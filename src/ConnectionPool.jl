@@ -494,8 +494,21 @@ function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, p
   connections = Vector{Any}(nothing, pool_size)
   available = fill(true, pool_size)
   lock = ReentrantLock()
-  PostgresConnectionPool{driver}(connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, lock)
+  # #1622: one branch per driver of `_PG_DRIVER_PACKAGES`, so each builds a concrete type. The type
+  # built from the run-time `driver` (`PostgresConnectionPool{driver}`) was a `UnionAll` to inference:
+  # a dynamic constructor call, and in a trimmed image a `MethodError` at boot (#1599, row 11). A
+  # driver added to the table adds an arm here and in `with_pool`; test_trim_shape_pins.jl fails until
+  # both list it.
+  args = (connections, available, connection_string, pool_size, Float64(pool_timeout), fail_fast_on_connect, lock)
+  driver === :libpq && return PostgresConnectionPool{:libpq}(args...)
+  driver === :postgres && return PostgresConnectionPool{:postgres}(args...)
+  return _unknown_postgres_driver(driver)
 end
+
+# The inner constructor's refusal, for a driver no arm above lists.
+@noinline _unknown_postgres_driver(driver::Symbol) = throw(InvalidConfigurationError(
+  "unknown PostgreSQL driver $(repr(driver)); expected one of " *
+  join((repr(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
 
 function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
   connections = Vector{Any}(nothing, pool_size)
@@ -621,6 +634,51 @@ function _warn_private_memory_slot(pool::PormGSQLite, slot::Int)
         "which surfaces as \"no such table\". Use `file:<name>?mode=memory&cache=shared` for one " *
         "shared in-memory database, or set pool_size=1." slot=slot pool_size=pool.pool_size maxlog=1
   return nothing
+end
+
+# ── The closed pool dispatch (#1622) ─────────────────────────────────────────
+# `Vararg{Any,N}` below, not a bare `args...`: Julia does not specialize a vararg tail it only passes
+# on, and the splat into `f` is then a dynamic `_apply_iterate` (Nitro's note on `with_response`).
+# (Kept above the docstring: a comment between a docstring and its definition detaches it, #612.)
+
+"""
+    with_pool(f, pool, args...) -> f(pool, args...)
+    with_pool(f, settings::Settings, args...)
+
+`f(pool, args...)`, with `pool` at its concrete type whenever it is a pool PormG builds:
+`SQLiteConnectionPool`, `MySQLConnectionPool`, or `PostgresConnectionPool{D}` for each driver of
+`_PG_DRIVER_PACKAGES`. The test on the type is a closed set of `isa`s, so each branch is a static
+call. The same shape as Nitro's `with_response` for response bodies (#1622).
+
+A pool is kept in an untyped place (`Settings.connections` holds any `_SQLEngine`, a test's own
+stand-in included), and every call on it dispatched at run time: one dynamic call per call under the
+JIT, and a call a `juliac --trim` image refuses, which raised a `MethodError` at run time (#1599,
+row 11). Reaching the pool through here is how a call resolves.
+
+Any other `_SQLEngine` (a unit test's stand-in pool) takes the one dynamic call it always took, in
+`_with_unlisted_pool`. A real pool never reaches it; in a trimmed build the verifier still lists that
+arm. A settings entry with no pool built yet raises `InvalidConfigurationError`.
+"""
+function with_pool(f::F, @nospecialize(pool), args::Vararg{Any,N}) where {F,N}
+  pool isa SQLiteConnectionPool && return f(pool, args...)
+  pool isa PostgresConnectionPool{:libpq} && return f(pool, args...)
+  pool isa PostgresConnectionPool{:postgres} && return f(pool, args...)
+  pool isa MySQLConnectionPool && return f(pool, args...)
+  pool isa Settings && return with_pool(f, pool.connections, args...)
+  pool === nothing && throw(_no_pool_error())
+  return _with_unlisted_pool(f, pool, args...)
+end
+
+# The refusal for a settings entry with no pool built yet; `with_pool` and `with_savepoint` raise it.
+_no_pool_error() = InvalidConfigurationError(
+  "this connection has no pool yet (not built or not connected). Call " *
+  "`PormG.Configuration.load(...)` or `register_connection(...)` so the pool exists first.")
+
+# A pool type outside the closed set above: under the JIT, the dynamic call every pool call used to be.
+@noinline function _with_unlisted_pool(f::F, @nospecialize(pool), args::Vararg{Any,N}) where {F,N}
+  pool isa _SQLEngine || throw(InvalidConfigurationError(
+    "with_pool expects a connection pool or a Settings entry, got a $(nameof(typeof(pool)))."))
+  return f(pool, args...)
 end
 
 # ── Direct-handoff wait (#124) ───────────────────────────────────────────────
@@ -2686,7 +2744,9 @@ end
 # PormGSettings overload — delegates to the underlying pool, mirroring with_transaction(::PormGSettings).
 finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = nothing, renew::Bool = false,
                                  body_error = nothing, abandoned_await::Bool = false) =
-  finalize_transaction_connection!(pool.connections, conn; rollback_error = rollback_error, renew = renew,
+  with_pool(_finalize_on, pool.connections, conn, rollback_error, renew, body_error, abandoned_await)
+_finalize_on(pool::_SQLEngine, conn, rollback_error, renew::Bool, body_error, abandoned_await::Bool) =
+  finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = renew,
                                    body_error = body_error, abandoned_await = abandoned_await)
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
@@ -3274,8 +3334,12 @@ function fetch_async(connection::_SQLEngine, sql::String;
     throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   end
 end
-fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+# The settings forms reach the pool through `with_pool` (#1622), so the call on it is static for every
+# pool PormG builds; `settings.connections` alone is an untyped value. The same holds for every
+# settings or by-key form below.
+fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx)
+fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx)
+_fetch_async_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool) = fetch_async(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch_async(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
@@ -3392,8 +3456,9 @@ function fetch(connection::_SQLEngine, sql::String;
     throw(root)
   end
 end
-fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings.connections, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx)
+fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx)
+_fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """
@@ -3439,7 +3504,7 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
     throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
   end
 end
-fetch_copy(settings::PormGSettings, sql::String, data_itr) = fetch_copy(settings.connections, sql, data_itr)
+fetch_copy(settings::PormGSettings, sql::String, data_itr) = with_pool(fetch_copy, settings.connections, sql, data_itr)
 
 """
     with_transaction_async(pool::PormGPostgres, sql::String; ...) -> (task, conn)
@@ -3580,8 +3645,10 @@ function with_transaction(pool::_SQLEngine, sql::String;
   end
   throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
 end
-with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_transaction(pool.connections, sql; conn=conn, release_conn=release_conn, params=params)
-with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_transaction_async(pool.connections, sql; conn=conn, params=params)
+with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_pool(_with_transaction_on, pool.connections, sql, conn, release_conn, params)
+with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_pool(_with_transaction_async_on, pool.connections, sql, conn, params)
+_with_transaction_on(pool::_SQLEngine, sql::AbstractString, conn, release_conn::Bool, params) = with_transaction(pool, sql; conn=conn, release_conn=release_conn, params=params)
+_with_transaction_async_on(pool::_SQLEngine, sql::String, conn, params) = with_transaction_async(pool, sql; conn=conn, params=params)
 
 """
     with_savepoint(f::Function, settings::PormGSettings, name::String) -> result
@@ -3599,7 +3666,10 @@ do not need to guard the call site.
 not parameterized — savepoint names are identifiers). Internal callers pass constants;
 the reentrant `atomic`/`run_in_transaction` path passes `_savepoint_name(depth)`.
 """
-function with_savepoint(f::Function, settings::PormGSettings, name::String)
+function with_savepoint(f::F, settings::PormGSettings, name::String) where {F<:Function}
+  # #1622: an entry with no pool is refused, as every call through `with_pool` is; it is not "outside a
+  # transaction" (`transaction_connection_for(nothing)` answers `nothing`, and `f` would run unguarded).
+  settings.connections === nothing && throw(_no_pool_error())
   if transaction_connection_for(settings) === nothing
     return f()   # not inside a transaction on this pool → nothing to savepoint
   end
@@ -3649,9 +3719,10 @@ write transaction) may re-enter without self-deadlock.
     created *inside* the transaction reuses the pinned connection instead of
     opening its own).
 """
-with_sqlite_write_lock(f::Function, pool::PormGSQLite) = Base.lock(f, pool.write_lock)
-with_sqlite_write_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL}) = f()
-with_sqlite_write_lock(f::Function, settings::PormGSettings) = with_sqlite_write_lock(f, settings.connections)
+with_sqlite_write_lock(f::F, pool::PormGSQLite) where {F<:Function} = Base.lock(f, pool.write_lock)
+with_sqlite_write_lock(f::F, pool::Union{PormGPostgres, PormGMySQL}) where {F<:Function} = f()
+with_sqlite_write_lock(f::F, settings::PormGSettings) where {F<:Function} = with_pool(_with_sqlite_write_lock_on, settings.connections, f)
+_with_sqlite_write_lock_on(pool::_SQLEngine, f::F) where {F<:Function} = with_sqlite_write_lock(f, pool)
 
 # #1129 item 2 — how a write transaction opens, per engine, with no fallback: a new backend gets a
 # `MethodError` rather than SQLite's `BEGIN IMMEDIATE`. SQLite takes the write lock at BEGIN, so a
@@ -3792,7 +3863,7 @@ end
 
 See also [`atomic`](@ref), [`run_in_transaction`](@ref).
 """
-function without_foreign_keys(f::Function, pool::PormGSQLite; check_on_exit::Bool = true)
+function without_foreign_keys(f::F, pool::PormGSQLite; check_on_exit::Bool = true) where {F<:Function}
   # Must be the OUTERMOST transaction on this pool. `run_in_transaction` degrades a nested call to a
   # SAVEPOINT, but that is not available here: the whole point is `PRAGMA foreign_keys = OFF`, which
   # SQLite ignores inside an open transaction — a nested block could not suspend anything. Worse, it
@@ -3845,7 +3916,7 @@ function without_foreign_keys(f::Function, pool::PormGSQLite; check_on_exit::Boo
   end
 end
 
-function without_foreign_keys(f::Function, pool::PormGPostgres; check_on_exit::Bool = true)
+function without_foreign_keys(f::F, pool::PormGPostgres; check_on_exit::Bool = true) where {F<:Function}
   # Outermost-only here too (#686). Nesting used to degrade to a SAVEPOINT and "work", so code green
   # on PostgreSQL threw on SQLite. For the foreign keys PormG creates it bought nothing: they are
   # already deferred to COMMIT. Only a DEFERRABLE INITIALLY IMMEDIATE constraint PormG did not create
@@ -3867,13 +3938,15 @@ end
 # switches the check off, and switching it back on does not recheck the rows written meanwhile
 # (measured on 8.4), so there is no check at exit to stand behind the block as SQLite's
 # `foreign_key_check` does. Refused before any transaction opens, naming the missing feature.
-without_foreign_keys(f::Function, pool::PormGMySQL; check_on_exit::Bool = true) =
+without_foreign_keys(f::F, pool::PormGMySQL; check_on_exit::Bool = true) where {F<:Function} =
   throw(_capability_error(pool, :deferred_foreign_keys, "without_foreign_keys";
     why = "Write the parent rows before their children, in one atomic block."))
 
-without_foreign_keys(f::Function, settings::PormGSettings; check_on_exit::Bool = true) =
-  without_foreign_keys(f, settings.connections; check_on_exit = check_on_exit)
-without_foreign_keys(f::Function, db::String; check_on_exit::Bool = true) =
+without_foreign_keys(f::F, settings::PormGSettings; check_on_exit::Bool = true) where {F<:Function} =
+  with_pool(_without_foreign_keys_on, settings.connections, f, check_on_exit)
+_without_foreign_keys_on(pool::_SQLEngine, f::F, check_on_exit::Bool) where {F<:Function} =
+  without_foreign_keys(f, pool; check_on_exit = check_on_exit)
+without_foreign_keys(f::F, db::String; check_on_exit::Bool = true) where {F<:Function} =
   without_foreign_keys(f, get_settings(db); check_on_exit = check_on_exit)
 
 """
@@ -3924,7 +3997,7 @@ end
 Every column above is one the F1 models declare `null = false`; omitting any of them raises at
 `create()` before the statement is built.
 """
-function run_in_transaction(f::Function, pool::_SQLEngine)
+function run_in_transaction(f::F, pool::_SQLEngine) where {F<:Function}
   # Reentrancy (#26): a nested run_in_transaction / atomic on the SAME pool becomes a
   # SAVEPOINT on the already-pinned connection instead of a second independent BEGIN.
   # A nested call targeting a DIFFERENT pool (e.g. a second database) still opens its own
@@ -3934,7 +4007,7 @@ function run_in_transaction(f::Function, pool::_SQLEngine)
   # atomic(a)`, the innermost context names only B, but A's transaction is still open, and a second
   # BEGIN on A would block behind it on SQLite or run outside it on PostgreSQL.
   if in_transaction_on(pool)
-    return _nested_savepoint(f, _settings_for_pool(pool))
+    return _nested_savepoint(f, pool, _settings_for_pool(pool))
   end
   # Serialize SQLite writers around the whole BEGIN..COMMIT so concurrent write
   # transactions never race on `BEGIN IMMEDIATE` (see `with_sqlite_write_lock`).
@@ -3964,15 +4037,16 @@ end
 # the pinned connection: no new connection is acquired, no BEGIN is issued, the SQLite write
 # lock (already held reentrantly by the outermost block) is not re-taken, and the outermost
 # block still owns the single connection release.
-function _nested_savepoint(f::Function, settings::PormGSettings)
-  pool = settings.connections
-  conn = transaction_connection_for(settings)
+# `pool` is the caller's, at its concrete type (#1622): `settings.connections` reads back untyped, and
+# `with_tx_context` on it was a dynamic call on the nested-block path.
+function _nested_savepoint(f::F, pool::_SQLEngine, settings::PormGSettings) where {F<:Function}
+  conn = transaction_connection_for(pool)
   return with_tx_context(pool, conn) do
     with_savepoint(f, settings, _savepoint_name(current_transaction_depth()))
   end
 end
 
-function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
+function _run_in_transaction_impl(f::F, pool::_SQLEngine) where {F<:Function}
   conn = _acquire_in_mode(pool, :write)
   tx_started = false
   local rollback_error = nothing
@@ -4105,12 +4179,13 @@ function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
   end
 end
 
-function run_in_transaction(f::Function, db::String)
+function run_in_transaction(f::F, db::String) where {F<:Function}
   settings::Settings = get_settings(db)
-  return run_in_transaction(f, settings.connections)
+  return with_pool(_run_in_transaction_on, settings.connections, f)
 end
 
-run_in_transaction(f::Function, settings::PormGSettings) = run_in_transaction(f, settings.connections)
+run_in_transaction(f::F, settings::PormGSettings) where {F<:Function} = with_pool(_run_in_transaction_on, settings.connections, f)
+_run_in_transaction_on(pool::_SQLEngine, f::F) where {F<:Function} = run_in_transaction(f, pool)
 
 """
     atomic(f::Function, db; durable::Bool=false) -> result
@@ -4142,7 +4217,7 @@ Pass `durable=true` to require this block be the outermost transaction on its da
 if a transaction is already active on the **same** database (mirrors Django's `atomic(durable=True)`,
 which is checked per connection). A transaction open on a different database does not count.
 """
-function atomic(f::Function, pool::_SQLEngine; durable::Bool=false)
+function atomic(f::F, pool::_SQLEngine; durable::Bool=false) where {F<:Function}
   # Same pool only (#831), like `_refuse_nested_without_foreign_keys` (#686): a transaction on
   # another database is a separate transaction, and this block still opens the outermost one here.
   # Enclosing blocks count, so a block on another database in between does not hide this pool's.
@@ -4155,8 +4230,9 @@ function atomic(f::Function, pool::_SQLEngine; durable::Bool=false)
   end
   return run_in_transaction(f, pool)
 end
-atomic(f::Function, db::String; durable::Bool=false) = atomic(f, get_settings(db).connections; durable=durable)
-atomic(f::Function, settings::PormGSettings; durable::Bool=false) = atomic(f, settings.connections; durable=durable)
+atomic(f::F, db::String; durable::Bool=false) where {F<:Function} = with_pool(_atomic_on, get_settings(db).connections, f, durable)
+atomic(f::F, settings::PormGSettings; durable::Bool=false) where {F<:Function} = with_pool(_atomic_on, settings.connections, f, durable)
+_atomic_on(pool::_SQLEngine, f::F, durable::Bool) where {F<:Function} = atomic(f, pool; durable=durable)
 
 """
     with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0,

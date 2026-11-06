@@ -474,7 +474,10 @@ end
 # enough: in `atomic(a) do; atomic(b) do; …`, it names only B, while A's transaction is still open.
 # A closed context is stepped over wherever it sits in the chain (#839): a block can end while a
 # block opened under it by another task is still running.
-function _tx_context_for(pool::_SQLEngine)
+# `@nospecialize` (#1622): the body only compares the pool by identity, so one method instance serves
+# every engine, and a caller holding the abstract `_SQLEngine` (the query builder's `connection`)
+# resolves to it statically. The same holds for the pool-identity helpers below.
+function _tx_context_for(@nospecialize(pool::_SQLEngine))
   ctx = _tx_context[]
   while ctx !== nothing && ctx.depth > 0
     if _is_closed(ctx)
@@ -493,7 +496,7 @@ end
 Whether a transaction is open on `pool`, in this block or any enclosing one. Unlike
 `in_transaction_context()`, a transaction on a different database does not count (#831).
 """
-in_transaction_on(pool::_SQLEngine) = _tx_context_for(pool) !== nothing
+in_transaction_on(@nospecialize(pool::_SQLEngine)) = _tx_context_for(pool) !== nothing
 
 """
     current_transaction_depth() -> Int
@@ -539,8 +542,12 @@ starts a fresh table, because the reservations are keyed by table name only (#83
 including on a throw. A spawned task that is still running after the block ends no longer sees it
 as open: its statements run in autocommit on a connection of their own (#839).
 """
-function with_tx_context(f::Function, pool::_SQLEngine, conn;
-                         abandoned_await::Union{Nothing, Threads.Atomic{Bool}} = nothing)
+function with_tx_context(f::F, pool::_SQLEngine, @nospecialize(conn);
+                         abandoned_await::Union{Nothing, Threads.Atomic{Bool}} = nothing) where {F<:Function}
+  # `@nospecialize(conn)` (#1622): the connection comes from a pool slot or the transaction context,
+  # both untyped (`Any`), and this only stores it; one instance per (body, pool) serves every handle
+  # type, so a caller holding the `Any` resolves to it statically. (Here, not above the signature: a
+  # comment between a docstring and its definition detaches it, #612.)
   # The enclosing block still running, not merely the one in scope (#839): a task that outlived
   # its block and opens one of its own starts a fresh chain at depth 1.
   old_ctx = _open_tx_context()
@@ -575,13 +582,13 @@ end
 # Record that a statement's await inside the open block on `pool` was abandoned by an interrupt
 # (#1588). Called by `await_result` for an in-transaction `FetchTask`; a no-op outside a block. The
 # block's cleanup reads it even when the body caught the interrupt or raised its own error instead.
-function _mark_abandoned_await!(pool::_SQLEngine)
+function _mark_abandoned_await!(@nospecialize(pool::_SQLEngine))
   ctx = _tx_context_for(pool)
   ctx === nothing || (ctx.abandoned_await[] = true)
   return nothing
 end
 
-function connection_key_for_pool(pool::_SQLEngine)::Union{String, Nothing}
+function connection_key_for_pool(@nospecialize(pool::_SQLEngine))::Union{String, Nothing}
   for (key, settings) in config
     if settings.connections === pool
       return key
@@ -596,7 +603,14 @@ end
 # `get_settings` resolved from `.db(...)`, a `connection =` override or the model's binding — not
 # the model's binding alone, which a `.db()` call overrides (#838). Raw `fetch` is deliberately
 # looser: it runs in autocommit on a pool with no open transaction, as Django does per connection.
-function ensure_transaction_scope(model::PormGModel, pool::_SQLEngine)
+# A model's name for a message, read without a dynamic `getproperty` on the abstract `PormGModel`
+# (`ModelType` overloads it), so the refusal below stays a static path (#1622).
+function _model_label(@nospecialize(model::PormGModel))::String
+  n = isdefined(model, :name) ? getfield(model, :name) : nothing
+  return n isa String ? n : n isa SubString{String} ? String(n) : "(unnamed model)"
+end
+
+function ensure_transaction_scope(@nospecialize(model::PormGModel), @nospecialize(pool::_SQLEngine))
   in_transaction_context() || return
   in_transaction_on(pool) && return
   active_key = connection_key_for_pool(get_tx_pool())
@@ -609,7 +623,7 @@ function ensure_transaction_scope(model::PormGModel, pool::_SQLEngine)
   # sibling check, `ConnectionPool.atomic(durable=true)`, reported the same class as
   # QueryBuildError until #268 gave both one honest home.
   throw(TransactionError("Active transaction on connection $(active_desc) cannot include model \
-    $(model.name) on connection $(target_desc), which has no transaction open. Wrap the call in \
+    $(_model_label(model)) on connection $(target_desc), which has no transaction open. Wrap the call in \
     $(fix) to give it a transaction of its own on that database (it commits separately: there is \
     no two-phase commit), or move it outside the current transaction."))
 end
@@ -617,10 +631,13 @@ end
 # The connection of the open transaction on `pool`, or `nothing`. Every path that reuses the
 # ambient connection must go through here rather than `get_tx_connection()`, which does not say
 # which pool the connection came from (#831).
-function transaction_connection_for(pool::_SQLEngine)
+function transaction_connection_for(@nospecialize(pool::_SQLEngine))
   ctx = _tx_context_for(pool)
   return ctx === nothing ? nothing : ctx.conn
 end
+# A settings entry with no pool built yet has no transaction open on it. The `Nothing` method also
+# closes the union the query builder holds (`Union{Nothing, _SQLEngine}`), so that call resolves (#1622).
+transaction_connection_for(::Nothing) = nothing
 transaction_connection_for(settings::PormGSettings) = transaction_connection_for(settings.connections)
 
 # The reservations live in the transaction context on `pool`, the pool the insert runs on — not the
@@ -1178,7 +1195,8 @@ function _check_configured_extensions!(settings::PormGSettings;
     if extension == "unaccent"
       # Literal name only — never interpolate the raw YAML value into SQL.
       installed = try
-        backend_num_rows(settings.connections, CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
+        CP.with_pool(backend_num_rows, settings.connections,   # #1622: the pool at its concrete type
+                     CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
       catch e
         @warn "Could not verify PostgreSQL extension state" extension=extension db_def_folder=settings.db_def_folder exception=e
         continue
@@ -1768,7 +1786,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       _warn_pool_takeover("PormG: this folder was already loaded under a key the implicit load " *
                           "minted; re-registering it under the key you asked for and discarding " *
                           "the implicit entry.", folder, existing, config)
-      config[existing].connections !== nothing && close_pool!(config[existing].connections)
+      _close_entry_pool!(config[existing])
       delete!(config, existing)
     else
       # The existing key is at least as explicit as this one, so keep it and refresh it in place
@@ -1791,7 +1809,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
                           "environment or folder, or over an entry the implicit load minted; its " *
                           "pool is closed and rebuilt.", folder, key, config)
     end
-    close_pool!(config[key].connections)
+    _close_entry_pool!(config[key])
   end
 
   # With `root` the field is the folder and the key is short (#857), so the two stop coinciding —
@@ -2198,7 +2216,9 @@ function register_offline(key::String; adapter::Symbol = :postgres,
   return key
 end
 
-_is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
+# #1622 wall 3: typed by the concrete `Settings`. The lease path (`ensure_before_connect!`) reached it with
+# `config[key]` of the abstract type, which is why it was unresolved; typing `config` resolved it.
+_is_offline(settings::Settings)::Bool = get(settings.db_config_settings, "offline", false) === true
 _is_offline_key(key::Union{Nothing,String})::Bool = key !== nothing && _is_offline(config[key])
 
 function _offline_config_settings(adapter::Symbol, server_version::Union{Nothing, Integer})::Dict{String, Any}
@@ -2270,10 +2290,24 @@ end
 
 function close_pool!(db::String; kwargs...)
   settings::Settings = get_settings(db)
-  if settings.connections !== nothing
-    close_pool!(settings.connections; kwargs...)
-  end
+  settings.connections === nothing && return nothing
+  # #1622: through the closed pool dispatch, so the close resolves for every pool PormG builds. On the
+  # field's untyped value it was a dynamic call, which a trimmed image refused at run time.
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  return CP.with_pool(_close_pool_with, settings.connections, values(kwargs))
 end
+
+# Close the pool of one entry, whichever registry holds it (`load` takes a `config =` of its own), at
+# the pool's concrete type (#1622). An entry with no pool has nothing to close.
+function _close_entry_pool!(settings::Settings; kwargs...)
+  settings.connections === nothing && return nothing
+  return getfield(parentmodule(@__MODULE__), :ConnectionPool).with_pool(_close_pool_with, settings.connections, values(kwargs))
+end
+
+# A named function rather than a closure: a closure would capture `CP` as a `Module` value, and the
+# call through it would not fold. Here the module lookup is a constant expression, as above.
+_close_pool_with(pool::_SQLEngine, kwargs::NamedTuple) =
+  getfield(parentmodule(@__MODULE__), :ConnectionPool).close_pool!(pool; kwargs...)
 
 """
     ping(path_or_key::String) -> Bool
@@ -2287,12 +2321,15 @@ function ping(path_or_key::String)::Bool
   key === nothing && return false
 
   settings::Settings = config[key]
-  pool = settings.connections
-  pool === nothing && return false
+  settings.connections === nothing && return false
+  # #1622: the lease and the liveness check run with the pool at its concrete type.
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  return CP.with_pool(_ping_pool, settings.connections, key, settings)
+end
 
+function _ping_pool(pool::_SQLEngine, key::String, settings::Settings)::Bool
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   conn = nothing
-
   try
     conn = CP._acquire_in_mode(pool, :read; timeout_seconds=5, max_retries=1)
     return backend_is_alive(pool, conn)
@@ -2419,7 +2456,7 @@ function __cleanup__()
       # were still checked out — is kept on purpose: a lease outstanding at process exit is exactly
       # the leak diagnostic an operator wants once, and it never fires for a clean shutdown.
       try
-        close_pool!(settings.connections; drain_seconds = 0)
+        _close_entry_pool!(settings; drain_seconds = 0)
       catch e
         @debug "PormG atexit cleanup: error closing pool for '$path'" exception=e
       end

@@ -21,6 +21,13 @@ dynamic dispatch per read, and a call `juliac --trim` refuses (#1599). `Settings
 `PormG.Kernel` so the registry can name it. `PormG.Configuration.Settings` still names it, and
 `PormGSettings` stays its abstract supertype.
 
+A call through a key or a `Settings` whose pool is not built yet (`connections === nothing`):
+`atomic(key)`, `run_in_transaction(key)`, `fetch(settings, sql)`, `with_transaction(settings, …)`,
+`without_foreign_keys(settings)`, `with_advisory_lock(settings, …)`, `with_savepoint(f, settings, name)`.
+These used to raise a `MethodError` (no method for `nothing`). They now raise `InvalidConfigurationError`, saying the pool
+does not exist yet. The pool is reached through one closed dispatch (`ConnectionPool.with_pool`) that
+calls it at its concrete type.
+
 Storing any other `PormGSettings` subtype now raises a `MethodError` (no `convert` to `Settings`).
 So does passing a `Dict{String,PormGSettings}` as `config =` (a `TypeError`). Nothing in PormG ever
 built either. The pattern is a test stand-in: a struct with a `connections` field registered under

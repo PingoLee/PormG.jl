@@ -130,6 +130,19 @@ Kernel._server_version(pool::PormGSQLite)::Int = backend_sqlite_version(pool)
 # MySQL's is the server's, as announced in its greeting; the extension asks a pooled connection.
 Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
 
+# #1605: the typed read's execute. `decode` is the query builder's row decoder (a callable returning
+# `Vector{T}`), handed down so the rows are decoded where the driver's result is concrete, never across a
+# call typed `Any`. The fallback decodes the materialized result `backend_execute` returns, which is
+# right for every driver: an extension adds a method only to decode without materializing (SQLite steps
+# its statement straight into `T`). Not in the loop above: a missing driver raises from `backend_execute`.
+function backend_execute_rows end
+backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =
+  decode(backend_execute(pool, conn, sql, params))
+# What `fetch` does with the rows a worker decoded, outside its `try`: the query builder's decoder raises
+# an error the worker recorded instead of throwing (`QueryBuilder._RowDecoder`), so it reaches the caller
+# unwrapped. Any other value is the rows.
+decoded_on_worker(decode, result) = result
+
 # #1548: a server round trip on an idle connection, asked at checkout only for a slot idle past the pool's
 # `validate_after_idle`. Returns `nothing`, or raises when the connection is unusable. A separate hook
 # rather than an argument on `backend_is_alive`, so the probe every checkout runs stays local and free.

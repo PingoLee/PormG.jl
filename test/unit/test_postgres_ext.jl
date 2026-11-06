@@ -89,12 +89,17 @@ struct NetClosingError <: Exception end
   # MySQL's bulk INSERT report and duplicate-key test (PostgreSQL counts rows and reads SQLSTATE, #1267),
   # and MySQL's driver parameter limit (PostgreSQL's own is `backend_postgres_parameter_limit`, a row above),
   # and MySQL's idle ping (#1548: only a backend with the `idle_validation` capability is ever pinged).
+  # `backend_execute_rows` (#1605) has core's fallback for every engine, the decode of
+  # `backend_execute`'s materialized result, which is right for both PostgreSQL drivers. Only SQLite
+  # adds a method, to decode without materializing; it never falls to LibPQ's marker-typed methods.
+  @test which(PormG.backend_execute_rows, Tuple{PostgresPool, PgConn, String, Any, Any}).module === PormG
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
     (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version, :backend_last_insert_id,
                                              :backend_insert_report, :backend_is_duplicate_key,
-                                             :backend_mysql_parameter_limit, :backend_ping) &&
+                                             :backend_mysql_parameter_limit, :backend_ping,
+                                             :backend_execute_rows) &&
      getfield(PormG, name) isa Function) || continue
     @test name in pg_generics
   end

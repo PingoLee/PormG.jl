@@ -7,6 +7,7 @@ import Logging
 import Base: fetch
 import PormG: PormGSettings, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGSQLiteParam, AbstractPormGParam, config, PormGModel, DEFAULT_POOL_TIMEOUT
 import PormG: PormGMySQL, _SQLEngine  # #1130: the MySQL marker, and every engine for the shared funnels
+import PormG.Kernel: Settings  # the struct `config` holds (#1622)
 import PormG: _backend_name  # #1129: an engine's name for a message, falling back to its type's name
 import PormG: _capability_error  # #1272: MySQL has no deferred foreign keys for without_foreign_keys
 import PormG: _supports, _require_feature  # #1548: the idle ping is a capability (MySQL)
@@ -3951,7 +3952,7 @@ _savepoint_name(depth::Integer) = "pormg_sp_$(depth)"
 
 # Resolve the registered PormGSettings for a pool so the reentrant savepoint path (which needs
 # `settings` for `with_savepoint`/`fetch`) can route through the pinned connection.
-function _settings_for_pool(pool::_SQLEngine)::PormGSettings
+function _settings_for_pool(pool::_SQLEngine)::Settings
   key = connection_key_for_pool(pool)
   key === nothing && throw(InvalidConfigurationError("Cannot resolve connection settings for the active transaction pool"))
   return get_settings(key)
@@ -4105,7 +4106,7 @@ function _run_in_transaction_impl(f::Function, pool::_SQLEngine)
 end
 
 function run_in_transaction(f::Function, db::String)
-  settings::PormGSettings = get_settings(db)
+  settings::Settings = get_settings(db)
   return run_in_transaction(f, settings.connections)
 end
 

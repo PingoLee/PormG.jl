@@ -44,6 +44,9 @@ function _dynamic_calls(f, argtypes::Tuple)::Vector{String}
   return found
 end
 
+# A settings type of its own, which `config` no longer accepts (#1622).
+struct _TspOtherSettings <: PormG.PormGSettings end
+
 @testset "Trim shape pins (#1599)" begin
 
   # What: `_is_interactive()`, the bootstrap's one input on whether the process is a REPL, read by
@@ -69,6 +72,26 @@ end
     finally
       Configuration._INTERACTIVE[] = previous
     end
+  end
+
+  # What: the registry of loaded connections and its accessor, `config` and `get_settings(key)`.
+  # Expected: `config` is a `Dict{String,Settings}`, `get_settings` infers `Settings`, and a field read
+  #   through it infers the field's declared type (`implicit::Bool`, `connections`' union).
+  # Why: `config` was a `Dict{String,PormGSettings}` of the abstract type, so every
+  #   `get_settings(key).x` was an `Any`: the read in `_register_models!`, `load` and `close_pool!(key)`
+  #   was #1600's row 2 in the verifier and a `MethodError` at run time in both boot paths (#1622 wall 1).
+  @testset "get_settings returns the concrete Settings (#1622 wall 1, row 2)" begin
+    @test PormG.config isa Dict{String, Configuration.Settings}
+    @test isconcretetype(Configuration.Settings)
+    @test Configuration.Settings === PormG.Kernel.Settings
+    @test only(Base.return_types(Configuration.get_settings, (String,))) === Configuration.Settings
+    read_implicit(k::String) = Configuration.get_settings(k).implicit
+    @test only(Base.return_types(read_implicit, (String,))) === Bool
+    read_pool(k::String) = Configuration.get_settings(k).connections
+    @test only(Base.return_types(read_pool, (String,))) === fieldtype(Configuration.Settings, :connections)
+    # A settings type of one's own can no longer be registered (the upgrade entry's case).
+    @test_throws MethodError (PormG.config["_tsp_other"] = _TspOtherSettings())
+    @test !haskey(PormG.config, "_tsp_other")
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

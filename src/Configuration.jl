@@ -2,6 +2,7 @@ module Configuration
 
 import YAML
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGMySQL, config, PormGModel
+import PormG.Kernel: Settings  # the struct `config` holds (#1622); its keyword constructor is below
 import PormG: _SQLEngine  # every engine (#1130): the pool a Settings holds, the transaction context's pool
 import PormG: model_table_name  # physical table name (db_table when set, #59) — defined in Kernel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
@@ -740,7 +741,7 @@ function _peek_default_env(db_settings_file::String, loader::F = YAML.load)::Uni
 end
 
 function _resolve_loaded_key(path_or_key::String,
-                            config::Dict{String,PormGSettings} = config;
+                            config::Dict{String,Settings} = config;
                             folder::String = path_or_key)::Union{Nothing, String}
   # The dict is a parameter, not the global: `load` accepts a `config=` override, and answering
   # "is this folder already loaded?" against the global while writing to a local dict mixes two
@@ -1547,7 +1548,7 @@ end
 # unexplained failure in whatever request was holding one. The close itself logs a second line
 # (`@warn`, with the count it actually force-closed) if any were still out when the window expired.
 function _warn_pool_takeover(msg::String, path::String, existing::String,
-                             config::Dict{String,PormGSettings})
+                             config::Dict{String,Settings})
   in_use = 0
   try
     pool = config[existing].connections
@@ -1623,7 +1624,7 @@ spelling or another spelling of the same folder, raises `InvalidConfigurationErr
 included: loading would replace the offline entry with a live pool. Call `unregister_connection(key)`
 first, or load under another key.
 """
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,Settings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -1809,7 +1810,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   config[key] = Settings(app_env = selected_env, db_def_folder = stored_folder, implicit = implicit,
                          loaded_folder = _canonical_folder_path(folder),
                          before_connect = something(before_connect, previous_hook, Some(nothing)))
-  settings::PormGSettings = config[key]
+  settings::Settings = config[key]
 
   # Both given `folder`, the spelling checked against the filesystem above. The pool builder
   # resolves a relative SQLite `database:` inside it, so under `root` that file is `pwd`-free too.
@@ -1846,7 +1847,7 @@ The server form loads short keys from a known project root, whatever the working
 PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "prod")
 ```
 """
-function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
+function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,Settings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   loaded_keys = String[]
   for path in paths
     key = String(path)
@@ -1891,7 +1892,7 @@ end
 # `config` (a `Settings` built by hand, or a `config=` override). For messages that tell the user
 # what to call next: since `load(…; root)` (#857) the folder is no longer the key, and
 # `migrate(db::String)` looks its argument up as a key.
-function _settings_key(settings::PormGSettings, config::Dict{String,PormGSettings} = config)::String
+function _settings_key(settings::PormGSettings, config::Dict{String,Settings} = config)::String
   for (k, v) in config
     v === settings && return k
   end
@@ -1973,7 +1974,7 @@ function _registered_env(env::Union{Nothing, AbstractString}, key::String)::Stri
   return DEV
 end
 
-function get_settings(key::String)
+function get_settings(key::String)::Settings
   _resolve_lazily!(key)
   haskey(config, key) || throw(InvalidConfigurationError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
   return config[key]  
@@ -2268,7 +2269,7 @@ function close_pool!(pool::_SQLEngine; kwargs...)
 end
 
 function close_pool!(db::String; kwargs...)
-  settings::PormGSettings = get_settings(db)
+  settings::Settings = get_settings(db)
   if settings.connections !== nothing
     close_pool!(settings.connections; kwargs...)
   end
@@ -2285,7 +2286,7 @@ function ping(path_or_key::String)::Bool
   key = _resolve_loaded_key(path_or_key)
   key === nothing && return false
 
-  settings::PormGSettings = config[key]
+  settings::Settings = config[key]
   pool = settings.connections
   pool === nothing && return false
 
@@ -2333,7 +2334,7 @@ function status(path_or_key::String)
     )
   end
 
-  settings::PormGSettings = config[key]
+  settings::Settings = config[key]
   return (
     key = key,
     loaded = true,
@@ -2350,69 +2351,28 @@ end
 # and reconnect_db() inside the fetch() cycle. Old direct handle logic removed.
 
 #
-# Settings struct
+# Settings: the struct is `Kernel.Settings` (#1622), so `config` can name it. Its keyword constructor
+# stays here, because its defaults (`_pormg_env()`, `DEV`) are this module's.
 #
 
-mutable struct Settings <: PormGSettings
-  app_env::String
-  db_def_folder::String # the folder; equal to the key unless `load(…; root)` was used (#857)
-  model_file::String
-  db_config_settings::Dict{String,Any}
-  change_db::Bool # Enable makemigrations and migrations functionality in the app
-  change_data::Bool # Enable the change of the database (upgrade, delete) in the app
-  connections::Union{Nothing, _SQLEngine}
-  time_zone::String
-  django_prefix::Union{Nothing, String}
-  # #553: `true` only for an entry `Models.set_models` minted through its implicit load, recorded
-  # at construction via `load(...; implicit = true)`. Not in `VALID_CONFIG_KEYS`, so YAML cannot set
-  # it. `Models._pick_connect_key` and `load`'s migrate branch both key on it — both used to infer
-  # it from `isabspath(key)`, which the relative `set_models(mod, "db")` form inverts.
-  implicit::Bool
-  # #623: `true` only for an entry `register_connection` created, recorded at construction. Not in
-  # `VALID_CONFIG_KEYS`, so YAML cannot set it. Every "is this a folder?" check keys on it — they
-  # used to compare `db_def_folder` against the literal "dynamic_connection", which a static folder
-  # of that name also stores, so that folder read as dynamic.
-  dynamic::Bool
-  # #1225: the canonical folder this entry was loaded from, resolved when `load` built it, or `""` for
-  # an entry built by hand. Without `root` the stored `db_def_folder` is relative ("db"), so it names a
-  # different folder after a `cd`; a repeated `load` compares the request against this instead, or it
-  # would keep a pool built from another directory's `connection.yml`. Internal, not YAML-settable.
-  loaded_folder::String
-  # #1232: this key's own `before_connect` hook, from `load(…; before_connect = f)`, or `nothing` to
-  # use the process-wide one (`set_before_connect_hook`). Not YAML-settable; never displayed or
-  # serialized (`display.jl` and `json_lower.jl` render an allowlist of slots).
-  before_connect::Union{Nothing, Function}
-
-  Settings(;
-      app_env             = something(_pormg_env(), DEV),
-      db_def_folder       = DB_PATH,
-      model_file          = MODEL_FILE,
-      db_config_settings  = Dict{String,Any}(),
-      change_db           = false,
-      change_data         = false,
-      connections         = nothing,
-          time_zone           = UTC_TIMEZONE,
-      django_prefix       = nothing,
-      implicit            = false,
-      dynamic             = false,
-      loaded_folder       = "",
-      before_connect      = nothing
-  ) =
-  new(
-      app_env,
-      db_def_folder,
-      model_file,
-      db_config_settings,
-      change_db,
-      change_data,
-      connections,
-      time_zone,
-      django_prefix,
-      implicit,
-      dynamic,
-      loaded_folder,
-      before_connect
-  )
+function Settings(;
+    app_env             = something(_pormg_env(), DEV),
+    db_def_folder       = DB_PATH,
+    model_file          = MODEL_FILE,
+    db_config_settings  = Dict{String,Any}(),
+    change_db           = false,
+    change_data         = false,
+    connections         = nothing,
+    time_zone           = UTC_TIMEZONE,
+    django_prefix       = nothing,
+    implicit            = false,
+    dynamic             = false,
+    loaded_folder       = "",
+    before_connect      = nothing,
+)::Settings
+  # The positional constructor converts each value to its field's type, as the inner `new(...)` did.
+  return Settings(app_env, db_def_folder, model_file, db_config_settings, change_db, change_data,
+                  connections, time_zone, django_prefix, implicit, dynamic, loaded_folder, before_connect)
 end
 
 """

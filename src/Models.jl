@@ -1245,8 +1245,9 @@ function _warn_plain_model_bindings(_module::Module, models::Vector{PormGModel},
         "untyped (a dynamic call under the JIT, an error under `juliac --trim`); bind it with " *
         "`$(binding)::Models.ModelType = Models.Model(…)` (a `const` binding is accepted too).$(rest) " *
         "This warning is shown once per session. See " *
-        "`upgrade_guide(from = v\"0.9\")` → \"The generated models file binds each model with " *
-        "`const`; a file without `const` still loads (#1650)\".", maxlog = 1)
+        "`upgrade_guide(from = v\"0.9\")` → \"The generated models file binds each model with a " *
+        "typed global (`Race::Models.ModelType = …`); a plain or `const` file still loads (#1650)\".",
+        maxlog = 1)
   return nothing
 end
 

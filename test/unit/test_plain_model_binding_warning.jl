@@ -75,6 +75,11 @@ end)
   @test occursin("a `const` binding is accepted too", msg)
   @test occursin("1 more model binding registered here is plain too", msg)
   @test occursin("upgrade_guide(from = v\"0.9\")", msg)
+  # The entry the warning cites exists under that exact title: #1672 renamed the heading, and a
+  # citation left behind would send the reader to nothing.
+  cited = match(r"→ \"(.+)\"\.$", msg)
+  @test cited !== nothing
+  @test cited !== nothing && cited[1] in [e.title for e in PormG._read_upgrading_entries()]
   # The non-public call this check rests on (`Base.ispublic(Core, :get_binding_type)` is false in
   # Julia 1.13): a plain binding reads `Any`. Its typed-global counterpart is asserted below.
   @test Core.get_binding_type(PMB_PLAIN, :Driver) === Any

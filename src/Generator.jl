@@ -1,13 +1,18 @@
 module Generator
 
 import PormG
-import PormG: MODEL_PATH, PormGSettings, DB_PATH, GENERATED_MODULE_RESERVED_BINDINGS, ModelDefinitionError
+import PormG: MODEL_PATH, PormGSettings, DB_PATH, GENERATED_MODULE_RESERVED_BINDINGS, ModelDefinitionError, InvalidConfigurationError
 import OrderedCollections: OrderedDict
 
 """
-  create_db_folder_and_yml(; path::String = DB_PATH, adapter::String = "PostgreSQL", database::String = "", host::String = "", username::String = "", password::String = "", port::Union{Int, String} = 5432, time_zone::String = "UTC")::Nothing
+  create_db_folder_and_yml(; path::String = DB_PATH, adapter::String = "PostgreSQL", database::String = "", host::String = "", username::String = "", password::String = "", port::Union{Int, String} = 5432, time_zone::String = "UTC", postgres_driver::Union{Nothing, String} = nothing)::Nothing
 
 Creates a folder named "db" at the given path (if it doesn't exist) and an empty ".yml" file inside it with the specified connection details.
+
+`postgres_driver` (#1676) writes `postgres_driver: <value>` into each environment block of a PostgreSQL
+file; left `nothing`, no key is written and the driver is chosen at load time (`PORMG_POSTGRES_DRIVER`,
+then LibPQ). It is refused for any other adapter, and a value `load` would refuse is refused here;
+the package's own spelling is written (`"postgres"` → `Postgres`).
 """
 function create_db_folder_and_yml(;
     path::String = DB_PATH, 
@@ -17,8 +22,28 @@ function create_db_folder_and_yml(;
     username::String = "",
     password::String = "",
     port::Union{Int, String} = 5432,
-    time_zone::String = "UTC"
+    time_zone::String = "UTC",
+    postgres_driver::Union{Nothing, String} = nothing
 )::Nothing
+    # #1676: the driver key belongs to a PostgreSQL environment block; refused before anything is
+    # written rather than dropped, so a caller never gets a file that silently ignores its choice.
+    if postgres_driver !== nothing && lowercase(adapter) != "postgresql"
+        throw(InvalidConfigurationError(
+            "create_db_folder_and_yml: `postgres_driver` picks the driver of a PostgreSQL adapter; " *
+            "remove it for adapter = \"$(adapter)\"."))
+    end
+    # Written only when given, so a file without it is byte-identical to one written before #1676. A
+    # given value is checked by the resolver `load` uses — refused here rather than at the first `load`
+    # — and written in its canonical spelling. An empty one is refused first: the resolver would read
+    # PORMG_POSTGRES_DRIVER for it, and write the shell's choice into the file.
+    driver_line = ""
+    if postgres_driver !== nothing
+        isempty(strip(postgres_driver)) && throw(InvalidConfigurationError(
+            "create_db_folder_and_yml: `postgres_driver` is empty; pass \"LibPQ\" or \"Postgres\", " *
+            "or leave it `nothing` to write no key."))
+        driver = PormG.Configuration._resolve_postgres_driver(postgres_driver; source = "create_db_folder_and_yml")
+        driver_line = "  postgres_driver: $(PormG._PG_DRIVER_PACKAGES[driver])\n"
+    end
     db_folder = joinpath(path)
     if !isdir(db_folder)
         mkpath(db_folder)
@@ -52,7 +77,7 @@ dev:
   username: $username
   password: $password
   port: $port
-  config:
+$(driver_line)  config:
     change_db: true
     change_data: true
     time_zone: '$time_zone'
@@ -64,7 +89,7 @@ prod:
   username: $username
   password: $password
   port: $port
-  config:
+$(driver_line)  config:
     change_db: true
     change_data: true
     time_zone: '$time_zone'
@@ -76,7 +101,7 @@ test:
   username: $username
   password: $password
   port: $port
-  config:
+$(driver_line)  config:
     change_db: true
     change_data: true
     time_zone: '$time_zone'

@@ -38,7 +38,10 @@ end
     setup(path::String = DB_PATH; root = nothing)
 
 Interactively setup the `connection.yml` file for PormG.
-This will prompt for database adapter, name, and connection details.
+This will prompt for database adapter, name, and connection details. For PostgreSQL it also asks
+which driver opens the connections, LibPQ (the default) or Postgres. A typed answer is written as
+`postgres_driver:` into each environment block; an empty answer writes no key, and the driver is then
+chosen at load time (`PORMG_POSTGRES_DRIVER`, then LibPQ) (#1676).
 
 `root` means what it means for `Configuration.load`: the project root `path` is relative to. With
 it, the folder is `joinpath(root, path)` and the AI skills (if you accept them) go into `root`, from
@@ -81,6 +84,7 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
     username = ""
     password = ""
     port = 5432
+    postgres_driver::Union{Nothing, String} = nothing
 
     if adapter == "SQLite"
         print("Database filename [Default: database.sqlite]: ")
@@ -101,6 +105,7 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
         if !isempty(p_input)
             port = p_input
         end
+        postgres_driver = _ask_postgres_driver(read_input)
     end
 
     print("Time zone [Default: UTC]: ")
@@ -115,7 +120,8 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
         username = username,
         password = password,
         port = port,
-        time_zone = time_zone
+        time_zone = time_zone,
+        postgres_driver = postgres_driver
     )
 
     # #1486: a name that cannot become the file's module is refused by the writer, and asked again
@@ -150,6 +156,39 @@ function setup(path::String = DB_PATH; root::Union{Nothing, AbstractString} = no
     choice = lowercase(read_input())
     if isempty(choice) || choice == "y"
         install_ai_skills(skills_dir)
+    end
+end
+
+# #1676: the PostgreSQL driver `setup` writes, as the `postgres_driver:` value — or `nothing` when the
+# answer is empty, so a file written by pressing Enter stays byte-identical to one written before the
+# prompt existed, and the driver is decided at load time as for any file that names none
+# (`PORMG_POSTGRES_DRIVER`, then LibPQ). An empty answer is never handed to `_resolve_postgres_driver`,
+# which would read that variable and write the shell's choice into the file; when the variable is set,
+# the prompt says so, since the `[Default: LibPQ]` it shows is then not what an empty answer gets. A
+# typed answer goes through the resolver, so the accepted spellings are its own, and its canonical
+# package name is written (`postgres` → `Postgres`) — `LibPQ` included: a typed choice is the user's,
+# and leaving it out would let the variable override it. A refused answer prints the resolver's text
+# and asks again, as the models-file prompt does (#1486); nothing is written yet, and at end of input
+# `readline` returns "", so a scripted run cannot loop.
+function _ask_postgres_driver(read_input::F)::Union{Nothing, String} where {F}
+    println("PostgreSQL driver — LibPQ (the default) is needed for `passfile`, `service`, Unix-socket hosts or the full `sslmode` set;")
+    println("  Postgres (Postgres.jl, pure Julia) gives more throughput under a server.")
+    from_env = get(ENV, Configuration.POSTGRES_DRIVER_ENV, "")
+    if !isempty(strip(from_env))
+        println("  $(Configuration.POSTGRES_DRIVER_ENV) is set: an empty answer writes no driver, so the " *
+                "variable decides at load time. Type LibPQ to pin LibPQ in the file.")
+    end
+    while true
+        print("PostgreSQL driver (LibPQ or Postgres) [Default: LibPQ]: ")
+        answer = read_input()
+        isempty(answer) && return nothing
+        try
+            driver = Configuration._resolve_postgres_driver(answer; source = "setup")
+            return String(_PG_DRIVER_PACKAGES[driver])
+        catch e
+            e isa InvalidConfigurationError || rethrow()
+            println(error_message(e))
+        end
     end
 end
 

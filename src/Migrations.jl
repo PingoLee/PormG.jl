@@ -59,6 +59,7 @@ import PormG: connection, config, get_constraints_pk, get_constraints_unique, ge
 import PormG: _column_attributes
 import PormG: backend_sqlite_version  # SQLite library-version probe (driver body in the weakdep extension)
 import PormG: PormGModel, PormGField, PormGSettings, PormGBackend, PormGPostgres, PormGSQLite, PormGMySQL, _SQLEngine
+import PormG.Kernel: Settings  # `config`'s value type (#1622), for the `config::Dict{String,Settings}` keywords
 # The canonical column IR (#507). The NOUNS live in `Kernel` (`src/column_ir.jl`) because `Dialect`
 # renders an ALTER from a `ColumnDelta` and is included before this module; the COMPILER that turns a
 # `PormGField` into a `ColumnSpec` is `migrations/column_spec.jl`, here, where `Models` and `Dialect`

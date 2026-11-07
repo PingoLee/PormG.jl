@@ -138,7 +138,7 @@ function pool_stats(key::AbstractString)
   # snapshot for a never-built pool would read as a healthy empty pool.
   pool = Configuration.get_settings(String(key)).connections
   pool === nothing && throw(InvalidConfigurationError("Connection '$(key)' has no pool yet (not built / not connected)."))
-  return pool_stats(pool)
+  return ConnectionPool.with_pool(pool_stats, pool)   # #1622: a static call per pool type
 end
 
 include("Models.jl")

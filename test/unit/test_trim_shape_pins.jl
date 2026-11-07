@@ -44,6 +44,33 @@ function _dynamic_calls(f, argtypes::Tuple)::Vector{String}
   return found
 end
 
+# The same over `tt` (a signature type) and over the keyword body it calls: a function with keyword
+# arguments lowers to a thin method that `:invoke`s `#f#N`, where the code is, so a pin on it reads both.
+function _dynamic_calls_kw(f, argtypes::Tuple)::Vector{String}
+  found = String[]
+  fname = string(nameof(f))
+  walk(tt, depth) = for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+    for (i, stmt) in enumerate(ci.code)
+      stmt isa Expr || continue
+      if stmt.head === :call
+        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        push!(found, "$(i): $(stmt)")
+      elseif stmt.head === :invoke && depth > 0
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        (mi isa Core.MethodInstance && mi.def isa Method) || continue
+        startswith(string(mi.def.name), "#$(fname)#") && walk(mi.specTypes, depth - 1)
+      end
+    end
+  end
+  walk(Base.signature_type(f, argtypes), 1)
+  return found
+end
+
+# A settings type of its own, which `config` no longer accepts (#1622).
+struct _TspOtherSettings <: PormG.PormGSettings end
+# A test's own stand-in pool, which `with_pool` hands on through its open arm.
+struct _TspStandInPool <: PormG.PormGSQLite end
+
 @testset "Trim shape pins (#1599)" begin
 
   # What: `_is_interactive()`, the bootstrap's one input on whether the process is a REPL, read by
@@ -69,6 +96,215 @@ end
     finally
       Configuration._INTERACTIVE[] = previous
     end
+  end
+
+  # What: the registry of loaded connections and its accessor, `config` and `get_settings(key)`.
+  # Expected: `config` is a `Dict{String,Settings}`, `get_settings` infers `Settings`, and a field read
+  #   through it infers the field's declared type (`implicit::Bool`, `connections`' union).
+  # Why: `config` was a `Dict{String,PormGSettings}` of the abstract type, so every
+  #   `get_settings(key).x` was an `Any`: the read in `_register_models!`, `load` and `close_pool!(key)`
+  #   was #1600's row 2 in the verifier and a `MethodError` at run time in both boot paths (#1622 wall 1).
+  @testset "get_settings returns the concrete Settings (#1622 wall 1, row 2)" begin
+    @test PormG.config isa Dict{String, Configuration.Settings}
+    @test isconcretetype(Configuration.Settings)
+    @test Configuration.Settings === PormG.Kernel.Settings
+    @test only(Base.return_types(Configuration.get_settings, (String,))) === Configuration.Settings
+    read_implicit(k::String) = Configuration.get_settings(k).implicit
+    @test only(Base.return_types(read_implicit, (String,))) === Bool
+    read_pool(k::String) = Configuration.get_settings(k).connections
+    @test only(Base.return_types(read_pool, (String,))) === fieldtype(Configuration.Settings, :connections)
+    # A settings type of one's own can no longer be registered (the upgrade entry's case).
+    @test_throws MethodError (PormG.config["_tsp_other"] = _TspOtherSettings())
+    @test !haskey(PormG.config, "_tsp_other")
+  end
+
+  # What: a PostgreSQL pool built for a driver named at run time (`postgres_driver:`, `register_connection`).
+  # Expected: the constructor infers a union of the concrete pool types, one per driver of
+  #   `_PG_DRIVER_PACKAGES`, with no dynamic call; each driver builds its own type.
+  # Why: `PostgresConnectionPool{driver}(…)` from a run-time Symbol was a `UnionAll` to inference, a
+  #   dynamic constructor call, and the boot failure of #1600's PostgreSQL round (row 11, #1622 wall 2).
+  @testset "PostgresConnectionPool builds a concrete type per driver (#1622 wall 2)" begin
+    CP = PormG.ConnectionPool
+    # Qualified, not through the local `CP`: a closure over a local Module value would not fold.
+    build(d::Symbol) = PormG.ConnectionPool.PostgresConnectionPool("host=x"; pool_size = 1, driver = d)
+    @test isempty(_dynamic_calls_kw(CP.PostgresConnectionPool, (String,)))
+    rt = only(Base.return_types(build, (Symbol,)))
+    @test all(isconcretetype, Base.uniontypes(rt))
+    for d in keys(PormG._PG_DRIVER_PACKAGES)
+      @test build(d) isa CP.PostgresConnectionPool{d}
+      @test CP.PostgresConnectionPool{d} <: rt
+    end
+    @test_throws PormG.InvalidConfigurationError build(:nodriver)
+  end
+
+  # What: `with_pool`, the closed dispatch over the pools PormG builds.
+  # Expected: every concrete pool type PormG or a driver extension defines has an `isa` arm (a
+  #   `PostgresConnectionPool{D}` per driver); `f` is called with the pool at its concrete type; a
+  #   `Settings` entry is unwrapped; an entry with no pool raises `InvalidConfigurationError`; a test's
+  #   own stand-in pool still reaches `f` (the open arm).
+  # Why: a pool kept in an untyped place (`Settings.connections`) made every call on it dynamic, a
+  #   `MethodError` at run time in a trimmed image (#1599 row 11). A pool type added without an arm
+  #   would fall back to that dynamic call silently.
+  @testset "with_pool lists every concrete pool type (#1622 wall 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    body = src[findfirst("function with_pool(", src)[1]:findfirst("function _with_unlisted_pool(", src)[1]]
+    listed = String[]
+    for T in (CP.SQLiteConnectionPool, CP.MySQLConnectionPool)
+      push!(listed, string(nameof(T)))
+    end
+    for d in keys(PormG._PG_DRIVER_PACKAGES)
+      push!(listed, "PostgresConnectionPool{$(repr(d))}")
+    end
+    for name in listed
+      @test occursin("pool isa $(name) &&", body)
+    end
+    # Every concrete pool struct PormG's modules define is one of them.
+    defined = Set{String}()
+    for M in (PormG.ConnectionPool,), n in names(M; all = true)
+      isdefined(M, n) || continue
+      x = getglobal(M, n); x isa Type || continue
+      d = Base.unwrap_unionall(x)
+      (d isa DataType && !isabstracttype(d) && d <: PormG.Kernel._SQLEngine) && push!(defined, string(nameof(d)))
+    end
+    @test defined == Set(["SQLiteConnectionPool", "MySQLConnectionPool", "PostgresConnectionPool"])
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    @test CP.with_pool(typeof, sl) === CP.SQLiteConnectionPool
+    @test CP.with_pool((p, x) -> (typeof(p), x), sl, 7) === (CP.SQLiteConnectionPool, 7)
+    @test CP.with_pool(typeof, Configuration.Settings(connections = sl)) === CP.SQLiteConnectionPool
+    @test_throws PormG.InvalidConfigurationError CP.with_pool(typeof, Configuration.Settings())
+    @test CP.with_pool(typeof, _TspStandInPool()) === _TspStandInPool
+    @test_throws PormG.InvalidConfigurationError CP.with_pool(typeof, 42)
+    # `pool` is `@nospecialize`, so the instance that runs is the one for `Any`: every arm is a static
+    # call there (the four `isa` arms, the `Settings` unwrap, the open arm's `_with_unlisted_pool`).
+    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool, Nothing)))
+    # The typed read's form (#1605): the last argument is its row decoder, concrete per `T`.
+    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool,
+                                                PormG.QueryBuilder._RowDecoder{NamedTuple{(:a,),Tuple{Int}},Tuple{PormG.ReadParser}})))
+    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._atomic_on), Any, typeof(identity), Bool)))
+    # A settings entry with no pool built yet: every call that needs the pool refuses it the same way.
+    PormG.config["_tsp_nopool"] = Configuration.Settings()
+    try
+      s0 = PormG.config["_tsp_nopool"]
+      @test_throws PormG.InvalidConfigurationError CP.atomic(() -> 1, "_tsp_nopool")
+      @test_throws PormG.InvalidConfigurationError CP.run_in_transaction(() -> 1, s0)
+      @test_throws PormG.InvalidConfigurationError CP.fetch(s0, "SELECT 1")
+      @test_throws PormG.InvalidConfigurationError CP.with_savepoint(() -> 1, s0, "sp_tsp")
+    finally
+      delete!(PormG.config, "_tsp_nopool")
+    end
+  end
+
+  # What: the pool-identity calls the query builder makes on the pool it holds, which it types as the
+  #   abstract `_SQLEngine` or `Union{Nothing,_SQLEngine}` (`ensure_transaction_scope(model, connection)`,
+  #   `transaction_connection_for(instruction.connection)`), and the two calls an app makes by key.
+  # Expected: no dynamic call, at the caller and in the callee.
+  # Why: #1600's round 3 reached the write path and stopped at `ensure_transaction_scope` with no method
+  #   instance for the concrete pool (row 11); `close_pool!(key)` and `ping(key)` missed in Nitro's pools
+  #   probe (#1622). The callees are `@nospecialize` barriers, or reach the pool through `with_pool`.
+  @testset "the pool-identity and by-key calls resolve (#1622 wall 2)" begin
+    E = PormG.Kernel._SQLEngine
+    scope(m::Base.RefValue{PormG.PormGModel}, p::Base.RefValue{E}) = Configuration.ensure_transaction_scope(m[], p[])
+    txfor(p::Base.RefValue{Union{Nothing, E}}) = Configuration.transaction_connection_for(p[])
+    @test isempty(_dynamic_calls(scope, (Base.RefValue{PormG.PormGModel}, Base.RefValue{E})))
+    @test isempty(_dynamic_calls(Configuration.ensure_transaction_scope, (PormG.PormGModel, E)))
+    @test isempty(_dynamic_calls(txfor, (Base.RefValue{Union{Nothing, E}},)))
+    # On a concrete pool: over the abstract union, a test file's own method on its stand-in adds matches.
+    @test isempty(_dynamic_calls(Configuration.transaction_connection_for, (PormG.ConnectionPool.SQLiteConnectionPool,)))
+    @test Configuration.transaction_connection_for(nothing) === nothing
+    # A nested block on the same database (`atomic(key) do; atomic(key) do …`): the savepoint runs in
+    # a transaction context entered with the caller's concrete pool and the untyped `conn`.
+    @test isempty(_dynamic_calls(PormG.ConnectionPool._nested_savepoint,
+                                 (typeof(identity), PormG.ConnectionPool.SQLiteConnectionPool, Configuration.Settings)))
+    @test isempty(_dynamic_calls_kw(Configuration.close_pool!, (String,)))
+    @test isempty(_dynamic_calls(Configuration.ping, (String,)))
+    # #1622 wall 3: the lease path's offline check, on the key `ensure_before_connect!` resolves.
+    @test isempty(_dynamic_calls(Configuration._is_offline_key, (String,)))
+  end
+
+  # What: the typed reads of a connection's configuration block (`db_config_settings`, a
+  #   `Dict{String,Any}`): the seconds, boolean, integer and text readers, the `config:` key setter and
+  #   the PostgreSQL driver name.
+  # Expected: no dynamic call in any of them, and each answers as the untyped read did: a number from
+  #   a string, an `Int`, a `Float64`, a `Bool` or another `Real`; the truthy strings; `parse(Int, …)`
+  #   raising on a non-integer; a `config:` value of the wrong type raising `TypeError` (the
+  #   `setfield!` it replaces did).
+  # Why: every read of the block was an `Any`, and every use of it a dynamic call (#1599 row 4, the
+  #   typing half of #1606), in `read_db_connection_data`, `_build_connection_pool!` and the pool
+  #   settings. `setfield!(settings, Symbol(key), v)` set a field by a name read at run time.
+  @testset "the configuration block reads are typed (#1606, row 4)" begin
+    S = Configuration.Settings
+    @test isempty(_dynamic_calls(Configuration._config_secs, (S, String, Float64)))
+    @test isempty(_dynamic_calls(Configuration._config_bool, (S, String, Bool)))
+    @test isempty(_dynamic_calls(Configuration._cfg_int, (S, String, Int)))
+    @test isempty(_dynamic_calls(Configuration._cfg_string, (S, String)))
+    @test isempty(_dynamic_calls(Configuration._set_config_key!, (S, String, Any)))
+    @test isempty(_dynamic_calls_kw(Configuration._resolve_postgres_driver, (Any,)))
+    s = S(db_config_settings = Dict{String,Any}("a" => "5", "b" => 5, "c" => 2.5, "d" => true,
+          "e" => 1//2, "f" => "x", "g" => "yes", "h" => "0", "i" => nothing, "j" => "7", "k" => :SQLite))
+    @test Configuration._config_secs(s, "a") === 5.0
+    @test Configuration._config_secs(s, "b") === 5.0
+    @test Configuration._config_secs(s, "c") === 2.5
+    @test Configuration._config_secs(s, "d") === 1.0
+    @test Configuration._config_secs(s, "e") === 0.5
+    @test Configuration._config_secs(s, "f", 3.0) === 3.0
+    @test Configuration._config_secs(s, "absent", 4.0) === 4.0
+    @test Configuration._config_bool(s, "g", false) === true
+    @test Configuration._config_bool(s, "h", true) === false
+    @test Configuration._config_bool(s, "i", true) === false
+    @test Configuration._config_bool(s, "absent", true) === true
+    @test Configuration._cfg_int(s, "j", 3) === 7
+    @test Configuration._cfg_int(s, "b", 3) === 5
+    @test Configuration._cfg_int(s, "absent", 3) === 3
+    @test_throws ArgumentError Configuration._cfg_int(s, "f", 3)
+    @test Configuration._cfg_string(s, "k") == "SQLite"
+    @test Configuration._cfg_string(s, "absent") === nothing
+    Configuration._set_config_key!(s, "change_data", true)
+    Configuration._set_config_key!(s, "time_zone", "America/Sao_Paulo")
+    Configuration._set_config_key!(s, "django_prefix", nothing)
+    @test s.change_data === true && s.time_zone == "America/Sao_Paulo" && s.django_prefix === nothing
+    @test_throws TypeError Configuration._set_config_key!(s, "change_db", "yes")
+    @test_throws TypeError Configuration._set_config_key!(s, "model_file", ":models")
+    @test Configuration._resolve_postgres_driver(:Postgres; source = "test") === :postgres
+    @test Configuration._resolve_postgres_driver("libpq"; source = "test") === :libpq
+  end
+
+  # What: the pool's calls into code that may be defined later than the task making them (the SQLite
+  #   worker's `backend_execute`, a deferred or reaped `close`).
+  # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its
+  #   arguments and result and holds no dynamic call (the builtin is not one).
+  # Why: six call sites each carried their own copy of the world-age reason (#1609, I11). One owner
+  #   keeps the reason in one place, and the one place a trimmed build would change: `juliac --trim`
+  #   does not verify the `invokelatest` builtin (#1609's trim item, still open).
+  @testset "invokelatest has one owner in ConnectionPool.jl (#1609)" begin
+    path = joinpath(pkgdir(PormG), "src", "ConnectionPool.jl")
+    sites = [l for l in eachline(path) if occursin("invokelatest(", l) && !startswith(lstrip(l), "#")]
+    @test length(sites) == 1
+    @test occursin("_call_latest(", only(sites))
+    @test PormG.ConnectionPool._call_latest(+, 1, 2) === 3
+    @test isempty(_dynamic_calls(PormG.ConnectionPool._call_latest, (typeof(+), Int, Int)))
+  end
+
+  # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /
+  #   `_feature_since(T, ::Symbol)`, and its callers `_supports` and `_supporting_backends`.
+  # Expected: the same answer as the table's `Val` method for every feature on every backend; an
+  #   unknown name raises `InvalidValueError`; no dynamic call in the lookup or in `_supports` on a
+  #   concrete pool.
+  # Why: the callers built `Val(feature)` from a run-time Symbol, which names no method: a dynamic
+  #   call per lookup, 10 verifier rows in #1600's round 3 (row 14, #1682).
+  @testset "the capability lookup is a closed dispatch (#1682, row 14)" begin
+    K = PormG.Kernel
+    for T in (PormG.PormGPostgres, PormG.PormGSQLite, PormG.PormGMySQL, PormG.ConnectionPool.SQLiteConnectionPool),
+        f in K._FEATURE_NAMES
+      @test K._has_feature(T, f) === K._has_feature(T, Val(f))
+      @test K._feature_since(T, f) === K._feature_since(T, Val(f))
+    end
+    @test_throws PormG.InvalidValueError K._has_feature(PormG.PormGSQLite, :no_such_feature)
+    @test_throws PormG.InvalidValueError K._feature_since(PormG.PormGSQLite, :no_such_feature)
+    @test K._supporting_backends(:arrays) == ["PostgreSQL"]
+    @test isempty(_dynamic_calls(K._has_feature, (Type{PormG.ConnectionPool.SQLiteConnectionPool}, Symbol)))
+    @test isempty(_dynamic_calls(K._feature_since, (Type{PormG.ConnectionPool.SQLiteConnectionPool}, Symbol)))
+    @test isempty(_dynamic_calls_kw(K._supports, (PormG.ConnectionPool.SQLiteConnectionPool, Symbol)))
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

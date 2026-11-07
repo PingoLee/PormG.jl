@@ -261,7 +261,7 @@ end
       @test stop_idx !== nothing
       rest[1:first(stop_idx)]
     end
-    body = function_body("function with_advisory_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL}")
+    body = function_body("function with_advisory_lock(f::F, pool::Union{PormGPostgres, PormGMySQL}")
 
     # Strip comments before scanning — the comment ABOVE the fix quotes `wait(...)`
     # while explaining the bug, and prose must not be able to fail a code guard.

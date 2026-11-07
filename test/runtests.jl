@@ -193,6 +193,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Engine Branches Are Reviewed (#1129)" include("unit/test_engine_branches.jl")
     @testset "Concrete Types Ratchet (#1346)" include("unit/test_type_ratchet.jl")
     @testset "Trim Shape Pins (#1599)" include("unit/test_trim_shape_pins.jl")
+    @testset "Configuration Read At Run Time (#1606)" include("unit/test_image_build_config.jl")
     @testset "Engine Facts Have No Fallback (#1129)" include("unit/test_engine_facts.jl")
     @testset "Meaning Departures Classify Every Backend (#1170)" include("unit/test_meaning_departures.jl")
     @testset "Constructor Surface Accepts Any AbstractString (#603)" include("unit/test_constructor_abstractstring.jl")

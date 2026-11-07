@@ -3952,7 +3952,7 @@ function _pending_plan_already_applied(connection::_SQLEngine, settings::PormGSe
 end
 
 function makemigrations(db::String; models_file::Union{AbstractString, Nothing} = nothing,
-                        config::Dict{String,PormGSettings} = config, interactive::Bool = true,
+                        config::Dict{String,Settings} = config, interactive::Bool = true,
                         renames::AbstractVector = Pair{String, Union{String, Nothing}}[])
 settings = Configuration.get_settings(db)
 # Here as well as in the methods below, and unconditionally: the plan is written under the folder

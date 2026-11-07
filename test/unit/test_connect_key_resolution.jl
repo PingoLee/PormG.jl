@@ -232,7 +232,7 @@ end
 
   # Nothing matches at either rank → nothing, which is the caller's implicit-load branch.
   @test PormG.Models._resolve_connect_key("../db_unknown", cfg) === nothing
-  @test PormG.Models._resolve_connect_key("db", Dict{String,PormG.PormGSettings}()) === nothing
+  @test PormG.Models._resolve_connect_key("db", Dict{String,PormG.Configuration.Settings}()) === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ end
   # The flag decides, not the string (#623): a dynamic entry whose folder slot happens to hold a
   # real folder name is still skipped by BOTH resolvers. Pre-fix both compared the slot against
   # the literal, so this entry was taken for a folder.
-  cfg3 = Dict{String,PormG.PormGSettings}("dyn" => _S550(db_def_folder = "db", dynamic = true))
+  cfg3 = Dict{String,PormG.Configuration.Settings}("dyn" => _S550(db_def_folder = "db", dynamic = true))
   @test PormG.Models._resolve_connect_key("db", cfg3) === nothing
   @test Configuration._resolve_loaded_key("db/", cfg3) === nothing
 end
@@ -861,7 +861,7 @@ end
     #    migrate branch — the kwarg exists precisely to allow an isolated configuration.
     empty!(PormG.config)
     Configuration.load(db; env = "test")                           # global holds the abs key
-    local_cfg = Dict{String,PormG.PormGSettings}()
+    local_cfg = Dict{String,PormG.Configuration.Settings}()
     cd(app) do
       @test Configuration.load("db"; env = "test", config = local_cfg) == "db"
     end
@@ -872,7 +872,7 @@ end
     #    the global is not consulted; this drives the branch that actually threw the KeyError,
     #    by pre-populating the LOCAL dict with the implicit absolute key.
     empty!(PormG.config)
-    local_cfg2 = Dict{String,PormG.PormGSettings}()
+    local_cfg2 = Dict{String,PormG.Configuration.Settings}()
     Configuration.load(db; env = "test", config = local_cfg2, implicit = true)
     @test collect(keys(local_cfg2)) == [db]
     cd(app) do

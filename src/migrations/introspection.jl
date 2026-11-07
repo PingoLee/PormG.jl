@@ -1674,7 +1674,7 @@ function _refuse_statements_above_server(conn::PormGPostgres, statements::Abstra
   isempty(refused) && return nothing
   # The feature's name and the version it needs are the capability table's (#1163).
   T = typeof(conn)
-  needs(feature) = _version_text(T, something(_feature_since(T, Val(feature))))
+  needs(feature) = _version_text(T, something(_feature_since(T, feature)))   # #1682: the Symbol dispatch
   # Each statement with its own way out: a plan can hold both, and they point in opposite directions.
   lines = join(("  - $(_feature_description(row.feature)), PostgreSQL $(needs(row.feature))+:\n" *
                 "      $(_refused_statement_excerpt(stmt, row.pattern))\n" *

@@ -210,28 +210,6 @@ function _resolve_fk_short_form(model::PormGModel, field_name::String)::String
   return field_name
 end
 
-# Resolve one side of an M2M relation (owner or related) to its PormGModel within `_module`:
-# by binding first, then by formatted model name. Lets the join builder read each side's
-# `db_column` for its PK (#64) — the relation stores only string names/bindings.
-function _resolve_m2m_side_model(_module::Module, binding::String, model_name::String, field_name::String)::PormGModel
-  bsym = Symbol(binding)
-  if isdefined(_module, bsym)
-    candidate = Base.invokelatest(getfield, _module, bsym)
-    candidate isa PormGModel && return candidate
-  end
-
-  target_name = Models.format_model_name(model_name)
-  for model in Models.get_all_models(_module)
-    Models.format_model_name(model.name) == target_name && return model
-  end
-
-  throw(QueryBuildError("The many-to-many model $(binding) for accessor $(field_name) is not defined"))
-end
-
-function _resolve_many_to_many_related_model(_module::Module, relation::Models.ManyToManyRelation)::PormGModel
-  return _resolve_m2m_side_model(_module, relation.related_binding, relation.related_model, relation.field_name)
-end
-
 function _insert_many_to_many_joins(
   relation::Models.ManyToManyRelation,
   instruct::SQLInstruction,
@@ -259,9 +237,9 @@ function _insert_many_to_many_joins(
   # ordinary import joined correctly and the bug survived; a `db_column=` written in the Django source
   # did not, because the importer splats it onto the field it builds (`process_class_fields!`). The
   # shape was origin-independent — hand-written models reached it the same way.
-  _module = instruct.object.model._module::Module
-  owner_model = _resolve_m2m_side_model(_module, relation.owner_binding, relation.owner_model, relation.field_name)
-  related_model = _resolve_m2m_side_model(_module, relation.related_binding, relation.related_model, relation.field_name)
+  # #1601: both sides are resolved at registration and recorded on the relation.
+  owner_model = relation.owner_model_resolved
+  related_model = relation.related_model_resolved
 
   through_row = ModelJoin(
     a = parent_table,
@@ -385,8 +363,7 @@ function _apply_many_to_many_branch(
   previus_how::Union{String, Nothing}=nothing,
   track_path::Bool=true,
 )
-  foreing_table_module = instruct.object.model._module::Module
-  foreign_model = _resolve_many_to_many_related_model(foreing_table_module, relation)
+  foreign_model = relation.related_model_resolved   # #1601: resolved at registration
   # #1134: no `length(vector) == 1` refusal. A hop always has a segment after it — `_build_row_join`
   # only ever receives two or more, and its loop only runs while two remain — so a path ending at
   # this relation reaches `_solve_field`, which refuses it as a relation (`_relation_terminal`).

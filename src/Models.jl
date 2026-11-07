@@ -203,12 +203,12 @@ end
   related_field::String
   inverse_accessor::String
   reverse::Bool = false
-  # #65: resolved model objects for the two sides, populated wherever a relation is built
-  # (`_relation_from_many_to_many` for the forward relation, swapped in the reverse one). This
-  # completes the "resolve every lazy reference once" guarantee for M2M — the query builder still
-  # re-resolves by binding today; consuming these slots to retire that reflection is #68/#41.
-  owner_model_resolved::Union{PormGModel, Nothing} = nothing
-  related_model_resolved::Union{PormGModel, Nothing} = nothing
+  # #65: resolved model objects for the two sides, set wherever a relation is built
+  # (`_relation_from_many_to_many` for the forward relation, swapped in the reverse one). REQUIRED
+  # since #1601: registration resolves both sides or refuses, so the query builder reads these and
+  # never looks a side up by its binding again.
+  owner_model_resolved::PormGModel
+  related_model_resolved::PormGModel
   # The explicit `through=` model, resolved (#363). Unlike the two slots above it has a live reader:
   # `QueryBuilder._m2m_has_extra_fields` needs the through model's FIELDS to decide whether the
   # direct mutators are allowed, and it used to recover them by re-resolving `through_model` as a
@@ -310,16 +310,19 @@ _reverse_relation(child::PormGModel, model_name::Symbol, binding::Symbol,
 _derived_reverse_accessor(model_name::Symbol, field_name::AbstractString, count::Int)::String =
   count > 1 ? lowercase(string(model_name, "_", field_name)) : String(model_name)
 
-# Lenient twin of `_resolve_model_reference` for the pre-scan's `strict = false` path (#396): a
-# many-to-many whose target cannot be resolved is skipped rather than aborting the scan. Narrowed to
-# `ModelDefinitionError` — the not-found case — so a genuine bug still surfaces, matching the
-# `UndefVarError` narrowing in `_resolve_target_model`.
-_try_resolve_model_reference(_module::Module, to)::Union{PormGModel, Nothing} =
-  try
-    _resolve_model_reference(_module, to)
-  catch e
-    e isa ModelDefinitionError ? nothing : rethrow()
-  end
+# #1601: a relation target that is a model OBJECT must belong to a registered model set — this
+# module's (whose models `_register_models!` gave `_module` before this scan) or a module registered
+# before it. A model in neither (one reached through `using` and not declared, #354; a bare `Model(…)`)
+# would get a reverse accessor and no connection: the half-registered state #354 described. Refused
+# here, naming the target and both fixes.
+function _require_registered_target(model::PormGModel, field_name::AbstractString, target::PormGModel,
+                                    _module::Module)::Nothing
+  target._module === nothing || return nothing
+  throw(ModelDefinitionError(
+    "$(model.name).$(field_name) relates to the model \"$(target.name)\", which no registered models " *
+    "module declares. List it in $(_module)'s `Models.@models …` line, or register the module that " *
+    "declares it before this one."))
+end
 
 # One pass over `model.fields` that resolves every relation target and counts them per target, so the
 # registration pass can derive an accessor that does not depend on the order it walks in (#396).
@@ -341,12 +344,13 @@ function _collect_relation_targets(model::PormGModel, _module::Module; strict::B
     target = if field isa sRelationalColumn
       resolve_fk_target!(field, field_name, model.name, _module; strict = strict)
     elseif is_many_to_many_field(field)
-      strict ? _resolve_model_reference(_module, field.to) :
-               _try_resolve_model_reference(_module, field.to)
+      strict ? _declared_target(_module, field.to, model, field_name, "ManyToManyField") :
+               _resolve_target_model(field.to, _module)
     else
       nothing
     end
     target isa PormGModel || continue
+    strict && _require_registered_target(model, field_name, target, _module)
     targets[field_name] = target
     counts[target] = get(counts, target, 0) + 1
   end
@@ -2311,21 +2315,41 @@ function fk_target_table(field::PormGField;
     "re-import, so the key has a model to point at."))
 end
 
-# Resolve a string FK/O2O target to its model object within `mod` (#62). Returns the
-# resolved `PormGModel`, a model passed through untouched, or `nothing` when the name is
-# not a model binding (caller picks strictness). `fk_target_column` can only honor a
-# referenced parent's `db_column` once `field.to` is a resolved model, so both model-load
-# lifecycles (runtime `set_models`, the migration prelude) write the resolution back via
-# this helper. The catch is narrowed to `UndefVarError` (the "not defined" case) so a
-# genuine bug surfaces instead of being swallowed.
+# Resolve a relation target to its model within `mod` (#62): a model passes through; a `String`
+# names a model `mod` DECLARES (#1601, #1602) — by binding first, then by logical name — or the result
+# is `nothing` (the caller picks strictness). Not a lookup of an arbitrary name in the module: a
+# binding that holds something else (`position` is `Base.position` inside a models module, #782) is
+# simply not a declared model. `fk_target_column` can only honor a referenced parent's `db_column`
+# once `field.to` is a resolved model, so both model-load lifecycles (runtime `set_models`, the
+# migration prelude) write the resolution back via this helper.
 function _resolve_target_model(to, mod::Module)::Union{PormGModel, Nothing}
   to isa PormGModel && return to
-  m = try
-    getfield(mod, Symbol(to))
-  catch e
-    e isa UndefVarError ? nothing : rethrow()
+  to isa AbstractString || return nothing
+  _model_set(mod) === nothing && return nothing
+  declared = _declared_models(mod)
+  ref = String(to)
+  for (binding, model) in declared
+    String(binding) == ref && return model
   end
-  return m isa PormGModel ? m : nothing
+  target = format_model_name(ref)
+  for (_, model) in declared
+    format_model_name(model.name) == target && return model
+  end
+  return nothing
+end
+
+# The strict form, for registration (#1601): the declared model `to` names, or a refusal naming the
+# target and the models the module declares.
+function _declared_target(mod::Module, to, model::PormGModel, field_name::AbstractString,
+                          kind::String)::PormGModel
+  resolved = _resolve_target_model(to, mod)
+  resolved === nothing || return resolved
+  set = _model_set(mod)
+  listed = set === nothing || isempty(set.bindings) ? "none" : join(set.bindings, ", ")
+  throw(ModelDefinitionError(
+    "The model $(to) in the $(kind) $(field_name) in the model $(model.name) is not one of the " *
+    "models $(mod) declares (`Models.@models`: $(listed)). Name a declared model's binding or " *
+    "table name, or pass the model itself."))
 end
 
 """
@@ -2358,7 +2382,9 @@ function resolve_fk_target!(field, field_name::AbstractString,
                             model_name::AbstractString, lookup::Module; strict::Bool)::Union{PormGModel, Nothing}
   resolved = _resolve_target_model(field.to, lookup)
   if resolved === nothing
-    strict && throw(ModelDefinitionError("The model $(field.to) in the field $field_name in the model $model_name is not defined"))
+    strict && throw(ModelDefinitionError(
+      "The model $(field.to) in the field $field_name in the model $model_name is not defined: it " *
+      "is not one of the models $(lookup) declares (`Models.@models`)."))
     @debug "makemigrations: FK target $(field.to) of field $field_name in model $model_name is not a model binding in the models module; leaving as a string"
     return nothing
   end
@@ -3580,7 +3606,7 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
     # bare model name, the new one suffixed — until the next `set_models`, which rebuilds
     # `related_objects` from scratch and normalizes the whole group.
     settings = config[model.connect_key]
-    related_model = _resolve_model_reference(model._module, field.to)
+    related_model = _declared_target(model._module, field.to, model, field_name, "ManyToManyField")
     _, counts = _collect_relation_targets(model, model._module; strict = false)
     accessor = _reverse_accessor_for(model, get_model_name(model, settings)::Symbol, field_name,
                                      field, related_model, counts)
@@ -4806,73 +4832,31 @@ function _same_model_reference(a::Union{String, PormGModel}, b::PormGModel)::Boo
   return format_model_name(_model_reference_name(a)) == format_model_name(b.name)
 end
 
-# Recover a model's Julia binding by identity. Used by the many-to-many registration path, which
-# stores the two bindings on the relation; the reverse-FK path gets its binding straight from
-# `_collect_models_and_bindings` instead, which is a great deal cheaper than one scan per relation.
-#
-# Two-pass structure (fixed in #354): the fast path scans `names(_module; all=true, imported=true)`,
-# which lists locally-defined and explicitly `import`ed bindings. The miss path scans with
-# `usings=true`, which additionally lists bindings introduced by `using`. The miss path uses
-# identity matching (`attr === model`) as its filter, so no `binding_module` guard is needed.
-#
-# The `uppercasefirst` fallback is retained as a last resort for the edge case where a model object
-# exists but is not bound under any name in the module (both scans exhausted). DO NOT delete it:
-# #343 tried that and broke registration silently, because both `set_models` callers that matter
-# (the injected `__init__` in `Utils.jl` and the Revise callback) swallow exceptions.
-#
-# The reverse-FK path depends on none of this: `set_models` records its binding directly from
-# `_collect_models_and_bindings`. This helper is many-to-many-only.
-function _find_model_binding_name(_module::Module, model::PormGModel)::String
-  # Fast path: explicit imports and locally-defined names.
-  for name in names(_module; all=true, imported=true)
-    attr = try
-      Base.invokelatest(getfield, _module, name)
-    catch
-      # swallows a name whose read fails (see `get_all_models`): it is not this model.
-      nothing
+# A registered model's Julia binding, from its module's declared set (#1601, #1602): the binding
+# whose value is this model. The many-to-many registration stores both sides' bindings on the relation.
+# It replaced `_find_model_binding_name`, an identity scan over `names(_module)` (twice, the second
+# with `usings = true`) whose last resort was a GUESS, `uppercasefirst(model.name)`; a model with no
+# declared binding is now refused instead. The reverse-FK path reads its binding straight from
+# `_collect_models_and_bindings`.
+function _declared_binding(model::PormGModel)::String
+  mod = model._module
+  mod isa Module || throw(ModelDefinitionError(
+    "The model \"$(model.name)\" is not registered, so it has no declared binding. Register the " *
+    "models module that declares it (`Models.@models`)."))
+  set = _model_set(mod)
+  if set !== nothing
+    for b in set.bindings
+      _latest_global(mod, b) === model && return String(b)
     end
-    attr === model && return String(name)
   end
-  # Miss path (#354): `using`-scoped names are invisible to `imported=true` but reachable by identity.
-  for name in names(_module; all=true, imported=true, usings=true)
-    attr = try
-      Base.invokelatest(getfield, _module, name)
-    catch
-      # swallows a name whose read fails (see `get_all_models`): it is not this model.
-      nothing
-    end
-    attr === model && return String(name)
-  end
-  # Final fallback: guess from the model's logical name. Works only for Xxxxx-style bindings;
-  # kept for backward compatibility.
-  return uppercasefirst(String(model.name))
+  throw(ModelDefinitionError(
+    "The model \"$(model.name)\" is registered with $(mod), but no binding in its `Models.@models` " *
+    "line holds it."))
 end
 
-_resolve_model_reference(_module::Module, model_ref::PormGModel)::PormGModel = model_ref
+_schema_model(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::PormGModel)::PormGModel = model_ref
 
-# #782: the binding lookup is only a first guess. A binding that exists but holds no model — inside a
-# models module `position` is `Base.position` — used to be returned unchecked, so the `::PormGModel`
-# return conversion raised a raw `MethodError` outside the `try` and the logical-name match below never
-# ran. The `isa` check makes such a binding fall through exactly like an unbound name, the same guard
-# `_resolve_target_model` applies to an FK target. The catch is narrowed to `UndefVarError` for the
-# same reason as there: a genuine bug surfaces instead of turning into "not defined".
-function _resolve_model_reference(_module::Module, model_ref::String)::PormGModel
-  bound = try
-    Base.invokelatest(getfield, _module, Symbol(model_ref))
-  catch e
-    e isa UndefVarError ? nothing : rethrow()
-  end
-  bound isa PormGModel && return bound
-  target_name = format_model_name(model_ref)
-  for model in get_all_models(_module)
-    format_model_name(model.name) == target_name && return model
-  end
-  throw(ModelDefinitionError("The model $(model_ref) referenced by a ManyToManyField is not defined"))
-end
-
-_resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::PormGModel)::PormGModel = model_ref
-
-function _resolve_model_reference(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::String)::PormGModel
+function _schema_model(models::Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}, model_ref::String)::PormGModel
   target_name = format_model_name(model_ref)
   for (binding_name, info) in models
     model = info[:model]
@@ -5035,9 +5019,9 @@ function _relation_from_many_to_many(
     through_model = if field.through isa PormGModel
       field.through
     elseif _module !== nothing
-      _resolve_model_reference(_module, field.through)
+      _declared_target(_module, field.through, owner_model, field_name, "ManyToManyField's through")
     elseif model_map !== nothing
-      _resolve_model_reference(model_map, field.through)
+      _schema_model(model_map, field.through)
     else
       throw(ModelDefinitionError("Cannot resolve explicit through model $(field.through) for $(owner_model.name).$(field_name)"))
     end
@@ -5181,14 +5165,15 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
   # #396: `set_models` has already resolved the target and derived the accessor from the model's
   # per-target relation group, and passes both in. The fallbacks serve `add_field!` and any caller
   # that holds one field rather than a whole model.
-  related_model === nothing && (related_model = _resolve_model_reference(_module, field.to))
+  related_model === nothing &&
+    (related_model = _declared_target(_module, field.to, model, field_name, "ManyToManyField"))
   relation = _relation_from_many_to_many(
     model,
-    _find_model_binding_name(_module, model),
+    _declared_binding(model),
     field_name,
     field,
     related_model,
-    _find_model_binding_name(_module, related_model),
+    _declared_binding(related_model),
     settings,
     _module=_module,
     reverse_accessor=reverse_accessor,
@@ -5302,29 +5287,18 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
 
   for (model_name, model_info) in current_schema
     source_model = model_info[:model]
-    # These two labels are NOT real Julia bindings, and nothing here reads them as such: on this
-    # lifecycle the relation is a transient carrier for the through-table SHAPE only — the five slots
-    # consumed below are `through_table`, `owner_column`, `related_column`, `owner_pk`, `related_pk`,
-    # and the relation is then discarded rather than stored on a model. So `_resolve_m2m_side_model`
-    # never sees these, and their spelling cannot reach a `getfield`.
-    #
-    # #343 note, so the next reader does not "fix" this into the trap in reverse: the identity scan
-    # `_find_model_binding_name` uses is UNAVAILABLE here. `_load_current_models` (planner.jl) builds
-    # the schema by `Base.include`ing the model file into a throwaway module and deliberately never
-    # runs `set_models`, so `source_model._module` is `nothing` on the makemigrations path. Deriving
-    # from the model's LOGICAL name is therefore the only option — and it is a harmless one, because
-    # these slots are write-only here. Retiring them properly is #68/#41.
-    #
-    # Derive from the LOGICAL name, not the dict key: the key is the resolved PHYSICAL table name
-    # (#59) and would carry a `db_table` spelling into a Julia-side label. Identical output for every
-    # model without `db_table`, since the key is that same logical name lowercased.
-    owner_binding = uppercasefirst(format_model_name(source_model.name))
+    # No binding on this lifecycle, and none is guessed (#1601): the relation is a transient carrier
+    # for the through-table SHAPE only — the five slots consumed below are `through_table`,
+    # `owner_column`, `related_column`, `owner_pk`, `related_pk` — and it is discarded rather than
+    # stored on a model. `_load_current_models` (planner.jl) never runs `set_models`, so the models
+    # carry no registration to read a binding from; the two binding slots stay empty.
+    owner_binding = ""
     for (field_name, field) in source_model.fields
       is_many_to_many_field(field) || continue
       field.through === nothing || continue
 
-      target_model = _resolve_model_reference(current_schema, field.to)
-      related_binding = uppercasefirst(format_model_name(target_model.name))
+      target_model = _schema_model(current_schema, field.to)
+      related_binding = ""
       relation = _relation_from_many_to_many(source_model, owner_binding, field_name, field, target_model, related_binding, settings, model_map=current_schema)
       # A key into an UNMANAGED end carries no database constraint (#741): that end may be a view, which
       # cannot be referenced, and the planner refuses a constrained key into an unmanaged model — so

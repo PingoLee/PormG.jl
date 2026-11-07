@@ -188,7 +188,7 @@ end
   #   swallows on purpose says so, and a new one is reviewed when it is written.
   @testset "every bare catch in src/ says what it swallows" begin
     sites, missing_comment = _swe_scan(_swe_src_files())
-    @test length(sites) >= 40     # the scan found the sites; a broken pattern finds none
+    @test length(sites) >= 30     # the scan found the sites; a broken pattern finds none (#1602 removed the names scans' catches)
     @test isempty(missing_comment)
     isempty(missing_comment) ||
       @info "bare `catch` with no `# swallows …` comment (say what it swallows and why)" missing_comment

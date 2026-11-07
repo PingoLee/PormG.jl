@@ -49,7 +49,7 @@ using DataFrames
 using PormG
 using PormG.Models: Model, CharField, IDField, ForeignKey, OneToOneField, ManyToManyField
 import PormG.ConnectionPool: fetch
-import PormG.QueryBuilder: PormGRow, save, _row_related_model
+import PormG.QueryBuilder: PormGRow, save
 
 # The mock backend. `save(show_query = :dict)` never executes, so this only has to exist — the
 # `:execute` path is deliberately not taken anywhere in this file, and an empty DataFrame is what a
@@ -79,26 +79,9 @@ O2ORowOwner.connect_key = "o2o_row_paths"
 
 _owner_row(data...) = PormGRow(Dict{Symbol, Any}(data...), O2ORowOwner)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Site 1: `_row_related_model`'s dispatch signature accepts a one-to-one (#418)
-# The signature was `fk_meta::Models.sForeignKey`, so resolving the related model for a
-# `OneToOneField` raised a MethodError naming an internal helper the caller never wrote. The
-# `hasmethod` assertions are the literal claim #418 opened with (`hasmethod(..., Tuple{PormGModel,
-# sOneToOneField})` was `false`), and the M2M one pins that the widening stopped where it should.
-# ─────────────────────────────────────────────────────────────────────────────
-@testset "_row_related_model dispatches on a OneToOneField (#418)" begin
-  @test hasmethod(_row_related_model, Tuple{PormG.PormGModel, PormG.Models.sOneToOneField})
-  @test hasmethod(_row_related_model, Tuple{PormG.PormGModel, PormG.Models.sForeignKey})
-
-  # The over-widening guard. `sManyToManyField` HAS a `.to` field, so a `hasfield(typeof(f), :to)`
-  # predicate would admit it here and then die on `fk_meta.pk_field`, which an M2M does not have.
-  @test !hasmethod(_row_related_model, Tuple{PormG.PormGModel, PormG.Models.sManyToManyField})
-
-  # And it resolves, not merely dispatches: `.to` already holds the PormGModel, so this is the
-  # fast path both relational types share.
-  @test _row_related_model(O2ORowOwner, O2ORowOwner.fields["solo"]) === O2ORowTarget
-  @test _row_related_model(O2ORowOwner, O2ORowOwner.fields["many"]) === O2ORowTarget
-end
+# Site 1 was `_row_related_model`'s dispatch signature (#418). #1601 deleted the helper: registration
+# resolves every foreign key and one-to-one target, so `save()` reads `fk_meta.to` directly, for both
+# relational types alike; the save() testsets below are what pin that path.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sites 1 + 3: save() plans the related UPDATE for a projected one-to-one column (#418)

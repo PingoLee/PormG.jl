@@ -778,7 +778,11 @@ end
     drivers = Models.ManyToManyField("Driver"),
   )))
   champ = Core.eval(reg_module, :(Championship))
-  # Behind the constructor guard, as in sections 13 and 18.
+  # #1601: the registrar resolves the target against the declared set and reads each side's binding
+  # from it, which `set_models` would have recorded; this call bypasses it, so do both by hand.
+  Core.eval(reg_module, :(Models.@models Driver Championship))
+  champ._module = reg_module
+  Core.eval(reg_module, :(Driver))._module = reg_module
   champ.fields["drivers"].related_name = "a__b"
 
   err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(

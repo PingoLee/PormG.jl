@@ -703,6 +703,8 @@ end
     @testset "set_models records the key, the root and the folder" begin
       record = PormG.Models._model_set(scratch)
       @test !isdefined(scratch, :__pormg_binding__)    # nothing evaluated into the module (#1607)
+      # The registry holds the KEY, not the folder (here they differ: `scratch_db` vs `db`).
+      @test PormG.Models.REGISTERED_MODULES[scratch] == "scratch_db"
       (; key, folder) = record
       @test key == "scratch_db"
       @test record.load_root == PormG._canonical_folder_path(root)

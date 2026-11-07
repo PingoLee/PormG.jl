@@ -257,5 +257,5 @@ end
   end
   end""")
   @test Models._declares_model_set(nested.args[3])
-  @test Models._with_model_set(nested) === nested
+  @test (@test_logs min_level = Logging.Warn Models._with_model_set(nested)) === nested   # no warning
 end

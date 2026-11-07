@@ -11,8 +11,8 @@ Registration resolves every relation target — a `ForeignKey`, `OneToOneField` 
 `to`, and a many-to-many `through` — against the declared model sets, and refuses there when it
 cannot. A `to` given as a string names a model the module declares, by its binding or its table
 name, and is replaced on the field by the model. The three query-time fallbacks that looked a
-related model up by name (a projected `save()`, the many-to-many join and its manager) read the model
-registration recorded instead, and the `uppercasefirst(model.name)` guess at a many-to-many side's
+related model up by name (a projected `save()`, the forward many-to-many join and its manager) read
+the model registration recorded instead, and the `uppercasefirst(model.name)` guess at a many-to-many side's
 Julia binding is gone.
 
 | | before | now |

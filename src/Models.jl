@@ -847,14 +847,23 @@ end
 # A module that declares its set but assigns a top-level `X = Model(…)` the declaration leaves out:
 # that model is not registered, which is what an edit that adds a model and forgets the list looks
 # like. A warning, not a refusal: leaving a model out of the set is allowed.
-function _warn_undeclared_assignments(name, body::Expr)::Nothing
-  declared = Set{Symbol}()
+# The bindings a body's `@models` calls list, at its top level and in top-level `begin … end` blocks.
+function _listed_model_bindings!(declared::Set{Symbol}, body::Expr)::Set{Symbol}
   for ex in body.args
-    ex isa Expr && ex.head === :macrocall && _is_models_macro_name(ex.args[1]) || continue
-    for a in ex.args[2:end]
-      a isa Symbol && push!(declared, a)
+    ex isa Expr || continue
+    if ex.head === :block
+      _listed_model_bindings!(declared, ex)
+    elseif ex.head === :macrocall && _is_models_macro_name(ex.args[1])
+      for a in ex.args[2:end]
+        a isa Symbol && push!(declared, a)
+      end
     end
   end
+  return declared
+end
+
+function _warn_undeclared_assignments(name, body::Expr)::Nothing
+  declared = _listed_model_bindings!(Set{Symbol}(), body)
   missing_ = [b for b in _declared_model_bindings(body) if !(b in declared)]
   isempty(missing_) || @warn(
     "PormG: the models module `$(name)` assigns $(join(("`" * string(b) * "`" for b in missing_), ", ")) " *
@@ -1593,6 +1602,9 @@ function _register_again!(mod::Module, path::AbstractString)::Nothing
     _register_models!(mod, nothing, record.key::String)
     return nothing
   end
+  # No record to go by: `path` is what `REGISTERED_MODULES` holds, the connection key. Bind by it when
+  # it is registered; resolve it as a folder only as the last resort.
+  haskey(config, path) && return _register_models!(mod, nothing, String(path))
   set_models(mod, String(path); implicit = false)
   return nothing
 end

@@ -130,7 +130,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A Revise reload of a module registered by key keeps the key (review fix)
-# What it tests: a models file registered with `set_models(mod; key)`, edited (a field added) and
+# What it tests: a models file registered with `set_models(mod; key)` on a `register_connection` key
+#   (which has no folder), edited (a field added) and
 #   reloaded the way the Revise callback does it — `reload_module_contents!` then `_register_again!` —
 #   is bound to the same key with the new field. The re-run `@models` line builds a new set, which
 #   carries the previous registration record. No SQL.
@@ -139,8 +140,11 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a reload of a key-registered module rebinds to its key (#1606)" begin
   key = "smk_reload"
-  Configuration.register_offline(key)
   dir = mktempdir()
+  # A `register_connection` key, not an offline one: an offline entry's folder is its key, so the
+  # folder fallback would succeed and hide the defect this pins.
+  Configuration.register_connection(key, joinpath(dir, "smk_reload.sqlite"); adapter = "SQLite",
+                                    env = "test", pool_size = 1)
   file = joinpath(dir, "smk_reload_models.jl")
   src(extra) = """
   module smk_reload_models
@@ -155,6 +159,8 @@ end
     Base.invokelatest(Models.set_models, mod; key = key)
     write(file, src(", country = Models.CharField(null = true)"))
     @test Base.invokelatest(PormG.Utils.reload_module_contents!, mod, file)
+    # The re-run `@models` line built a new set; it carries the key before anything re-registers.
+    @test Base.invokelatest(Models._model_set, mod).key == key
     Base.invokelatest(Models._register_again!, mod, key)
     circuit = Base.invokelatest(getglobal, mod, :Circuit)
     @test haskey(circuit.fields, "country")

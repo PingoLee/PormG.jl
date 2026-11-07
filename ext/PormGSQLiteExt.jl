@@ -208,7 +208,9 @@ end
 # recorded error as it was raised (`decoded_on_worker`), as when the decode ran after `fetch` returned.
 function _sqlite_rows_into(::Type{T}, q, decode::PormG.QueryBuilder._RowDecoder{T})::Vector{T} where T
   handle = SQLite._get_stmt_handle(q.stmt)
-  cols = _sqlite_field_columns(T, Tables.columnnames(q))
+  # `q.names` (a `Vector{Symbol}` on every SQLite.jl from 1.6.1 on, pinned in test_driver_internals.jl):
+  # the field `Tables.columnnames(::SQLite.Query)` returns, read directly.
+  cols = _sqlite_field_columns(T, q.names)
   parsers, site = decode.parsers, decode.site
   out = T[]
   i = 0

@@ -227,6 +227,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Plain Model Binding Warning (#1664)" include("unit/test_plain_model_binding_warning.jl")
     @testset "Declared Model Set (#1602)" include("unit/test_declared_model_set.jl")
     @testset "set_models by Key (#1606)" include("unit/test_set_models_key.jl")
+    @testset "JIT-only Reload and Include (#1608)" include("unit/test_jit_only_paths.jl")
     @testset "Configuration API" include("unit/test_configuration_api.jl")
     @testset "Connection-String Redaction (#649)" include("unit/test_redact_secret.jl")
     @testset "bulk_update Column Scope" include("unit/test_bulk_update_column_scope.jl")

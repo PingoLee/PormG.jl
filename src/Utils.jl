@@ -15,7 +15,11 @@ runs again.
 
 This helper parses the file, finds the `module` named like `existing_mod`, and evaluates every
 expression of its body inside the *original* module object, so that existing references
-(e.g. `import .models as M`) remain valid. It returns `false`, and evaluates nothing, when the file
+(e.g. `import .models as M`) remain valid.
+
+JIT-only (#1608): its one caller is the Revise callback `PormGReviseExt` registers, and a running
+application never reaches it — `set_models`, `ensure_model_initialized` and the query path neither
+parse nor evaluate code. A trimmed binary cannot load new code by definition, so it has no reload. It returns `false`, and evaluates nothing, when the file
 does not parse or defines no such module. An expression that fails to evaluate (a typo in a field)
 is logged with its line and leaves that binding at its previous value.
 """
@@ -53,27 +57,17 @@ function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
     return false
 end
 
-# Revise hooks (optionally overridden by PormGReviseExt if Revise is loaded)
-function _default_includet(mod, path)
-    if isdefined(Main, :Revise) && isdefined(Main.Revise, :includet)
-        try return Main.Revise.includet(mod, path) catch end
-    end
-    Base.include(mod, path)
-end
-
-const _includet_hook = Base.RefValue{Function}(_default_includet)
-
-# `PormGReviseExt` installs both hooks from its `__init__`. The reload hook lives in `Models` (#1487),
+# `PormGReviseExt` installs the reload hook from its `__init__`. The hook lives in `Models` (#1487),
 # because `set_models(…; source)` calls it and `Models` is included before this file.
-function set_revise_hooks!(; includet=nothing, add_revise_callback=nothing)
-    _includet_hook[] = includet === nothing ? _default_includet : includet
+#
+# #1608: there was a second hook, `includet`, through which `@import_models` included the models file
+# with `Revise.includet` in a session (and a duck-typed `Main.Revise` fallback). #1602 made the macro
+# include with `Base.include(Models._with_model_set, …)` — `includet` cannot apply a `mapexpr` — so
+# the hook had no caller left and is deleted: PormG's own `source =` reload is the one reload path.
+function set_revise_hooks!(; add_revise_callback=nothing)
     Models._add_revise_callback_hook[] =
         add_revise_callback === nothing ? Models._noop_add_revise_callback : add_revise_callback
     return nothing
-end
-
-function _includet(mod, path)
-    return _includet_hook[](mod, path)
 end
 
 function resolve_import_models_path(source_file::AbstractString, import_path::AbstractString, calling_module::Module)

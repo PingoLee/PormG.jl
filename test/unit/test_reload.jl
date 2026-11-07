@@ -687,8 +687,7 @@ end
         calls = Tuple{String, Module, String}[]
         spy(path::String, mod::Module, folder::String) = (push!(calls, (path, mod, folder)); nothing)
         PormG.Configuration.load(dir; env = "test")
-        previous_includet = PormG.Utils._includet_hook[]       # restored, not reset: a session
-        previous_reload = PormG.Models._add_revise_callback_hook[]   # with Revise keeps its hooks
+        previous_reload = PormG.Models._add_revise_callback_hook[]   # restored, not reset: a session with Revise keeps its hook
         try
             PormG.Utils.set_revise_hooks!(add_revise_callback = spy)
 
@@ -724,7 +723,7 @@ end
                 PormG.Models.set_models, bad_mod, dir; source = bad)
             @test calls == [(bad, bad_mod, dir)]
         finally
-            PormG.Utils.set_revise_hooks!(includet = previous_includet, add_revise_callback = previous_reload)
+            PormG.Utils.set_revise_hooks!(add_revise_callback = previous_reload)
         end
         @test PormG.Models._add_revise_callback_hook[] === previous_reload
 

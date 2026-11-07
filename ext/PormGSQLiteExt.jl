@@ -467,7 +467,8 @@ end
 @setup_workload begin
   Models = PormG.Models
   CP = PormG.ConnectionPool
-  QB = PormG.QueryBuilder
+  # `QB` is the module's constant (top of file). PrecompileTools 1.2 runs this block at module top level,
+  # where assigning it again is "invalid assignment to constant".
 
   @compile_workload begin
     mktempdir() do dir

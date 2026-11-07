@@ -475,7 +475,13 @@ end
         Core.eval(_PrecompileModels, :(Driver = Constructor = Result = nothing))
         # `invokelatest`: the set is a global the `Core.eval` above made, newer than this code's world.
         record = Base.invokelatest(Models._model_set, _PrecompileModels)
-        record === nothing || (record.key = record.load_root = record.folder = nothing)
+        # The set holds the models themselves (#1606), so its lists are emptied too, or the bindings
+        # reset above would still reach the image through it.
+        if record !== nothing
+          record.key = record.load_root = record.folder = nothing
+          empty!(record.models)
+          empty!(record.bindings)
+        end
         delete!(PormG.config, key)
         CP.close_pool!(pool)
       end

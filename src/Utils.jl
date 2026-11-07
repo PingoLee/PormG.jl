@@ -28,10 +28,12 @@ function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
     top = Meta.parseall(content)
     # A parse error anywhere is an `:error` node at the top level and no `module` at all.
     any(e -> e isa Expr && e.head in (:error, :incomplete), top.args) && return false
-    for expr in top.args
+    for top_expr in top.args
         # The module the file defines for `existing_mod`, by name: evaluating another module's body
-        # into it (a wrong `source =`) would overwrite its bindings with unrelated ones.
-        if expr isa Expr && expr.head === :module && expr.args[2] === nameof(existing_mod)
+        # into it (a wrong `source =`) would overwrite its bindings with unrelated ones. A documented
+        # module (a docstring above `module`) counts as the module it documents (#1602).
+        expr = Models._module_expr(top_expr)
+        if expr !== nothing && expr.args[2] === nameof(existing_mod)
             # #1602: the same model-set declaration `@import_models` adds, so a model added by the
             # edit is in the set the `set_models` after the reload reads.
             body_block = Models._with_model_set(expr).args[3]

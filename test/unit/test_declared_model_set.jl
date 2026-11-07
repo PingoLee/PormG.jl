@@ -524,3 +524,41 @@ end
   end
   @test isempty(Models._RELOADING)
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A documented module gets the generated declaration like a plain one
+# What it tests: a file whose module has a docstring (`"""F1 models."""` above `module models`, which
+#   parses as a `Core.@doc` call around the `module`) and no `Models.@models` line: `@import_models`
+#   registers its `Circuit`; `Migrations._load_current_models` keys `dms_doc_circuit`; the Revise reload
+#   finds the module and puts an added `Race` in its set. No SQL.
+# Why it matters: `_with_model_set` only looked at a bare `module` expression, so a documented module got
+#   no declaration and was refused at registration, or, through the planner, read as declaring nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a documented module gets the generated declaration (#1602)" begin
+  dir = mktempdir()
+  folder = joinpath(dir, "dms_doc_module")
+  mkpath(folder)
+  file = joinpath(folder, "models.jl")
+  write_models(ms...) = write(file, "\"\"\"F1 models.\"\"\"\nmodule models\nimport PormG.Models\n" *
+                                    join(ms, "\n") * "\nend\n")
+  circuit = "Circuit::Models.ModelType = Models.Model(\"dms_doc_circuit\", circuitid = Models.IDField())"
+  race = "Race::Models.ModelType = Models.Model(\"dms_doc_race\", raceid = Models.IDField())"
+  write_models(circuit)
+  PormG.config[folder] = PormG.Configuration.Settings(
+    connections = DmsMockPostgres(), change_data = true, db_def_folder = folder)
+  try
+    host = Module(:DmsDocModuleHost)
+    Core.eval(host, :(using PormG))
+    Core.eval(host, :(PormG.@import_models $file models))
+    mod = Base.invokelatest(getfield, host, :models)
+    @test Base.invokelatest(Models.get_all_models, mod; symbol = true) == [:Circuit]
+    @test Models.connection_key(Base.invokelatest(getfield, mod, :Circuit)) == folder
+    @test collect(keys(PormG.Migrations._load_current_models(file))) == [:dms_doc_circuit]
+
+    write_models(circuit, race)
+    @test PormG.Utils.reload_module_contents!(mod, file)
+    @test Base.invokelatest(Models._model_set, mod).bindings == [:Circuit, :Race]
+  finally
+    pop!(PormG.config, folder, nothing)
+  end
+end

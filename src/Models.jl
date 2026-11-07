@@ -807,6 +807,13 @@ _documented_expr(ex) =
   ex isa Expr && ex.head === :macrocall && length(ex.args) == 4 && _is_doc_macro_name(ex.args[1]) ?
     ex.args[4] : nothing
 
+# The `module` expression `ex` is, or documents (`"""…""" module models … end`), or `nothing`.
+function _module_expr(@nospecialize(ex))::Union{Nothing, Expr}
+  documented = _documented_expr(ex)
+  documented === nothing || return _module_expr(documented)
+  return ex isa Expr && ex.head === :module ? ex : nothing
+end
+
 # The binding an assignment of a `Model(…)` call names, or `nothing`: `X = Model(…)`,
 # `X::T = Model(…)`, `const X = Model(…)`, `const X::T = Model(…)`, `global X = Model(…)`,
 # `global X::T = Model(…)`, and any of these under a docstring.
@@ -977,11 +984,16 @@ reload and the migration planner: a `module` expression whose body declares no m
 `@models` with the bindings `_declared_model_bindings` finds, inserted right after the last model
 assignment — not at the end, so a statement after the models that registers the module (an older
 generated file's `Models.set_models(@__MODULE__, @__DIR__)`) already sees the set. Any other
-expression, and a module that declares its own, is returned unchanged (#1602). A module that builds a
+expression, and a module that declares its own, is returned unchanged (#1602). A documented module (a
+docstring above `module`) is treated as the module it documents. A module that builds a
 model the parser cannot name is refused instead (`_generated_model_bindings`): the line would leave
 it out.
 """
 function _with_model_set(@nospecialize(ex))
+  # A documented module, `"""…""" module models … end`, parses as a `@doc` call around the module.
+  documented = _documented_expr(ex)
+  documented isa Expr && documented.head === :module &&
+    return Expr(:macrocall, ex.args[1], ex.args[2], ex.args[3], _with_model_set(documented))
   ex isa Expr && ex.head === :module || return ex
   body = ex.args[3]::Expr
   if _declares_model_set(body)

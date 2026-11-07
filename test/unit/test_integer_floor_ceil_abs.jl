@@ -52,6 +52,7 @@ Ifc_result = Models.Model("ifc_result",
   date     = Models.DateField(null = true),
 )
 
+Models.@models Ifc_result
 PormG.Models.set_models(@__MODULE__, "ifc_mock")
 end
 

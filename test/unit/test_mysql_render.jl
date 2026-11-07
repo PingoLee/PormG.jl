@@ -65,6 +65,7 @@ for (modname, key) in ((:MrMyModels, "mr_my"), (:MrPGModels, "mr_pg"), (:MrSLMod
     laps = Models.IntegerField(),
     fastestlaptime = Models.DurationField(null = true),
   )
+  Models.@models Race Driver Result
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end
@@ -79,6 +80,7 @@ import PormG.Models
 Team = Models.Model(teamid = Models.IDField(), name = Models.CharField(), country = Models.CharField())
 Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField(),
   teamid = Models.ForeignKey(Team, pk_field = "teamid", on_delete = "RESTRICT", null = true))
+Models.@models Team Driver
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 module MrMyCrossB
@@ -88,6 +90,7 @@ import ..MrMyCrossA
 Lap = Models.Model(lapid = Models.IDField(),
   driverid = Models.ForeignKey(MrMyCrossA.Driver, pk_field = "driverid", on_delete = "RESTRICT", related_name = "laps"),
   position = Models.IntegerField(null = true))
+Models.@models Lap
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 
@@ -385,6 +388,7 @@ import PormG.Models
 Race = Models.Model(raceid = Models.IDField(), year = Models.IntegerField())
 Result = Models.Model(resultid = Models.IDField(),
   raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))
+Models.@models Race Result
 PormG.Models.set_models(@__MODULE__, "mr_sl338")
 end
 
@@ -1771,6 +1775,7 @@ for (modname, key, conn) in ((:MrMyUp, "mr_my_up", MrMockMySQL()), (:MrPGUp, "mr
                        raceid = Models.IntegerField(null = true),
                        ticket = Models.UUIDField(unique = true, auto_add = true), note = Models.CharField(null = true),
                        constraints = [Models.UniqueConstraint(fields = ("ref", "raceid"))])
+  Models.@models Circuit Constructor Status Standing Season Token Grid Pit Seat Entry Badge
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

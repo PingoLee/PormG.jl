@@ -47,6 +47,7 @@ Result = Models.Model("result",
   grid           = Models.IntegerField(null = true),
   fastestlaptime = Models.DurationField(null = true),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "fi1621_pg")
 end
 
@@ -58,6 +59,7 @@ Result = Models.Model("result",
   grid           = Models.IntegerField(null = true),
   fastestlaptime = Models.DurationField(null = true),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "fi1621_sl")
 end
 

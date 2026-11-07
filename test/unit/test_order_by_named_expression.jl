@@ -58,6 +58,7 @@ Result = Models.Model("result",
   points        = Models.FloatField(),
   date          = Models.DateField(null = true),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_named_expr_pg")
 end
 
@@ -72,6 +73,7 @@ Result = Models.Model("result",
   points        = Models.FloatField(),
   date          = Models.DateField(null = true),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_named_expr_sl")
 end
 

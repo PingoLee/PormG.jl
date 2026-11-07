@@ -80,6 +80,7 @@ for (modname, key) in ((:JcmPGModels, "jcm_pg"), (:JcmSLModels, "jcm_sl"))
     constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
     status_id = Models.ForeignKey(Status, on_delete = "CASCADE", null = true, related_name = "results"),
   )
+  Models.@models Team Sponsor Driver Constructor Status Result
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

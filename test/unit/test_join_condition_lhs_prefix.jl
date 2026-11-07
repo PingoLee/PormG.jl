@@ -53,6 +53,7 @@ Result = Models.Model("result",
   dob = Models.DateField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "join_lhs_pg")
 end
 
@@ -72,6 +73,7 @@ Result = Models.Model("result",
   dob = Models.DateField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "join_lhs_sl")
 end
 

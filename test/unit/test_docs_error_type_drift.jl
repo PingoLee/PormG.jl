@@ -72,6 +72,7 @@ const ALLOWED_DOC_MENTIONS = [
 const ALLOWED_SRC_ARGUMENTERROR = Dict(
     "src/tools.jl" => 1,   # upgrade_guide's missing `from` kwarg — Julia-level API misuse (#639)
     "src/Utils.jl" => 1,   # @import_models non-literal path — macro (Julia-level) misuse
+    "src/Models.jl" => 2,  # @models given a non-name, or a name twice — macro (Julia-level) misuse (#1602)
 )
 
 # ─────────────────────────────────────────────────────────────────────────────

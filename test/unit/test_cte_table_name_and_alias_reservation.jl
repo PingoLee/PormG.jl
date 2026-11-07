@@ -100,6 +100,7 @@ Cts_item = Models.Model("cts_item",
   tags = Models.ManyToManyField(Cts_tag, related_name = "cts_items"),
 )
 
+Models.@models Cts_grand Cts_parent Cts_child Cts_orphan Cts_tag Cts_item
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -116,6 +117,7 @@ Cts_other_parent = Models.Model("cts_other_parent",
   sku = Models.CharField(),
 )
 
+Models.@models Cts_other_parent
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -130,6 +132,7 @@ Cts_cross_child = Models.Model("cts_cross_child",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Cts_cross_child
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -145,6 +148,7 @@ Cts_far_parent = Models.Model("cts_far_parent",
   sku = Models.CharField(),
 )
 
+Models.@models Cts_far_parent
 PormG.Models.set_models(@__MODULE__, "cts_mock_b")
 end
 
@@ -159,6 +163,7 @@ Cts_far_child = Models.Model("cts_far_child",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Cts_far_child
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -453,6 +458,7 @@ Cts_polluted_child = Models.Model("cts_polluted_child",
 
 # `set_models` runs the sibling walker (`_collect_models_and_bindings`); before the guard this line
 # was the first thing to throw.
+Models.@models Cts_polluted_parent Cts_polluted_child
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 

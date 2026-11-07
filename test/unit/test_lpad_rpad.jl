@@ -68,6 +68,7 @@ Lpr_driver = Models.Model("lpr_driver",
   ref    = Models.UUIDField(null = true),
   extra  = Models.JSONField(null = true),
 )
+Models.@models Lpr_team Lpr_code Lpr_driver
 PormG.Models.set_models(@__MODULE__, "lpr_mock_sl")
 end
 
@@ -90,6 +91,7 @@ Lpr_driver = Models.Model("lpr_driver",
   ref    = Models.UUIDField(null = true),
   extra  = Models.JSONField(null = true),
 )
+Models.@models Lpr_team Lpr_code Lpr_driver
 PormG.Models.set_models(@__MODULE__, "lpr_mock_pg")
 end
 

@@ -50,6 +50,7 @@ Result = Models.Model("zsa_result",
   fee    = Models.DecimalField(max_digits = 12, decimal_places = 2, null = true),
   laps   = Models.IntegerField(null = true),
 )
+Models.@models Race Result
 PormG.Models.set_models(@__MODULE__, "zsa_mock")
 end
 

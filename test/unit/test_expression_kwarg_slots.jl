@@ -68,6 +68,7 @@ Eks_result = Models.Model("eks_result",
   payload       = Models.JSONField(null = true),
 )
 
+Models.@models Eks_driver Eks_result
 PormG.Models.set_models(@__MODULE__, "eks_mock")
 end
 

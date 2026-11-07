@@ -105,6 +105,7 @@ Fd_result = Models.Model("fd_result",
   rank      = Models.PositiveIntegerField(null = true),
 )
 
+Models.@models Fd_race Fd_result
 PormG.Models.set_models(@__MODULE__, "fd_mock")
 end
 

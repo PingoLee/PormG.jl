@@ -502,6 +502,7 @@ Result = Models.Model("t1638_result",
   statusid = Models.ForeignKey(Status, pk_field = "statusid", on_delete = "CASCADE", related_name = "results"),
   points   = Models.IntegerField(),
 )
+Models.@models Status Result
 PormG.Models.set_models(@__MODULE__, "t1638_pg")
 end
 

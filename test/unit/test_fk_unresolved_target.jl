@@ -43,10 +43,15 @@ PormG.config["fk_unres_mock"] = PormG.Configuration.Settings(
 const FKU_MOD = Module(:FkUnresScratch)
 Base.eval(FKU_MOD, :(using PormG))
 
+# #1601/#1602: a `to` string names a model the module DECLARES, so each binding joins the module's
+# `Models.@models` set as it is registered (the set is redeclared with the binding added).
+const FKU_BINDINGS = Symbol[]
 function fku_register!(binding::Symbol, model)
   model._module = FKU_MOD
   model.connect_key = "fk_unres_mock"
   Base.eval(FKU_MOD, :($binding::$(PormG.Models.ModelType) = $model))
+  binding in FKU_BINDINGS || push!(FKU_BINDINGS, binding)
+  Base.eval(FKU_MOD, PormG.Models._model_set_declaration(copy(FKU_BINDINGS)))
   return model
 end
 

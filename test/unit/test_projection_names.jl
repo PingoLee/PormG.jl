@@ -86,6 +86,7 @@ Pn_dbc = Models.Model("pn_dbc",
   qty  = Models.IntegerField(null = true),
 )
 
+Models.@models Pn_parent Pn_child Pn_dbc
 PormG.Models.set_models(@__MODULE__, "pn_mock")
 end
 

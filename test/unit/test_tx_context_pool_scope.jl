@@ -135,6 +135,7 @@ module ScopeM2M831
     id = Models.IDField(),
     name = Models.CharField(),
     drivers = Models.ManyToManyField(Driver, related_name = "championships"))
+  Models.@models Driver Championship
   PormG.Models.set_models(@__MODULE__, "pormg831_pg_b")
 end
 

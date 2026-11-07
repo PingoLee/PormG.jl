@@ -86,6 +86,7 @@ _SdrLog = Model("sdr_logs",
   eventid = ForeignKey(_SdrEvent, pk_field="id", related_name="logs"),
 )
 
+Models.@models _SdrTeam _SdrTag _SdrEvent _SdrLog
 PormG.Models.set_models(@__MODULE__, "sargable_mock")
 end
 

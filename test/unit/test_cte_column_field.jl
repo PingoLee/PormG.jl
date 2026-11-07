@@ -57,6 +57,7 @@ Ccf_constructor_result = Models.Model("ccf_constructor_result",
   points               = Models.DecimalField(max_digits = 10, decimal_places = 2),
 )
 
+Models.@models Ccf_driver Ccf_result Ccf_constructor_result
 PormG.Models.set_models(@__MODULE__, "ccf_mock")
 end
 

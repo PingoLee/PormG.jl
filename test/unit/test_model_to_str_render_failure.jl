@@ -19,15 +19,21 @@
 using Test
 using Logging
 using PormG
-using PormG.Models: CharField
+using PormG.Models: CharField, ArrayField, IntegerField
 
-# A field type whose RENDERING throws. Model_to_str derives the emitted constructor name by
-# stripping the struct name's first character (sCharField → CharField), so this type resolves
-# to `ThrowingRenderField` — which has no binding inside the Models module. The render helper
-# `_model_to_str_general` then raises UndefVarError at `getfield(@__MODULE__, struct_name)()`,
-# with no monkey-patching needed.
+# A field whose RENDERING throws. Model_to_str derives a constructor name from a struct name by
+# stripping its first character (sCharField → CharField); a type outside PormG resolves to a name with
+# no binding inside the Models module, and the render helper raises UndefVarError at
+# `getfield(@__MODULE__, struct_name)()`. A model holds PormG's own field types only (#1604), so the
+# foreign type rides inside an `ArrayField`'s `base_field`, the one slot typed with the abstract
+# `PormGField`: the field is an ArrayField, and rendering its element type is what throws.
 struct _ThrowingRenderField <: PormG.PormGField
   payload::Any
+end
+function _throwing_field()
+  af = ArrayField(IntegerField())
+  af.base_field = _ThrowingRenderField(nothing)
+  return af
 end
 
 # Bare ModelType around a fields dict — bypasses the Model() constructor (and any config/FK
@@ -62,7 +68,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
   @testset "throwing field → warn + marker comment, healthy field kept" begin
     m = _mk_render_model(Dict{String, PormG.PormGField}(
       "surname" => CharField(),                       # healthy control field
-      "validade" => _ThrowingRenderField(nothing),    # rendering raises UndefVarError
+      "validade" => _throwing_field(),               # rendering raises UndefVarError
     ))
 
     # The warn must fire with the render-failure message — pinning the message ensures a
@@ -71,7 +77,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
     s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m)
 
     # The gap is visible in the artifact itself: marker names the field and its type.
-    @test occursin("# PormG: field 'validade' (ThrowingRenderField) could not be rendered", s)
+    @test occursin("# PormG: field 'validade' (ArrayField) could not be rendered", s)
     # The marker sits ABOVE the model definition (start of the string), keeping the code valid.
     @test startswith(s, "# PormG:")
     # The throwing field is omitted from the constructor call — never half-rendered.
@@ -121,8 +127,8 @@ end
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "all fields fail → definition commented out, file still loads (#134)" begin
     m = _mk_render_model(Dict{String, PormG.PormGField}(
-      "alpha" => _ThrowingRenderField(nothing),   # rendering raises UndefVarError
-      "beta"  => _ThrowingRenderField(nothing),   # rendering raises UndefVarError
+      "alpha" => _throwing_field(),              # rendering raises UndefVarError
+      "beta"  => _throwing_field(),              # rendering raises UndefVarError
     ))
 
     # Both fields fail, so both must still warn + surface their own marker (match_mode=:any tolerates
@@ -130,8 +136,8 @@ end
     s = @test_logs (:warn, r"field render failed") match_mode=:any PormG.Models.Model_to_str(m)
 
     # Every failed field is still surfaced individually (the #70 per-field markers).
-    @test occursin("# PormG: field 'alpha' (ThrowingRenderField) could not be rendered", s)
-    @test occursin("# PormG: field 'beta' (ThrowingRenderField) could not be rendered", s)
+    @test occursin("# PormG: field 'alpha' (ArrayField) could not be rendered", s)
+    @test occursin("# PormG: field 'beta' (ArrayField) could not be rendered", s)
     # A model-level note explains why the whole definition is commented out.
     @test occursin("# PormG: model 'drivers_render_scratch' had no renderable fields", s)
     # CRUCIAL (#134): no bare, top-level `Var = Models.Model(...)` call — that line would throw at

@@ -44,6 +44,8 @@ function _ran_module(name::Symbol, decls::Expr; register::Bool = true)
   mod = Module(name)
   Core.eval(mod, :(import PormG; import PormG.Models))
   Core.eval(mod, decls)
+  # #1602: the model set, from the block's own `X = Models.Model(…)` assignments.
+  Core.eval(mod, Models._model_set_declaration(Models._declared_model_bindings(decls)))
   register && Base.invokelatest(Models.set_models, mod, "ran_mock")
   return mod
 end
@@ -776,7 +778,11 @@ end
     drivers = Models.ManyToManyField("Driver"),
   )))
   champ = Core.eval(reg_module, :(Championship))
-  # Behind the constructor guard, as in sections 13 and 18.
+  # #1601: the registrar resolves the target against the declared set and reads each side's binding
+  # from it, which `set_models` would have recorded; this call bypasses it, so do both by hand.
+  Core.eval(reg_module, :(Models.@models Driver Championship))
+  champ._module = reg_module
+  Core.eval(reg_module, :(Driver))._module = reg_module
   champ.fields["drivers"].related_name = "a__b"
 
   err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(

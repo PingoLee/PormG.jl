@@ -127,6 +127,7 @@ Result = Models.Model("jcr_result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Constructor Driver Result
 PormG.Models.set_models(@__MODULE__, "jcr_sl")
 end
 
@@ -399,6 +400,7 @@ Badge = Models.Model("jcr_badge",
   badge_net = Models.CIDRField(),
   session = Models.ForeignKey(Session, on_delete = "CASCADE", related_name = "badges"),
 )
+Models.@models Session Badge
 PormG.Models.set_models(@__MODULE__, "jcr_pg")
 end
 

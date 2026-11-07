@@ -53,6 +53,7 @@ Grid_slot = Models.Model("grid_slots",
   constraints = [Models.UniqueConstraint(fields = ("race", "position"), name = "grid_slot_unique")],
 )
 
+Models.@models Season_entry Grid_slot
 PormG.Models.set_models(@__MODULE__, "uc_mock_pg")
 end
 const UM = UniqueConstraintUnitModels

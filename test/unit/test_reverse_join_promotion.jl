@@ -61,6 +61,7 @@ Rj_report = Models.Model("rj_report",
   race = Models.OneToOneField(Rj_race, on_delete = "CASCADE", related_name = "report"),
   body = Models.CharField(),
 )
+Models.@models Rj_driver Rj_sponsor Rj_race Rj_result Rj_report
 PormG.Models.set_models(@__MODULE__, "rj1367_sqlite")
 end
 

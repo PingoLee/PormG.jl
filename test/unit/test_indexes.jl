@@ -63,6 +63,7 @@ Grid_slot = Models.Model("grid_slots",
   indexes  = [Models.Index(fields = ("race", "position"), name = "grid_slot_lookup")],
 )
 
+Models.@models Lap_time Grid_slot
 PormG.Models.set_models(@__MODULE__, "ix_mock_pg")
 end
 const IXM = IndexUnitModels
@@ -290,6 +291,7 @@ Driver_ix = Models.Model("driver_ix",
     Models.Index(fields = ("dob",), method = "brin"),
   ],
 )
+Models.@models Result_ix Driver_ix
 PormG.Models.set_models(@__MODULE__, "ix_mock_pg")
 end
 const IXA = IndexAdvancedModels

@@ -68,6 +68,7 @@ Opf_row = Models.Model("opf_row",
   note = Models.CharField(null = true),
 )
 
+Models.@models Opf_row
 PormG.Models.set_models(@__MODULE__, "opf_mock")
 end
 

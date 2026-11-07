@@ -57,6 +57,7 @@ Ib_lap = Models.Model("ib_lap",
   code      = Models.CharField(null = true),
 )
 
+Models.@models Ib_lap
 PormG.Models.set_models(@__MODULE__, "ib1581_mock")
 end
 

@@ -98,6 +98,7 @@ Lap = Models.Model("sqs1634_lap",
   id = Models.IDField(),
   lap = Models.IntegerField(),
   car = Models.ForeignKey(Car, pk_field = "id", on_delete = "CASCADE", related_name = "laps"))
+Models.@models Car Lap
 end
 
 const _SQS1634_KEY = "sqs1634"

@@ -63,6 +63,7 @@ Use_result = Models.Model("use_result",
   racedate     = Models.DateField(null = true),
 )
 
+Models.@models Use_driver Use_result
 PormG.Models.set_models(@__MODULE__, "use_mock")
 end
 

@@ -48,6 +48,8 @@ const FMT_MODELS = quote
     points = Models.IntegerField(),
     positionorder = Models.IntegerField(),
   )
+  # #1602: the model set; interpolated, since this block's macros expand before its `import` runs.
+  $(PormG.Models._model_set_declaration([:Circuit, :Race, :Result]))
 end
 module FmtPG end
 module FmtSL end

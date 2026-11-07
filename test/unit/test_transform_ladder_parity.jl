@@ -86,6 +86,7 @@ Tlp_visit = Models.Model("tlp_visit",
   rowid = Models.OneToOneField(Tlp_row, pk_field = "id", on_delete = "CASCADE"),
 )
 
+Models.@models Tlp_row Tlp_clock Tlp_day Tlp_visit
 PormG.Models.set_models(@__MODULE__, "tlp_mock")
 end
 
@@ -760,6 +761,7 @@ Tlp_result = Models.Model("tlp_result", id = Models.IDField(),
   driver = Models.ForeignKey(Tlp_driver, on_delete = "CASCADE", related_name = "tlp_results", null = true),
   points = Models.IntegerField(null = true), grid = Models.IntegerField(null = true),
   ts = Models.DateTimeField(null = true))
+Models.@models Tlp_driver Tlp_result
 PormG.Models.set_models(@__MODULE__, "tlp_mock")
 end
 

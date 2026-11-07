@@ -56,6 +56,7 @@ Pnc_result = Models.Model("pnc_result",
   date            = Models.DateField(null = true),
 )
 
+Models.@models Pnc_driver Pnc_result
 PormG.Models.set_models(@__MODULE__, "pnc_mock")
 end
 

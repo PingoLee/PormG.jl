@@ -47,6 +47,7 @@ Circuit = Models.Model("circuits",
   raceid = Models.IntegerField(),
   name = Models.CharField(),
 )
+Models.@models Lap Circuit
 PormG.Models.set_models(@__MODULE__, "cjoinon_pg")
 end
 
@@ -66,6 +67,7 @@ Circuit = Models.Model("circuits",
   raceid = Models.IntegerField(),
   name = Models.CharField(),
 )
+Models.@models Lap Circuit
 PormG.Models.set_models(@__MODULE__, "cjoinon_sl")
 end
 
@@ -356,6 +358,7 @@ Result = Models.Model("result",
   grid = Models.IntegerField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Sponsor Driver Result
 PormG.Models.set_models(@__MODULE__, "cjoinon_sl")
 end
 

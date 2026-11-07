@@ -239,9 +239,10 @@ instead, so the wrong-database case cannot happen silently.
 
 The same rule holds on the first `Model.objects` of a restored package image. The self-heal there
 (`ensure_model_initialized`) binds the model to a configuration that is already loaded, or raises
-the same error. It never loads one. The `__init__` that `@import_models` and `@models_module` inject
-into the models module binds only when the configuration is already loaded, and otherwise does
-nothing. It runs before your package's own `__init__`, so refusing there would make `using` fail.
+the same error. It never loads one. The `__init__` an `@models_module` block defines binds only when
+the configuration is already loaded, and otherwise does nothing. It runs before your package's own
+`__init__`, so refusing there would make `using` fail. `@import_models` adds no `__init__` (#1607):
+the first query rebinds from the key it recorded.
 
 **The REPL keeps the convenience.** In an interactive session (`isinteractive()`), a direct
 `@import_models` or `set_models` with nothing loaded loads the folder anyway, with the old warning
@@ -258,7 +259,7 @@ binds them to a connection that renders SQL and never connects. A `load` or `imp
 would open a real pool. The recipe is on [Testing Your App](../testing.md).
 
 There is no process-wide switch: whether a registration refuses never depends on what some other
-code in the process turned on earlier. The self-heal and the injected `__init__` above never load,
+code in the process turned on earlier. The self-heal and the `@models_module` `__init__` above never load,
 not even in a REPL — `using SomePackage` at a REPL is an interactive session too.
 
 An implicit load marks the entry as implicit:
@@ -369,8 +370,8 @@ all; `__init__` runs in the session, so it is what puts the connection in `confi
 can find it. Neither substitutes for the other.
 
 **What the first `.objects` binds to (#1227).** When `@import_models` binds the models it records,
-in the models module, the key the folder was loaded under and the `root` it was loaded relative to
-(`__pormg_binding__`). That record is part of the image. On the first `.objects` of a restored
+in the models module's model set (its `MODEL_SET`, #1607), the key the folder was loaded under and
+the `root` it was loaded relative to. That record is part of the image. On the first `.objects` of a restored
 session the self-heal reads it back and binds to that **key** — the one your `__init__` loads — or
 refuses, naming `load(key; root, env)`. It does not look through `config` for some other
 configuration that happens to match the folder, so a session that loaded the same folder under a

@@ -43,6 +43,7 @@ Stint = Models.Model("stint",
   strategy = Models.ForeignKey("Race_strategy"),
   lap      = Models.IntegerField(),
 )
+Models.@models Race_strategy Stint
 PormG.Models.set_models(@__MODULE__, "arr_lookup28")
 end
 

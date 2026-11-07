@@ -42,6 +42,7 @@ Wp_result = Models.Model("wp_result",
   positionorder = Models.IntegerField(null = true),
 )
 
+Models.@models Wp_result
 PormG.Models.set_models(@__MODULE__, "wp_mock")
 end
 

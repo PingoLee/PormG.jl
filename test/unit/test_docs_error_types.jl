@@ -229,6 +229,7 @@ Docerr_cycle_b = Models.Model("docerr_cycle_b",
              related_name = "docerr_cycle_bs", null = true),
 )
 
+Models.@models Docerr_cycle_a Docerr_cycle_b
 PormG.Models.set_models(@__MODULE__, "docerr_cycle")
 end
 
@@ -260,6 +261,7 @@ Docerr_tm_result = Models.Model("docerr_tm_result",
     driverid = Models.ForeignKey(Docerr_tm_driver, on_delete = "CASCADE", related_name = "results"),
 )
 
+Models.@models Docerr_tm_sponsor Docerr_tm_driver Docerr_tm_result
 PormG.Models.set_models(@__MODULE__, "docerr_tomany")
 end
 
@@ -298,6 +300,7 @@ const DOCERR_DRIVER_OFFLINE = let mod = Module(:DocErrOffline1442)
                                            driverid = Models.IDField(), surname = Models.CharField())))
     Core.eval(mod, :(Result = Models.Model("docerr_result1442", resultid = Models.IDField(),
                                            driverid = Models.ForeignKey(Driver, pk_field = "driverid"))))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Driver, :Result]))   # #1602
     Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline")
     Base.invokelatest(getfield, mod, :Driver)
 end
@@ -309,6 +312,7 @@ const DOCERR_RACE_OFFLINE_PROTECT = let mod = Module(:DocErrOffline1453)
     Core.eval(mod, :(Race = Models.Model("docerr_race1453", raceid = Models.IDField(), year = Models.IntegerField())))
     Core.eval(mod, :(Standing = Models.Model("docerr_standing1453", standingid = Models.IDField(),
                                              raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "PROTECT"))))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Race, :Standing]))   # #1602
     Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline")
     Base.invokelatest(getfield, mod, :Race)
 end
@@ -320,6 +324,7 @@ const DOCERR_RESULT_OFFLINE_SQLITE = let mod = Module(:DocErrOffline1452)
     Core.eval(mod, :(import PormG.Models))
     Core.eval(mod, :(Result = Models.Model("docerr_result1452", resultid = Models.IDField(),
                                            points = Models.FloatField(null = true))))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Result]))   # #1602
     Base.invokelatest(PormG.Models.set_models, mod, "docerr_offline_sqlite")
     Base.invokelatest(getfield, mod, :Result)
 end
@@ -3337,6 +3342,7 @@ const DOCERR_CASES = [
             Core.eval(mod, :(import PormG))
             Core.eval(mod, :(Points = $view))
             Core.eval(mod, :(Award = $award))
+            Core.eval(mod, :(PormG.Models.@models Points Award))   # #1602: the model set
             # `set_models` resolves its key through `db_def_folder`, which `docerr_pg` does not set.
             # `invokelatest`: this closure runs in the world the case list was built in, where the two
             # bindings `Core.eval` just made do not exist yet, and `set_models` would see no models.

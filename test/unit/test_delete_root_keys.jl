@@ -73,6 +73,7 @@ Rk_note = Models.Model("rk_note",
   body   = Models.CharField(),
   result = Models.ForeignKey(Rk_result, on_delete = "SET_NULL", related_name = "notes", null = true),
 )
+Models.@models Rk_circuit Rk_race Rk_result Rk_lap Rk_flag Rk_note
 PormG.Models.set_models(@__MODULE__, "rk1342_sqlite")
 end
 

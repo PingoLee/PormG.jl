@@ -90,6 +90,8 @@ let prev = Dct_c01
     prev = m
   end
 end
+# #1602: the loop above binds its models with `Core.eval`, so the set names them all.
+Models.@models(Dct_c01, Dct_c02, Dct_c03, Dct_c04, Dct_c05, Dct_c06, Dct_c07, Dct_c08, Dct_c09, Dct_c10, Dct_c11, Dct_c12, Dct_c13, Dct_c14)
 
 PormG.Models.set_models(@__MODULE__, "dct_mock")
 end
@@ -130,6 +132,7 @@ Dct_dleaf = Models.Model("dct_dleaf",
   mid = Models.ForeignKey(Dct_mid, on_delete = "SET_DEFAULT", related_name = "dleaves", null = true, default = 0),
 )
 
+Models.@models Dct_top Dct_root Dct_mid Dct_leaf Dct_dleaf
 PormG.Models.set_models(@__MODULE__, "dct_mock")
 end
 
@@ -151,6 +154,7 @@ Dct_y = Models.Model("dct_y",
   x  = Models.ForeignKey(Dct_x, on_delete = "CASCADE", related_name = "ys", null = true),
 )
 
+Models.@models Dct_x Dct_y
 PormG.Models.set_models(@__MODULE__, "dct_mock")
 end
 

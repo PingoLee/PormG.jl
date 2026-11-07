@@ -112,6 +112,14 @@ end
 end
 ```
 
+A connection built in code rather than read from `connection.yml` binds the same way, by its key:
+`PormG.register_connection("f1", …)` and then `PormG.Models.set_models(models; key = "f1")`. See
+[Dynamic Multi-Tenancy](dynamic.md#Binding-models-to-a-dynamic-connection).
+
+The models file ends with `Models.@models Circuit Race …`, naming every model binding: `set_models`
+reads that list, and refuses a module that does not write one (#1602). `generate_models_from_db`
+writes it; see [Defining models](../models.md).
+
 This is the default to write, and it is the same in development and production. `source` is the
 models file. With [Revise.jl](https://github.com/timholy/Revise.jl) loaded, an edit to it is applied
 before the next REPL command, and the models are bound again. Without Revise, `source` does nothing,

@@ -56,6 +56,7 @@ Kit = Models.Model("p3k_kit",
   id = Models.IDField(),
   slug = Models.CharField(unique = true),
   blob = Models.BinaryField(null = true))
+Models.@models Team Car Status Stint Garage Sponsor Season Kit
 end
 
 # The tables, in drop order (children first).

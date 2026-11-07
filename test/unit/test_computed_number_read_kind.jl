@@ -53,6 +53,7 @@ for (modname, key) in ((:CnPGModels, "cn_pg"), (:CnSLModels, "cn_sl"))
     laps = Models.IntegerField(),
     points = Models.FloatField(),
   )
+  Models.@models Race Constructor_results Result
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

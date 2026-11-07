@@ -65,6 +65,7 @@ Unn_result = Models.Model("unn_result",
   telemetry       = Models.BinaryField(null = true),
 )
 
+Models.@models Unn_driver Unn_result
 PormG.Models.set_models(@__MODULE__, "unn_mock")
 end
 

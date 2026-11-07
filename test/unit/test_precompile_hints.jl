@@ -96,17 +96,20 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite extension: the workload leaves nothing machine-specific in the cache image
 # The workload registers its models in `PormGSQLiteExt._PrecompileModels`, a submodule that IS
-# serialized. Two things keep it inert: its `__pormg_init_path__` marker is pre-declared as "" (so
-# `set_models` does not inject this machine's deleted temp folder), and the `finally` resets the
-# three model bindings to `nothing` (so no Model object is saved). Dropping either keeps every other
-# test green, because the image is only read here.
+# serialized. The workload's `finally` keeps it inert: it clears the registration record in the
+# module's model set (#1607: key, root and this machine's deleted temp folder) and resets the three
+# model bindings to `nothing` (so no Model object is saved). Dropping either keeps every other test
+# green, because the image is only read here.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite extension image carries no workload state" begin
   ext = Base.get_extension(PormG, :PormGSQLiteExt)
   @test ext !== nothing
   if ext !== nothing
     pm = ext._PrecompileModels
-    @test pm.__pormg_init_path__ == ""
+    record = PormG.Models._model_set(pm)
+    @test record isa PormG.Models.ModelSet
+    @test record.key === nothing && record.load_root === nothing && record.folder === nothing
+    @test !isdefined(pm, :__pormg_init_path__) && !isdefined(pm, :__pormg_binding__)
     for n in (:Driver, :Constructor, :Result)
       @test isdefined(pm, n) && getglobal(pm, n) === nothing
     end

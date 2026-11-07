@@ -91,7 +91,7 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   "src/AdvisoryLock.jl" => 1,
   "src/Configuration.jl" => 4,
   "src/ConnectionPool.jl" => 9,
-  "src/Models.jl" => 5,
+  "src/Models.jl" => 4,                 # #1604: `ModelType.name::String` (was `AbstractString`)
   "src/column_ir.jl" => 4,
   "src/exceptions.jl" => 3,
   "src/migrations/column_spec.jl" => 1,
@@ -237,14 +237,13 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 const _TR_GETFIELD = r"(?<!`)\bget(?:field|property|global)\b(?:\(|\s*,)\s*[@\w.]+\s*,\s*Symbol\("
 const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
-  # #1346 baseline (19 sites); 20 since #1333; 19 since #1332.
-  "src/Models.jl" => 2,                          # a relation's target model by binding name (#211)
+  # #1346 baseline (19 sites); 20 since #1333; 19 since #1332; 16 since #1601 (a relation's target
+  # is resolved at registration, never looked up by binding name).
   "src/migrations/importers.jl" => 3,            # a field constructor by its name, from introspection
   "src/models/fields.jl" => 2,                   # a field type's default instance by its name; a field
                                                  # type's accepted keywords by a name that arrives as a
                                                  # string (#1333: the importers, the refusal message)
   "src/querybuilder/build_helpers.jl" => 1,      # a lookup transform by name
-  "src/querybuilder/execution_write.jl" => 1,    # a foreign key's target model by binding name (#211)
   "src/querybuilder/filter_nodes.jl" => 1,       # Dialect operator by name
   "src/querybuilder/filter_operators.jl" => 3,   # Dialect operators by name
   "src/querybuilder/join_conditions.jl" => 5,    # a related model by binding name (#211)

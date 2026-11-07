@@ -11,21 +11,6 @@ struct ManyToManyManager
   owner_id::Any
 end
 
-function _m2m_model_from_binding(_module::Module, binding::String, table_name::String)::PormGModel
-  binding_symbol = Symbol(binding)
-  if isdefined(_module, binding_symbol)
-    candidate = Base.invokelatest(getfield, _module, binding_symbol)
-    candidate isa PormGModel && return candidate
-  end
-
-  target_name = Models.format_model_name(table_name)
-  for model in Models.get_all_models(_module)
-    Models.format_model_name(model.name) == target_name && return model
-  end
-
-  throw(QueryBuildError("The many-to-many related model $(binding) is not defined"))
-end
-
 function _m2m_extract_pk(value, pk_field::String)
   if value isa PormGRow
     return value[pk_field]
@@ -88,11 +73,10 @@ end
 # fail-OPEN: any relation whose through model the scan could not reach silently unlocked the
 # mutators. That was reachable, not theoretical — `through = <a PormGModel object>` is taken inline
 # by `_relation_from_many_to_many`'s `field.through isa PormGModel` arm, with no module lookup at
-# all (it does not even reach `Models._resolve_model_reference`), so a model that
+# all (it did not even reach the module lookup that #1601 removed), so a model that
 # is not reachable BY NAME from the owner's module was invisible here while its extra columns were
-# very real. (Only by name: `Models.get_all_models` makes a second pass with `usings=true` since
-# #354, so a `using`-brought binding did resolve. A qualified `Other.Membership` reference, or a
-# model built and passed by value, did not.)
+# very real. (Only by name. Since #1602 `Models.get_all_models` reads the module's declared set, and
+# registration resolves `through` to the model and records it.)
 #
 # The relation now records the model itself (`through_model_resolved`, `Models.jl`), so the question
 # is answered from the relation alone: no module, no reflection, no exception-as-signal. `nothing`
@@ -100,9 +84,7 @@ end
 # the two FKs — so `false` there is a fact about how that table is constructed, not an assumption
 # about a lookup that failed.
 #
-# `_m2m_model_from_binding` keeps one caller (the descriptor below), where a `QueryBuildError` is now
-# just an error rather than a signal; retiring that last reflection against `related_model_resolved`
-# is #68/#41.
+# The descriptor below reads `related_model_resolved` too (#1601): no M2M side is looked up by name.
 function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
   through_model = manager.relation.through_model_resolved
   through_model === nothing && return false
@@ -125,9 +107,8 @@ end
 
 function (descriptor::ManyToManyDescriptor)(owner)
   owner_id = _m2m_extract_pk(owner, descriptor.relation.owner_pk)
-  owner_module = descriptor.owner_model._module
-  owner_module === nothing && throw(InvalidConfigurationError("Many-to-many descriptor $(descriptor.accessor) requires initialized models. Call set_models() before using it."))
-  related_model = _m2m_model_from_binding(owner_module, descriptor.relation.related_binding, descriptor.relation.related_model)
+  descriptor.owner_model._module === nothing && throw(InvalidConfigurationError("Many-to-many descriptor $(descriptor.accessor) requires initialized models. Call set_models() before using it."))
+  related_model = descriptor.relation.related_model_resolved   # #1601: resolved at registration
   return ManyToManyManager(descriptor.owner_model, related_model, descriptor.relation, owner_id)
 end
 

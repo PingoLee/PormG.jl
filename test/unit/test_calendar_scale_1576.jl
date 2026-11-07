@@ -59,6 +59,7 @@ Cs_result = Models.Model("cs_result",
   at     = Models.DateTimeField(null = true),
 )
 
+Models.@models Cs_result
 PormG.Models.set_models(@__MODULE__, "cs1576_mock")
 end
 

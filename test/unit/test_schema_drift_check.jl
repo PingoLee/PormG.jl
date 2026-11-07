@@ -345,15 +345,16 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# M2M target by binding: a name bound to something else falls back (#762)
-# `position` is `Base.position` inside the models module, not a model. The binding lookup must pass
-# it over rather than throw, so the planner's own name match still finds the model named `position`.
+# M2M target named like a non-model binding resolves to the declared model (#762, #1601)
+# `position` is `Base.position` inside the models module, not a model. The lookup reads only the
+# models the module declares (#1601), so `position` resolves to the declared model named `position`.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "#762: an M2M target that is a non-model binding falls back to the model name" begin
+@testset "#762: an M2M target named like a non-model binding resolves to the declared model" begin
     pos_model = "Pos762 = Models.Model(\"position\", id = Models.IDField())\n"
     current, plan = _m2m762_plan(_m2m762_models("position"; extra = pos_model))
-    # Left as the String: the binding `position` is `Base.position`, which is no model.
-    @test _m2m762_season(current).fields["circuits"].to == "position"
+    # Resolved by the model's table name among the declared models; `Base.position` is never a candidate.
+    @test _m2m762_season(current).fields["circuits"].to isa PormG.PormGModel
+    @test _m2m762_season(current).fields["circuits"].to.name == "position"
     @test !(plan isa Exception)
     through = only(k for k in keys(plan) if startswith(String(k), "season762_"))
     @test occursin(r"REFERENCES\s+\"position\"", join(values(plan[through]), "\n"))

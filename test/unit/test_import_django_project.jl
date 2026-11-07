@@ -2751,6 +2751,7 @@ Driver_teammates = Models.Model("driver_teammates", db_table = "racing__driver_t
   id = Models.IDField(),
   from_driver = Models.ForeignKey("_Driver", db_column = "from__driver_id", on_delete = Models.CASCADE),
   to_driver = Models.ForeignKey("_Driver", db_column = "to__driver_id", on_delete = Models.CASCADE))
+Models.@models _Driver Driver_teammates
 end
 """))
     mod = Core.eval(sandbox, :django_1140_through)

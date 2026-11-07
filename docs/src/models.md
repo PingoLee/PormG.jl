@@ -122,9 +122,22 @@ Just_a_test_deletion::Models.ModelType = Models.Model(
   test_result2 = Models.ForeignKey(Result, pk_field="resultid", on_delete="CASCADE", null=true, related_name="test_deletion2")
 )
 
+Models.@models Status Circuit Race Driver Constructor Result Just_a_test_deletion
+
 end
 ```
 
+- The module ends with `Models.@models …`, naming every model binding (#1602), after the models:
+  the line binds the module's `MODEL_SET`, which holds them. That is the module's model set:
+  registration reads it, and PormG never scans a module's names for models.
+  `generate_models_from_db` and the Django importer write it, and `@import_models` and
+  `@models_module` add it from the file's top-level `X = Models.Model(…)` assignments when the file
+  does not. A module registered with `set_models` after a plain `include` (the package boot below)
+  must write it, or registration raises `ModelDefinitionError` naming the line to add. A model built
+  by a function or a loop, defined in a file the module `include`s, or reached through `using` is a
+  model of this module only when the list names it. When a file writes its own list and assigns a
+  top-level `X = Models.Model(…)` the list leaves out, `@import_models` warns naming it: that model
+  is not registered.
 - Each field uses a PormG field constructor (e.g., `IDField`, `CharField`, `DateField`).
 - You can use keyword arguments to customize field options (e.g., `max_length`, `unique`, `null`).
 - Each model is bound with a typed global, `Race::Models.ModelType = Models.Model(…)`. A plain
@@ -796,12 +809,14 @@ M.Driver.objects.filter("surname" => "Senna").count()
 
 #### What `@import_models` Does
 1. **Resolves the model file path** relative to your source file
-2. **Tracks the file with Revise** (if it is loaded)
+2. **Declares the model set** (`Models.@models …`) from the file's top-level `X = Models.Model(…)`
+   assignments, when the file does not end with its own (#1602)
 3. **Registers models** with PormG so fields and metadata are indexed, binding them to the
    configuration loaded for the folder. With none loaded it raises `InvalidConfigurationError`
    (see [The Boot-Time Hazard](configuration/advanced.md#The-Boot-Time-Hazard))
-4. **Injects `__init__()`**, which re-binds the models after package precompilation when their
-   configuration is already loaded
+4. **Records the key** in the module's model set, from which a restored package image rebinds the
+   models on their first query. Nothing is evaluated into the models module: no `__init__` is added
+   to it (#1607)
 5. **Registers the Revise reload** (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions))
 
 ### The run-time bind in a package
@@ -815,7 +830,7 @@ using PormG, LibPQ
 const APP_ROOT    = normpath(joinpath(@__DIR__, ".."))
 const MODELS_FILE = joinpath(APP_ROOT, "db", "models.jl")
 
-include(MODELS_FILE)                  # defines `module models … end`
+include(MODELS_FILE)                  # defines `module models … end`, ending with `Models.@models …`
 import .models as M
 
 function __init__()
@@ -826,7 +841,8 @@ end
 ```
 
 See [The Bootstrap Sequence](configuration/setup.md#The-Bootstrap-Sequence) for why this is the
-package boot in development and in production alike.
+package boot in development and in production alike. With a connection built in code
+(`register_connection`), bind by key instead: `PormG.Models.set_models(models; key = "f1")` (#1606).
 
 ### Inline Models (without a separate file)
 If you define models directly in code rather than a separate file, use the `@models_module` macro:

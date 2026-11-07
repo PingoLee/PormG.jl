@@ -703,6 +703,7 @@ Lap = Models.Model("fks_lap",
   name = Models.CharField(),
   race_id = Models.ForeignKey(Race, pk_field = "id", related_name = "circuit"))
 
+Models.@models Fkscircuit Race Lap
 PormG.Models.set_models(@__MODULE__, "fkshort_mock")
 end
 
@@ -776,6 +777,7 @@ Lap = Models.Model("fksp_lap",
   name = Models.CharField(),
   race_id = Models.ForeignKey(Race, pk_field = "id", related_name = "circuit"))
 
+Models.@models Fkspcircuit Race Lap
 PormG.Models.set_models(@__MODULE__, "fkshort_prefixed")
 end
 
@@ -845,6 +847,7 @@ Epdriver = Models.Model("epdriver",
   surname = Models.CharField(),
   team_id = Models.ForeignKey(Epteam, pk_field = "id", related_name = "drivers"))
 
+Models.@models Epteam Epdriver
 PormG.Models.set_models(@__MODULE__, "empty_prefix_q")
 end
 

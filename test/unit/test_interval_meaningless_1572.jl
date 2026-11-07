@@ -55,6 +55,7 @@ Im_lap = Models.Model("im_lap",
   code      = Models.CharField(null = true),
 )
 
+Models.@models Im_lap
 PormG.Models.set_models(@__MODULE__, "im1572_mock")
 end
 

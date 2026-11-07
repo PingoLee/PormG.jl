@@ -720,6 +720,7 @@ if !isdefined(Main, :Net904Models)
     session = Models.ForeignKey("Pit_wall_session"),
     holder  = Models.CharField(max_length = 100),
   )
+  Models.@models Pit_wall_session Pit_pass
   PormG.Models.set_models(@__MODULE__, "net904_pg")
   end
 end

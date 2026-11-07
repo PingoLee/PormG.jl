@@ -88,6 +88,7 @@ const _SQS_PG_RESULT = let mod = Module(:Sqs1632Pg)
     Core.eval(mod, :(Result = Models.Model("sqs1632_result", resultid = Models.IDField(),
                                            tags = Models.ArrayField(Models.IntegerField()),
                                            constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE"))))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Constructor, :Result]))   # #1602
     Base.invokelatest(PormG.Models.set_models, mod, "sqs1632_pg")
     Base.invokelatest(getfield, mod, :Result)
 end

@@ -74,6 +74,7 @@ Lap = Models.Model("p3w_lap",
   id = Models.IDField(),
   ref = Models.CharField(unique = true),
   best = Models.DurationField(null = true))
+Models.@models Team Driver Note Guard Token Plain Node Constructor Circuit Season Lap
 end
 
 # The tables, in drop order (children first).

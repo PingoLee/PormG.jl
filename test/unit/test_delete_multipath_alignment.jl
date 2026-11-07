@@ -121,6 +121,7 @@ Dmp_k = Models.Model("dmp_k",
   label  = Models.CharField(null = true),
 )
 
+Models.@models Dmp_root Dmp_a Dmp_b Dmp_c Dmp_k
 PormG.Models.set_models(@__MODULE__, "dmp_mock")
 end
 

@@ -2,6 +2,17 @@
 
 This comprehensive guide covers all field types available in PormG, inspired by Django ORM but optimized for Julia. Each field type maps to appropriate data types in PostgreSQL, SQLite or MySQL and provides validation, constraints, and formatting capabilities.
 
+## The field types are a closed set
+
+A model holds PormG's own field types: the constructors on this page (`CharField`, `ForeignKey`,
+`ArrayField`, …). Defining a subtype of `PormGField` and putting it in a model raises
+`ModelDefinitionError` naming the field and its type (#1604): `Model`, the `Dict` constructors and
+`add_field!` refuse it. The set is closed so that a model's fields have one concrete type the compiler
+knows — a read like `field.type` is a field access, not a dynamic call — and because PormG finds a
+field's constructor, its SQL type and its rendering from that set. PormG has no extension point for a
+field type of your own; one would be a deliberate API (see *Planned hook* in
+[Extending PormG](extending.md)), not an open abstract type.
+
 ## Naming Conventions and Considerations
 
 ### Field Naming Rules

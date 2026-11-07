@@ -62,6 +62,7 @@ Dv_lap = Models.Model("dv_lap",
   code      = Models.CharField(null = true),
 )
 
+Models.@models Dv_lap
 PormG.Models.set_models(@__MODULE__, "dv1553_mock")
 end
 

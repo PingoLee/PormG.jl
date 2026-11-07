@@ -332,6 +332,7 @@ Mi_result = Models.Model("mi_result",
   points = Models.IntegerField(null = true),
 )
 
+Models.@models Mi_race Mi_result
 PormG.Models.set_models(@__MODULE__, "memo_iface_mock")
 end
 

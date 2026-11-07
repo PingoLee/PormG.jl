@@ -89,6 +89,7 @@ J_driver = Models.Model("j_driver",
   sponsors = Models.ManyToManyField(J_sponsor, related_name = "j_drivers_m2m"),
 )
 
+Models.@models J_team J_sponsor J_driver
 PormG.Models.set_models(@__MODULE__, "json_641_no_connection")
 end
 

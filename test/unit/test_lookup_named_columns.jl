@@ -51,6 +51,7 @@ Lnc_note = Models.Model("lnc_note",
   year     = Models.IntegerField(null = true),
 )
 
+Models.@models Lnc_note
 PormG.Models.set_models(@__MODULE__, "lnc_mock")
 end
 

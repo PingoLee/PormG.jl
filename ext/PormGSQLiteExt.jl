@@ -365,12 +365,11 @@ using PrecompileTools: PrecompileTools, @setup_workload, @compile_workload
 #   * not a throwaway `Module()`: precompilation refuses `Core.eval` into any module outside the
 #     package being compiled, and 1.12's `setglobal!` cannot create a binding;
 #   * so a submodule of this extension, which IS serialized — hence the two rules below.
-# The marker is pre-declared so `set_models` does not inject its own, which would bake this
-# machine's deleted temp path into the cache image. Nothing reads it: the self-healing scan in
-# `Models.ensure_model_initialized` looks only at top-level modules, and at models whose
-# `_module` is this one, of which none survive the workload (see the `finally` below).
+# Registration records the key and this machine's temp folder in the module's model set (#1607); the
+# `finally` below clears that record, so the deleted temp path never reaches the cache image. Nothing
+# would read it anyway: the self-healing scan in `Models.ensure_model_initialized` looks only at
+# top-level modules, and at models whose `_module` is this one, of which none survive the workload.
 module _PrecompileModels
-const __pormg_init_path__ = ""
 end
 
 @setup_workload begin
@@ -402,6 +401,9 @@ end
             constructorid = Models.ForeignKey(Constructor, pk_field = "constructorid", on_delete = "RESTRICT"),
             grid = Models.IntegerField(),
             points = Models.FloatField())
+          # #1602: the set `set_models` reads. Interpolated: the block's macros expand before its
+          # `import PormG.Models` runs, so `Models.@models` would not resolve here.
+          $(PormG.Models._model_set_declaration([:Driver, :Constructor, :Result]))
         end)
         # `invokelatest`: the bindings are newer than this code's world, the rule `@import_models`
         # handles the same way (#211).
@@ -468,8 +470,12 @@ end
           e isa PormG.DoesNotExist || rethrow()
         end
       finally
-        # The models must not reach the cache image through `_PrecompileModels`.
+        # The models must not reach the cache image through `_PrecompileModels`, nor this machine's
+        # temp folder through its registration record (#1607).
         Core.eval(_PrecompileModels, :(Driver = Constructor = Result = nothing))
+        # `invokelatest`: the set is a global the `Core.eval` above made, newer than this code's world.
+        record = Base.invokelatest(Models._model_set, _PrecompileModels)
+        record === nothing || (record.key = record.load_root = record.folder = nothing)
         delete!(PormG.config, key)
         CP.close_pool!(pool)
       end

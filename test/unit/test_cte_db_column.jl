@@ -93,6 +93,7 @@ Cdc_odd_child = Models.Model("cdc_odd_child",
   odd = Models.ForeignKey(Cdc_odd, on_delete = "CASCADE", null = true),
 )
 
+Models.@models Cdc_parent Cdc_child Cdc_plain Cdc_odd Cdc_odd_child
 PormG.Models.set_models(@__MODULE__, "cte_dbcol_mock")
 end
 

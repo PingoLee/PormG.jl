@@ -15,7 +15,11 @@ runs again.
 
 This helper parses the file, finds the `module` named like `existing_mod`, and evaluates every
 expression of its body inside the *original* module object, so that existing references
-(e.g. `import .models as M`) remain valid. It returns `false`, and evaluates nothing, when the file
+(e.g. `import .models as M`) remain valid.
+
+JIT-only (#1608): its one caller is the Revise callback `PormGReviseExt` registers, and a running
+application never reaches it — `set_models`, `ensure_model_initialized` and the query path neither
+parse nor evaluate code. A trimmed binary cannot load new code by definition, so it has no reload. It returns `false`, and evaluates nothing, when the file
 does not parse or defines no such module. An expression that fails to evaluate (a typo in a field)
 is logged with its line and leaves that binding at its previous value.
 """
@@ -28,7 +32,9 @@ function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
         # The module the file defines for `existing_mod`, by name: evaluating another module's body
         # into it (a wrong `source =`) would overwrite its bindings with unrelated ones.
         if expr isa Expr && expr.head === :module && expr.args[2] === nameof(existing_mod)
-            body_block = expr.args[3]           # the body block Expr
+            # #1602: the same model-set declaration `@import_models` adds, so a model added by the
+            # edit is in the set the `set_models` after the reload reads.
+            body_block = Models._with_model_set(expr).args[3]
             line = 0
             for sub in body_block.args
                 if sub isa LineNumberNode
@@ -51,27 +57,17 @@ function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
     return false
 end
 
-# Revise hooks (optionally overridden by PormGReviseExt if Revise is loaded)
-function _default_includet(mod, path)
-    if isdefined(Main, :Revise) && isdefined(Main.Revise, :includet)
-        try return Main.Revise.includet(mod, path) catch end
-    end
-    Base.include(mod, path)
-end
-
-const _includet_hook = Base.RefValue{Function}(_default_includet)
-
-# `PormGReviseExt` installs both hooks from its `__init__`. The reload hook lives in `Models` (#1487),
+# `PormGReviseExt` installs the reload hook from its `__init__`. The hook lives in `Models` (#1487),
 # because `set_models(…; source)` calls it and `Models` is included before this file.
-function set_revise_hooks!(; includet=nothing, add_revise_callback=nothing)
-    _includet_hook[] = includet === nothing ? _default_includet : includet
+#
+# #1608: there was a second hook, `includet`, through which `@import_models` included the models file
+# with `Revise.includet` in a session (and a duck-typed `Main.Revise` fallback). #1602 made the macro
+# include with `Base.include(Models._with_model_set, …)` — `includet` cannot apply a `mapexpr` — so
+# the hook had no caller left and is deleted: PormG's own `source =` reload is the one reload path.
+function set_revise_hooks!(; add_revise_callback=nothing)
     Models._add_revise_callback_hook[] =
         add_revise_callback === nothing ? Models._noop_add_revise_callback : add_revise_callback
     return nothing
-end
-
-function _includet(mod, path)
-    return _includet_hook[](mod, path)
 end
 
 function resolve_import_models_path(source_file::AbstractString, import_path::AbstractString, calling_module::Module)
@@ -113,42 +109,6 @@ function resolve_import_models_path(source_file::AbstractString, import_path::Ab
     return isempty(candidates) ? normpath(import_path) : first(candidates)
 end
 
-# Define an `__init__` in the models submodule that re-runs `set_models` with the folder baked
-# in as a literal. Two facts about it, measured in #552 rather than assumed:
-#
-#   * It is NOT what makes model registration survive precompilation. It is defined by
-#     `Core.eval` after the submodule has closed, and in a restored image it is not observed to
-#     run at all. The recovery comes from `Models.ensure_model_initialized` cases 2b/2c, which
-#     read `__pormg_init_path__` on the first `.objects` access.
-#   * If a Julia release ever DID run it, it would fire before the parent package's `__init__`,
-#     with `config` still empty. It calls `Models._bind_if_loaded`, not `set_models` (#1226): with
-#     nothing loaded it does nothing, rather than refuse inside an `__init__` (failing `using`) or,
-#     as before #1226, implicit-load — absolute key, environment from PORMG_ENV/`default_env:`, the
-#     #550 incident. The first `.objects` then binds or refuses (`ensure_model_initialized`).
-#     Firing early is therefore harmless and invisible; `test/unit/test_reload.jl`'s boot-pattern
-#     testset pins the outcome (the short key and the application's environment), not the firing.
-#
-# It is kept as a no-cost belt, not as the mechanism.
-function ensure_models_init!(mod::Module, dir_path::AbstractString)
-    if isdefined(mod, :__init__)
-        return nothing
-    end
-
-    init_expr = quote
-        function __init__()
-            try
-                Base.invokelatest(PormG.Models._bind_if_loaded, @__MODULE__, $dir_path)
-            catch
-                # swallows any error: an `__init__` that throws fails `using`; the first
-                # `.objects` binds or refuses instead (`ensure_model_initialized`, see above).
-            end
-        end
-    end
-
-    Core.eval(mod, init_expr)
-    return nothing
-end
-
 """
     _do_import_models(calling_module, source_file, import_path, alias)
 
@@ -168,17 +128,15 @@ function _post_import_setup(calling_module::Module, source_file::String,
     return nothing
 end
 
-# What `@import_models` and `import_models` do once the models module exists: the `__init__` belt,
-# the Revise callback, and the registration (#1232 shares it between the macro and the function).
+# What `@import_models` and `import_models` do once the models module exists: the Revise callback and
+# the registration (#1232 shares it between the macro and the function).
+#
+# #1607: no `__init__` is injected into the models module any more. `ensure_models_init!` used to
+# `Core.eval` one in after the module had closed; #552 measured that it never ran in a restored image,
+# and a trimmed binary cannot `Core.eval` at all. A restored image rebinds on the first `.objects`
+# from the record registration keeps in the module's own `ModelSet` (`ensure_model_initialized`).
 function _setup_imported_models!(mod::Module, resolved_path::String)::Nothing
     dir_path = dirname(resolved_path)
-
-    # Inject __init__() into the submodule (a belt only — see the note on `ensure_models_init!`)
-    try
-        ensure_models_init!(mod, dir_path)
-    catch e
-        @warn "PormG: Failed to inject __init__() for module $(string(nameof(mod)))" exception=e
-    end
 
     # Register models with PormG, and the Revise reload for their file (#1487: `set_models` skips the
     # reload while precompiling, and registers it once the key is decided, so a `ModelDefinitionError`
@@ -198,12 +156,16 @@ The `alias` must match the module name defined in the file.
 
 The macro automatically:
 - Resolves the path relative to the calling file
-- Registers models for the current session
-- Injects an `__init__()` into the model module (see `ensure_models_init!` for what that does
-  and does not guarantee — post-precompilation recovery is `Models.ensure_model_initialized`)
-- Handles World Age issues in Julia 1.12+
+- Declares the model set (`Models.@models …`, #1602) from the file's top-level
+  `X = Models.Model(…)` assignments, when the file does not end with its own `Models.@models`
+  line. A model built any other way, or reached through `using`, is registered only when the file
+  declares it
+- Registers models for the current session, recording the key in the module's model set, from
+  which a restored package image rebinds on the first query (`Models.ensure_model_initialized`)
+- Handles World Age issues in Julia 1.12+: the registration is its own top-level statement
 
-Users do NOT need to manually add an `__init__()` function to their model files.
+Users do NOT need to add an `__init__()` function to their model files, and none is added for them
+(#1607).
 
 With Revise loaded, it also registers a reload of the file (`Models.set_models(…; source)`, #1487).
 It is the REPL / script form: in a package's module body it runs at precompile time, where no
@@ -231,7 +193,7 @@ macro import_models(path_expr, alias)
     alias_sym = alias isa Expr ? alias.args[1] : alias
 
     resolve_ref  = GlobalRef(Utils, :resolve_import_models_path)
-    includet_ref = GlobalRef(Utils, :_includet)
+    with_set_ref = GlobalRef(Models, :_with_model_set)
     setup_ref    = GlobalRef(Utils, :_post_import_setup)
 
     sf = QuoteNode(source_file)
@@ -239,23 +201,13 @@ macro import_models(path_expr, alias)
     as = QuoteNode(alias_sym)
 
     return Expr(:toplevel,
-        # Statement 1 — resolve path + include.
-        # Executed as its own top-level statement so the submodule binding
-        # is established in the current world age before the next statement
-        # (and before any subsequent `import .alias` in the caller).
-        # During precompilation we skip Revise to avoid file-watcher hangs.
-        :(if ccall(:jl_generating_output, Cint, ()) != 0
-            Base.include($calling_module, $resolve_ref($sf, $ip, $calling_module))
-        else
-            let __path = $resolve_ref($sf, $ip, $calling_module)
-                $includet_ref($calling_module, __path)
-                if !isdefined($calling_module, $as)
-                    Base.include($calling_module, __path)
-                end
-            end
-        end),
+        # Statement 1 — resolve the path and include the file, appending the model-set declaration
+        # (`Models.@models …`, #1602) to its module when the file does not write one. Its own
+        # top-level statement, so the submodule binding is established in the current world age
+        # before the next statement (and before any subsequent `import .alias` in the caller).
+        :(Base.include($with_set_ref, $calling_module, $resolve_ref($sf, $ip, $calling_module))),
 
-        # Statement 2 — inject __init__, register Revise callback, set_models.
+        # Statement 2 — register the Revise callback and the models (set_models).
         # Runs as a separate top-level statement so it can see the binding.
         :($setup_ref($calling_module, $sf, $ip, $as))
     )
@@ -266,7 +218,9 @@ end
 
 Defines a new module with inline model definitions and registers it with PormG.
 
-Use this when you want to define models directly in code rather than in a separate file.
+Use this when you want to define models directly in code rather than in a separate file. The
+model set (`Models.@models`, #1602) is declared for you from the block's top-level
+`X = Models.Model(…)` assignments, unless the block declares its own.
 
 # Example
 ```julia
@@ -280,28 +234,39 @@ end
 """
 macro models_module(name, path, block)
     source_file = string(__source__.file)
+    body = block isa Expr && block.head === :block ? block : Expr(:block, block)
+    declaration = Models._declares_model_set(body) ? nothing :
+        Models._model_set_declaration(Models._declared_model_bindings(body), __source__)
     return Expr(:toplevel,
         :(module $(esc(name))
             using PormG
             import PormG.Models
 
-            const __pormg_init_path__ = let
-                p = $(esc(path))
-                isabspath(p) ? p : joinpath(dirname($source_file), p) |> normpath
-            end
-
             $(esc(block))
 
-            Base.invokelatest(Models.set_models, @__MODULE__, __pormg_init_path__)
+            $(declaration === nothing ? nothing : esc(declaration))
+
+            # #1607: the folder goes into the module's own `ModelSet`, from its body, so the
+            # `__init__` below can read it even if the registration under it has not happened yet.
+            Models._record_folder!(@__MODULE__, let
+                p = $(esc(path))
+                isabspath(p) ? p : joinpath(dirname($source_file), p) |> normpath
+            end)
+
+            # Direct calls (#1607): this body runs at top level, in the newest world, so the models
+            # above are visible to `set_models` without `invokelatest`.
+            Models.set_models(@__MODULE__, Models._model_set(@__MODULE__).folder)
 
             # Runs when a package image is restored, before the parent's `__init__` has loaded
-            # the configuration: bind only if it is already loaded (#1226), see `ensure_models_init!`.
+            # the configuration: bind only if it is already loaded (#1226). Written in the module
+            # body, not evaluated into the closed module.
             function __init__()
                 try
-                    Base.invokelatest(Models._bind_if_loaded, @__MODULE__, __pormg_init_path__)
-                catch
-                    # swallows any error: an `__init__` that throws fails `using`; see
-                    # `ensure_models_init!`.
+                    Models._bind_if_loaded(@__MODULE__)
+                catch e
+                    # swallows a refusal or a bug in the bind: an `__init__` that throws fails
+                    # `using`; the first `.objects` binds or refuses (`ensure_model_initialized`).
+                    @debug "PormG: @models_module __init__ did not bind" exception = e
                 end
             end
         end)

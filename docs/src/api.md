@@ -867,6 +867,15 @@ than the `connect_key` field to check which database a model's queries reach:
 PormG.Models.connection_key(M.Driver)   # "db"
 ```
 
+### `Models.@models Circuit Race …`
+
+The last line of a models module: the bindings of the models it defines, which `set_models` reads
+(#1602). PormG does not scan a module's names for models; a module registered after a plain `include`
+that writes no `@models` line raises `ModelDefinitionError` naming the line to add, and
+`@import_models` / `@models_module` add it from the file's top-level `X = Models.Model(…)`
+assignments. The line binds the module's `MODEL_SET::Models.ModelSet`, which holds the models (it
+comes after them). A `juliac --trim` application registers with `set_models(models.MODEL_SET; key)`.
+
 ### `Models.bind!(model, key)`
 
 Binds one model to the loaded connection `key` and does nothing else (#1230): the narrow half of

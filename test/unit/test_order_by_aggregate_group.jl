@@ -53,6 +53,7 @@ Result = Models.Model("result",
   grid          = Models.IntegerField(null = true),
   points        = Models.FloatField(),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_agg_group_pg")
 end
 
@@ -66,6 +67,7 @@ Result = Models.Model("result",
   grid          = Models.IntegerField(null = true),
   points        = Models.FloatField(),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_agg_group_sl")
 end
 

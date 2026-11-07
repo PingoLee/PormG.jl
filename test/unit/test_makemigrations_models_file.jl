@@ -99,7 +99,8 @@ end
 
         # The old state, checked out beside its sibling (as `git show REV:… > …` would).
         write(joinpath(key, "driver_v1.jl"), _mf736_driver_model(with_nickname = false))
-        v1 = "module models\nimport PormG.Models\ninclude(\"driver_v1.jl\")\nend\n"
+        # #1602: a model defined in an included file is declared by the models file itself.
+        v1 = "module models\nimport PormG.Models\ninclude(\"driver_v1.jl\")\nModels.@models Driver736\nend\n"
         write(joinpath(key, "models_v1.jl"), v1)
 
         # Relative to the working directory, like any path a user types.

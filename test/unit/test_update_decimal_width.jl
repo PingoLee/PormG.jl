@@ -63,6 +63,7 @@ Udw_result = Models.Model("udw_result",
   wide          = Models.DecimalField(max_digits = 16, decimal_places = 2, null = true),
 )
 
+Models.@models Udw_constructor Udw_result
 PormG.Models.set_models(@__MODULE__, "udw_mock")
 end
 

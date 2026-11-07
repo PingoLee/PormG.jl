@@ -799,7 +799,10 @@ end
 # `getfield(Dialect, Symbol(name))(…)`: a binding looked up by a name at run time, which a static
 # compiler cannot follow (`juliac --trim`, #1599). The names are exactly the `Dialect` functions with a
 # method taking `(column, ::FnOptions, conn)`, read from the method table when this file is loaded,
-# so a renderer added to `Dialect` is reachable with no list to keep in step.
+# so a renderer added to `Dialect` is reachable with no list to keep in step. The list is a snapshot
+# of that load: a renderer added to `Dialect` later in the session (under Revise) is refused with this
+# `QueryBuildError` until the package is reloaded, while an edit to an existing renderer's body is seen
+# at once.
 const _FN_OPTIONS_RENDERERS = let found = String[]
   for n in names(Dialect; all = true)
     isdefined(Dialect, n) || continue

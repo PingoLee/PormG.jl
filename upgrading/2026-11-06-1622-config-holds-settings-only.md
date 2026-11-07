@@ -4,7 +4,8 @@
 - **PormG ref**: #1622, part of #1599 ; `src/Kernel.jl`, `src/Configuration.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for code that stores its own `PormGSettings` subtype in `PormG.config` or
-  passes its own dictionary as `config =`. Code that loads or registers connections is unaffected.
+  passes its own dictionary as `config =`, or that matches the text of `register_connection`'s
+  unsupported-adapter refusal. Code that loads or registers connections is otherwise unaffected.
 
 ### What changed
 
@@ -32,6 +33,12 @@ Storing any other `PormGSettings` subtype now raises a `MethodError` (no `conver
 So does passing a `Dict{String,PormGSettings}` as `config =` (a `TypeError`). Nothing in PormG ever
 built either. The pattern is a test stand-in: a struct with a `connections` field registered under
 a test key.
+
+`register_connection`'s refusal of an adapter it does not take no longer repeats the value it was
+given (a resolver answer with its entries swapped would have printed the connection URL). It still
+raises `InvalidConfigurationError`, but the message reads ``register_connection: unsupported
+`adapter`; expected "PostgreSQL" or "SQLite".`` where it read `Unsupported adapter: <value>`, so a
+caller that matches the old text breaks.
 
 ### How to find the calls to migrate
 

@@ -3998,6 +3998,10 @@ function _load_current_models(path::String)::Dict{Symbol, Dict{Symbol, Union{Boo
   temp_module = Module(:TemporaryModels)
   Base.include(Models._with_model_set, temp_module, path)   # #1602: the declared model set
   models_module = Base.invokelatest(getfield, temp_module, :models)
+  # A module with no set would read as declaring no model, and every live table would be planned as a
+  # drop: refuse it, naming the line to add (#1602). `_with_model_set` gives every module a line that
+  # runs, so this is the guard behind it, not a path a file is expected to take.
+  Base.invokelatest(Models._require_model_set, models_module)
   current_models = Base.invokelatest(get_all_models, models_module)
   Base.invokelatest(_resolve_fk_targets_and_pk!, current_models, models_module)
   return current_models

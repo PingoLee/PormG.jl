@@ -767,11 +767,27 @@ function _is_model_call(rhs)::Bool
          _is_model_ctor_name(f.args[2].value)
 end
 
+# `@doc`, as a docstring parses (`GlobalRef(Core, Symbol("@doc"))`) or as written (`@doc`, `Base.@doc`).
+_is_doc_macro_name(x)::Bool =
+  x === Symbol("@doc") ||
+  (x isa GlobalRef && x.name === Symbol("@doc")) ||
+  (x isa Expr && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode &&
+   x.args[2].value === Symbol("@doc"))
+
+# The expression a docstring documents, or `nothing` when `ex` is no docstring: `"""…""" X = …` parses
+# as `Expr(:macrocall, GlobalRef(Core, Symbol("@doc")), ::LineNumberNode, doc, X = …)`.
+_documented_expr(ex) =
+  ex isa Expr && ex.head === :macrocall && length(ex.args) == 4 && _is_doc_macro_name(ex.args[1]) ?
+    ex.args[4] : nothing
+
 # The binding an assignment of a `Model(…)` call names, or `nothing`: `X = Model(…)`,
-# `X::T = Model(…)`, `const X = Model(…)`, `const X::T = Model(…)`.
+# `X::T = Model(…)`, `const X = Model(…)`, `const X::T = Model(…)`, `global X = Model(…)`,
+# `global X::T = Model(…)`, and any of these under a docstring.
 function _model_assignment_binding(ex)::Union{Symbol, Nothing}
   ex isa Expr || return nothing
-  ex.head === :const && length(ex.args) == 1 && return _model_assignment_binding(ex.args[1])
+  documented = _documented_expr(ex)
+  documented === nothing || return _model_assignment_binding(documented)
+  ex.head in (:const, :global) && length(ex.args) == 1 && return _model_assignment_binding(ex.args[1])
   ex.head === :(=) && length(ex.args) == 2 || return nothing
   _is_model_call(ex.args[2]) || return nothing
   lhs = ex.args[1]
@@ -784,8 +800,9 @@ end
     _declared_model_bindings(body::Expr) -> Vector{Symbol}
 
 The model bindings a module body assigns at its top level (`begin … end` blocks included, nested
-modules and function bodies not), in order: each `X = Model(…)`, `X::T = Model(…)` and
-`const X = Model(…)`, under any qualification of `Model`. Syntactic: nothing is evaluated. The one
+modules and function bodies not), in order: each `X = Model(…)`, `X::T = Model(…)`,
+`const X = Model(…)` and `global X = Model(…)`, documented or not, under any qualification of
+`Model`. Syntactic: nothing is evaluated. The one
 parser behind `@models_module`, `@import_models`, `import_models`, the Revise reload, the migration
 planner and the Generator (#1602).
 """
@@ -804,11 +821,28 @@ function _declared_model_bindings(body::Expr)::Vector{Symbol}
   return out
 end
 
-# Whether a module body already declares its model set: an `@models …` call at its top level or in
-# a top-level `begin … end` block (where `_declared_model_bindings` also looks).
-_declares_model_set(body::Expr)::Bool =
-  any(ex -> ex isa Expr && ((ex.head === :macrocall && _is_models_macro_name(ex.args[1])) ||
-                            (ex.head === :block && _declares_model_set(ex))), body.args)
+# Whether a module body already declares its model set: an `@models …` call that always runs when the
+# module loads — at its top level, documented (`"""…""" Models.@models …`), or in a top-level
+# `begin … end` (#1602). One that may not run — in an `if`, a quoted expression, a macro body — does
+# not count: a declaration counted but never run would leave the module with no set, which the
+# planner would read as declaring nothing and plan every table as dropped. For such a module the line
+# is generated, and an `if` line that does run merges into it.
+_declares_model_set(body::Expr)::Bool = _first_models_call(body) !== nothing
+
+# The first `@models …` call among the statements of `ex` that always run (the top level, `begin`
+# blocks, docstring wrappers), or `nothing`.
+function _first_models_call(@nospecialize(ex))::Union{Nothing, Expr}
+  ex isa Expr || return nothing
+  ex.head === :macrocall && _is_models_macro_name(ex.args[1]) && return ex
+  documented = _documented_expr(ex)
+  documented === nothing || return _first_models_call(documented)
+  ex.head === :block || return nothing
+  for a in ex.args
+    found = _first_models_call(a)
+    found === nothing || return found
+  end
+  return nothing
+end
 
 # Whether a top-level statement assigns a model (directly, or inside a `begin … end` block).
 _assigns_model(ex)::Bool =
@@ -847,17 +881,21 @@ end
 # A module that declares its set but assigns a top-level `X = Model(…)` the declaration leaves out:
 # that model is not registered, which is what an edit that adds a model and forgets the list looks
 # like. A warning, not a refusal: leaving a model out of the set is allowed.
-# The bindings a body's `@models` calls list, at its top level and in top-level `begin … end` blocks.
-function _listed_model_bindings!(declared::Set{Symbol}, body::Expr)::Set{Symbol}
-  for ex in body.args
-    ex isa Expr || continue
-    if ex.head === :block
-      _listed_model_bindings!(declared, ex)
-    elseif ex.head === :macrocall && _is_models_macro_name(ex.args[1])
-      for a in ex.args[2:end]
-        a isa Symbol && push!(declared, a)
-      end
+# The bindings a body's `@models` calls list, among the statements that always run (where
+# `_declares_model_set` looks).
+function _listed_model_bindings!(declared::Set{Symbol}, @nospecialize(ex))::Set{Symbol}
+  ex isa Expr || return declared
+  if ex.head === :macrocall && _is_models_macro_name(ex.args[1])
+    for a in ex.args[2:end]
+      a isa Symbol && push!(declared, a)
     end
+    return declared
+  end
+  documented = _documented_expr(ex)
+  documented === nothing || return _listed_model_bindings!(declared, documented)
+  ex.head === :block || return declared
+  for a in ex.args
+    _listed_model_bindings!(declared, a)
   end
   return declared
 end

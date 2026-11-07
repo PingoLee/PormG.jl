@@ -223,9 +223,14 @@ end
 # What it tests: (a) an older generated file that ends with `Models.set_models(@__MODULE__, …)` in its
 #   own body loads through `import_models`: the generated declaration is inserted right after the last
 #   model, before that call, so the call sees the set; (b) an explicit `@models` inside a top-level
-#   `begin … end` block counts as the module's declaration, so none is generated over it. No SQL.
+#   `begin … end` block, or under a docstring, counts as the module's declaration, so none is
+#   generated over it and nothing it lists is reported as left out; (c) one inside an `if` does not
+#   count, since it may not run: the line is generated, so the planner sees both models of a file
+#   whose `if` branch is not taken. No SQL.
 # Why it matters: (a) loaded before #1602 and must not start failing mid-include; (b) a generated
-#   declaration evaluated later would overwrite the user's list.
+#   declaration would merge every top-level model into the user's list, overriding a deliberate
+#   omission; (c) a declaration counted but never run leaves no set, which the planner would read as
+#   declaring nothing — every table planned as a drop.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the generated declaration goes after the models; a nested one counts (#1602)" begin
   dir = mktempdir()
@@ -258,4 +263,85 @@ end
   end""")
   @test Models._declares_model_set(nested.args[3])
   @test (@test_logs min_level = Logging.Warn Models._with_model_set(nested)) === nested   # no warning
+
+  documented = Meta.parse("module models\nimport PormG.Models\nCircuit = Models.Model(circuitid = Models.IDField())\n" *
+                          "\"\"\"The F1 model set.\"\"\"\nModels.@models Circuit\nend")
+  @test Models._declares_model_set(documented.args[3])
+  @test (@test_logs min_level = Logging.Warn Models._with_model_set(documented)) === documented
+
+  # (c) An `@models` in an `if` branch that is not taken: the generated line still lists both models.
+  plan_dir = mktempdir()
+  plan_file = joinpath(plan_dir, "models.jl")
+  write(plan_file, """
+  module models
+  import PormG.Models
+  Circuit::Models.ModelType = Models.Model("dms_if_circuit", circuitid = Models.IDField())
+  Race::Models.ModelType = Models.Model("dms_if_race", raceid = Models.IDField())
+  if get(ENV, "DMS_NEVER_SET_F1", "") == "1"
+    Models.@models Circuit
+  end
+  end
+  """)
+  @test !Models._declares_model_set(Meta.parse(read(plan_file, String)).args[3])
+  @test sort(collect(keys(PormG.Migrations._load_current_models(plan_file)))) == [:dms_if_circuit, :dms_if_race]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A documented model and a `global` model are read by the generated declaration
+# What it tests: `_declared_model_bindings` reads `"""doc""" X = Model(…)` (a `Core.@doc` macrocall
+#   around the assignment), `global X = Model(…)` and `global X::T = Model(…)`. For each shape, a file
+#   whose two models (`Circuit`, `Race`) are written that way and that has no `Models.@models` line:
+#   `@import_models` registers both; `Migrations._load_current_models` keys both tables
+#   (`dms_shape_circuit`, `dms_shape_race`); and the Revise reload (`Utils.reload_module_contents!`) of
+#   a module first loaded with `Circuit` alone puts the added `Race` in its set. No SQL.
+# Why it matters: the generated line used to skip both shapes in silence, and a model left out of the
+#   set is one `makemigrations` plans to drop.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a documented or global model is in the generated set (#1602)" begin
+  body = _dms_body("""
+    import PormG.Models
+    \"\"\"A circuit.\"\"\"
+    Circuit::Models.ModelType = Models.Model(circuitid = Models.IDField())
+    global Race = Models.Model(raceid = Models.IDField())
+    global Lap::Models.ModelType = Models.Model(lapid = Models.IDField())
+    \"\"\"A pit stop.\"\"\"
+    const Pit = Models.Model(pitid = Models.IDField())
+    @doc "A driver." Driver = Models.Model(driverid = Models.IDField())
+  """)
+  @test Models._declared_model_bindings(body) == [:Circuit, :Race, :Lap, :Pit, :Driver]
+
+
+  shapes = Dict(
+    :doc => (b, t) -> "\"\"\"The $(t) table.\"\"\"\n$(b)::Models.ModelType = Models.Model(\"$(t)\", id = Models.IDField())",
+    :global => (b, t) -> "global $(b) = Models.Model(\"$(t)\", id = Models.IDField())")
+  for (shape, model) in shapes
+    dir = mktempdir()
+    folder = joinpath(dir, "dms_shape_$(shape)")
+    mkpath(folder)
+    file = joinpath(folder, "shape_models.jl")
+    write_models(ms...) = write(file, "module models\nimport PormG.Models\n" * join(ms, "\n") * "\nend\n")
+    write_models(model(:Circuit, "dms_shape_circuit"), model(:Race, "dms_shape_race"))
+    PormG.config[folder] = PormG.Configuration.Settings(
+      connections = DmsMockPostgres(), change_data = true, db_def_folder = folder)
+    try
+      host = Module(Symbol("DmsShapeHost_", shape))
+      Core.eval(host, :(using PormG))
+      Core.eval(host, :(PormG.@import_models $file models))   # the planner reads a module named `models`
+      mod = Base.invokelatest(getfield, host, :models)
+      @test Base.invokelatest(Models.get_all_models, mod; symbol = true) == [:Circuit, :Race]
+      @test Models.connection_key(Base.invokelatest(getfield, mod, :Race)) == folder
+
+      @test sort(collect(keys(PormG.Migrations._load_current_models(file)))) ==
+            [:dms_shape_circuit, :dms_shape_race]
+
+      write_models(model(:Circuit, "dms_shape_circuit"))
+      reloaded = PormG.import_models(file; into = Module(Symbol("DmsShapeReload_", shape)))
+      @test Base.invokelatest(Models.get_all_models, reloaded; symbol = true) == [:Circuit]
+      write_models(model(:Circuit, "dms_shape_circuit"), model(:Race, "dms_shape_race"))
+      @test PormG.Utils.reload_module_contents!(reloaded, file)
+      @test Base.invokelatest(Models._model_set, reloaded).bindings == [:Circuit, :Race]
+    finally
+      pop!(PormG.config, folder, nothing)
+    end
+  end
 end

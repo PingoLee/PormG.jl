@@ -220,7 +220,7 @@ function _sqlite_rows_into(::Type{T}, q, decode::PormG.QueryBuilder._RowDecoder{
     row = try
       _sqlite_typed_row(T, handle, cols, parsers, i, site)
     catch e
-      e isa InterruptException && rethrow()   # a Ctrl-C stops the statement, as anywhere else
+      (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement, as anywhere else
       PormG.QueryBuilder._decode_failed!(decode, e)
       return out
     end

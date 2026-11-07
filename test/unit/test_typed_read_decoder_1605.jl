@@ -312,7 +312,7 @@ end
 # Expected: the retry's rows decoded into `T` (the decoder rides along the retry), the statement sent
 # twice, the slot renewed once and released, and the "Lost connection … Retrying" warning.
 # Matters: `fetch`'s retry calls `fetch_async` again and decodes the retry's result in its `catch`; a
-# retry that dropped `_decode` would hand back the driver's raw rows, which the typed read's
+# retry that dropped `_decode` would hand back the driver's raw rows, which `decoded_on_worker`'s
 # `::Vector{T}` assertion would then refuse.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "fetch's reconnect retry decodes the retried statement's rows (#1605)" begin

@@ -3361,11 +3361,11 @@ end
 # The settings forms reach the pool through `with_pool` (#1622), so the call on it is static for every
 # pool PormG builds; `settings.connections` alone is an untyped value. The same holds for every
 # settings or by-key form below.
-fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx, _decode)
-fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx, _decode)
-# #1605: `_decode` forwarded only when set, as in `_fetch_on`.
-_fetch_async_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, ::Nothing) = fetch_async(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
-_fetch_async_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, decode) = fetch_async(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx, _decode=decode)
+# No `_decode` here (#1605): a typed read decodes through `fetch`, which finishes the decode
+# (`_decoded`); a task from these forms would hand back undecoded rows, or rows short of a recorded error.
+fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx)
+fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx)
+_fetch_async_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool) = fetch_async(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 fetch_async(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch_async(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 
 """

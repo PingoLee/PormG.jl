@@ -215,8 +215,9 @@ const PINNED_METHODS = _MethodPin[
 ]
 
 # ── Keyword arguments PormG passes — a method without the keyword raises a `MethodError` ─────────────
-# The documented `SQLite.Stmt(db, sql)` says nothing of `register`, which keeps a statement out of the
-# database's registry so `close!` finalizes it at once.
+# `SQLite.Stmt(db, sql; register = false)` keeps a statement out of the database's registry, so `close!`
+# finalizes it at once. A pin on the name alone would stay green with the keyword gone, and the keyword
+# is declared (`register::Bool`, not a `kw...` catch-all), so `hasmethod` checks it.
 const _KeywordPin = @NamedTuple{f::Any, sig::Type, kw::Tuple{Vararg{Symbol}}, reader::String}
 const PINNED_KEYWORDS = _KeywordPin[
   (f = SQLite.Stmt, sig = Tuple{SQLite.DB, String}, kw = (:register,),

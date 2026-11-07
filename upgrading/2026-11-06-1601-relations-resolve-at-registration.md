@@ -1,7 +1,7 @@
 ## Every relation resolves to a model at `set_models`, or registration refuses (#1601)
 
 - **Version**: Unreleased
-- **PormG ref**: #1601, #1599, #354 ; `src/Models.jl`, `src/querybuilder/build_joins.jl`, `src/querybuilder/many_to_many.jl`, `src/querybuilder/execution_write.jl`
+- **PormG ref**: #1601, #1599, #354, #1689 ; `src/Models.jl`, `src/querybuilder/build_joins.jl`, `src/querybuilder/many_to_many.jl`, `src/querybuilder/execution_write.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for a models module with a relation whose target is not one of the models a registered module declares. A module whose `ForeignKey` / `OneToOneField` / `ManyToManyField` targets are models it declares (`Models.@models`, #1602), or models a module registered before it declares, is unaffected.
 
@@ -22,10 +22,18 @@ Julia binding is gone.
 | a many-to-many side whose binding the module could not find | its binding guessed as `uppercasefirst(name)` | the binding read from the declared set; a model with none is refused |
 | `ManyToManyRelation.owner_model_resolved` / `related_model_resolved` | could be `nothing` | always the model |
 
-A cross-module relation still works: the target's own module must be registered first, **or** the
+A cross-module relation still registers: the target's own module must be registered first, **or** the
 target listed in this module's `Models.@models` line — either, not both. A model listed by two
 registered modules belongs to the one registered last, and registering it again clears the reverse
 accessors the other module's models had installed on it.
+
+One hop is not resolved at registration yet: a many-to-many traversed from the **target's** side.
+The reverse accessor still looks the owner model up by its binding in the target's module, so with
+`Race.drivers = ManyToManyField(Driver, related_name = "races")` in one module and `Driver` in another,
+`Driver.objects.filter("races__year" => 2009)` raises `UndefVarError` unless the target's module binds
+`Race` too — and if it binds a *different* model under that name, the hop joins that model's table,
+with no error. Registration accepts the relation, so either shows only at the first such query. #1689
+moves that lookup onto the model registration recorded.
 
 ### How to find the calls to migrate
 

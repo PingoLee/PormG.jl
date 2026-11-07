@@ -305,3 +305,31 @@ _dc_fetch_error(pool, decoder) = try fetch(pool, "SELECT resultid, points FROM r
     @test_throws ArgumentError PormG.decoded_on_worker(d, DcCheckedRow[])
     @test PormG.decode_on_worker(length, [1, 2, 3]) == 3
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests: `fetch`'s reconnect retry for a typed read. The first execute raises a lost connection that
+# provably never ran (retry-safe); the retry, on a renewed connection, returns the rows.
+# Expected: the retry's rows decoded into `T` (the decoder rides along the retry), the statement sent
+# twice, the slot renewed once and released, and the "Lost connection … Retrying" warning.
+# Matters: `fetch`'s retry calls `fetch_async` again and decodes the retry's result in its `catch`; a
+# retry that dropped `_decode` would hand back the driver's raw rows, which the typed read's
+# `::Vector{T}` assertion would then refuse.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "fetch's reconnect retry decodes the retried statement's rows (#1605)" begin
+    pool = DcMockSQLitePool([(resultid = 1, points = 10.0), (resultid = 3, points = 18.5)]; fail_times = 1)
+    first_conn = pool.connections[1]
+    rows = @test_logs (:warn, r"Lost connection to database\. Retrying") match_mode = :any fetch(
+        pool, "SELECT resultid, points FROM results"; _decode = _dc_decoder(DcCheckedRow))
+    @test rows isa Vector{DcCheckedRow}
+    @test rows == [DcCheckedRow(1, 10.0), DcCheckedRow(3, 18.5)]
+    @test pool.executed == 2               # failed once, re-ran once
+    @test pool.renewals == 1
+    @test pool.connections[1] !== first_conn
+    @test all(pool.available)
+    # And an error building a row on the retry still reaches the caller unwrapped.
+    bad = DcMockSQLitePool([(resultid = 1, points = 25.0)]; fail_times = 1)
+    err = @test_logs (:warn, r"Lost connection to database\. Retrying") match_mode = :any _dc_fetch_error(
+        bad, _dc_decoder(DcCheckedRow))
+    @test err isa ArgumentError
+    @test bad.executed == 2
+end

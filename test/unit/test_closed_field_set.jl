@@ -55,3 +55,29 @@ end
     @test occursin("time", err.msg) && occursin("lap_x", err.msg) && occursin("_ClosedSetLapTime", err.msg)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# No source file builds a field dict `ModelType` would convert
+# What it tests: no line under `src/` or `ext/` builds an `OrderedDict{String, PormGField}` (under any
+#   qualification: `Models.PormGField`, `Kernel.PormGField`); a dict
+#   meant for `ModelType(fields = …)` is built as `OrderedDict{String, Models.AnyField}`, which the
+#   constructor takes as it is (`convert` returns its argument), while a `PormGField`-valued dict is
+#   converted, that is copied, on every construction. A source scan. No SQL.
+# Why it matters: the CTE model (`_build_cte_custom_model`) is built per query; its dict was the one
+#   such site, converted and copied on each `.with()` build.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "no src file builds a field dict ModelType must convert (#1604)" begin
+  hits = String[]
+  for sub in ("src", "ext")
+    root = joinpath(pkgdir(PormG), sub)
+    for (dir, _, files) in walkdir(root), f in files
+      endswith(f, ".jl") || continue
+      for (i, l) in enumerate(eachline(joinpath(dir, f)))
+        occursin(r"OrderedDict\{String,\s*(\w+\.)*PormGField\}", l) && push!(hits, "$(sub)/$(f):$(i)")
+      end
+    end
+  end
+  @test isempty(hits)
+  fields = PormG.OrderedCollections.OrderedDict{String, Models.AnyField}("id" => Models.IDField())
+  @test Models.ModelType(name = "cte_x", fields = fields, field_names = ["id"]).fields === fields   # taken as it is
+end

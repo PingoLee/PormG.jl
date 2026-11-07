@@ -1,4 +1,4 @@
-## Every relation resolves to a model at `set_models`, or registration refuses; nothing is resolved by name at query time (#1601)
+## Every relation resolves to a model at `set_models`, or registration refuses (#1601)
 
 - **Version**: Unreleased
 - **PormG ref**: #1601, #1599, #354 ; `src/Models.jl`, `src/querybuilder/build_joins.jl`, `src/querybuilder/many_to_many.jl`, `src/querybuilder/execution_write.jl`
@@ -10,8 +10,10 @@
 Registration resolves every relation target — a `ForeignKey`, `OneToOneField` or `ManyToManyField`
 `to`, and a many-to-many `through` — against the declared model sets, and refuses there when it
 cannot. A `to` given as a string names a model the module declares, by its binding or its table
-name. The query builder reads the models registration recorded; it no longer looks a related model up
-by name, and the `uppercasefirst(model.name)` guess at a many-to-many side's Julia binding is gone.
+name, and is replaced on the field by the model. The three query-time fallbacks that looked a
+related model up by name (a projected `save()`, the many-to-many join and its manager) read the model
+registration recorded instead, and the `uppercasefirst(model.name)` guess at a many-to-many side's
+Julia binding is gone.
 
 | | before | now |
 |---|---|---|
@@ -20,8 +22,10 @@ by name, and the `uppercasefirst(model.name)` guess at a many-to-many side's Jul
 | a many-to-many side whose binding the module could not find | its binding guessed as `uppercasefirst(name)` | the binding read from the declared set; a model with none is refused |
 | `ManyToManyRelation.owner_model_resolved` / `related_model_resolved` | could be `nothing` | always the model |
 
-A cross-module relation still works: the target's own module must be registered first (or the target
-listed in this module's `Models.@models` line).
+A cross-module relation still works: the target's own module must be registered first, **or** the
+target listed in this module's `Models.@models` line — either, not both. A model listed by two
+registered modules belongs to the one registered last, and registering it again clears the reverse
+accessors the other module's models had installed on it.
 
 ### How to find the calls to migrate
 
@@ -45,7 +49,7 @@ Driver::Models.ModelType = Models.Model(driverid = Models.IDField(),
 Models.@models Driver
 end
 
-# ✓ after: declare it here (or register `Shared`, declaring it there, before this module)
+# ✓ after: declare it here (or, instead, register `Shared`, declaring it there, before this module)
 module models
 import PormG.Models
 using ..Shared

@@ -1823,7 +1823,7 @@ function save(row::PormGRow; show_query::Symbol = :execute)
       related_model = fk_meta.to
       related_model isa PormGModel || throw(QueryBuildError(
         "save() cannot update projected fields under '$(fk_sym)': the foreign key's target " *
-        "$(fk_meta.to) is not resolved. Register the models with set_models() first."))
+        "$(Models._target_label(fk_meta.to)) is not resolved. Register the models with set_models() first."))
       fk_pairs = _row_update_pairs(fk_updates[fk_sym])
       related_query = object(related_model)
       related_query.filter(String(fk_meta.pk_field) => fk_value)

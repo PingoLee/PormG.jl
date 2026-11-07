@@ -2029,3 +2029,32 @@ end
   @test length(POOL_1473.executed) == 1 && rows(only(POOL_1473.executed)) == 499
   reset!()
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A ManyToManyField named by its target's table name resolves at registration and joins (#1601)
+# What it tests: `ManyToManyField("m2mt_circuit")` (the target's TABLE name, not its binding) resolves
+#   against the declared set at `set_models`, is written back onto the field as the model, and a
+#   projection through it renders a join to "m2mt_circuit" — no name is looked up at query time. No
+#   SQL is run (an offline key).
+# Why it matters: the target used to stay a string, which the join path looked up as a binding.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a ManyToManyField named by table resolves at registration and joins (#1601)" begin
+  key = "m2mt_offline"
+  PormG.Configuration.register_offline(key)
+  try
+    mod = Module(:M2MTableNameTarget)
+    Core.eval(mod, :(import PormG; import PormG.Models))
+    Core.eval(mod, :(Circuit = Models.Model("m2mt_circuit", circuitid = Models.IDField(), name = Models.CharField())))
+    Core.eval(mod, :(Driver = Models.Model("m2mt_driver", driverid = Models.IDField(),
+      circuits = Models.ManyToManyField("m2mt_circuit", related_name = "drivers"))))
+    Core.eval(mod, :(Models.@models Circuit Driver))
+    Base.invokelatest(Models.set_models, mod, key)
+    driver = Base.invokelatest(getglobal, mod, :Driver)
+    circuit = Base.invokelatest(getglobal, mod, :Circuit)
+    @test driver.fields["circuits"].to === circuit
+    sql = PormG.inspect_query(driver.objects.values("driverid", "circuits__name"))[:sql_text]
+    @test occursin("\"m2mt_circuit\"", sql)
+  finally
+    PormG.Configuration.unregister_connection(key)
+  end
+end

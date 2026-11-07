@@ -75,9 +75,8 @@ end
 # by `_relation_from_many_to_many`'s `field.through isa PormGModel` arm, with no module lookup at
 # all (it did not even reach the module lookup that #1601 removed), so a model that
 # is not reachable BY NAME from the owner's module was invisible here while its extra columns were
-# very real. (Only by name: `Models.get_all_models` makes a second pass with `usings=true` since
-# #354, so a `using`-brought binding did resolve. A qualified `Other.Membership` reference, or a
-# model built and passed by value, did not.)
+# very real. (Only by name. Since #1602 `Models.get_all_models` reads the module's declared set, and
+# registration resolves `through` to the model and records it.)
 #
 # The relation now records the model itself (`through_model_resolved`, `Models.jl`), so the question
 # is answered from the relation alone: no module, no reflection, no exception-as-signal. `nothing`

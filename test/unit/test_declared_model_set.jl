@@ -217,3 +217,45 @@ end
   @test parsed.args[3:end] == many
   @test PormG.Generator._model_set_line(Symbol[]) == "Models.@models"
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Review fixes: where the generated declaration lands, and a nested explicit one
+# What it tests: (a) an older generated file that ends with `Models.set_models(@__MODULE__, …)` in its
+#   own body loads through `import_models`: the generated declaration is inserted right after the last
+#   model, before that call, so the call sees the set; (b) an explicit `@models` inside a top-level
+#   `begin … end` block counts as the module's declaration, so none is generated over it. No SQL.
+# Why it matters: (a) loaded before #1602 and must not start failing mid-include; (b) a generated
+#   declaration evaluated later would overwrite the user's list.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the generated declaration goes after the models; a nested one counts (#1602)" begin
+  dir = mktempdir()
+  folder = joinpath(dir, "dms_legacy")
+  mkpath(folder)
+  file = joinpath(folder, "legacy_models.jl")
+  write(file, """
+  module legacy_models
+  import PormG.Models
+  Circuit::Models.ModelType = Models.Model("dms_legacy_circuit", circuitid = Models.IDField())
+  Models.set_models(@__MODULE__, @__DIR__)
+  end
+  """)
+  PormG.config[folder] = PormG.Configuration.Settings(
+    connections = DmsMockPostgres(), change_data = true, db_def_folder = folder)
+  try
+    mod = PormG.import_models(file; into = Module(:DmsLegacyInto))
+    @test Models.connection_key(Base.invokelatest(getfield, mod, :Circuit)) == folder
+  finally
+    pop!(PormG.config, folder, nothing)
+  end
+
+  nested = Meta.parse("""
+  module N
+  import PormG.Models
+  begin
+    A = Models.Model(id = Models.IDField())
+    Models.@models A B
+  end
+  end""")
+  @test Models._declares_model_set(nested.args[3])
+  @test Models._with_model_set(nested) === nested
+end

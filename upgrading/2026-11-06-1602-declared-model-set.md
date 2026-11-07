@@ -4,8 +4,10 @@
 - **PormG ref**: #1602, #1599, #354 ; `src/Models.jl`, `src/Utils.jl`, `src/Generator.jl`, `src/migrations/planner.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for a models module registered with `set_models` after a plain `include`
-  (the package boot), and for a model the registering module reaches through `using`. A file loaded
-  with `@import_models`, `import_models` or `@models_module` keeps working unchanged.
+  (the package boot), and for any model that is not a top-level `X = Models.Model(…)` assignment of
+  its module's file: one reached through `using`, built by a function, a loop or `@eval`, or defined
+  in a file the module `include`s. A file loaded with `@import_models`, `import_models` or
+  `@models_module` whose models are all top-level assignments keeps working unchanged.
 
 ### What changed
 
@@ -19,7 +21,7 @@ models. The line binds the module's `MODEL_SET`, which holds those models and th
 | a module included with `include` and registered with `set_models(models, "db")` | its models found by a scan of its names | its `Models.@models …` line is read; a module without one raises `ModelDefinitionError` naming the line to add |
 | a file loaded with `@import_models` / `import_models`, or `@models_module` | scanned | the declaration is added for you from the file's top-level `X = Models.Model(…)` assignments when the file does not write one |
 | a model the module reaches through `using` (#354) | registered by the second scan pass | registered only when the module lists it in `Models.@models` |
-| a model built by a function, a loop or `@eval` in an `@import_models` file | registered by the scan | registered only when the file lists it in `Models.@models` |
+| a model built by a function, a loop or `@eval`, or defined in a file the module `include`s, in an `@import_models` file | registered by the scan | registered only when the file lists it in `Models.@models` |
 | `Models.get_all_models(mod)` | every model bound in `mod` | the models `mod` declares, in declaration order; empty for a module that declares none |
 | `makemigrations` / `check` reading the models file | scanned the module | read the declaration (added as `@import_models` adds it) |
 
@@ -72,3 +74,14 @@ end
 ```
 
 A long list may be written across lines as `Models.@models(Circuit, Race, …)`.
+
+**Check the migration plan after upgrading.** `makemigrations` reads the same set, so a model that is
+not in it is not a model of the file any more: the planner sees its live table as one the models no
+longer declare and plans to drop it (applied only by `migrate(destructive = true)`). Run
+`makemigrations` once after the upgrade and read the plan before applying it; a `Drop table` for a
+table you still use means that model belongs in the `Models.@models` line. A file that writes its own
+line warns, when it is loaded, about a top-level `X = Models.Model(…)` the line leaves out.
+
+An older generated file that ends with `Models.set_models(@__MODULE__, @__DIR__)` keeps loading
+through `@import_models`: the generated declaration is inserted right after the last model, before
+that call. Delete the call anyway; it registers the module a second time.

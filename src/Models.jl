@@ -401,12 +401,17 @@ function _collect_relation_targets(model::PormGModel, lookup; strict::Bool = tru
       if strict && through isa AbstractString
         field.through = _declared_target(lookup, String(through), model, field_name,
                                          "ManyToManyField's through")
+      elseif strict && through isa ModelType
+        _require_registered_target(model, field_name, through,
+                                   lookup isa ModelSet ? lookup.mod : lookup)
       end
       to = field.to
       if to isa ModelType
         to
       elseif to isa AbstractString
-        strict ? _declared_target(lookup, String(to), model, field_name, "ManyToManyField") :
+        # Written back when strict (registration), as `resolve_fk_target!` writes a foreign key's:
+        # the query builder then reads the model, not a string it would look up by name.
+        strict ? (field.to = _declared_target(lookup, String(to), model, field_name, "ManyToManyField")) :
                  _resolve_target_model(String(to), lookup)
       else
         strict && throw(ModelDefinitionError(
@@ -658,9 +663,10 @@ Base.deepcopy_internal(m::ModelType, stackdict::IdDict) = get!(stackdict, m, m)
 # SECTION: Management/Reflection
 #═══════════════════════════════════════════════════════════════════════════════
 
-# Every registered models module → the models folder it was registered by, or (#1606 proposal 1) the
-# connection key when it was registered by key (`set_models(mod; key)`). The query builder groups
-# modules by this value (`ctes.jl`); the self-heal re-registers each from its `ModelSet` record.
+# Every registered models module → the connection key it is bound to. The query builder groups the
+# modules of one database by this value (`ctes.jl`), so it is the key for every module — registered
+# by folder or, since #1606, by key — never a folder for some and a key for others. The self-heal
+# re-registers each from its `ModelSet` record (`_register_again!`), which holds the folder.
 const REGISTERED_MODULES = Dict{Module, String}()
 
 #───────────────────────────────────────────────────────────────────────────────
@@ -717,6 +723,12 @@ ModelSet(mod::Module, bindings::Vector{Symbol}, models::Vector{ModelType}) =
 
 const _MODEL_SET_NAME = :MODEL_SET
 
+# Every set registration has seen, by module (#1606): what `_model_set` answers when the binding is
+# not there to read — a `juliac --trim` image drops the module bindings no compiled code references,
+# and a set handed to `set_models(set; key)` is registered here. `_new_model_set` reads it to carry a
+# registration record across a reload.
+const REGISTERED_SETS = IdDict{Module, ModelSet}()
+
 # What `@models` evaluates: the set of `mod`, from the values its listed bindings hold right now.
 function _new_model_set(mod::Module, bindings::Vector{Symbol}, values::Vector)::ModelSet
   models = ModelType[]
@@ -726,7 +738,15 @@ function _new_model_set(mod::Module, bindings::Vector{Symbol}, values::Vector)::
       "$(nameof(typeof(v))), not a `Models.Model(…)`."))
     push!(models, v)
   end
-  return ModelSet(mod, copy(bindings), models)
+  set = ModelSet(mod, copy(bindings), models)
+  # A re-run of the line (the Revise reload re-evaluates the module body) builds a new set; it keeps
+  # the registration the previous one recorded, so `_register_again!` still knows the key a module
+  # registered by key (#1606) was bound to.
+  prev = get(REGISTERED_SETS, mod, nothing)
+  if prev !== nothing
+    set.key, set.load_root, set.folder = prev.key, prev.load_root, prev.folder
+  end
+  return set
 end
 
 _is_models_macro_name(x)::Bool =
@@ -784,9 +804,16 @@ function _declared_model_bindings(body::Expr)::Vector{Symbol}
   return out
 end
 
-# Whether a module body already declares its model set: a top-level `@models …` call.
+# Whether a module body already declares its model set: an `@models …` call at its top level or in
+# a top-level `begin … end` block (where `_declared_model_bindings` also looks).
 _declares_model_set(body::Expr)::Bool =
-  any(ex -> ex isa Expr && ex.head === :macrocall && _is_models_macro_name(ex.args[1]), body.args)
+  any(ex -> ex isa Expr && ((ex.head === :macrocall && _is_models_macro_name(ex.args[1])) ||
+                            (ex.head === :block && _declares_model_set(ex))), body.args)
+
+# Whether a top-level statement assigns a model (directly, or inside a `begin … end` block).
+_assigns_model(ex)::Bool =
+  _model_assignment_binding(ex) !== nothing ||
+  (ex isa Expr && ex.head === :block && any(_assigns_model, ex.args))
 
 # The declaration `@models` would write for `bindings`, as an expression that needs no binding in the
 # module it lands in (`GlobalRef`): an `@import_models` file need not `import PormG.Models`.
@@ -798,8 +825,10 @@ _model_set_declaration(bindings::Vector{Symbol}, line::LineNumberNode = LineNumb
 
 The `mapexpr` `@import_models` and `import_models` pass to `Base.include`, also applied by the Revise
 reload and the migration planner: a `module` expression whose body declares no model set gets
-`@models` with the bindings `_declared_model_bindings` finds, appended as its last statement. Any
-other expression, and a module that declares its own, is returned unchanged (#1602).
+`@models` with the bindings `_declared_model_bindings` finds, inserted right after the last model
+assignment — not at the end, so a statement after the models that registers the module (an older
+generated file's `Models.set_models(@__MODULE__, @__DIR__)`) already sees the set. Any other
+expression, and a module that declares its own, is returned unchanged (#1602).
 """
 function _with_model_set(@nospecialize(ex))
   ex isa Expr && ex.head === :module || return ex
@@ -808,8 +837,11 @@ function _with_model_set(@nospecialize(ex))
     _warn_undeclared_assignments(ex.args[2], body)
     return ex
   end
-  new_body = Expr(:block, body.args..., _model_set_declaration(_declared_model_bindings(body)))
-  return Expr(:module, ex.args[1], ex.args[2], new_body)
+  args = copy(body.args)
+  at = findlast(_assigns_model, args)
+  declaration = _model_set_declaration(_declared_model_bindings(body))
+  at === nothing ? push!(args, declaration) : insert!(args, at + 1, declaration)
+  return Expr(:module, ex.args[1], ex.args[2], Expr(:block, args...))
 end
 
 # A module that declares its set but assigns a top-level `X = Model(…)` the declaration leaves out:
@@ -828,8 +860,9 @@ function _warn_undeclared_assignments(name, body::Expr)::Nothing
     "PormG: the models module `$(name)` assigns $(join(("`" * string(b) * "`" for b in missing_), ", ")) " *
     "with `Models.Model(…)` but its `Models.@models` line does not list " *
     (length(missing_) == 1 ? "it" : "them") * ", so registration leaves " *
-    (length(missing_) == 1 ? "it" : "them") * " unbound. Add " *
-    (length(missing_) == 1 ? "it" : "them") * " to the `Models.@models` line.")
+    (length(missing_) == 1 ? "it" : "them") * " unbound and `makemigrations` does not see " *
+    (length(missing_) == 1 ? "it" : "them") * " (it plans to drop a live table the module no longer " *
+    "declares). Add " * (length(missing_) == 1 ? "it" : "them") * " to the `Models.@models` line.")
   return nothing
 end
 
@@ -892,11 +925,6 @@ const _UNBOUND = _Unbound()
 _global_or_unbound(mod::Module, name::Symbol) =
   isdefinedglobal(mod, name) ? getglobal(mod, name) : _UNBOUND
 
-# Every set registration has seen, by module (#1606): what `_model_set` answers when the binding is
-# not there to read — a `juliac --trim` image drops the module bindings no compiled code references,
-# and a set handed to `set_models(set; key)` is registered here.
-const REGISTERED_SETS = IdDict{Module, ModelSet}()
-
 # The module's declared set, or `nothing`: its `MODEL_SET` binding (the current one, so a reload's new
 # set wins), else the set registration last saw for it.
 function _model_set(mod::Module)::Union{ModelSet, Nothing}
@@ -910,7 +938,9 @@ function _undeclared_models_error(mod::Module)::ModelDefinitionError
     "PormG cannot tell which models $(mod) defines: it declares no model set. Add " *
     "`Models.@models Circuit Race …`, naming every model binding, as the module's last line " *
     "(the Generator writes it; `@import_models` and `@models_module` add it from the file's " *
-    "top-level `X = Models.Model(…)` assignments). PormG does not scan a module's names for models.")
+    "top-level `X = Models.Model(…)` assignments). PormG does not scan a module's names for models. " *
+    "A module built by a call still in progress is not visible to that call: register it with " *
+    "`Base.invokelatest(Models.set_models, mod, …)`.")
 end
 
 # The declared models, binding => model, in declaration order, read from the set — no binding is read
@@ -1551,7 +1581,10 @@ end
 # never re-resolved through a folder it does not have.
 function _register_again!(mod::Module, path::AbstractString)::Nothing
   record = _model_set(mod)
-  if record !== nothing && record.folder === nothing && record.key !== nothing
+  # Registered by folder: re-resolve that folder (the record's; `path` is the caller's copy of it).
+  record !== nothing && record.folder !== nothing &&
+    return set_models(mod, record.folder::String; implicit = false)
+  if record !== nothing && record.key !== nothing
     haskey(config, record.key) ||
       throw(InvalidConfigurationError(
         "The models in $(mod) were registered under the connection \"$(record.key)\", which is not " *
@@ -1642,7 +1675,7 @@ function _register_models!(record::ModelSet, path::Union{Nothing, String}, conne
 
   # Register for lazy loading / self-healing: the folder, or the key for a key-registered module. The
   # set is kept by module too (#1606): a trimmed image cannot read `MODEL_SET` by name.
-  REGISTERED_MODULES[_module] = something(path, connect_key)
+  REGISTERED_MODULES[_module] = connect_key
   REGISTERED_SETS[_module] = record
 
   settings::PormGSettings = Configuration.get_settings(connect_key)
@@ -2326,8 +2359,9 @@ come from a live table: `inspectdb` on `2fast` or `driver profile` produced sour
 parse. Fall back to the field sanitizer only when it is not already legal.
 
 The `isidentifier` guard is load-bearing, not an optimization. A child's `ForeignKey` `.to` names the
-parent's BINDING and `_resolve_target_model` resolves it by BINDING LOOKUP alone — no name or table
-fallback — so the binding and `.to` must be the same expression. Sanitizing unconditionally silently
+parent's BINDING and `_resolve_target_model` resolves it against the declared set by binding first
+(its table-name fallback, #1601, is a second chance, not the contract), so the binding and `.to`
+must be the same expression. Sanitizing unconditionally silently
 broke that for every name `uppercasefirst` already made legal: `end` -> `End_` vs `.to = "End"`,
 `db_table` -> `Db_table_` vs `Db_table`, `_order` -> `Order` vs `_order`.
 

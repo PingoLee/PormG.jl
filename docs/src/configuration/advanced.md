@@ -370,8 +370,8 @@ all; `__init__` runs in the session, so it is what puts the connection in `confi
 can find it. Neither substitutes for the other.
 
 **What the first `.objects` binds to (#1227).** When `@import_models` binds the models it records,
-in the models module, the key the folder was loaded under and the `root` it was loaded relative to
-(`__pormg_binding__`). That record is part of the image. On the first `.objects` of a restored
+in the models module's model set (its `MODEL_SET`, #1607), the key the folder was loaded under and
+the `root` it was loaded relative to. That record is part of the image. On the first `.objects` of a restored
 session the self-heal reads it back and binds to that **key** — the one your `__init__` loads — or
 refuses, naming `load(key; root, env)`. It does not look through `config` for some other
 configuration that happens to match the folder, so a session that loaded the same folder under a

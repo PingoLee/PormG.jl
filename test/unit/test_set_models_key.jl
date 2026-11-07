@@ -127,3 +127,41 @@ end
     Configuration.unregister_connection(key)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A Revise reload of a module registered by key keeps the key (review fix)
+# What it tests: a models file registered with `set_models(mod; key)`, edited (a field added) and
+#   reloaded the way the Revise callback does it — `reload_module_contents!` then `_register_again!` —
+#   is bound to the same key with the new field. The re-run `@models` line builds a new set, which
+#   carries the previous registration record. No SQL.
+# Why it matters: the new set used to have an empty record, so `_register_again!` treated the key as
+#   a folder and refused: after one edit the models stayed unbound for the session.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a reload of a key-registered module rebinds to its key (#1606)" begin
+  key = "smk_reload"
+  Configuration.register_offline(key)
+  dir = mktempdir()
+  file = joinpath(dir, "smk_reload_models.jl")
+  src(extra) = """
+  module smk_reload_models
+  import PormG.Models
+  Circuit::Models.ModelType = Models.Model("smk_reload_circuit", circuitid = Models.IDField()$(extra))
+  Models.@models Circuit
+  end
+  """
+  write(file, src(""))
+  try
+    mod = Base.include(Models._with_model_set, Module(:SmkReloadHost), file)
+    Base.invokelatest(Models.set_models, mod; key = key)
+    write(file, src(", country = Models.CharField(null = true)"))
+    @test Base.invokelatest(PormG.Utils.reload_module_contents!, mod, file)
+    Base.invokelatest(Models._register_again!, mod, key)
+    circuit = Base.invokelatest(getglobal, mod, :Circuit)
+    @test haskey(circuit.fields, "country")
+    @test Models.connection_key(circuit) == key
+    record = Base.invokelatest(Models._model_set, mod)
+    @test (record.key, record.folder) == (key, nothing)
+  finally
+    Configuration.unregister_connection(key)
+  end
+end

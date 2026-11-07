@@ -179,11 +179,15 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The migration planner reads the same set
-# What it tests: `Migrations._load_current_models` on a file with no declaration keys the model on its
-#   table (`dms_plan_circuit`) — the set `_with_model_set` added; a non-model global in the file is not
-#   a model. No SQL.
+# What it tests: `Migrations._load_current_models` keys exactly the declared models on their tables.
+#   (a) A file with no declaration: the set `_with_model_set` adds (`dms_plan_circuit`). (b) A file
+#   whose `Models.@models Circuit` line leaves out a top-level `Race = Models.Model(…)`, and that
+#   reaches a third model, `Driver`, through `using`: only `dms_plan_circuit`, with the left-out
+#   warning naming `Race`. A scan of the module's names, which the planner used to run, keeps `Race`
+#   and (with `usings = true`, #354) `Driver` too, so (b) fails against it. No SQL.
 # Why it matters: `makemigrations` and `check` load the models file without `set_models`; they must
-#   see the same models registration does.
+#   see the same models registration does, no more: a model the planner sees but registration does
+#   not is a table planned for a model the application cannot query.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the migration planner reads the declared set (#1602)" begin
   dir = mktempdir()
@@ -192,11 +196,36 @@ end
   module models
   import PormG.Models
   Circuit::Models.ModelType = Models.Model("dms_plan_circuit", circuitid = Models.IDField())
-  NOT_A_MODEL = 3
   end
   """)
-  schema = PormG.Migrations._load_current_models(file)
+  @test collect(keys(PormG.Migrations._load_current_models(file))) == [:dms_plan_circuit]
+
+  write(file, """
+  module models
+  import PormG.Models
+  module drivers
+    import PormG.Models
+    Driver = Models.Model("dms_plan_driver", driverid = Models.IDField())
+    Models.@models Driver
+  end
+  using .drivers: Driver
+  Circuit::Models.ModelType = Models.Model("dms_plan_circuit", circuitid = Models.IDField())
+  Race::Models.ModelType = Models.Model("dms_plan_race", raceid = Models.IDField())
+  Models.@models Circuit
+  end
+  """)
+  schema = @test_logs (:warn, r"assigns `Race` with `Models.Model\(…\)` but its `Models.@models` line does not list it") (
+    PormG.Migrations._load_current_models(file))
   @test collect(keys(schema)) == [:dms_plan_circuit]
+  # The premise, checked: a names scan of the same module (what the planner ran before #1602) finds
+  # both models the declaration leaves out.
+  scanned = Logging.with_logger(Logging.NullLogger()) do
+    Base.include(Models._with_model_set, Module(:DmsPlanScan), file)
+  end
+  found = Set(n for n in names(scanned; all = true, imported = true, usings = true)
+              if Base.invokelatest(isdefined, scanned, n) &&
+                 Base.invokelatest(getglobal, scanned, n) isa Models.ModelType)
+  @test :Race in found && :Driver in found
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

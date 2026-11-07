@@ -234,6 +234,6 @@ end
 @testset "#713: EXTRACT_DATE ignores locale / nlsparam" begin
   col = "\"Tb\".\"date\""
   hostile = Dict{String,Any}("format" => "YYYY-MM", "locale" => "; DROP TABLE race; --", "nlsparam" => "OR TRUE")
-  @test Dialect.EXTRACT_DATE(col, hostile, _FPG) == "to_char($(col), 'YYYY-MM')"
-  @test Dialect.EXTRACT_DATE(col, hostile, _FSL) == "strftime('%Y-%m', $(col))"
+  @test Dialect.EXTRACT_DATE(col, Dialect.FnOptions(hostile), _FPG) == "to_char($(col), 'YYYY-MM')"
+  @test Dialect.EXTRACT_DATE(col, Dialect.FnOptions(hostile), _FSL) == "strftime('%Y-%m', $(col))"
 end

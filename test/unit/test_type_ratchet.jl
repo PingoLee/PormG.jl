@@ -273,9 +273,9 @@ end
 # struct field or a type assertion of that type, so the rule covers those in review, not here.
 # ─────────────────────────────────────────────────────────────────────────────
 const _TR_FORMAT_DICT = r"\bformat::Dict\{String,\s*Any\}"
-const _TR_FORMAT_DICT_REVIEWED = Dict{String,Int}(
-  "src/Dialect.jl" => 119,   # #1346 baseline
-)
+# #1610: zero. Every Dialect function takes its options as `Dialect.FnOptions`, one typed slot per key,
+# built once from the query builder's resolved bag (`QueryBuilder._function_sql`). Any new one fails.
+const _TR_FORMAT_DICT_REVIEWED = Dict{String,Int}()
 
 @testset "#1346: format::Dict{String,Any} parameters match the reviewed counts" begin
   _tr_check("format::Dict{String,Any} parameters", _tr_scan(_TR_FORMAT_DICT), _TR_FORMAT_DICT_REVIEWED)

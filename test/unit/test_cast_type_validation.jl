@@ -165,14 +165,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#696: Dialect sinks refuse a hostile type" begin
   bad = "int); DROP TABLE race; --"
-  @test_throws PormG.InvalidValueError Dialect.CAST("x", Dict{String,Any}("type" => bad), _CPG)
-  @test_throws PormG.InvalidValueError Dialect.CAST("x", Dict{String,Any}("type" => bad), _CSL)
+  @test_throws PormG.InvalidValueError Dialect.CAST("x", PormG.Dialect.FnOptions("type" => bad), _CPG)
+  @test_throws PormG.InvalidValueError Dialect.CAST("x", PormG.Dialect.FnOptions("type" => bad), _CSL)
   whens = Any["WHEN a THEN 1"]
-  @test_throws PormG.InvalidValueError Dialect.CASE(whens, Dict{String,Any}("else" => "0", "output_field" => bad), _CPG)
-  @test_throws PormG.InvalidValueError Dialect.CASE(whens, Dict{String,Any}("else" => "0", "output_field" => bad), _CSL)
+  @test_throws PormG.InvalidValueError Dialect.CASE(whens, PormG.Dialect.FnOptions("else" => "0", "output_field" => bad), _CPG)
+  @test_throws PormG.InvalidValueError Dialect.CASE(whens, PormG.Dialect.FnOptions("else" => "0", "output_field" => bad), _CSL)
   # #852: the three operand-typed functions cast on both engines now, so each is a sink on each.
   for f in (Dialect.COALESCE, Dialect.GREATEST, Dialect.LEAST), conn in (_CPG, _CSL)
-    @test_throws PormG.InvalidValueError f(Any["a", "b"], Dict{String,Any}("output_field" => bad), conn)
+    @test_throws PormG.InvalidValueError f(Any["a", "b"], Dialect.FnOptions("output_field" => bad), conn)
   end
 
   # The bind cast: `Case`'s `default=` value is a parameter, cast to `output_field` on PostgreSQL.
@@ -221,18 +221,18 @@ end
   ]
   for (input, pg, sl) in cases
     @testset "$(repr(input))" begin
-      @test Dialect.CAST("x", Dict{String,Any}("type" => input), _CPG) == "(x)::" * pg
-      @test Dialect.CAST("x", Dict{String,Any}("type" => input), _CSL) == "CAST(x AS " * sl * ")"
+      @test Dialect.CAST("x", PormG.Dialect.FnOptions("type" => input), _CPG) == "(x)::" * pg
+      @test Dialect.CAST("x", PormG.Dialect.FnOptions("type" => input), _CSL) == "CAST(x AS " * sl * ")"
     end
   end
 
   # Arrays are PostgreSQL-only: SQLite has no array type, so it is a capability error, not a
   # syntax error at execution.
-  @test Dialect.CAST("x", Dict{String,Any}("type" => "integer[]"), _CPG) == "(x)::integer[]"
-  @test Dialect.CAST("x", Dict{String,Any}("type" => "integer [ 3 ]"), _CPG) == "(x)::integer[3]"
-  @test_throws PormG.BackendCapabilityError Dialect.CAST("x", Dict{String,Any}("type" => "integer[]"), _CSL)
+  @test Dialect.CAST("x", PormG.Dialect.FnOptions("type" => "integer[]"), _CPG) == "(x)::integer[]"
+  @test Dialect.CAST("x", PormG.Dialect.FnOptions("type" => "integer [ 3 ]"), _CPG) == "(x)::integer[3]"
+  @test_throws PormG.BackendCapabilityError Dialect.CAST("x", PormG.Dialect.FnOptions("type" => "integer[]"), _CSL)
   # The name maps, the suffix stays: a field type in an array is the engine's array type.
-  @test Dialect.CAST("x", Dict{String,Any}("type" => "BLOB[]"), _CPG) == "(x)::bytea[]"
+  @test Dialect.CAST("x", PormG.Dialect.FnOptions("type" => "BLOB[]"), _CPG) == "(x)::bytea[]"
 
   # The constructor stores the validated spelling, not the caller's text.
   @test Cast("points", "numeric( 10 , 2 )").kwargs["type"] == "numeric(10,2)"
@@ -261,25 +261,25 @@ end
       # #1221: a `DecimalField` casts to its own precision and scale, as the string `"numeric(p,s)"` does.
       if f isa PormG.Models.sDecimalField
         twin = Cast("points", "numeric($(f.max_digits),$(f.decimal_places))")
-        @test Dialect.CAST("x", node.kwargs, _CPG) == Dialect.CAST("x", twin.kwargs, _CPG) == "(x)::numeric(10,2)"
-        @test Dialect.CAST("x", node.kwargs, _CSL) == Dialect.CAST("x", twin.kwargs, _CSL)
+        @test Dialect.CAST("x", Dialect.FnOptions(node.kwargs), _CPG) == Dialect.CAST("x", Dialect.FnOptions(twin.kwargs), _CPG) == "(x)::numeric(10,2)"
+        @test Dialect.CAST("x", Dialect.FnOptions(node.kwargs), _CSL) == Dialect.CAST("x", Dialect.FnOptions(twin.kwargs), _CSL)
         continue
       end
       # #1438: a `SlugField` or `URLField` casts to its column's length, as the string `"varchar(n)"` does.
       if f isa Union{PormG.Models.sSlugField, PormG.Models.sURLField}
         twin = Cast("points", "varchar($(f.max_length))")
-        @test Dialect.CAST("x", node.kwargs, _CPG) == Dialect.CAST("x", twin.kwargs, _CPG) == "(x)::varchar($(f.max_length))"
-        @test Dialect.CAST("x", node.kwargs, _CSL) == Dialect.CAST("x", twin.kwargs, _CSL)
+        @test Dialect.CAST("x", Dialect.FnOptions(node.kwargs), _CPG) == Dialect.CAST("x", Dialect.FnOptions(twin.kwargs), _CPG) == "(x)::varchar($(f.max_length))"
+        @test Dialect.CAST("x", Dialect.FnOptions(node.kwargs), _CSL) == Dialect.CAST("x", Dialect.FnOptions(twin.kwargs), _CSL)
         continue
       end
-      @test Dialect.CAST("x", node.kwargs, _CPG) == "(x)::" * PormG.postgres_type_map_reverse[t]
+      @test Dialect.CAST("x", Dialect.FnOptions(node.kwargs), _CPG) == "(x)::" * PormG.postgres_type_map_reverse[t]
       # The temporal fields are #822's, below: SQLite has no time types to cast to.
       t in ("DATE", "TIMESTAMPTZ", "TIME", "INTERVAL") && continue
-      @test Dialect.CAST("x", node.kwargs, _CSL) == "CAST(x AS " * PormG.sqlite_type_map_reverse[t] * ")"
+      @test Dialect.CAST("x", Dialect.FnOptions(node.kwargs), _CSL) == "CAST(x AS " * PormG.sqlite_type_map_reverse[t] * ")"
     end
   end
-  @test Dialect.CAST("x", Cast("points", BinaryField()).kwargs, _CPG) == "(x)::bytea"
-  @test Dialect.CAST("x", Cast("points", PositiveIntegerField()).kwargs, _CPG) == "(x)::integer"
+  @test Dialect.CAST("x", Dialect.FnOptions(Cast("points", BinaryField()).kwargs), _CPG) == "(x)::bytea"
+  @test Dialect.CAST("x", Dialect.FnOptions(Cast("points", PositiveIntegerField()).kwargs), _CPG) == "(x)::integer"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,14 +322,14 @@ end
 # the defect, which `sqlite3` shows directly (`SELECT CAST('2020-03-29' AS DATE)` → `2020`).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#822: SQLite renders a date cast as date(), and refuses the other temporal casts" begin
-  _sl_cast(type) = Dialect.CAST("x", Dict{String,Any}("type" => type), _CSL)
+  _sl_cast(type) = Dialect.CAST("x", PormG.Dialect.FnOptions("type" => type), _CSL)
 
   @testset "date" begin
     for type in ("date", "DATE", Cast("points", DateField()).kwargs["type"])
       @test _sl_cast(type) == "date(x)"
     end
     # PostgreSQL is unchanged — it has a real date type.
-    @test Dialect.CAST("x", Dict{String,Any}("type" => "date"), _CPG) == "(x)::date"
+    @test Dialect.CAST("x", PormG.Dialect.FnOptions("type" => "date"), _CPG) == "(x)::date"
   end
 
   @testset "the other temporal targets are a capability error" begin
@@ -390,11 +390,11 @@ end
       end
     end
     try
-      @test _run(Dialect.CAST("'2020-03-29'", Dict{String,Any}("type" => "date"), _CSL)) == "2020-03-29"
-      @test _run(Dialect.CAST("'2020-03-29T10:11:12.000+00:00'", Dict{String,Any}("type" => "date"), _CSL)) == "2020-03-29"
-      @test _run(Dialect.CAST("'2020-03-29 10:11:12'", Dict{String,Any}("type" => "date"), _CSL)) == "2020-03-29"
+      @test _run(Dialect.CAST("'2020-03-29'", PormG.Dialect.FnOptions("type" => "date"), _CSL)) == "2020-03-29"
+      @test _run(Dialect.CAST("'2020-03-29T10:11:12.000+00:00'", PormG.Dialect.FnOptions("type" => "date"), _CSL)) == "2020-03-29"
+      @test _run(Dialect.CAST("'2020-03-29 10:11:12'", PormG.Dialect.FnOptions("type" => "date"), _CSL)) == "2020-03-29"
       # The comparison a filter makes: date text against date text, so it can match.
-      @test _run(Dialect.CAST("'2020-03-29'", Dict{String,Any}("type" => "date"), _CSL) * " = '2020-03-29'") == 1
+      @test _run(Dialect.CAST("'2020-03-29'", PormG.Dialect.FnOptions("type" => "date"), _CSL) * " = '2020-03-29'") == 1
     finally
       close(db)
     end
@@ -437,7 +437,7 @@ end
     value(sql) = only([row.v for row in Main.SQLite.DBInterface.execute(db, "SELECT " * sql * " AS v")])
     try
       before = "COALESCE(NULL, '7')"   # what SQLite rendered for output_field = "integer"
-      after = Dialect.COALESCE(Any["NULL", "'7'"], Dict{String,Any}("output_field" => "integer"), _CSL)
+      after = Dialect.COALESCE(Any["NULL", "'7'"], PormG.Dialect.FnOptions("output_field" => "integer"), _CSL)
       @test after == "CAST(COALESCE(NULL, '7') AS INTEGER)"
       @test value(before * " = 7") == 0
       @test value(after * " = 7") == 1

@@ -773,12 +773,13 @@ _text_operand_advice(operand) = operand isa SQLText ?
   "uuid, \e[4m\e[32mToChar\e[0m for a timestamp, a \e[4m\e[32mCase\e[0m for a boolean; a float, a " *
   "decimal, an interval or a JSON document reads differently on each engine, so format it in Julia"
 
-# The Dialect renderer of a scalar function, by its name. A function added since #1346 takes no
-# `Dict{String,Any}` option bag and is called with its typed arguments (`Substr`, #1332); the rest are
-# looked up by name and handed `kwargs`, the one lookup left here for `test_type_ratchet.jl` to count.
+# The Dialect renderer of a scalar function, by its name. A function added since #1346 takes no option
+# bag and is called with its typed arguments (`Substr`, #1332); the rest are looked up by name and
+# handed their options as `Dialect.FnOptions`, built here from the resolved `kwargs` (#1610): the one
+# place the string-keyed bag becomes typed slots, so no renderer reads a key.
 function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, conn::_SQLEngine)
   name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
-  return getfield(Dialect, Symbol(name))(column, kwargs, conn)
+  return getfield(Dialect, Symbol(name))(column, Dialect.FnOptions(kwargs), conn)
 end
 
 function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;

@@ -188,9 +188,10 @@ julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.in
   - A change made for typing that slows the JIT path more than noise needs a measurement that
     justifies it.
 
-  `test/unit/test_type_ratchet.jl` holds the reviewed count, per file, of the three patterns that
-  remain: struct fields typed `Any` or left abstract, `getfield(<x>, Symbol(…))` lookups and
-  `format::Dict{String,Any}` parameters. A rise fails. A fall fails too, until the count is lowered
+  `test/unit/test_type_ratchet.jl` holds the reviewed count, per file, of three patterns: struct
+  fields typed `Any` or left abstract, `getfield(<x>, Symbol(…))` lookups and
+  `format::Dict{String,Any}` parameters (zero since #1610: a `Dialect` renderer takes
+  `Dialect.FnOptions`). A rise fails. A fall fails too, until the count is lowered
   in the same change, so each improvement is recorded. A change to the query build or row read
   compares against `test/performance/alloc_baseline.jl` (allocations and warm build time; not a CI
   gate, since the numbers move between Julia versions).

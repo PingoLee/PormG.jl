@@ -218,6 +218,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "getproperty overloads infer for a literal name (#1615)" include("unit/test_getproperty_inference_1615.jl")
     @testset "Typed read decodes where the result is concrete (#1605)" include("unit/test_typed_read_decoder_1605.jl")
     @testset "A projection is copied one level, per concrete type (#1612)" include("unit/test_projection_copy_1612.jl")
+    @testset "Function renderer options are typed and refuse a wrong type (#1610)" include("unit/test_fn_options_1610.jl")
     @testset "Names chosen at run time dispatch through generated branches (#1611)" include("unit/test_named_dispatch_1611.jl")
     @testset "Read terminals copy the handler once (#1589)" include("unit/test_read_path_one_copy_1589.jl")
     @testset "The build writes nothing into the handler (#1624, #1625)" include("unit/test_build_writes_nothing_1624.jl")

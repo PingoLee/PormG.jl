@@ -116,7 +116,11 @@ end
 # naming the option and never the value (#971), as the renderer would have refused it.
 @noinline _fo_type_refusal(k::String) = InvalidValueError(
   "the function option `$(k)` holds a value of a type no renderer takes (#1610).", :type)
-_fo_bool(d::Dict{String,Any}, k::String)::Bool = Base.get(d, k, false) === true
+function _fo_bool(d::Dict{String,Any}, k::String)::Bool
+  v = Base.get(d, k, false)
+  v isa Bool || throw(_fo_type_refusal(k))   # every builder stores a `Bool`; absent reads as `false`
+  return v
+end
 function _fo_string(d::Dict{String,Any}, k::String)::Union{Nothing,String}
   v = Base.get(d, k, nothing)
   v === nothing && return nothing

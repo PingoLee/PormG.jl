@@ -345,3 +345,96 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A model the generated declaration cannot name is refused, not left out
+# What it tests: an `@import_models` file with no `Models.@models` line whose only model is built in a
+#   `for` loop raises `ModelDefinitionError` naming the module (`dms_loop_models`), the call
+#   (`Models.Model(…)`), its line and the line to write (`Models.@models`); so does one whose second
+#   model comes from a helper function (the line would list `Circuit` alone), a file whose module
+#   `include`s another file, one that `Core.eval`s a quoted model assignment, and an
+#   `@models_module` block with a loop. The Generator's commented
+#   template (`create_models_jl`), which has no model call at all, still loads with the bare
+#   `Models.@models` and an empty set. No SQL.
+# Why it matters: a generated line that silently leaves a model out is one `makemigrations` reads as
+#   "this table is no longer declared" and plans to drop.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a model the generated declaration cannot name is refused (#1602)" begin
+  unwrap(e) = e isa LoadError ? unwrap(e.error) : e
+  dir = mktempdir()
+  folder = joinpath(dir, "dms_loop")
+  mkpath(folder)
+  PormG.config[folder] = PormG.Configuration.Settings(
+    connections = DmsMockPostgres(), change_data = true, db_def_folder = folder)
+  try
+    file = joinpath(folder, "dms_loop_models.jl")
+    write(file, """
+    module dms_loop_models
+    import PormG.Models
+    for t in ("dms_loop_circuit",)
+      global Circuit = Models.Model(t, circuitid = Models.IDField())
+    end
+    end
+    """)
+    host = Module(:DmsLoopHost)
+    Core.eval(host, :(using PormG))
+    err = unwrap(try Core.eval(host, :(PormG.@import_models $file dms_loop_models)); nothing catch e; e end)
+    @test err isa PormG.ModelDefinitionError
+    @test occursin("`dms_loop_models`", err.msg) && occursin("`Models.Model(…)`", err.msg)
+    @test occursin("line 4 of dms_loop_models.jl", err.msg) && occursin("Write the line yourself", err.msg)
+    @test occursin("`Models.@models Circuit Race`", err.msg)   # nothing named: an example list
+    @test !isdefined(host, :dms_loop_models)                    # refused before the module ran
+
+    write(file, """
+    module dms_loop_models
+    import PormG.Models
+    Circuit = Models.Model("dms_loop_circuit", circuitid = Models.IDField())
+    make_race() = Models.Model("dms_loop_race", raceid = Models.IDField())
+    Race = make_race()
+    end
+    """)
+    err = unwrap(try PormG.import_models(file; into = Module(:DmsHelperInto)); nothing catch e; e end)
+    @test err isa PormG.ModelDefinitionError && occursin("`Models.@models Circuit …`", err.msg)
+
+    # A body that includes another file: its models are invisible to the parser.
+    write(joinpath(folder, "dms_more_models.jl"),
+          "Race = Models.Model(\"dms_loop_race\", raceid = Models.IDField())\n")
+    write(file, """
+    module dms_loop_models
+    import PormG.Models
+    Circuit = Models.Model("dms_loop_circuit", circuitid = Models.IDField())
+    include("dms_more_models.jl")
+    end
+    """)
+    err = unwrap(try PormG.import_models(file; into = Module(:DmsIncludeInto)); nothing catch e; e end)
+    @test err isa PormG.ModelDefinitionError && occursin("includes another file with `include(…)`", err.msg)
+
+    block = :(PormG.@models_module DmsLoopBlock $folder begin
+      for t in ("dms_block_circuit",)
+        global Circuit = Models.Model(t, circuitid = Models.IDField())
+      end
+    end)
+    block_host = Module(:DmsBlockHost)
+    Core.eval(block_host, :(using PormG))
+    err = unwrap(try Core.eval(block_host, block); nothing catch e; e end)
+    @test err isa PormG.ModelDefinitionError && occursin("`DmsLoopBlock`", err.msg)
+
+    # Quoted code is walked: a `Core.eval` of a quoted model assignment is a model the line cannot name.
+    write(file, """
+    module dms_loop_models
+    import PormG.Models
+    Circuit = Models.Model("dms_loop_circuit", circuitid = Models.IDField())
+    Core.eval(@__MODULE__, :(Race = Models.Model("dms_loop_race", raceid = Models.IDField())))
+    end
+    """)
+    err = unwrap(try PormG.import_models(file; into = Module(:DmsQuoteInto)); nothing catch e; e end)
+    @test err isa PormG.ModelDefinitionError && occursin("line 4 of dms_loop_models.jl", err.msg)
+
+    # The Generator's template: comments only, no model call — the bare line, an empty set.
+    PormG.Generator.create_models_jl(folder, "template_models.jl")
+    template = PormG.import_models(joinpath(folder, "template_models.jl"); into = Module(:DmsTemplateInto))
+    @test isempty(Base.invokelatest(Models._model_set, template).bindings)
+  finally
+    pop!(PormG.config, folder, nothing)
+  end
+end

@@ -157,9 +157,11 @@ The `alias` must match the module name defined in the file.
 The macro automatically:
 - Resolves the path relative to the calling file
 - Declares the model set (`Models.@models …`, #1602) from the file's top-level
-  `X = Models.Model(…)` assignments, when the file does not end with its own `Models.@models`
-  line. A model built any other way, or reached through `using`, is registered only when the file
-  declares it
+  `X = Models.Model(…)` assignments (documented, typed, `const` or `global`), when the file does
+  not end with its own `Models.@models` line. A file that builds a model any other way (in a loop,
+  a function, an `@eval`) and writes no line is refused with `ModelDefinitionError`, since the
+  generated line would leave that model out; a model reached through `using` is registered only
+  when the file declares it
 - Registers models for the current session, recording the key in the module's model set, from
   which a restored package image rebinds on the first query (`Models.ensure_model_initialized`)
 - Handles World Age issues in Julia 1.12+: the registration is its own top-level statement
@@ -220,7 +222,9 @@ Defines a new module with inline model definitions and registers it with PormG.
 
 Use this when you want to define models directly in code rather than in a separate file. The
 model set (`Models.@models`, #1602) is declared for you from the block's top-level
-`X = Models.Model(…)` assignments, unless the block declares its own.
+`X = Models.Model(…)` assignments, unless the block declares its own. A block that builds a model
+any other way (in a loop, a function) and declares none is refused with `ModelDefinitionError`:
+write its `Models.@models` line.
 
 # Example
 ```julia
@@ -236,7 +240,7 @@ macro models_module(name, path, block)
     source_file = string(__source__.file)
     body = block isa Expr && block.head === :block ? block : Expr(:block, block)
     declaration = Models._declares_model_set(body) ? nothing :
-        Models._model_set_declaration(Models._declared_model_bindings(body), __source__)
+        Models._model_set_declaration(Models._generated_model_bindings(name, body), __source__)
     return Expr(:toplevel,
         :(module $(esc(name))
             using PormG

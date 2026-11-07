@@ -821,6 +821,94 @@ function _declared_model_bindings(body::Expr)::Vector{Symbol}
   return out
 end
 
+# A call to `include`, under any qualification (`include`, `Base.include`): the statements of the file it
+# names are not in the body, so no parser can read the models it defines.
+function _is_include_call(@nospecialize(ex))::Bool
+  ex isa Expr && ex.head === :call && !isempty(ex.args) || return false
+  f = ex.args[1]
+  f === :include && return true
+  f isa GlobalRef && return f.name === :include
+  return f isa Expr && f.head === :. && length(f.args) == 2 && f.args[2] isa QuoteNode &&
+         f.args[2].value === :include
+end
+
+# The first call in `ex` that builds a model (`Model(…)` / `ModelType(…)`, under any qualification) or
+# includes a file, and the line it is on, or `nothing`. Every quoted expression is walked, whether or not
+# it is evaluated: in a models module one usually is (`Core.eval(@__MODULE__, :(Race = Models.Model(…)))`,
+# a macro of the file's own), and a quote kept as data is refused too — loudly, with the line to write.
+# Nested modules are not walked: they declare their own set.
+function _first_unread_call(@nospecialize(ex), line::LineNumberNode)::Union{Nothing, Tuple{LineNumberNode, Expr}}
+  ex isa Expr || return nothing
+  ex.head === :module && return nothing
+  (_is_model_call(ex) || _is_include_call(ex)) && return (line, ex)
+  for a in ex.args
+    if a isa LineNumberNode
+      line = a
+      continue
+    end
+    found = _first_unread_call(a, line)
+    found === nothing || return found
+  end
+  return nothing
+end
+
+"""
+    _unnamed_model_call(body::Expr) -> Union{Nothing, Tuple{LineNumberNode, Expr}}
+
+The first model a module body builds that `_declared_model_bindings` cannot name, with its line: a
+`Model(…)` / `ModelType(…)` call anywhere but as the right-hand side of a top-level model assignment
+of one binding — in a loop, a function, a `let`, an `@eval`, any quoted expression (evaluated by a
+`Core.eval` or a macro, or kept as data), a chained `X = Y = Model(…)`, an assignment to a field —
+or an `include(…)`, whose file's models the parser cannot see. `nothing` when every model call is
+such an assignment, or when there is none (#1602).
+"""
+function _unnamed_model_call(body::Expr, line::LineNumberNode = LineNumberNode(0, :none))::Union{Nothing, Tuple{LineNumberNode, Expr}}
+  for ex in body.args
+    if ex isa LineNumberNode
+      line = ex
+      continue
+    end
+    ex isa Expr || continue
+    _model_assignment_binding(ex) === nothing || continue
+    found = ex.head === :block ? _unnamed_model_call(ex, line) :
+            ex.head === :macrocall && _is_models_macro_name(ex.args[1]) ? nothing :
+            _first_unread_call(ex, line)
+    found === nothing || return found
+  end
+  return nothing
+end
+
+"""
+    _generated_model_bindings(name, body::Expr) -> Vector{Symbol}
+
+The bindings the generated declaration of module `name` lists: `_declared_model_bindings(body)`. When
+the body builds a model that parser cannot name, or includes a file (`_unnamed_model_call`), it raises
+`ModelDefinitionError` instead, naming the module, the call and its line, and asking for the
+`Models.@models` line: the generated line would leave those models out, and a model left out of the
+set is one `makemigrations` plans to drop (#1602). A body with no model call at all (the Generator's
+commented template) gets the empty list.
+"""
+function _generated_model_bindings(name, body::Expr)::Vector{Symbol}
+  bindings = _declared_model_bindings(body)
+  unnamed = _unnamed_model_call(body)
+  unnamed === nothing && return bindings
+  line, call = unnamed
+  where_ = line.line == 0 ? "" : " (line $(line.line)" *
+           (line.file === :none ? "" : " of $(basename(string(line.file)))") * ")"
+  listed = isempty(bindings) ? "Circuit Race" : join(bindings, " ") * " …"
+  what = _is_include_call(call) ?
+    "includes another file with `$(call.args[1])(…)`$(where_), and the `Models.@models` line PormG " *
+    "writes for a file that has none cannot see the models that file defines" :
+    "builds a model with `$(call.args[1])(…)`$(where_) that is not a top-level " *
+    "`X = Models.Model(…)` assignment of one binding (it is in a loop, a function, a `let`, a " *
+    "macro or an `eval`, or in a chained `X = Y = Models.Model(…)` or an assignment to a field), so " *
+    "the `Models.@models` line PormG writes for a file that has none cannot name it"
+  throw(ModelDefinitionError(
+    "PormG: the models module `$(name)` $(what). Left out of the model set, a model is not " *
+    "registered, and `makemigrations` plans to drop its table. Write the line yourself as the " *
+    "module's last line, listing every model binding: `Models.@models $(listed)`."))
+end
+
 # Whether a module body already declares its model set: an `@models …` call that always runs when the
 # module loads — at its top level, documented (`"""…""" Models.@models …`), or in a top-level
 # `begin … end` (#1602). One that may not run — in an `if`, a quoted expression, a macro body — does
@@ -862,7 +950,9 @@ reload and the migration planner: a `module` expression whose body declares no m
 `@models` with the bindings `_declared_model_bindings` finds, inserted right after the last model
 assignment — not at the end, so a statement after the models that registers the module (an older
 generated file's `Models.set_models(@__MODULE__, @__DIR__)`) already sees the set. Any other
-expression, and a module that declares its own, is returned unchanged (#1602).
+expression, and a module that declares its own, is returned unchanged (#1602). A module that builds a
+model the parser cannot name is refused instead (`_generated_model_bindings`): the line would leave
+it out.
 """
 function _with_model_set(@nospecialize(ex))
   ex isa Expr && ex.head === :module || return ex
@@ -873,7 +963,7 @@ function _with_model_set(@nospecialize(ex))
   end
   args = copy(body.args)
   at = findlast(_assigns_model, args)
-  declaration = _model_set_declaration(_declared_model_bindings(body))
+  declaration = _model_set_declaration(_generated_model_bindings(ex.args[2], body))
   at === nothing ? push!(args, declaration) : insert!(args, at + 1, declaration)
   return Expr(:module, ex.args[1], ex.args[2], Expr(:block, args...))
 end

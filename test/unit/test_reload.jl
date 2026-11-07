@@ -404,10 +404,10 @@ end
     PormG.@import_models "db_r/tmp_reload_models.jl" reload_models
     import .reload_models as RM
 
-    # #552: `Utils.ensure_models_init!` injects an `__init__` into the models submodule. It is
-    # not observed to run in a restored image, so this pins only that the injection still
-    # happens; the boot-pattern testset below is what would notice if it started to fire.
-    @test isdefined(RM, :__init__)
+    # #552 → #1607: no `__init__` is injected into the models submodule any more (`ensure_models_init!`
+    # `Core.eval`ed one after the module closed, and it never ran in a restored image). The
+    # boot-pattern testset below pins the outcome a restored image gets without it.
+    @test !isdefined(RM, :__init__)
 
     @test isdefined(RM, :ReloadTest)
     @test RM.ReloadTest.name == "reload_test"
@@ -798,8 +798,9 @@ end
     @test occursin("BOOT_BODY_RAN_ELSEWHERE:true\n", output)
     @test occursin("BOOT_INIT_RAN_HERE:true\n", output)
 
-    # The injection still happens. It is inert today; this is loud if a Julia release changes that.
-    @test occursin("BOOT_MODELS_HAS_INIT:true\n", output)
+    # #1607: no `__init__` is injected into the models module (it was inert; a restored image rebinds
+    # from the key recorded in the module's model set). The outcome below is what the docs promise.
+    @test occursin("BOOT_MODELS_HAS_INIT:false\n", output)
 
     # The short key, not the absolute path the implicit load would mint. The trailing newline is
     # load-bearing: an absolute path ending in `db` must not satisfy this.

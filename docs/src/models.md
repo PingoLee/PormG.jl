@@ -813,8 +813,9 @@ M.Driver.objects.filter("surname" => "Senna").count()
 3. **Registers models** with PormG so fields and metadata are indexed, binding them to the
    configuration loaded for the folder. With none loaded it raises `InvalidConfigurationError`
    (see [The Boot-Time Hazard](configuration/advanced.md#The-Boot-Time-Hazard))
-4. **Injects `__init__()`**, which re-binds the models after package precompilation when their
-   configuration is already loaded
+4. **Records the key** in the module's model set, from which a restored package image rebinds the
+   models on their first query. Nothing is evaluated into the models module: no `__init__` is added
+   to it (#1607)
 5. **Registers the Revise reload** (see [Hot-Reloading Model Definitions](#Hot-Reloading-Model-Definitions))
 
 ### The run-time bind in a package

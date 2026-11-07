@@ -95,10 +95,13 @@ end
     # routed by `.db(key)` either way. (That the second access skips the scan is what the holder
     # swap above proves; an equal entry afterwards would also follow from a second scan.)
     routed = Model("heal1250_routed", id = IDField())
-    @test occursin("heal1250_routed", PormG.inspect_query(routed.objects.db(key))[:sql_text])
+    # `invokelatest`: the scan reads `holder`'s `Core.eval` binding, newer than this closure (#1607:
+    # registration reads bindings in the caller's world).
+    _routed_sql() = Base.invokelatest(() -> PormG.inspect_query(routed.objects.db(key))[:sql_text])
+    @test occursin("heal1250_routed", _routed_sql())
     recorded = get(Models._UNBOUND_SCAN, routed, nothing)
     @test recorded == Models._unbound_scan_signature()
-    @test occursin("heal1250_routed", PormG.inspect_query(routed.objects.db(key))[:sql_text])
+    @test occursin("heal1250_routed", _routed_sql())
     @test get(Models._UNBOUND_SCAN, routed, nothing) === recorded
 
     # A model with a module goes through #1226/#1227's paths, and one with a key through case 1,

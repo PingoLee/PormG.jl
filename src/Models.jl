@@ -600,7 +600,7 @@ const REGISTERED_MODULES = Dict{Module, String}()
 # reflection a static compiler cannot follow (#1599 round 3, row 8), and action at a distance: a model
 # reached through `using` registered or not depending on which pass saw it.
 #
-# The set is one PormG-owned constant per models module, `__pormg_models__::ModelSet`, written by:
+# The set is one PormG-owned typed global per models module, `__pormg_models__::ModelSet`, written by:
 #   * the module itself, `Models.@models Circuit Race` as its last line (the Generator writes it);
 #   * `@import_models` / `import_models` / `@models_module`, from the file's top-level
 #     `X = Models.Model(…)` assignments, when the module does not declare one
@@ -610,19 +610,30 @@ const REGISTERED_MODULES = Dict{Module, String}()
 # BINDING NAMES, not model values: a typed global reassigned by a reload stays current, and the
 # declaration never needs re-evaluating to follow it. A concrete struct rather than a tuple: the read
 # `getglobal(mod, :__pormg_models__)` is untyped (any module), and one typeassert to `ModelSet` makes
-# it concrete, where an `NTuple{N,Symbol}` differs per module.
+# it concrete, where an `NTuple{N,Symbol}` differs per module. A typed global rather than a `const`:
+# see `@models`.
 #───────────────────────────────────────────────────────────────────────────────
 """
     ModelSet
 
-The model set a models module declares: the binding names of its models, in declaration order.
-Written by [`@models`](@ref) as the module's `__pormg_models__` constant, and read by
-[`set_models`](@ref) instead of scanning the module's names (#1602). Build it with `@models`, not by
-hand.
+The model set a models module declares: the binding names of its models, in declaration order, and
+the registration [`set_models`](@ref) records for the module. Written by [`@models`](@ref) as the
+module's typed global `__pormg_models__` and read by `set_models` instead of scanning the module's names
+(#1602). Build it with `@models`, not by hand.
+
+The record (`key`, `load_root`, `folder`) is filled by `set_models` (#1607): the connection key the
+module was bound to, the root that key was loaded relative to (#857), and the models folder. It lives
+in this object, created by the module's own body, so registration MUTATES it and writes nothing into
+the module after it has closed. A package image saves it with the module, which is how a restored
+image rebinds to the key it was imported under (#1227).
 """
 mutable struct ModelSet
   bindings::Vector{Symbol}
+  key::Union{Nothing, String}
+  load_root::Union{Nothing, String}   # not `root`: test_memo_interface.jl reserves that field name
+  folder::Union{Nothing, String}
 end
+ModelSet(bindings::Vector{Symbol}) = ModelSet(bindings, nothing, nothing, nothing)
 
 const _MODEL_SET_NAME = :__pormg_models__
 
@@ -764,23 +775,29 @@ macro models(bindings...)
   length(unique(bindings)) == length(bindings) || throw(ArgumentError(
     "@models lists a binding twice: $(join(bindings, ", "))."))
   syms = Symbol[bindings...]
-  return :(const $(esc(_MODEL_SET_NAME)) = $(ModelSet)($(syms)))
+  # A typed global, not a `const`: a `juliac --trim` image keeps a module's typed globals, and dropped
+  # this binding when it was a `const` that no compiled code read by its name (#1599, measured on this
+  # branch: `isdefinedglobal` answered `false` in the binary). Typed, so the read is still concrete;
+  # and a reload reassigns it like any typed global.
+  return :(global $(esc(_MODEL_SET_NAME))::$(ModelSet) = $(ModelSet)($(syms)))
 end
 
-# A global of `mod` read in the latest world, or `_UNBOUND`. `set_models` runs from a caller whose
-# world may predate the binding (a macro expansion's next statement, `__init__`, a reload), so the read
-# goes through `invokelatest` — of THIS function, never of the builtins `isdefinedglobal`/`getglobal`
-# themselves: `juliac --trim` refuses `invokelatest` of a builtin ("trim verification not yet
-# implemented for builtin `Core.invokelatest`"), and accepts it of an ordinary method (#1599 round 1).
+# A global of `mod`, or `_UNBOUND`. A direct read, in the caller's world (#1607): `juliac --trim`
+# reports `invokelatest` itself ("trim verification not yet implemented for builtin
+# `Core.invokelatest`"), and a trimmed binary raised a `MethodError` at the call (#1599, measured on this
+# branch). A global (the set, a typed or plain model binding) is visible only from a world at least
+# as new as its assignment, so registration has to RUN in such a
+# world — which every caller arranges: `@import_models`' registration is its own top-level statement,
+# `@models_module` registers from its module body, and the Revise reload, `import_models` and a test
+# that builds a module with `Core.eval` call `set_models` through `invokelatest`.
 struct _Unbound end
 const _UNBOUND = _Unbound()
 _global_or_unbound(mod::Module, name::Symbol) =
   isdefinedglobal(mod, name) ? getglobal(mod, name) : _UNBOUND
-_latest_global(mod::Module, name::Symbol) = Base.invokelatest(_global_or_unbound, mod, name)
 
 # The module's declared set, or `nothing`.
 function _model_set(mod::Module)::Union{ModelSet, Nothing}
-  s = _latest_global(mod, _MODEL_SET_NAME)
+  s = _global_or_unbound(mod, _MODEL_SET_NAME)
   return s isa ModelSet ? s : nothing
 end
 
@@ -799,9 +816,11 @@ function _declared_models(mod::Module)::Vector{Pair{Symbol, ModelType}}
   set === nothing && throw(_undeclared_models_error(mod))
   out = Pair{Symbol, ModelType}[]
   for b in set.bindings
-    m = _latest_global(mod, b)
+    m = _global_or_unbound(mod, b)
     m isa _Unbound && throw(ModelDefinitionError(
-      "$(mod) declares the model `$(b)` (`Models.@models`), but nothing is bound to `$(b)` there."))
+      "$(mod) declares the model `$(b)` (`Models.@models`), but nothing is bound to `$(b)` there " *
+      "— or not yet in this world: a binding made after the calling function started is invisible " *
+      "to it, so register such a module with `Base.invokelatest(Models.set_models, mod, …)`."))
     m isa ModelType || throw(ModelDefinitionError(
       "$(mod) declares `$(b)` as a model (`Models.@models`), but `$(b)` holds a " *
       "$(nameof(typeof(m))), not a `Models.Model(…)`."))
@@ -844,7 +863,7 @@ end
 
 function _owner_holds(owner::Module, name::Symbol, model::PormGModel)::Bool
   _binding_owner_or_nothing(owner, name) === owner || return false
-  return _latest_global(owner, name) === model
+  return _global_or_unbound(owner, name) === model
 end
 
 """
@@ -1111,9 +1130,8 @@ folder, so the same import is an exact path hit from any working directory.
 Free of globals and of `set_models` side effects — it only logs — so every rule is unit-testable
 without loading a configuration, in the spirit of `_infer_self_heal_key`.
 
-Deliberately not a raise: `@import_models` injects an `__init__` that swallows every exception (see
-`Utils.ensure_models_init!`), so a throw here would be invisible and the module would silently keep
-whatever key was baked at precompile — a deeper failure rather than a louder one.
+Deliberately not a raise: its callers decide. `set_models` turns `nothing` into the #1226 refusal,
+and `_bind_if_loaded` (an `@models_module` `__init__`, which must not fail `using`) into "not yet".
 """
 function _resolve_connect_key(path::AbstractString, config)
     target = _canonical_folder_path(path)
@@ -1278,8 +1296,8 @@ Registration does four things:
    the aggregated report when present.
 
    Because the aggregated throw comes after every model is wired, a **swallowed** failure leaves a
-   fully-wired, queryable graph. The `__init__` that `@import_models` and `@models_module` inject
-   `catch` — though the first load of either macro still surfaces the error. The Revise reload
+   fully-wired, queryable graph. The `__init__` an `@models_module` block defines catches — though
+   the first load of the macro still surfaces the error. The Revise reload
    catches too, and logs the error with a warning naming the models file. `delete()` keeps its own copy of both checks, and that is what still raises
    for a contradiction the caller never saw.
 
@@ -1328,7 +1346,7 @@ function set_models(_module::Module, path::String;
   # the `load` call that is missing. Before, this always fell through to the implicit load; #550 and
   # #553 made it warn and rank, and it still connected to whichever environment it guessed. It comes
   # BEFORE the two records below: a refused call (a typo'd folder) must not register the module or
-  # fix its `__pormg_init_path__` constant, which the self-heal would then keep re-reading.
+  # record its models folder (#1607), which the self-heal would then keep re-reading.
   isnothing(connect_key) && !implicit && throw(_unloaded_folder_error(path, config))
 
   @pormg_debug false
@@ -1434,7 +1452,7 @@ end
 
 # The half of `set_models` after the key is decided: record the module, then bind and wire every
 # model in it to `connect_key`. Split out (#1227) so `ensure_model_initialized` can rebind a module
-# to the key `__pormg_binding__` recorded without resolving the folder again — resolving is a scan
+# to the key its `ModelSet` recorded (#1607) without resolving the folder again — resolving is a scan
 # of `config`, and that is the step a restored image must not repeat.
 function _register_models!(_module::Module, path::String, connect_key::String)::Nothing
   # #343: one walk yields the models AND their Julia bindings. The binding cannot be recovered later
@@ -1447,34 +1465,22 @@ function _register_models!(_module::Module, path::String, connect_key::String)::
 
   settings::PormGSettings = Configuration.get_settings(connect_key)
 
-  # Try to inject fallback constants into the module so they survive precompilation, which is what
-  # lets `ensure_model_initialized` recover after REGISTERED_MODULES is lost with the session.
-  #   * `__pormg_init_path__` — the folder, for modules registered before #1227 recorded more.
-  #   * `__pormg_binding__` (#1227) — the KEY the application loaded the folder under and the root it
-  #     loaded it relative to (#857). A restored image rebinds from it by key, never by scanning
-  #     `config`, and the refusal it raises names the exact `load(key; root, env)` call to add.
-  #     Not recorded for an implicit entry, whose key is a guessed absolute path, nor for a module
-  #     whose `__pormg_init_path__` was pre-declared `""` — the precompile workload's marker that the
-  #     module must not bake a (temporary) folder into the image.
-  try
-    if !isdefined(_module, :__pormg_init_path__)
-        # We use Core.eval to define a constant in the module
-        Base.invokelatest(Core.eval, _module, :(const __pormg_init_path__ = $path))
-    end
-    if !settings.implicit && !isdefined(_module, :__pormg_binding__) &&
-       Base.invokelatest(getfield, _module, :__pormg_init_path__) != ""
-        binding = (key = connect_key, root = _binding_root(connect_key, settings.db_def_folder),
-                   folder = path)
-        Base.invokelatest(Core.eval, _module, :(const __pormg_binding__ = $binding))
-    end
-  catch e
-    # #1668: only `Core.eval`'s own refusals into a user module are swallowed, and all are
-    # `ErrorException`s: a module closed for incremental compilation (`set_models` while another
-    # package precompiles), or a name the module already declared a global. The two constants are a
-    # restored image's fallback, so the load goes on without them. Anything else propagates: a
-    # `MethodError` is a bug, or a trimmed build's call with no compiled target (#1599), and a trimmed
-    # image's `UndefVarError` here is `Core.eval` missing, not refusing (#1607 removes the write).
-    e isa ErrorException || rethrow()
+  # #1607: the registration record is the module's own `ModelSet` (its body created it, so it exists
+  # before the module closed), mutated here — nothing is evaluated into the module. A package image
+  # saves it with the module, which is what lets a restored image rebind (#1227):
+  #   * `folder` — the models folder, for the self-heal's re-registration;
+  #   * `key` / `load_root` — the KEY the application loaded the folder under and the root it loaded it
+  #     relative to (#857). A restored image rebinds from them by key, never by scanning `config`,
+  #     and the refusal it raises names the exact `load(key; root, env)` call to add. Not recorded for
+  #     an implicit entry, whose key is a guessed absolute path.
+  # It replaced two `invokelatest(Core.eval, …)` constant writes (`__pormg_init_path__`,
+  # `__pormg_binding__`) into the closed module, which a trimmed binary cannot run: there `Core.eval`
+  # raised `UndefVarError`, a catch-all swallowed it, and boot reported success (#1599 round 3).
+  record = _model_set(_module)::ModelSet
+  record.folder = path
+  if !settings.implicit
+    record.key = connect_key
+    record.load_root = _binding_root(connect_key, settings.db_def_folder)
   end
 
   # set the original module in models and clear related objects for idempotency
@@ -1556,8 +1562,8 @@ function _register_models!(_module::Module, path::String, connect_key::String)::
   # `ensure_model_initialized`'s fast path reports it initialized. Pre-#303 that depended on whether
   # the model happened to be walked before the throwing one — i.e. on Dict/`names` order. (A run
   # that fails at one of the earlier in-loop throws still leaves the models after it unbound.)
-  # So a caller that swallows this throw — the `__init__` injected by `@import_models` /
-  # `@models_module`, or the Revise reload callback — is left with a fully-wired, queryable graph
+  # So a caller that swallows this throw — the `__init__` an `@models_module` block defines, or the
+  # Revise reload callback — is left with a fully-wired, queryable graph
   # rather than a partly-wired one, and `deletion.jl`'s own copies of these two guards are what
   # still catch the contradiction at delete time.
   isempty(contradictions) ||
@@ -1629,17 +1635,19 @@ function _binding_root(key::AbstractString, folder::AbstractString)::Union{Nothi
   return joinpath(folder_parts[1:end-n])
 end
 
-# #1227: rebind `mod` from the `__pormg_binding__` it recorded at import. `false` when it recorded
-# none (a module registered before #1227, or one behind the precompile marker), so the caller falls
-# back to the older cases. Otherwise it binds to the recorded key when that key is loaded, and raises
+# #1227: rebind `mod` from the key its registration recorded (#1607: in its `ModelSet`). `false` when
+# it recorded none (never registered, or only through an implicit load), so the caller falls back to
+# the older cases. Otherwise it binds to the recorded key when that key is loaded, and raises
 # `InvalidConfigurationError` when it is not — naming the key and the `load` call. It never scans
 # `config` for another key and never loads: which configuration the models use was decided by the
 # application at import time, and a restored image repeats that decision rather than re-deriving it.
 function _rebind_from_record(mod::Module)::Bool
-  Base.invokelatest(isdefined, mod, :__pormg_binding__) || return false
-  binding = Base.invokelatest(getfield, mod, :__pormg_binding__)
-  # Destructured: `test_memo_interface.jl` pins every read of a `root` field in src/ (#478).
-  (; key, root, folder) = binding
+  record = _model_set(mod)
+  (record === nothing || record.key === nothing) && return false
+  (; key, load_root, folder) = record
+  root = load_root
+  key::String
+  folder::String
   if haskey(config, key) && !config[key].dynamic
     _register_models!(mod, folder, key)
     return true
@@ -1670,6 +1678,19 @@ function _unloaded_folder_error(path::AbstractString, config)::InvalidConfigurat
     "with a warning, pass `implicit = true` to `Models.set_models`; a REPL does that by default.")
 end
 
+# #1607: `@models_module` records its folder from the module body, before registering.
+function _record_folder!(mod::Module, folder::AbstractString)::Nothing
+  (_model_set(mod)::ModelSet).folder = String(folder)
+  return nothing
+end
+
+# The `@models_module` `__init__` form: the folder from the module's record.
+function _bind_if_loaded(mod::Module)::Nothing
+  record = _model_set(mod)
+  (record === nothing || record.folder === nothing) && return nothing
+  return _bind_if_loaded(mod, record.folder::String)
+end
+
 # #1226: bind `mod` to `path` only when a configuration matching `path` is loaded. Otherwise do
 # nothing — never the implicit load, not even in a REPL (#1248): `using SomePackage` at a REPL is an
 # interactive session too, and a package's `__init__` loading a folder for it is the guess #1226
@@ -1683,10 +1704,11 @@ function _bind_if_loaded(mod::Module, path::AbstractString)::Nothing
   # #1227: a module that recorded its binding binds to that KEY or not at all — the same rule as the
   # self-heal. `@models_module`'s `__init__` runs when an image is restored, so resolving the folder
   # here would bind it to whichever key happens to hold the folder in this session.
-  if Base.invokelatest(isdefined, mod, :__pormg_binding__)
-    binding = Base.invokelatest(getfield, mod, :__pormg_binding__)
-    if haskey(config, binding.key) && !config[binding.key].dynamic
-      _register_models!(mod, binding.folder, binding.key)
+  record = _model_set(mod)
+  if record !== nothing && record.key !== nothing
+    (; key, folder) = record
+    if haskey(config, key) && !config[key].dynamic
+      _register_models!(mod, folder::String, key::String)
     end
     return nothing
   end
@@ -1755,13 +1777,13 @@ _unbound_scan_signature()::Tuple{Int, Int} = (length(REGISTERED_MODULES), length
     ensure_model_initialized(model::PormGModel)
 
 Checks if a model has been initialized (i.e., has a connect_key that exists in `config`).
-If not, and its module recorded the key it was bound to at import (`__pormg_binding__`, #1227), it
+If not, and its module recorded the key it was bound to at import (its `ModelSet`, #1227, #1607), it
 rebinds to that key when it is loaded and raises `InvalidConfigurationError` naming the
 `load(key; root, env)` call when it is not — without looking for another key. A module with no
 record (registered before #1227) is self-healed by:
 1. Remapping stale path-based keys to current session alias keys
 2. Re-registering via REGISTERED_MODULES
-3. Scanning loaded modules for __pormg_init_path__ markers
+3. Scanning loaded modules for a recorded models folder
 4. Using the model's own `_module` reference (survives precompilation)
 
 It only ever binds to a configuration that is already loaded — never the implicit load, not even in
@@ -1823,7 +1845,7 @@ function ensure_model_initialized(model::PormGModel)
     end
 
     # 2b. If the model has _module set (survives precompilation), re-register it from the
-    #     module's OWN recorded source path (__pormg_init_path__, injected by
+    #     module's OWN recorded models folder (its `ModelSet`, #1607; recorded by every
     #     @import_models/@models_module). That path is authoritative — it binds the module
     #     to the connection it was actually defined for. We must NOT guess by scanning
     #     `config`: in a multi-connection setup the first entry iterated could be the wrong
@@ -1836,9 +1858,10 @@ function ensure_model_initialized(model::PormGModel)
     refusal = nothing
     if !isnothing(model._module)
         mod = model._module
-        if isdefined(mod, :__pormg_init_path__)
+        record = _model_set(mod)
+        if record !== nothing && record.folder !== nothing
             try
-                set_models(mod, getfield(mod, :__pormg_init_path__); implicit = false)
+                set_models(mod, record.folder::String; implicit = false)
                 if !isnothing(model.connect_key) && haskey(config, model.connect_key)
                     @info "Self-healing: Re-registered $(model.name) from module $(mod) source path"
                     return true
@@ -1868,15 +1891,16 @@ function ensure_model_initialized(model::PormGModel)
         end
     end
 
-    # 2c. Scan loaded packages for __pormg_init_path__ markers (injected by @models_module).
+    # 2c. Scan loaded packages for a recorded models folder (their `ModelSet`, #1607).
     #     Only the module that defines `model` is registered: this used to run `set_models` on every
     #     marked module it met and check membership afterwards, which bound unrelated modules —
     #     and, since #1226, would raise a refusal that is not about this model.
     for (pkgid, mod) in Base.loaded_modules
-        if isdefined(mod, :__pormg_init_path__) && any(m === model for m in get_all_models(mod))
+        record = _model_set(mod)
+        if record !== nothing && record.folder !== nothing && any(m === model for m in get_all_models(mod))
             _rebind_from_record(mod) && return true     # #1227, as above
-            path = getfield(mod, :__pormg_init_path__)
-            @info "Self-healing: Recovered registration for $(mod) from __pormg_init_path__"
+            path = record.folder::String
+            @info "Self-healing: Recovered registration for $(mod) from its recorded models folder"
             try
                 set_models(mod, path; implicit = false)
             catch e
@@ -4846,7 +4870,7 @@ function _declared_binding(model::PormGModel)::String
   set = _model_set(mod)
   if set !== nothing
     for b in set.bindings
-      _latest_global(mod, b) === model && return String(b)
+      _global_or_unbound(mod, b) === model && return String(b)
     end
   end
   throw(ModelDefinitionError(

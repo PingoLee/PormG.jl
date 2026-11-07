@@ -157,7 +157,9 @@ end
     connections = DmsMockPostgres(), change_data = true, db_def_folder = folder)
   try
     imported = PormG.import_models(file; into = Module(:DmsImportInto))
-    @test Models.get_all_models(imported; symbol = true) == [:Circuit]
+    # `invokelatest`: the module was included by a call inside this testset, so its bindings are
+    # newer than this world (#1607: the set is read in the caller's world).
+    @test Base.invokelatest(Models.get_all_models, imported; symbol = true) == [:Circuit]
     @test Models.connection_key(Base.invokelatest(getfield, imported, :Circuit)) == folder
 
     plain = Base.include(Module(:DmsPlainInto), file)

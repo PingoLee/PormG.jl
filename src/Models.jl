@@ -95,70 +95,44 @@ public @models, ModelSet
 
 
 #═══════════════════════════════════════════════════════════════════════════════
-# SECTION: Core Types
+# SECTION: Field types (#1604)
 #═══════════════════════════════════════════════════════════════════════════════
-"""
-    ModelType <: PormGModel
+include("models/network_address.jl")
+include("models/pg_array.jl")
+include("models/fields.jl")
 
-The concrete model object — what [`Model`](@ref) returns and what `M.Driver` is. It is the only
-concrete subtype of `PormGModel`. Build models with `Model(...)` rather than calling this
-constructor; name the type where a model is bound, so the binding has a type the compiler can rely
-on:
+# The closed set of field types a model holds (#1604). `ModelType.fields` is typed with it, so a read of
+# a slot every field struct carries with one type — `field.type::String`, `field.primary_key::Bool` —
+# is a `getfield` the compiler resolves on the union, not a dynamic call on the abstract `PormGField`
+# (#1599 round 3, row 13: `field.type == "TIMESTAMPTZ"` in the insert path). A `PormGField` subtype
+# outside this set is refused where a model is built (`_closed_field`): PormG never documented user
+# field types, and its code already treats the set as closed — a field's constructor is found from
+# its struct name. A future extension point would be a deliberate API, not an open abstract type.
+const AnyField = Union{sIDField, sForeignKey, sManyToManyField, sOneToOneField, sCharField,
+  sIntegerField, sPositiveSmallIntegerField, sPositiveIntegerField, sBigIntegerField,
+  sBooleanField, sDateField, sDateTimeField, sDecimalField, sEmailField, sPasswordField,
+  sFloatField, sImageField, sTextField, sTimeField, sBinaryField, sDurationField, sUUIDField,
+  sGenericIPAddressField, sCIDRField, sSearchVectorField, sURLField, sSlugField, sJSONField,
+  sArrayField}
 
-```julia
-Driver::Models.ModelType = Models.Model(
-  driverid = Models.IDField(),
-  surname  = Models.CharField(max_length = 255),
-)
-```
-
-Construction fills `name`, `fields` and `field_names`; the remaining slots are populated later by
-[`set_models`](@ref) (directly or through `@import_models`), which is why a model used before
-registration has `connect_key === nothing` and no reverse relations.
-
-| Slot | Filled by | Holds |
-|---|---|---|
-| `name` | `Model(...)`, or `set_models` from the Julia binding | The table name. For a model you *declare* it is always lowercase — a positional name is rejected unless already lowercase (#300), a binding-derived one is lowercased as it is filled in. A model built by `inspectdb` introspection or the Django importer instead keeps the name read from its source, mixed case and all |
-| `managed` | `Model(managed = false)` | `false` when PormG queries the table but never migrates it (#741). Default `true` |
-| `fields` | `Model(...)` | Declared field name → `PormGField`, including many-to-many fields |
-| `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
-| `related_objects` | `set_models` | Reverse accessors installed by relations pointing *at* this model: accessor name → a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation` (a many-to-many, reversed). Each carries the resolved child model, so a reverse join never re-derives a Julia binding from a name (#343) |
-| `_module` / `connect_key` | `set_models` | The defining module and the connection key it registered under |
-| `cache` | `set_models`, `Model(constraints = …, indexes = …)` | Derived metadata: many-to-many relations, declared unique constraints, declared composite indexes |
-
-`deepcopy` **shares** rather than clones (`deepcopy(model) === model`): a model is resolved schema
-state treated as an immutable shared reference, and recursion would otherwise descend into
-`_module::Module` and throw. The query builder relies on this — copying a query copies its state but
-keeps the same model.
-
-See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref).
-"""
-@kwdef mutable struct ModelType <: PormGModel
-  name::AbstractString
-  db_table::Union{String, Nothing} = nothing # explicit physical table name override (#59)
-  # `false`: PormG queries the table but never migrates it — a view, or a table another system owns
-  # (#741, Django's `Meta.managed`). Read through `model_is_managed`, never directly: the accessor
-  # answers `true` for any `PormGModel` that does not carry the slot.
-  managed::Bool = true
-  # Ordered, not a `Dict`: this container decides the PHYSICAL COLUMN ORDER of every table PormG
-  # creates — `create_table` and the SQLite table rebuild both iterate it. Under a plain `Dict` that
-  # order came from hashing the FIELD NAMES, so a model rendered its columns in an order nobody
-  # chose, and two Julia versions disagreed: 1.12.7 and 1.13.0 produced different DDL from identical
-  # models, because 1.13 changed string hashing (#544). Insertion order is declaration order on the
-  # kwargs path and physical database order on both introspection paths (the PostgreSQL reader
-  # aggregates `ORDER BY a.attnum`, the SQLite one reads `PRAGMA table_info` in `cid` order), so
-  # this field now carries the order its source already knew and used to discard.
-  #
-  # Fourth container in this class to be fixed, after `insert` (#97), `custom_join`/`alias_join`
-  # (#449) and `ctes` (#543).
-  fields::OrderedCollections.OrderedDict{String, PormGField}
-  field_names::Vector{String} = [] # needed to create sql queries with joins
-  related_objects::Dict{String, Any} = Dict{String, Any}() # needed to create sql queries with joins
-  _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
-  connect_key::Union{String, Nothing} = nothing # needed to get the connection
-  cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
+# The field, if its type is in the closed set; else the refusal naming it (#1604).
+function _closed_field(model_name::AbstractString, field_name::AbstractString, field)::AnyField
+  field isa AnyField && return field
+  throw(ModelDefinitionError(
+    "The field $(field_name) of the model $(model_name) is a $(nameof(typeof(field))), which is not " *
+    "one of PormG's field types. A model holds PormG's own fields only (`Models.CharField(…)`, " *
+    "`Models.ForeignKey(…)`, …); PormG has no extension point for a field type of its own."))
 end
 
+_closed_fields(model_name::AbstractString, d::AbstractDict) =
+  OrderedCollections.OrderedDict{String, AnyField}(
+    String(k) => _closed_field(model_name, String(k), v) for (k, v) in d)
+
+#═══════════════════════════════════════════════════════════════════════════════
+# SECTION: Core Types
+#═══════════════════════════════════════════════════════════════════════════════
+# The two relation structs `related_objects` holds, defined ahead of `ModelType` so its
+# `related_objects` can name their union (#1604).
 @kwdef struct ManyToManyRelation
   field_name::String
   # The PHYSICAL join table (#363) — `db_table` when the through model declares one, else the
@@ -264,6 +238,75 @@ end
   model_resolved::PormGModel  # the CHILD model itself
 end
 
+"""
+    ModelType <: PormGModel
+
+The concrete model object — what [`Model`](@ref) returns and what `M.Driver` is. It is the only
+concrete subtype of `PormGModel`. Build models with `Model(...)` rather than calling this
+constructor; name the type where a model is bound, so the binding has a type the compiler can rely
+on:
+
+```julia
+Driver::Models.ModelType = Models.Model(
+  driverid = Models.IDField(),
+  surname  = Models.CharField(max_length = 255),
+)
+```
+
+Construction fills `name`, `fields` and `field_names`; the remaining slots are populated later by
+[`set_models`](@ref) (directly or through `@import_models`), which is why a model used before
+registration has `connect_key === nothing` and no reverse relations.
+
+| Slot | Filled by | Holds |
+|---|---|---|
+| `name` | `Model(...)`, or `set_models` from the Julia binding | The table name. For a model you *declare* it is always lowercase — a positional name is rejected unless already lowercase (#300), a binding-derived one is lowercased as it is filled in. A model built by `inspectdb` introspection or the Django importer instead keeps the name read from its source, mixed case and all |
+| `managed` | `Model(managed = false)` | `false` when PormG queries the table but never migrates it (#741). Default `true` |
+| `fields` | `Model(...)` | Declared field name → `PormGField`, including many-to-many fields |
+| `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
+| `related_objects` | `set_models` | Reverse accessors installed by relations pointing *at* this model: accessor name → a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation` (a many-to-many, reversed). Each carries the resolved child model, so a reverse join never re-derives a Julia binding from a name (#343) |
+| `_module` / `connect_key` | `set_models` | The defining module and the connection key it registered under |
+| `cache` | `set_models`, `Model(constraints = …, indexes = …)` | Derived metadata: many-to-many relations, declared unique constraints, declared composite indexes |
+
+`deepcopy` **shares** rather than clones (`deepcopy(model) === model`): a model is resolved schema
+state treated as an immutable shared reference, and recursion would otherwise descend into
+`_module::Module` and throw. The query builder relies on this — copying a query copies its state but
+keeps the same model.
+
+See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`Index`](@ref).
+"""
+@kwdef mutable struct ModelType <: PormGModel
+  # `String`, not `AbstractString` (#1604): every comparison on it (`name == ""`) dispatched
+  # dynamically, a `juliac --trim` run-time `MethodError` (#1599 round 3, row 8).
+  name::String
+  db_table::Union{String, Nothing} = nothing # explicit physical table name override (#59)
+  # `false`: PormG queries the table but never migrates it — a view, or a table another system owns
+  # (#741, Django's `Meta.managed`). Read through `model_is_managed`, never directly: the accessor
+  # answers `true` for any `PormGModel` that does not carry the slot.
+  managed::Bool = true
+  # Ordered, not a `Dict`: this container decides the PHYSICAL COLUMN ORDER of every table PormG
+  # creates — `create_table` and the SQLite table rebuild both iterate it. Under a plain `Dict` that
+  # order came from hashing the FIELD NAMES, so a model rendered its columns in an order nobody
+  # chose, and two Julia versions disagreed: 1.12.7 and 1.13.0 produced different DDL from identical
+  # models, because 1.13 changed string hashing (#544). Insertion order is declaration order on the
+  # kwargs path and physical database order on both introspection paths (the PostgreSQL reader
+  # aggregates `ORDER BY a.attnum`, the SQLite one reads `PRAGMA table_info` in `cid` order), so
+  # this field now carries the order its source already knew and used to discard.
+  #
+  # Fourth container in this class to be fixed, after `insert` (#97), `custom_join`/`alias_join`
+  # (#449) and `ctes` (#543).
+  fields::OrderedCollections.OrderedDict{String, AnyField}
+  field_names::Vector{String} = [] # needed to create sql queries with joins
+  # Reverse accessors: a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation`
+  # (a many-to-many, reversed) — the only two values ever stored, so the value type says so (#1604).
+  related_objects::Dict{String, Union{ReverseRelation, ManyToManyRelation}} =
+    Dict{String, Union{ReverseRelation, ManyToManyRelation}}()
+  _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
+  connect_key::Union{String, Nothing} = nothing # needed to get the connection
+  cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
+end
+
+
+
 # Single constructor for every reverse FK/O2O relation. It served three `set_models` branches that
 # differed only in the Dict KEY they wrote under (>=2 relations to one target, one with an implicit
 # accessor, one with an explicit `related_name`); #396 collapsed those into `_register_reverse_accessor!`,
@@ -340,24 +383,40 @@ end
 # `lookup` is a `Module` (`add_field!`) or a `ModelSet` (registration, #1606); untyped here only
 # because `ModelSet` is defined further down this file.
 function _collect_relation_targets(model::PormGModel, lookup; strict::Bool = true)
-  targets = Dict{String, PormGModel}()
-  counts  = IdDict{PormGModel, Int}()
+  # Concrete (#1604): `ModelType` is the only model type, and the wiring below calls
+  # `_reverse_accessor_for` / `_register_reverse_accessor!` with these — on the abstract `PormGModel`
+  # those calls had no compiled target in a trimmed binary (#1599 round 3, row 6).
+  targets = Dict{String, ModelType}()
+  counts  = IdDict{ModelType, Int}()
   for (field_name, field) in pairs(model.fields)
     target = if field isa sRelationalColumn
       resolve_fk_target!(field, field_name, model.name, lookup; strict = strict)
-    elseif is_many_to_many_field(field)
+    elseif field isa sManyToManyField   # `isa` narrows the field union; the predicate call does not (#1604)
       # #1606: an explicit `through` named by a string is resolved here too and written back, so the
       # registrar never looks it up in a module (a trimmed image has no binding to read).
-      if strict && field.through isa AbstractString
-        field.through = _declared_target(lookup, field.through, model, field_name,
+      # Each slot is read into a local and narrowed by `isa`: the slots are typed
+      # `Union{Nothing, String, PormGModel}`, and a call on that (abstract) union has no compiled target
+      # in a trimmed binary (#1604).
+      through = field.through
+      if strict && through isa AbstractString
+        field.through = _declared_target(lookup, String(through), model, field_name,
                                          "ManyToManyField's through")
       end
-      strict ? _declared_target(lookup, field.to, model, field_name, "ManyToManyField") :
-               _resolve_target_model(field.to, lookup)
+      to = field.to
+      if to isa ModelType
+        to
+      elseif to isa AbstractString
+        strict ? _declared_target(lookup, String(to), model, field_name, "ManyToManyField") :
+                 _resolve_target_model(String(to), lookup)
+      else
+        strict && throw(ModelDefinitionError(
+          "The ManyToManyField $(field_name) in the model $(model.name) names no target model."))
+        nothing
+      end
     else
       nothing
     end
-    target isa PormGModel || continue
+    target isa ModelType || continue
     strict && _require_registered_target(model, field_name, target,
                                          lookup isa ModelSet ? lookup.mod : lookup)
     targets[field_name] = target
@@ -371,8 +430,8 @@ end
 # `@info` fires only for a DERIVED name in a group of two or more: a lone relation still gets the
 # bare model name, which is documented and stable, and logging that would be noise on every load.
 # Routed through `_emsg` so the highlight degrades off-TTY (log files, CI, structured sinks).
-function _reverse_accessor_for(model::PormGModel, model_name::Symbol, field_name::AbstractString,
-                               field, target::PormGModel, counts::IdDict{PormGModel, Int})::String
+function _reverse_accessor_for(model::ModelType, model_name::Symbol, field_name::AbstractString,
+                               field, target::ModelType, counts::IdDict{ModelType, Int})::String
   # #420. Both arms are checked here — derived or explicit, FK/O2O or many-to-many, `set_models` or
   # `add_field!` — because this funnel computes almost every accessor. Two other guards complete it,
   # and neither is redundant: `_validate_related_name` in `models/fields.jl` catches an explicit name
@@ -408,7 +467,8 @@ end
 # A `ManyToManyRelation` reached through `related_objects` is always the REVERSED one, and
 # `_reverse_many_to_many_relation` swaps the sides — so the DECLARING model is its `related_model`
 # and the field that declared it is its `inverse_accessor`. The forward arm is defensive only.
-_accessor_holder(rel::ReverseRelation)::String = "$(rel.model_resolved.name).$(rel.fk_field)"
+_accessor_holder(rel::ReverseRelation)::String =
+  "$((rel.model_resolved::ModelType).name).$(rel.fk_field)"   # typed read: `ModelType` is the only model type
 _accessor_holder(rel::ManyToManyRelation)::String =
   rel.reverse ? "$(rel.related_model).$(rel.inverse_accessor)" : "$(rel.owner_model).$(rel.field_name)"
 _accessor_holder(::Any)::String = "another relation"
@@ -562,8 +622,8 @@ end
 # declared `circuit_id`) is legal and load-bearing (#345), and widening this check to the short form
 # would outlaw it. See `test/unit/test_complex_queries.jl` → "Short-form FK resolution defers to an
 # existing reverse accessor (#345)".
-function _register_reverse_accessor!(target::PormGModel, accessor::AbstractString,
-                                     model::PormGModel, model_name::Symbol, model_binding::Symbol,
+function _register_reverse_accessor!(target::ModelType, accessor::AbstractString,
+                                     model::ModelType, model_name::Symbol, model_binding::Symbol,
                                      field_name::AbstractString, field)::Nothing
   derived = field.related_name === nothing
   haskey(target.fields, accessor) &&
@@ -946,8 +1006,8 @@ end
 # `_declared_models` keeps the FIRST declared binding when one model is declared under two names.
 _collect_models_and_bindings(mod::Module) = _collect_models_and_bindings(_require_model_set(mod))
 function _collect_models_and_bindings(set::ModelSet)
-  models = PormGModel[]
-  bindings = IdDict{PormGModel, Symbol}()
+  models = ModelType[]
+  bindings = IdDict{ModelType, Symbol}()
   for (name, model) in _declared_models(set)
     _fill_model_name!(model, name)
     push!(models, model)
@@ -1531,8 +1591,8 @@ const _REPORTED_PLAIN_BINDINGS_LOCK = ReentrantLock()
 # (`_owner_binding_name`), the line to fix. Skipped while generating output: the SQLite
 # extension's precompile workload registers plain models on purpose, and a package's models are
 # registered again at run time (`_bind_if_loaded`, `_rebind_from_record`), where the author sees it.
-function _warn_plain_model_bindings(_module::Module, models::Vector{PormGModel},
-                                    bindings::IdDict{PormGModel, Symbol})::Nothing
+function _warn_plain_model_bindings(_module::Module, models::Vector{ModelType},
+                                    bindings::IdDict{ModelType, Symbol})::Nothing
   ccall(:jl_generating_output, Cint, ()) == 0 || return nothing
   plain = Tuple{Module, Symbol}[]
   @lock _REPORTED_PLAIN_BINDINGS_LOCK begin
@@ -1642,7 +1702,7 @@ function _register_models!(record::ModelSet, path::Union{Nothing, String}, conne
 
     for (field_name, field) in pairs(model.fields)
       if field isa sRelationalColumn
-        field_to::PormGModel = targets[field_name]
+        field_to = targets[field_name]
         accessor = _reverse_accessor_for(model, model_name, field_name, field, field_to, counts)
         _register_reverse_accessor!(field_to, accessor, model, model_name, model_binding,
                                     field_name, field)
@@ -1660,11 +1720,11 @@ function _register_models!(record::ModelSet, path::Union{Nothing, String}, conne
         _collect_field_contradictions!(contradictions, model, field_name, field)
         _collect_unmanaged_target_contradiction!(contradictions, model, field_name, field, field_to)
 
-      elseif is_many_to_many_field(field)
+      elseif field isa sManyToManyField   # narrows the field union (#1604)
         # #396: the accessor is computed HERE, from the group, and threaded in — never re-derived
         # inside the registrar. `_m2m_query` filters on `relation.inverse_accessor`, so the slot the
         # manager reads and the key that lands in `related_objects` have to be the same string.
-        related_model::PormGModel = targets[field_name]
+        related_model = targets[field_name]
         accessor = _reverse_accessor_for(model, model_name, field_name, field, related_model, counts)
         _register_many_to_many_relation!(_module, settings, model, field_name, field;
                                          related_model = related_model, reverse_accessor = accessor)
@@ -2471,16 +2531,16 @@ end
 # simply not a declared model. `fk_target_column` can only honor a referenced parent's `db_column`
 # once `field.to` is a resolved model, so both model-load lifecycles (runtime `set_models`, the
 # migration prelude) write the resolution back via this helper.
-function _resolve_target_model(to, mod::Module)::Union{PormGModel, Nothing}
-  to isa PormGModel && return to
+function _resolve_target_model(to, mod::Module)::Union{ModelType, Nothing}
+  to isa ModelType && return to
   set = _model_set(mod)
   set === nothing && return nothing
   return _resolve_target_model(to, set)
 end
 
 # The set form registration uses (#1606): it reads the models the set holds, no module binding.
-function _resolve_target_model(to, set::ModelSet)::Union{PormGModel, Nothing}
-  to isa PormGModel && return to
+function _resolve_target_model(to, set::ModelSet)::Union{ModelType, Nothing}
+  to isa ModelType && return to
   to isa AbstractString || return nothing
   declared = _declared_models(set)
   ref = String(to)
@@ -2497,7 +2557,7 @@ end
 # The strict form, for registration (#1601): the declared model `to` names, or a refusal naming the
 # target and the models the module declares.
 function _declared_target(lookup::Union{Module, ModelSet}, to, model::PormGModel,
-                          field_name::AbstractString, kind::String)::PormGModel
+                          field_name::AbstractString, kind::String)::ModelType
   resolved = _resolve_target_model(to, lookup)
   resolved === nothing || return resolved
   set = lookup isa ModelSet ? lookup : _model_set(lookup)
@@ -2508,6 +2568,10 @@ function _declared_target(lookup::Union{Module, ModelSet}, to, model::PormGModel
     "models $(mod) declares (`Models.@models`: $(listed)). Name a declared model's binding or " *
     "table name, or pass the model itself."))
 end
+
+# A relation target as text for a message, from its declared type — never `string` of an untyped
+# value on the registration path (#1346, #1604).
+_target_label(to)::String = to isa AbstractString ? String(to) : to isa ModelType ? to.name : "nothing"
 
 """
     resolve_fk_target!(field, field_name, model_name, lookup; strict) -> Union{PormGModel, Nothing}
@@ -2537,11 +2601,11 @@ ever reach here.
 """
 function resolve_fk_target!(field, field_name::AbstractString,
                             model_name::AbstractString, lookup::Union{Module, ModelSet};
-                            strict::Bool)::Union{PormGModel, Nothing}
+                            strict::Bool)::Union{ModelType, Nothing}
   resolved = _resolve_target_model(field.to, lookup)
   if resolved === nothing
     strict && throw(ModelDefinitionError(
-      "The model $(field.to) in the field $field_name in the model $model_name is not defined: it " *
+      "The model $(_target_label(field.to)) in the field $field_name in the model $model_name is not defined: it " *
       "is not one of the models $(lookup isa ModelSet ? lookup.mod : lookup) declares " *
       "(`Models.@models`)."))
     @debug "makemigrations: FK target $(field.to) of field $field_name in model $model_name is not a model binding in the models module; leaving as a string"
@@ -3644,7 +3708,7 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
   isempty(name) || _validate_positional_model_name(name)
   # Ordered: `pairs` over the kwargs NamedTuple yields them in the order the user wrote them, and
   # that is the order the columns must be created in (#544).
-  fields_dict = OrderedCollections.OrderedDict{String, PormGField}()
+  fields_dict = OrderedCollections.OrderedDict{String, AnyField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
     # This is the KWARGS declaration path — the only place a field name is a Julia identifier the
@@ -3657,14 +3721,14 @@ function Model(name::AbstractString, fields::NTuple{N, <:Pair{Symbol}}) where N
     if !(field[2] isa PormGField)
       throw(ModelDefinitionError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
-    fields_dict[field_name] = field[2]
+    fields_dict[field_name] = _closed_field(name, field_name, field[2])   # #1604
     !is_many_to_many_field(field[2]) && push!(field_names, field_name)
   end
   # println(fields_dict)
   # #612: `String(name)`, so the stored name is never a view. This is the seam BOTH user-facing
-  # forms funnel through — the kwargs `Model(name; fields...)` builds its tuple and lands here — and
-  # `ModelType.name` is an `AbstractString` slot, so an unconverted `SubString` is retained for the
-  # model's whole process lifetime along with its entire parent buffer. Measured: a name sliced out
+  # forms funnel through — the kwargs `Model(name; fields...)` builds its tuple and lands here. (The
+  # slot was `AbstractString`, so an unconverted `SubString` was retained for the model's whole
+  # process lifetime along with its entire parent buffer; it is `String` since #1604.) Measured: a name sliced out
   # of a 143-character request string kept all 143. The `Dict` methods below are deliberately left
   # alone; their names come from a live catalog or a Python class, not from a request.
   return ModelType(name=String(name), fields=fields_dict, field_names=field_names)
@@ -3679,14 +3743,13 @@ end
 # caller that already knows the physical column order — both introspection readers do — must be able
 # to hand that order over instead of having it dropped on the way in. A plain `Dict` still works and
 # behaves exactly as it did: there is simply no order in it to preserve.
-function Model(name::AbstractString, dict::AbstractDict{String, PormGField})
-  fields = dict isa OrderedCollections.OrderedDict{String, PormGField} ? dict :
-           OrderedCollections.OrderedDict{String, PormGField}(dict)
+function Model(name::AbstractString, dict::AbstractDict{String, <:PormGField})
+  fields = _closed_fields(name, dict)   # #1604: the closed field set, in the dict's order
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
-  return ModelType(name=name, fields=fields, field_names=field_names)
+  return ModelType(name=String(name), fields=fields, field_names=field_names)
 end
 # Django-importer path. Same exemption as the `Dict{String,…}` method above (#317) — the keys are
 # Python class attributes read from a live model; a Django `_foo = models.CharField()` used to import
@@ -3695,7 +3758,7 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
   # Ordered to satisfy `ModelType.fields` (#544). The SOURCE here is a plain `Dict`, so there is no
   # declaration order left to recover — this preserves whatever order the caller's Dict iterates in
   # rather than inventing one.
-  fields_dict = OrderedCollections.OrderedDict{String, PormGField}()
+  fields_dict = OrderedCollections.OrderedDict{String, AnyField}()
   field_names::Vector{String} = []
   for (field_name, field) in pairs(fields)
     @pormg_debug false
@@ -3703,10 +3766,10 @@ function Model(name::AbstractString, fields::Dict{Symbol, Any})
     if !(field isa PormGField)
       throw(ModelDefinitionError("All fields must be of type PormGField, exemple: users = Models.PormGModel(\"users\", name = Models.CharField(), age = Models.IntegerField())"))
     end
-    fields_dict[field_name] = field
+    fields_dict[field_name] = _closed_field(name, field_name, field)
     !is_many_to_many_field(field) && push!(field_names, field_name)
   end
-  return ModelType(name=name, fields=fields_dict, field_names=field_names)
+  return ModelType(name=String(name), fields=fields_dict, field_names=field_names)
 end
 function Model(; constraints = nothing, db_table = nothing, indexes = nothing, managed = nothing, fields...)
   # No-positional-name form (the idiomatic style — the table name is inferred from the binding
@@ -3755,7 +3818,7 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
         "Call set_models() with a configured connection before add_field!."
       ))
     end
-    model.fields[field_name] = field
+    model.fields[field_name] = _closed_field(model.name, field_name, field)   # #1604
     # #396: `add_field!` cannot see the group `set_models` pre-scans, so it counts what the model
     # holds RIGHT NOW — the new field included, since it was inserted on the line above. Resolved
     # leniently: an unrelated unresolvable foreign key must not abort adding a field.
@@ -3777,7 +3840,7 @@ function add_field!(model::PormGModel, field_name::Union{String, Symbol}, field:
   # Checked before the field is inserted, so a refused one leaves the model as it was.
   _validate_generated_field(model.name, field_name, field,
                             Iterators.flatten((pairs(model.fields), (field_name => field,))))
-  model.fields[field_name] = field
+  model.fields[field_name] = _closed_field(model.name, field_name, field)   # #1604
   push!(model.field_names, field_name)
   return nothing
 end
@@ -4969,10 +5032,8 @@ _fk_target_binding(field::PormGField)::Union{String, Nothing} =
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Fields
 #═══════════════════════════════════════════════════════════════════════════════
-
-include("models/network_address.jl")
-include("models/pg_array.jl")
-include("models/fields.jl")
+# The field structs (`models/fields.jl`) are included at the top of this file since #1604, ahead of
+# `ModelType`, whose `fields` holds the closed union of them (`AnyField`).
 
 is_many_to_many_field(::PormGField)::Bool = false
 is_many_to_many_field(::sManyToManyField)::Bool = true
@@ -5401,7 +5462,7 @@ function strip_many_to_many_fields(model::PormGModel)::PormGModel
   # Ordered, and load-bearing (#544): every model reaching the migration planner passes through
   # here, so a plain `Dict` would re-hash the column order back to arbitrary at the last step before
   # DDL is rendered — undoing the fix for exactly the path it exists to fix.
-  physical_fields = OrderedCollections.OrderedDict{String, PormGField}()
+  physical_fields = OrderedCollections.OrderedDict{String, AnyField}()
   for (field_name, field) in model.fields
     is_many_to_many_field(field) && continue
     physical_fields[field_name] = field

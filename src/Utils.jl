@@ -35,21 +35,35 @@ function reload_module_contents!(existing_mod::Module, filepath::String)::Bool
             # #1602: the same model-set declaration `@import_models` adds, so a model added by the
             # edit is in the set the `set_models` after the reload reads.
             body_block = Models._with_model_set(expr).args[3]
+            # The body's first `@models` statement replaces this set rather than merging into it, so a
+            # model the edit removed leaves the set; any later line merges as usual (#1602). The mark is
+            # held for that one statement only: if it fails, the later lines merge into the old set
+            # instead of one of them replacing it with a part of the models.
+            replacing = Base.invokelatest(Models._global_or_unbound, existing_mod, Models._MODEL_SET_NAME)
+            first_decl = findfirst(sub -> Models._first_models_call(sub) !== nothing, body_block.args)
             line = 0
-            for sub in body_block.args
-                if sub isa LineNumberNode
-                    line = sub.line
-                    continue
+            try
+                for (i, sub) in enumerate(body_block.args)
+                    if sub isa LineNumberNode
+                        line = sub.line
+                        continue
+                    end
+                    try
+                        i == first_decl && replacing isa Models.ModelSet &&
+                            (Models._RELOADING[existing_mod] = replacing)
+                        Base.invokelatest(Core.eval, existing_mod, sub)
+                    catch e
+                        # import / using of already-loaded packages may error; ignore those. Anything
+                        # else is the edit itself failing (a typo in a field), which leaves that binding
+                        # at its previous value, so say so rather than reload half a file in silence (#1487).
+                        sub isa Expr && sub.head in (:import, :using) && continue
+                        @warn "PormG: an expression in the reloaded models file failed; its binding keeps the previous value" file = filepath line = line exception = e
+                    finally
+                        i == first_decl && delete!(Models._RELOADING, existing_mod)
+                    end
                 end
-                try
-                    Base.invokelatest(Core.eval, existing_mod, sub)
-                catch e
-                    # import / using of already-loaded packages may error; ignore those. Anything
-                    # else is the edit itself failing (a typo in a field), which leaves that binding
-                    # at its previous value, so say so rather than reload half a file in silence (#1487).
-                    sub isa Expr && sub.head in (:import, :using) && continue
-                    @warn "PormG: an expression in the reloaded models file failed; its binding keeps the previous value" file = filepath line = line exception = e
-                end
+            finally
+                delete!(Models._RELOADING, existing_mod)
             end
             return true
         end

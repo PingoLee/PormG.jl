@@ -140,7 +140,8 @@ end
   and its line, rather than generate a list that leaves the model out. A model reached through
   `using` is a model of this module only when the list names it. When a file writes its own list
   and assigns a top-level `X = Models.Model(…)` the list leaves out, `@import_models` warns naming
-  it: that model is not registered.
+  it: that model is not registered. Several `Models.@models` lines in one module merge into one
+  set.
 - Each field uses a PormG field constructor (e.g., `IDField`, `CharField`, `DateField`).
 - You can use keyword arguments to customize field options (e.g., `max_length`, `unique`, `null`).
 - Each model is bound with a typed global, `Race::Models.ModelType = Models.Model(…)`. A plain

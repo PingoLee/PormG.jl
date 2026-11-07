@@ -691,8 +691,9 @@ const REGISTERED_MODULES = Dict{Module, String}()
 # survived), so registration reads no binding by name: the models come from the set, and a trimmed
 # application hands the set over itself, `set_models(models.MODEL_SET; key)`, which references it.
 # Capturing values means the line comes after the definitions, and a model rebound by hand needs the
-# line run again; the Revise reload re-evaluates the whole body, so it does. A concrete struct rather
-# than a tuple: one typeassert makes a read of it from any module concrete.
+# line run again; the Revise reload re-evaluates the whole body, so it does. Several lines merge into
+# one set (`_new_model_set`). A concrete struct rather than a tuple: one typeassert makes a read of it
+# from any module concrete.
 #───────────────────────────────────────────────────────────────────────────────
 """
     ModelSet
@@ -729,7 +730,20 @@ const _MODEL_SET_NAME = :MODEL_SET
 # registration record across a reload.
 const REGISTERED_SETS = IdDict{Module, ModelSet}()
 
+# The set a reload (`Utils.reload_module_contents!`) is replacing, by module, while it re-evaluates the
+# module's body (#1602): the one bound `MODEL_SET` the body's first `@models` line replaces rather than
+# merges into.
+const _RELOADING = IdDict{Module, ModelSet}()
+
 # What `@models` evaluates: the set of `mod`, from the values its listed bindings hold right now.
+#
+# Lines MERGE (#1602). A `MODEL_SET` already bound — a second `@models` line in the same body, or the
+# line run again in a live module — gains the listed models in place (a binding listed again takes the
+# value it holds now), so every line's models are in the set and the registration record the set
+# carries stays. Before, the last line replaced the set in silence: an earlier line's models were
+# neither registered nor seen by `makemigrations`, which planned them as dropped. The one exception is
+# the set a reload is replacing (`_RELOADING`): the reload re-evaluates the whole body, so the set is
+# rebuilt from it, and a model the edit removed leaves the set.
 function _new_model_set(mod::Module, bindings::Vector{Symbol}, values::Vector)::ModelSet
   models = ModelType[]
   for (b, v) in zip(bindings, values)
@@ -737,6 +751,19 @@ function _new_model_set(mod::Module, bindings::Vector{Symbol}, values::Vector)::
       "$(mod) declares `$(b)` as a model (`Models.@models`), but `$(b)` holds a " *
       "$(nameof(typeof(v))), not a `Models.Model(…)`."))
     push!(models, v)
+  end
+  bound = _global_or_unbound(mod, _MODEL_SET_NAME)
+  if bound isa ModelSet && get(_RELOADING, mod, nothing) !== bound
+    for (b, m) in zip(bindings, models)
+      i = findfirst(==(b), bound.bindings)
+      if i === nothing
+        push!(bound.bindings, b)
+        push!(bound.models, m)
+      else
+        bound.models[i] = m
+      end
+    end
+    return bound
   end
   set = ModelSet(mod, copy(bindings), models)
   # A re-run of the line (the Revise reload re-evaluates the module body) builds a new set; it keeps
@@ -1031,8 +1058,12 @@ lines.
 
 The line captures the models the bindings hold when it runs, so it comes after their definitions; a
 model rebound by hand afterwards needs the line run again (the Revise reload re-evaluates the whole
-module body, so it does). A `juliac --trim` application registers with
-`Models.set_models(models.MODEL_SET; key)` (#1606).
+module body, so it does). Several `@models` lines in one module, or the line run again, merge: each
+adds its models to the module's set, and a binding listed again takes the value it holds then. A
+model leaves the set only through PormG's reload of the file (`set_models(…; source)` with Revise
+loaded, which re-evaluates the whole body) or a fresh `include` of it; Revise re-evaluating one
+changed line of a package's own file merges, so it only adds. A `juliac --trim`
+application registers with `Models.set_models(models.MODEL_SET; key)` (#1606).
 """
 macro models(bindings...)
   for b in bindings

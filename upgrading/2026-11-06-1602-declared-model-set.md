@@ -35,7 +35,12 @@ An `@import_models` file that writes its own `Models.@models` line is read as wr
 The line captures the models its bindings hold when it runs, so it goes after their definitions (a
 binding not yet assigned fails at the line with `UndefVarError`). A model rebound by hand afterwards
 is registered only once the line runs again; the Revise reload re-evaluates the whole module, so it
-does. A module that already binds a global named `MODEL_SET` must rename it.
+does. **Several `Models.@models` lines merge:** a second line in the module, or the line run again,
+adds its models to the set, and a binding listed again takes the value it holds then. A model
+leaves the set only through PormG's reload of the file (`set_models(…; source)` with Revise loaded)
+or a fresh `include` of it; Revise re-evaluating one changed line of a package's own file only adds.
+A module that already
+binds a global named `MODEL_SET` must rename it.
 
 ### How to find the calls to migrate
 

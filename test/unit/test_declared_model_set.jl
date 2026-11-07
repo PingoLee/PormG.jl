@@ -438,3 +438,89 @@ end
     pop!(PormG.config, folder, nothing)
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Several `Models.@models` lines merge into one set
+# What it tests: a file whose module writes `Models.@models Circuit` and then `Models.@models Race`,
+#   loaded with plain `include` + `set_models` and with `import_models`, registers both (`MODEL_SET`
+#   lists `[:Circuit, :Race]`, `get_all_models` returns both); the line run again in a live module adds
+#   the newly listed model to the same set object, keeps its registration record, and the next
+#   `set_models` registers it. The Revise reload (`Utils.reload_module_contents!`) instead REPLACES the
+#   set: an edit that removes `Race` leaves `[:Circuit]`, a reload of the two-line file merges both
+#   again, and a reload whose first line fails keeps the old set for the later line to merge into.
+#   No SQL.
+# Why it matters: the last line used to replace the set in silence, so the first line's models were not
+#   registered and `makemigrations` planned their tables as dropped; and the left-out warning, which
+#   unions the lines, did not fire.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "several Models.@models lines merge into one set (#1602)" begin
+  dir = mktempdir()
+  folder = joinpath(dir, "dms_two")
+  mkpath(folder)
+  file = joinpath(folder, "dms_two_lines.jl")
+  two_lines = """
+  module dms_two_lines
+  import PormG.Models
+  Circuit = Models.Model("dms_two_circuit", circuitid = Models.IDField())
+  Models.@models Circuit
+  Race = Models.Model("dms_two_race", raceid = Models.IDField())
+  Models.@models Race
+  end
+  """
+  write(file, two_lines)
+  PormG.config[folder] = PormG.Configuration.Settings(
+    connections = DmsMockPostgres(), change_data = true, db_def_folder = folder)
+  try
+    plain = Base.include(Module(:DmsTwoPlain), file)
+    Base.invokelatest(Models.set_models, plain, folder)
+    imported = PormG.import_models(file; into = Module(:DmsTwoImport))
+    for mod in (plain, imported)
+      @test Base.invokelatest(Models._model_set, mod).bindings == [:Circuit, :Race]
+      @test Base.invokelatest(Models.get_all_models, mod; symbol = true) == [:Circuit, :Race]
+      @test Models.connection_key(Base.invokelatest(getfield, mod, :Race)) == folder
+    end
+
+    # Run again in a live module: the same set object gains the model and keeps its record.
+    set = Base.invokelatest(Models._model_set, plain)
+    Core.eval(plain, :(Pit = Models.Model("dms_two_pit", pitid = Models.IDField())))
+    Core.eval(plain, :(Models.@models Circuit Pit))
+    @test Base.invokelatest(Models._model_set, plain) === set
+    @test set.bindings == [:Circuit, :Race, :Pit] && set.key == folder
+    Base.invokelatest(Models.set_models, plain, folder)                 # the merged model registers
+    @test Models.connection_key(Base.invokelatest(getfield, plain, :Pit)) == folder
+
+    # The reload replaces the set: a model the edit removed leaves it.
+    write(file, """
+    module dms_two_lines
+    import PormG.Models
+    Circuit = Models.Model("dms_two_circuit", circuitid = Models.IDField())
+    Models.@models Circuit
+    end
+    """)
+    loaded = imported
+    @test PormG.Utils.reload_module_contents!(loaded, file)
+    @test Base.invokelatest(Models._model_set, loaded).bindings == [:Circuit]
+    write(file, two_lines)
+    @test PormG.Utils.reload_module_contents!(loaded, file)
+    @test Base.invokelatest(Models._model_set, loaded).bindings == [:Circuit, :Race]
+
+    # A reload whose first line fails (it names a model whose definition has a typo) keeps the old set
+    # and merges the later line into it, rather than the later line replacing it with `Race` alone.
+    write(file, """
+    module dms_two_lines
+    import PormG.Models
+    Circuit = Models.Model("dms_two_circuit", circuitid = Models.IDField())
+    Lap = Models.Model("dms_two_lap", lapid = Models.IDFeild())
+    Models.@models Circuit Lap
+    Race = Models.Model("dms_two_race", raceid = Models.IDField())
+    Models.@models Race
+    end
+    """)
+    @test_logs (:warn, r"reloaded models file failed") match_mode = :any (
+      @test PormG.Utils.reload_module_contents!(loaded, file))
+    @test Base.invokelatest(Models._model_set, loaded).bindings == [:Circuit, :Race]
+  finally
+    pop!(PormG.config, folder, nothing)
+  end
+  @test isempty(Models._RELOADING)
+end

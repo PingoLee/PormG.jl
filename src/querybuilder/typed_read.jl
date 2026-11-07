@@ -78,7 +78,7 @@ function _typed_projection!(q::SQLObjectHandler, ::Type{T}) where T
   end
   projected = String[]
   for v in obj.values
-    name = _projection_output_name(v)
+    name = _typed_output_name(v)
     name === nothing && continue            # build raises its own "Field requires an alias"
     name == "*" && throw(QueryBuildError(
       "A typed read cannot project values(\"*\"): it reads exactly the fields of $(T). Drop " *
@@ -97,6 +97,14 @@ function _typed_projection!(q::SQLObjectHandler, ::Type{T}) where T
     "values(...) or add the fields to $(T)."))
   return q
 end
+
+# A projection's output name, split by hand over the two concrete node types: `obj.values` holds the
+# abstract `Union{SQLTypeText,SQLTypeField}`, and the call on it was dynamic and returned `Any` (#1605;
+# round 1 of #1600, row 9).
+# `SQLField` and `SQLText` are the two node types a projection holds (the only subtypes in src/), so the
+# second arm asserts rather than dispatching again.
+_typed_output_name(@nospecialize(v::Union{SQLTypeText,SQLTypeField}))::Union{Nothing,String} =
+  v isa SQLField ? _projection_output_name(v) : _projection_output_name(v::SQLText)
 
 # The handler a typed read runs on: the caller's is never written to (#43, #199). With no `values()`
 # the projection is set to `fieldnames(T)`, on a shallow copy (#1624: the build writes nothing, so the
@@ -136,7 +144,10 @@ end
 # ROW BY ROW over typed columns, not column by column, on purpose: the first refusal is the same cell
 # step 1 reports (rows in order, fields in declaration order), so step 1's refusal tests stay the
 # oracle, and no column is copied into an intermediate vector.
-function _typed_rows(::Type{T}, result, parsers::Union{Nothing,Dict{Symbol,Function}}, site::_TypedReadSite)::Vector{T} where T
+_typed_rows(::Type{T}, result, parsers::Union{Nothing,Dict{Symbol,Function}}, site::_TypedReadSite) where T =
+  _typed_rows_decoded(T, result, _typed_parsers(T, parsers), site)
+
+function _typed_rows_decoded(::Type{T}, result, parsers::Tuple, site::_TypedReadSite)::Vector{T} where T
   columns = Tables.columntable(result)
   # An empty result can name no column at all (MySQL's materialized result when the driver reports no
   # schema), and its columns are never read.
@@ -144,7 +155,7 @@ function _typed_rows(::Type{T}, result, parsers::Union{Nothing,Dict{Symbol,Funct
   # The generated loop indexes every column `1:n`; step 1 zipped them. Every driver's column is 1-based
   # today, and a driver whose column is not fails here rather than reading the wrong cells.
   Base.require_one_based_indexing(values(columns)...)
-  return _typed_rows_from_columns(T, columns, _typed_parsers(T, parsers), site)
+  return _typed_rows_from_columns(T, columns, parsers, site)
 end
 
 # The parser of each field's column, in field order: `nothing` where none applies. A field's column is
@@ -156,6 +167,57 @@ _typed_parsers(::Type{T}, parsers::Dict{Symbol,Function}) where T =
 
 @inline _typed_parse(::Nothing, v) = v
 @inline _typed_parse(parser::F, v) where F = parser(v)
+
+# ── The row decoder (#1605, #1599 I5): the typed read end to end ────────────────────────────────────
+#
+# A typed read used to come back from `fetch` as the driver's result, typed `Any`, and was then decoded
+# by a call on that `Any` (`_typed_rows(T, result, …)`), with parsers kept as `Function`s in a `Dict`.
+# Under the JIT that is a function barrier; a trimmed build has no compiled target for either call (round
+# 1 of #1600, row 10). The decoder carries the decode down to where the result IS concrete: `fetch` hands
+# it to the backend (`backend_execute_rows`), the SQLite extension steps its statement straight into
+# `T`, and the other drivers decode their materialized result with it. What comes back is a
+# `Vector{T}`, asserted at the call site, and nothing on the way is `Any`.
+#
+# Concrete for a given `T`: one `ReadParser` per field (`NO_READ_PARSER` where none applies), in field
+# order, so a cell's parser is a static call.
+#
+# `failure` carries an error raised while BUILDING a row on SQLite's worker (a cell rule's refusal, a
+# parser's, or your struct's own constructor) back to `fetch`, which raises it as it was raised. Thrown
+# on the worker, it would come back wrapped as a driver `StatementError`, as a statement's own error
+# does; under the JIT the decode used to run after `fetch` returned, so its errors reached the caller
+# unwrapped, and that is kept.
+struct _RowDecoder{T,P<:Tuple{Vararg{ReadParser}}}
+  parsers::P
+  site::_TypedReadSite
+  failure::Base.RefValue{Union{Nothing,Exception}}
+end
+_RowDecoder{T}(parsers::P, site::_TypedReadSite) where {T,P<:Tuple{Vararg{ReadParser}}} =
+  _RowDecoder{T,P}(parsers, site, Base.RefValue{Union{Nothing,Exception}}(nothing))
+
+# The worker's half: record the error and stop (the extension returns the rows it has, unread).
+_decode_failed!(d::_RowDecoder, e::Exception) = (d.failure[] = e; nothing)
+# `fetch`'s half, outside its `try`: raise what the worker recorded, unwrapped.
+function decoded_on_worker(d::_RowDecoder{T}, result) where T
+  f = d.failure[]
+  f === nothing || throw(f)
+  return result::Vector{T}
+end
+
+# A materialized result (LibPQ, Postgres.jl, MySQL, or SQLite's rows when a backend has no stepping
+# decoder): the column and row walks above.
+(d::_RowDecoder{T})(result) where T = _typed_rows_decoded(T, result, d.parsers, d.site)::Vector{T}
+
+# Each field's parser, from the build's record of what each projection evaluates to (#564) — the
+# selection `_projection_parsers` makes, read through `read_parser` so it is concrete. A field's column
+# is keyed by the field's name (the projection is exactly `fieldnames(T)`).
+function _typed_read_parsers(::Type{T}, built::SQLInstruction, connection) where T
+  kinds = built.projection_kinds
+  return ntuple(Val(fieldcount(T))) do k
+    name = fieldname(T, k)
+    kind = Base.get(kinds, name, nothing)
+    kind === nothing ? NO_READ_PARSER : read_parser(kind, connection, name)   # #1110: a raise names it
+  end
+end
 
 # The function barrier: `columns` and `parsers` arrive concretely typed, so each column read, parser
 # call and cell rule below is static. GENERATED for `_typed_row`'s reason: one `_typed_value` call per
@@ -192,10 +254,8 @@ end
 # arguments and its row (about 3 allocations a row). Measured on 100 000 five-integer rows with no NULL:
 # 3 allocations and 3.5 ms, against 500 006 and 65 ms for step 1's Dict rows; on 10 000 rows mixing NULL
 # and values, about 29 500 allocations against step 1's ~5 a row.
-function _typed_rows(::Type{T}, result::AbstractVector{<:NamedTuple}, parsers::Union{Nothing,Dict{Symbol,Function}},
-                     site::_TypedReadSite)::Vector{T} where T
-  return _typed_rows_from_namedtuples(T, result, _typed_parsers(T, parsers), site)
-end
+_typed_rows_decoded(::Type{T}, result::AbstractVector{<:NamedTuple}, parsers::Tuple, site::_TypedReadSite) where T =
+  _typed_rows_from_namedtuples(T, result, parsers, site)
 
 function _typed_rows_from_namedtuples(::Type{T}, rows::AbstractVector{<:NamedTuple}, parsers::P,
                                       site::_TypedReadSite)::Vector{T} where {T,P<:Tuple}
@@ -391,10 +451,33 @@ end
 # The body both run, on a handler that is owned AND already carries `T`'s projection.
 Base.@constprop :aggressive function _typed_read_owned(q::SQLObjectHandler, ::Type{T}; show_query::Symbol = :execute) where T
   show_query !== :execute && return _show_select(q, show_query)
+  return _execute_select_rows(q, T)
+end
+
+# #1605: the typed read's execution. `_execute_select` with the decode handed to `fetch`, so the rows
+# come back as `Vector{T}` (asserted: a typeassert, not a dispatch) and no driver result crosses a call
+# typed `Any`.
+function _execute_select_rows(q::SQLObjectHandler, ::Type{T})::Vector{T} where T
+  settings, connection, conn_key = get_settings(q)
+  rendered = _render_select(q, connection=connection, show_query=:execute)
+  _refuse_lock_outside_transaction(q, rendered.instruction)
   # `op` names the read, not the terminal: `first(T)`, `get(T, …)` and the others run this same body.
-  result, built, connection = _execute_select(q)
-  return _typed_rows(T, result, _projection_parsers(built, connection),
-                     _TypedReadSite("a typed read into $(T)", q.object.model.name))
+  decoder = _RowDecoder{T}(_typed_read_parsers(T, rendered.instruction, connection),
+                           _TypedReadSite("a typed read into $(T)", q.object.model.name))
+  # On the pool `get_settings` resolved, which is what `fetch(settings, …)` delegates to: its type is the
+  # pool's, where the settings' is not concrete yet (#1622).
+  return _fetch_rows(connection, rendered.sql, rendered.instruction.parameters, decoder)::Vector{T}
+end
+
+# The statement's parameters, split by hand over the three collectors a build makes: the instruction's
+# slot is the abstract `AbstractPormGParam`, and a keyword call carrying it could not be resolved
+# statically (`juliac --trim`), so each branch calls `fetch` with a concrete one.
+function _fetch_rows(connection, sql::String, @nospecialize(params), decoder::_RowDecoder{T})::Vector{T} where T
+  params isa SQLiteParameterizedQuery && return fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
+  params isa PgParameterizedQuery && return fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
+  params isa MySQLParameterizedQuery && return fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
+  # A build makes one of the three collectors, or none at all.
+  return fetch(connection, sql; params = params::Nothing, _decode = decoder)::Vector{T}
 end
 
 """

@@ -110,6 +110,17 @@ const PINNED_NAMES = _NamePin[
   (name = "SQLite.register",                    status = :documented, reader = "_create_sqlite_connection"),
   (name = "SQLite.C.sqlite3_interrupt",         status = :internal,   reader = "PormG.backend_cancel_query!"),
   (name = "SQLite.C.sqlite3_libversion_number", status = :internal,   reader = "PormG.backend_sqlite_version"),
+  # #1605: the typed read steps the statement and reads each cell by its storage class, as SQLite.jl's
+  # own non-strict `getvalue` does (1.6.1 through 1.11 read them the same way).
+  (name = "SQLite.C.SQLITE_NULL",               status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.SQLITE_INTEGER",            status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.SQLITE_FLOAT",              status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.SQLITE_TEXT",               status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.sqlite3_column_type",       status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.sqlite3_column_int64",      status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.sqlite3_column_double",     status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.sqlitevalue",                 status = :internal,   reader = "_sqlite_cell (TEXT and BLOB)"),
+  (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into"),
   # MySQL.jl
   (name = "MySQL.Connection",                   status = :documented, reader = "PormG.backend_execute, _open_connection, _run, …"),
   (name = "MySQL.connection_id",                status = :documented, reader = "PormG.backend_cancel_query!"),
@@ -162,6 +173,7 @@ const PINNED_FIELDS = _FieldPin[
   # the floor (1.6.1) has none, which the extension checks with `hasfield`. The #1521 testset in
   # test_connection_pool_liveness.jl reads it whenever it exists, so a rename still fails there.
   (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
+  (type = SQLite.Query, fields = [:stmt], status = :internal, reader = "_sqlite_rows_into (#1605)"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
    reader = "PormG.backend_classify_error, backend_error_fields"),
   # MySQL.jl. `_ok_info` returns "" when the cursor has no `ok` field; the pin is what keeps that

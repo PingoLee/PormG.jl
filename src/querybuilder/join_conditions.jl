@@ -35,8 +35,23 @@ function _segment_field(q::SQLObject, model::PormGModel, seg::AbstractString, fi
   return get(model.fields, col, nothing)
 end
 
+# #1611 — a model named by its Julia binding in the models module, through the model graph's one
+# resolver (`Models._resolve_target_model`: the exact binding, no module scan). These sites used
+# `getfield(model._module, Symbol(name))` each; the model-graph work (#1601) replaces the resolver's lookup
+# with its registry, and they follow with no change. A name that binds no model raises `QueryBuildError`
+# (it used to be Julia's `UndefVarError`, or a non-model value that failed further on).
+_bound_model(model::PormGModel, name::AbstractString)::Union{Nothing,PormGModel} =
+  Models._resolve_target_model(String(name), model._module::Module)
+function _require_bound_model(model::PormGModel, name::AbstractString)::PormGModel
+  found = _bound_model(model, name)
+  found === nothing && throw(QueryBuildError(
+    "No model is bound as `$(name)` in the models module of $(model.name). A relation names its " *
+    "target model by its Julia binding, which is case-sensitive."))
+  return found
+end
+
 # The model a target slot names: a model, or a binding name in the model's module.
-_relation_target(model::PormGModel, to) = to isa PormGModel ? to : getfield(model._module, Symbol(String(to)))
+_relation_target(model::PormGModel, to) = to isa PormGModel ? to : _require_bound_model(model, String(to))
 
 # One relation hop: `(canonical segment, model reached, kind)`, or `nothing` when `seg` is not a relation
 # from `model` — a plain column, a JSON/array value lookup, an unknown name. The canonical segment is the
@@ -64,7 +79,7 @@ function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, fi
   haskey(model.related_objects, seg) || return nothing
   related = model.related_objects[seg]
   related isa Models.ManyToManyRelation &&
-    return (seg, getfield(model._module, Symbol(related.related_binding)), :many_to_many)
+    return (seg, _require_bound_model(model, related.related_binding), :many_to_many)
   return (seg, (related::Models.ReverseRelation).model_resolved, :reverse)
 end
 
@@ -1322,7 +1337,7 @@ function _cjoin(
       throw(QueryBuildError("Model '$(main_join.second)' not found in module. Please remember that model names are case-sensitive."))
       return nothing
     end
-    foreign_model = getfield(q.model._module, Symbol(main_join.second))
+    foreign_model = _require_bound_model(q.model, String(main_join.second))
     @pormg_debug false
     pk_field = Models.get_model_pk_field(foreign_model)
     if !isa(pk_field, Symbol)
@@ -1354,8 +1369,8 @@ function _cjoin(
       field_to = getproperty(field, :to)
       if field_to isa PormGModel
         foreign_model = field_to
-      elseif field_to isa String && isdefined(q.model._module, Symbol(field_to))
-        foreign_model = getfield(q.model._module, Symbol(field_to))
+      elseif field_to isa String && (bound = _bound_model(q.model, field_to)) !== nothing
+        foreign_model = bound
       end
     end
   end
@@ -1489,7 +1504,7 @@ function _cjoin_on(q::SQLObject, target_model::String, on::AbstractVector; alias
   if !isdefined(q.model._module, Symbol(target_model))
     throw(QueryBuildError("cjoin_on target model '$(target_model)' not found in module. Model names are case-sensitive."))
   end
-  return _cjoin_on(q, getfield(q.model._module, Symbol(target_model))::PormGModel, on; alias=alias, join_type=join_type)
+  return _cjoin_on(q, _require_bound_model(q.model, target_model), on; alias=alias, join_type=join_type)
 end
 
 function _cjoin_on(q::SQLObjectHandler, target::Union{String,PormGModel}; alias::String, on::AbstractVector, join_type::Union{String,Nothing}="INNER")

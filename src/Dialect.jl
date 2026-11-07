@@ -68,15 +68,111 @@ import PormG: ts_config_name, ts_config_prefix, ts_lookup_document_sql, ts_vecto
 import PormG: @pormg_debug
 
 
+# ── The options a function renderer reads (#1610, #1599 I4) ───────────────────────────────────────
+#
+# Every function renderer below takes `format`, the function's options. It used to be the
+# `Dict{String,Any}` the query builder resolves (`_render_function_body`), and each read was a lookup
+# by string key returning `Any`: a dynamic call at every use, on the render path of every query that
+# projects a function, and nothing a static compiler (`juliac --trim`) can follow. `FnOptions` is that
+# bag with one typed slot per key the renderers read, built once, at the boundary
+# (`QueryBuilder._function_sql`), from the resolved dict. A key no renderer reads (`as`, `rotation_of`,
+# `mixed_config`) is not carried.
+"""
+    FnOptions
+
+The options a `Dialect` function renderer reads, one typed slot per key. Build it from the query
+builder's resolved options with `FnOptions(::Dict{String,Any})`, or from pairs (`FnOptions("part" =>
+"YEAR")`); an absent key takes its default (`false`, `nothing`, `0` for `precision`, `"plain"` for
+`search_type`).
+"""
+struct FnOptions
+  distinct::Bool                                     # `Sum`/`Avg`/`Count(…; distinct = true)`
+  bigint::Bool                                       # #1147: a `Sum` over a `bigint`
+  integer::Bool                                      # #1130: a `Sum` over integers, kept an integer
+  boolean::Bool                                      # #953: `Max`/`Min` over a boolean
+  decimal_operand::Bool                              # #1130: `Round` over a known decimal
+  empty_fill::Bool                                   # #1130: `LPad`/`RPad` with an empty fill
+  propagate_null::Bool                               # `Concat` that propagates a NULL operand
+  cover_density::Bool                                # #31: `SearchRank(…; cover_density)`
+  integer_kind::Union{Nothing,CInt16,CInt32,CInt64}  # #1147, #1150: an integer operand's kind
+  temporal_kind::Union{Nothing,Symbol}               # #1130: a date function's operand kind
+  output_field::Union{Nothing,String}                # #603: the declared result type
+  precision::Union{Int,String}                       # `Round`'s places: `0`, or their rendered SQL
+  then::Union{Nothing,String}                        # `When`'s value, rendered
+  else_::Union{Nothing,String}                       # `Case`'s default, rendered (the key `else`)
+  type::Union{Nothing,String}                        # `Cast`'s target
+  part::Union{Nothing,String}                        # `Extract`'s part
+  format::Union{Nothing,String}                      # `ToChar`/`ExtractDate`'s format string
+  config::Union{Nothing,String}                      # #31: a text search config
+  combinator::Union{Nothing,String}                  # #1021: `||`, `&&`, `!!` between FTS operands
+  search_type::String                                # #31: `SearchQuery(…; search_type)`
+  weight::Union{Nothing,String}                      # #31: `SearchVector(…; weight)`
+  weights::Union{Nothing,Vector{Float64}}            # #31: `SearchRank(…; weights)`
+  normalization::Union{Nothing,Int}                  # #31: `SearchRank(…; normalization)`
+end
+
+# The typed read of each key. A node is a value a caller can build or edit by hand, and every renderer
+# refuses what it cannot render on its own (#696, #31), so a value of another type is refused here,
+# naming the option and never the value (#971), as the renderer would have refused it.
+@noinline _fo_type_refusal(k::String) = InvalidValueError(
+  "the function option `$(k)` holds a value of a type no renderer takes (#1610).", :type)
+_fo_bool(d::Dict{String,Any}, k::String)::Bool = Base.get(d, k, false) === true
+function _fo_string(d::Dict{String,Any}, k::String)::Union{Nothing,String}
+  v = Base.get(d, k, nothing)
+  v === nothing && return nothing
+  v isa AbstractString || throw(_fo_type_refusal(k))
+  return String(v)
+end
+function _fo_precision(d::Dict{String,Any})::Union{Int,String}
+  v = Base.get(d, "precision", 0)
+  v isa Integer && return Int(v)
+  v isa AbstractString || throw(_fo_type_refusal("precision"))
+  return String(v)
+end
+function _fo_normalization(d::Dict{String,Any})::Union{Nothing,Int}
+  v = Base.get(d, "normalization", nothing)
+  v === nothing && return nothing
+  # #31: the refusal `SEARCH_RANK` raises for a value outside the bitmask, for a non-integer too.
+  v isa Integer || throw(InvalidValueError(   # `true` passes, as SEARCH_RANK took it (`, 1`)
+    "normalization is an integer bitmask from 0 to 63 (#31).", :range))
+  return Int(v)
+end
+# #31: the weights go through the one validation `SearchRank` applies when it is built.
+_fo_weights(d::Dict{String,Any})::Union{Nothing,Vector{Float64}} = ts_rank_weights(Base.get(d, "weights", nothing))
+function _fo_kind(d::Dict{String,Any}, k::String, ::Type{T}) where T
+  v = Base.get(d, k, nothing)
+  v isa T || throw(_fo_type_refusal(k))
+  return v
+end
+
+function FnOptions(d::Dict{String,Any})
+  return FnOptions(
+    _fo_bool(d, "distinct"), _fo_bool(d, "bigint"), _fo_bool(d, "integer"), _fo_bool(d, "boolean"),
+    _fo_bool(d, "decimal_operand"), _fo_bool(d, "empty_fill"), _fo_bool(d, "propagate_null"),
+    _fo_bool(d, "cover_density"),
+    _fo_kind(d, "integer_kind", Union{Nothing,CInt16,CInt32,CInt64}),
+    _fo_kind(d, "temporal_kind", Union{Nothing,Symbol}),
+    _fo_string(d, "output_field"), _fo_precision(d), _fo_string(d, "then"), _fo_string(d, "else"),
+    _fo_string(d, "type"), _fo_string(d, "part"), _fo_string(d, "format"), _fo_string(d, "config"),
+    _fo_string(d, "combinator"), something(_fo_string(d, "search_type"), "plain"),
+    _fo_string(d, "weight"), _fo_weights(d),
+    _fo_normalization(d))
+end
+FnOptions(kv::Pair{String}...) = FnOptions(Dict{String,Any}(kv...))
+
+# A key the renderer needs: the builder always sets it, so its absence is a defect.
+_fo_need(::Nothing, key::String) = throw(KeyError(key))
+_fo_need(v::String, ::String) = v
+
 # Date Part Wrappers
-function YEAR(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
-  return EXTRACT(column, Dict{String,Any}("part" => "YEAR"), conn)
+function YEAR(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+  return EXTRACT(column, FnOptions("part" => "YEAR"), conn)
 end
-function MONTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
-  return EXTRACT(column, Dict{String,Any}("part" => "MONTH"), conn)
+function MONTH(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+  return EXTRACT(column, FnOptions("part" => "MONTH"), conn)
 end
-function DAY(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
-  return EXTRACT(column, Dict{String,Any}("part" => "DAY"), conn)
+function DAY(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+  return EXTRACT(column, FnOptions("part" => "DAY"), conn)
 end
 # #562 — `@date` is the one transform whose two resolution ladders did not merely differ in
 # spelling: one of them was wrong. `CAST(col AS DATE)` applies NUMERIC affinity on SQLite, because
@@ -89,17 +185,17 @@ end
 # `strftime`, which is what the string ladder already emitted and what `format_date_sql` parses back
 # — so both engines now read back a `Date`, which is also Django's `__date` contract (`TruncDate`
 # returns a `datetime.date`, not text).
-function DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return CAST(column, Dict{String,Any}("type" => "date"), conn)
+function DATE(column::String, format::FnOptions, conn::PormGPostgres)
+  return CAST(column, FnOptions("type" => "date"), conn)
 end
-function DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function DATE(column::String, format::FnOptions, conn::PormGSQLite)
   return "strftime('%Y-%m-%d', $(column))"
 end
 # MySQL (#1130 phase 2c-3a): `DATE` is a type there, as on PostgreSQL.
-DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+DATE(column::String, format::FnOptions, conn::PormGMySQL) =
   (_refuse_mysql_date_part(format, "@date"); "CAST($(column) AS DATE)")
-function Y_M(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
-  return EXTRACT_DATE(column, Dict{String,Any}("format" => "YYYY-MM"), conn)
+function Y_M(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+  return EXTRACT_DATE(column, FnOptions("format" => "YYYY-MM"), conn)
 end
 # #571 — the PostgreSQL date-part arms cast to `integer`. `EXTRACT(...)` is `numeric` on
 # PostgreSQL ≥ 14 (it was `double precision` before), which LibPQ delivers as a `Decimal`, while
@@ -107,23 +203,23 @@ end
 # two Julia types per engine — the one divergence inside the `Dialect` ladder that #562's collapse
 # could not fix. `::integer` rather than `::bigint` on purpose: it is what a PostgreSQL `IntegerField`
 # already reads back as, and it matches Django's `Extract.output_field = IntegerField()`.
-function QUARTER(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function QUARTER(column::String, format::FnOptions, conn::PormGPostgres)
   return "EXTRACT(QUARTER FROM $(column))::integer"
 end
-function QUARTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function QUARTER(column::String, format::FnOptions, conn::PormGSQLite)
   return "((strftime('%m', $(column)) - 1) / 3) + 1"
 end
-function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function QUADRIMESTER(column::String, format::FnOptions, conn::PormGPostgres)
   # `numeric / 4.0` is `numeric` and `CEIL(numeric)` is `numeric` — the cast goes outside CEIL.
   return "CEIL(EXTRACT(MONTH FROM $(column)) / 4.0)::integer"
 end
-function QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function QUADRIMESTER(column::String, format::FnOptions, conn::PormGSQLite)
   return "((strftime('%m', $(column)) - 1) / 4) + 1"
 end
 # MySQL (#1130 phase 2c-3a): its own `QUARTER`, and the quadrimester from `MONTH`, each an INT.
-QUARTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+QUARTER(column::String, format::FnOptions, conn::PormGMySQL) =
   (_refuse_mysql_date_part(format, "@quarter"); "QUARTER($(column))")
-QUADRIMESTER(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+QUADRIMESTER(column::String, format::FnOptions, conn::PormGMySQL) =
   (_refuse_mysql_date_part(format, "@quadrimester"); "(((MONTH($(column)) - 1) DIV 4) + 1)")
 
 # #527 — the SQL-side image of `DATETIME_FORMAT` (#79, `constants.jl`), for SQLite.
@@ -679,8 +775,8 @@ end
 # PostgreSQL: a key renders its `postgres` template; anything else is passed through as a native
 # `to_char` template (the documented PostgreSQL-only escape for patterns the map does not carry),
 # with the quote escaped so the format can never close the SQL literal it is written into.
-function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  format_str = format["format"]
+function EXTRACT_DATE(column::String, format::FnOptions, conn::PormGPostgres)
+  format_str = _fo_need(format.format, "format")
   entry = get(date_format_map, format_str, nothing)
   template = entry === nothing ? replace(format_str, "'" => "''") : entry.postgres
   return "to_char($(column), '$(template)')"
@@ -688,8 +784,8 @@ end
 # SQLite: only a key renders — `strftime` has no way to spell an arbitrary `to_char` template, so
 # an unknown format is a capability the backend lacks, named with the formats it does have. Before
 # #569 this was a bare `KeyError` from the map lookup, outside the #231 taxonomy.
-function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  format_str = format["format"]
+function EXTRACT_DATE(column::String, format::FnOptions, conn::PormGSQLite)
+  format_str = _fo_need(format.format, "format")
   entry = get(date_format_map, format_str, nothing)
   entry === nothing && throw(_tochar_format_refusal("SQLite", format_str))
   return "strftime('$(entry.sqlite)', $(column))"
@@ -708,9 +804,9 @@ end
 # count of microseconds on MySQL, which `DATE_FORMAT` would read as no date at all: refused, naming
 # `Cast(x, "text")`, which reads its `HH:MM:SS` text (phase 2b). Since #1416 the build refuses `ToChar`
 # over a duration on every engine first; this is its backstop.
-function EXTRACT_DATE(column::String, format::Dict{String,Any}, conn::PormGMySQL)
-  format_str = format["format"]
-  get(format, "temporal_kind", nothing) === :interval && throw(QueryBuildError(
+function EXTRACT_DATE(column::String, format::FnOptions, conn::PormGMySQL)
+  format_str = _fo_need(format.format, "format")
+  format.temporal_kind === :interval && throw(QueryBuildError(
     "ToChar over an interval is not supported on MySQL, which stores a duration as its microseconds: " *
     "use Cast(x, \"text\") for its HH:MM:SS text."))
   entry = get(date_format_map, format_str, nothing)
@@ -725,45 +821,45 @@ end
 # #1147 step 2 — `bigint` (set by the build from `_sums_bigint`): PostgreSQL's `sum(bigint)` is a
 # `numeric`, where the sum of an integer means an integer (Django's `Sum` of an integer field, and
 # SQLite's sum), so it is cast back. A sum past the `bigint` range then raises, as SQLite's does.
-function SUM(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  sql = get(format, "distinct", false) ? "SUM(DISTINCT $(column))" : "SUM($(column))"
-  return get(format, "bigint", false) === true ? "$(sql)::bigint" : sql
+function SUM(column::String, format::FnOptions, conn::PormGPostgres)
+  sql = format.distinct ? "SUM(DISTINCT $(column))" : "SUM($(column))"
+  return format.bigint ? "$(sql)::bigint" : sql
 end
 
-function SUM(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  if get(format, "distinct", false)
+function SUM(column::String, format::FnOptions, conn::PormGSQLite)
+  if format.distinct
     return "SUM(DISTINCT $(column))"
   else
     return "SUM($(column))"
   end
 end
 
-function AVG(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  if get(format, "distinct", false)
+function AVG(column::String, format::FnOptions, conn::PormGPostgres)
+  if format.distinct
     return "AVG(DISTINCT $(column))"
   else
     return "AVG($(column))"
   end
 end
 
-function AVG(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  if get(format, "distinct", false)
+function AVG(column::String, format::FnOptions, conn::PormGSQLite)
+  if format.distinct
     return "AVG(DISTINCT $(column))"
   else
     return "AVG($(column))"
   end
 end
 
-function COUNT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  if get(format, "distinct", false)
+function COUNT(column::String, format::FnOptions, conn::PormGPostgres)
+  if format.distinct
     return "COUNT(DISTINCT $(column))"
   else
     return "COUNT($(column))"
   end
 end
 
-function COUNT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  if get(format, "distinct", false)
+function COUNT(column::String, format::FnOptions, conn::PormGSQLite)
+  if format.distinct
     return "COUNT(DISTINCT $(column))"
   else
     return "COUNT($(column))"
@@ -771,21 +867,21 @@ function COUNT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
 end
 
 # #953: PostgreSQL has no `max(boolean)`/`min(boolean)`; its boolean extrema are `bool_or` ("any
-# true") and `bool_and` ("all true"). `format["boolean"]` is set by the builder when the operand is a
+# true") and `bool_and` ("all true"). `format.boolean` is set by the builder when the operand is a
 # boolean. SQLite stores a boolean as 0/1, so its `MAX`/`MIN` already give the same answer and stay.
-function MAX(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return get(format, "boolean", false) === true ? "BOOL_OR($(column))" : "MAX($(column))"
+function MAX(column::String, format::FnOptions, conn::PormGPostgres)
+  return format.boolean ? "BOOL_OR($(column))" : "MAX($(column))"
 end
 
-function MAX(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function MAX(column::String, format::FnOptions, conn::PormGSQLite)
   return "MAX($(column))"
 end
 
-function MIN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return get(format, "boolean", false) === true ? "BOOL_AND($(column))" : "MIN($(column))"
+function MIN(column::String, format::FnOptions, conn::PormGPostgres)
+  return format.boolean ? "BOOL_AND($(column))" : "MIN($(column))"
 end
 
-function MIN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function MIN(column::String, format::FnOptions, conn::PormGSQLite)
   return "MIN($(column))"
 end
 
@@ -797,16 +893,16 @@ end
 # or a decimal is a DECIMAL too, which the read parser turns into the float or decimal it means
 # (#1121). A boolean is a `TINYINT(1)`, so `MAX`/`MIN` give "any true" / "all true" as they are.
 # `COUNT` is a `BIGINT`.
-function SUM(column::String, format::Dict{String,Any}, conn::PormGMySQL)
-  sql = get(format, "distinct", false) ? "SUM(DISTINCT $(column))" : "SUM($(column))"
-  return get(format, "integer", false) === true ? "($(sql) DIV 1)" : sql
+function SUM(column::String, format::FnOptions, conn::PormGMySQL)
+  sql = format.distinct ? "SUM(DISTINCT $(column))" : "SUM($(column))"
+  return format.integer ? "($(sql) DIV 1)" : sql
 end
-AVG(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  get(format, "distinct", false) ? "AVG(DISTINCT $(column))" : "AVG($(column))"
-COUNT(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  get(format, "distinct", false) ? "COUNT(DISTINCT $(column))" : "COUNT($(column))"
-MAX(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "MAX($(column))"
-MIN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "MIN($(column))"
+AVG(column::String, format::FnOptions, conn::PormGMySQL) =
+  format.distinct ? "AVG(DISTINCT $(column))" : "AVG($(column))"
+COUNT(column::String, format::FnOptions, conn::PormGMySQL) =
+  format.distinct ? "COUNT(DISTINCT $(column))" : "COUNT($(column))"
+MAX(column::String, format::FnOptions, conn::PormGMySQL) = "MAX($(column))"
+MIN(column::String, format::FnOptions, conn::PormGMySQL) = "MIN($(column))"
 
 # SQLite has window functions from 3.25.0: a version row of the capability table (#1163), checked
 # against the library PormG loads (or the `server_version` an offline key states, #1452), and refused
@@ -1203,21 +1299,21 @@ end
 # multi-line text is pinned (`END)::type`). An integer declaration an engine's own cast does not apply the
 # range of (#1405) never reaches these: the build renders the function undeclared and wraps it in
 # `integer_cast_guard_sql`, as for `Cast`.
-function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGPostgres)
-  output_field = get(format, "output_field", nothing)
+function _output_field_cast(sql::AbstractString, format::FnOptions, conn::PormGPostgres)
+  output_field = format.output_field
   (isnothing(output_field) || output_field == "") && return sql
   return "($sql)::$(cast_type_sql(output_field, conn; context = "output_field"))"
 end
-function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGSQLite)
-  output_field = get(format, "output_field", nothing)
+function _output_field_cast(sql::AbstractString, format::FnOptions, conn::PormGSQLite)
+  output_field = format.output_field
   (isnothing(output_field) || output_field == "") && return sql
   return sqlite_cast_sql(sql, output_field, conn; context = "output_field")
 end
 # MySQL (#1130 phase 2c): `CAST(… AS T)` to the target `cast_type_sql` maps the name to. A declaration
 # with no faithful target there (a boolean, an interval) is decided before this renders, by the build
 # (`_mysql_declared_output` in querybuilder/select_nodes.jl), which hands it a format without one.
-function _output_field_cast(sql::AbstractString, format::Dict{String,Any}, conn::PormGMySQL)
-  output_field = get(format, "output_field", nothing)
+function _output_field_cast(sql::AbstractString, format::FnOptions, conn::PormGMySQL)
+  output_field = format.output_field
   (isnothing(output_field) || output_field == "") && return sql
   return "CAST($(sql) AS $(cast_type_sql(output_field, conn; context = "output_field")))"
 end
@@ -1363,16 +1459,16 @@ function window_frame_sql(frame::AbstractString; context::AbstractString = "fram
   return "$(mode) $(body)$(exclusion)"
 end
 
-function CAST(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  return """($column)::$(cast_type_sql(format["type"], conn))"""
+function CAST(column::String, format::FnOptions, conn::PormGPostgres)
+  return """($column)::$(cast_type_sql(_fo_need(format.type, "type"), conn))"""
 end
-function CAST(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  return sqlite_cast_sql(column, format["type"], conn)
+function CAST(column::String, format::FnOptions, conn::PormGSQLite)
+  return sqlite_cast_sql(column, _fo_need(format.type, "type"), conn)
 end
 # MySQL: the target `cast_type_sql` maps the name to (#1130 phase 2b). A meaning departure
 # (`_MEANING_DEPARTURES`) refuses the cast before this renders.
-CAST(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
-  "CAST($(column) AS $(cast_type_sql(format["type"], conn)))"
+CAST(column::String, format::FnOptions, conn::PormGMySQL) =
+  "CAST($(column) AS $(cast_type_sql(_fo_need(format.type, "type"), conn)))"
 # #1006: the public `Concat` skips a NULL operand on both engines, as Django's `ConcatPair` does
 # (it coalesces every operand to `''`). PostgreSQL's `CONCAT` already skips one; SQLite has no
 # `CONCAT` before 3.44 and its `||` propagates NULL, so each operand is wrapped in `COALESCE(…, '')`.
@@ -1381,12 +1477,12 @@ CAST(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
 # while a NULL row reads `''`, a column of mixed types where PostgreSQL's `CONCAT(7)` reads `'7'`.
 # #997: `propagate_null` is the opposite contract, set only by the `@yyyy_q` / `@yyyy_quad` labels
 # (`Y_Q` / `Y_QUAD`): a NULL date gives a NULL label, so both engines render a bare `||`.
-function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGPostgres)
-  get(format, "propagate_null", false) === true && return "($(join(column, " ||\n")))"
+function CONCAT(column::Array{Any,1}, format::FnOptions, conn::PormGPostgres)
+  format.propagate_null && return "($(join(column, " ||\n")))"
   return "CONCAT($(join(column, ",\n")))"
 end
-function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGSQLite)
-  get(format, "propagate_null", false) === true && return "($(join(column, " ||\n")))"
+function CONCAT(column::Array{Any,1}, format::FnOptions, conn::PormGSQLite)
+  format.propagate_null && return "($(join(column, " ||\n")))"
   parts = String["COALESCE($(c), '')" for c in column]
   length(parts) == 1 && push!(parts, "''")
   return "($(join(parts, " ||\n")))"
@@ -1396,8 +1492,8 @@ end
 # for a single operand too (measured: `CONCAT_WS('', 'a', NULL, 'b')` is `'ab'`, `CONCAT_WS('', NULL)`
 # is `''`, `CONCAT_WS('', 7)` is `'7'`). Under `propagate_null` MySQL's own `CONCAT` gives the NULL a
 # NULL operand means (`CONCAT('a', NULL)` is NULL), as `||` does on the other engines.
-function CONCAT(column::Array{Any,1}, format::Dict{String,Any}, conn::PormGMySQL)
-  get(format, "propagate_null", false) === true && return "CONCAT($(join(column, ",\n")))"
+function CONCAT(column::Array{Any,1}, format::FnOptions, conn::PormGMySQL)
+  format.propagate_null && return "CONCAT($(join(column, ",\n")))"
   return "CONCAT_WS('',\n$(join(column, ",\n")))"
 end
 # #691 — the `EXTRACT` field list, PostgreSQL's (the superset: SQLite's eight are all in it).
@@ -1436,10 +1532,10 @@ end
 # `extract` is a `numeric` from PostgreSQL 14, where the cast changes nothing, and a `double precision`
 # below it.
 const _PG_EXTRACT_FRACTIONAL = ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
-function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function EXTRACT(column::String, format::FnOptions, conn::PormGPostgres)
   # #691 — the rendered field is the table's spelling, so no caller text reaches the SQL. The
   # 3-arg `Extract(x, part, format)` raw cast suffix is gone too: `Cast(Extract(x, part), type)`.
-  up = extract_part(format["part"])
+  up = extract_part(_fo_need(format.part, "part"))
   bare = "EXTRACT($(up) FROM $(column))"
   up in _PG_EXTRACT_FRACTIONAL && return "$(bare)::numeric"
   # `numeric::integer` ROUNDS (45.6 → 46) where SQLite's `%S` truncates; `trunc` keeps parity.
@@ -1447,8 +1543,8 @@ function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   # See the note above `QUARTER` for why `::integer` and not `::bigint`.
   return "$(bare)::integer"
 end
-function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  part = format["part"]
+function EXTRACT(column::String, format::FnOptions, conn::PormGSQLite)
+  part = _fo_need(format.part, "part")
   # #684 — case-blind like PostgreSQL, ASCII-only fold; #691 — through the shared table, so a part
   # that is no field at all raises `InvalidValueError` here exactly as on PostgreSQL, and only a
   # real field SQLite cannot spell reaches the capability error below.
@@ -1512,10 +1608,10 @@ const _MYSQL_CALENDAR_PARTS = ("YEAR", "MONTH", "DAY", "QUARTER", "DOW", "ISODOW
 # #1388: every calendar part, the ones MySQL has no spelling for included, so a duration meets the same
 # refusal whichever part it is; the build check (`_check_temporal_expression`) reads the same rows.
 const _MYSQL_DURATION_CALENDAR_PARTS = (_MYSQL_CALENDAR_PARTS..., "CENTURY", "DECADE", "MILLENNIUM", "JULIAN")
-function EXTRACT(column::String, format::Dict{String,Any}, conn::PormGMySQL)
-  part = format["part"]
+function EXTRACT(column::String, format::FnOptions, conn::PormGMySQL)
+  part = _fo_need(format.part, "part")
   up = extract_part(part)
-  kind = get(format, "temporal_kind", nothing)
+  kind = format.temporal_kind
   kind === :time && up in _MYSQL_CALENDAR_PARTS && throw(_mysql_date_of_time_refusal("Extract(…, \"$(part)\")"))
   kind === :interval && up in _MYSQL_DURATION_CALENDAR_PARTS && throw(_duration_calendar_refusal("Extract(…, \"$(part)\")"))
   kind === :interval && up != "EPOCH" && throw(_mysql_part_of_interval_refusal("Extract(…, \"$(part)\")"))
@@ -1532,8 +1628,8 @@ end
 # A date read from a TIME, which MySQL answers from today's date (see above).
 _mysql_date_of_time_refusal(label::String) = QueryBuildError(
   "$(label) over a time is not supported on MySQL, which reads a time's date as today's: a time has no date.")
-_refuse_date_of_time(format::Dict{String,Any}, label::String) =
-  get(format, "temporal_kind", nothing) === :time && throw(_mysql_date_of_time_refusal(label))
+_refuse_date_of_time(format::FnOptions, label::String) =
+  format.temporal_kind === :time && throw(_mysql_date_of_time_refusal(label))
 # #1324 — a clock part of a duration EXPRESSION (a timestamp difference, interval arithmetic, a `Sum`
 # of a duration), which MySQL holds as its count of microseconds: `EXTRACT(HOUR FROM <a BIGINT>)` reads
 # the count as a time, a NULL or a value with no meaning. Only `EPOCH` reads the count (its seconds).
@@ -1551,9 +1647,9 @@ _duration_calendar_refusal(label::String) = QueryBuildError(
   "$(label) over a duration is not supported: a duration has no calendar date on any engine, so the " *
   "part has no meaning over one (#1388).")
 # The four nodes MySQL renders from a date part, all calendar parts.
-function _refuse_mysql_date_part(format::Dict{String,Any}, label::String)
+function _refuse_mysql_date_part(format::FnOptions, label::String)
   _refuse_date_of_time(format, label)
-  get(format, "temporal_kind", nothing) === :interval && throw(_duration_calendar_refusal(label))
+  format.temporal_kind === :interval && throw(_duration_calendar_refusal(label))
   return nothing
 end
 
@@ -1580,27 +1676,27 @@ end
 
 # #636 — `@week_day`, Django's numbering: 1 = Sunday … 7 = Saturday. Neither engine has it as a
 # field; both have the 0-based Sunday-first day (`DOW` / `%w`), so this is that plus one.
-function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function WEEK_DAY(column::String, format::FnOptions, conn::PormGPostgres)
   return "(EXTRACT(DOW FROM $(column))::integer + 1)"
 end
-function WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function WEEK_DAY(column::String, format::FnOptions, conn::PormGSQLite)
   return "(CAST(strftime('%w', $(column)) AS INTEGER) + 1)"
 end
 # MySQL's `DAYOFWEEK` is already Django's numbering, 1 = Sunday.
-WEEK_DAY(column::String, format::Dict{String,Any}, conn::PormGMySQL) =
+WEEK_DAY(column::String, format::FnOptions, conn::PormGMySQL) =
   (_refuse_mysql_date_part(format, "@week_day"); "DAYOFWEEK($(column))")
-function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  output_field = get(format, "output_field", nothing)
+function CASE(column::Vector{Any}, format::FnOptions, conn::PormGPostgres)
+  output_field = format.output_field
   if !isnothing(output_field) && output_field != ""
     return """(CASE
     $(join(column, "\n"))
-    ELSE $(format["else"])
+    ELSE $(_fo_need(format.else_, "else"))
     END)::$(cast_type_sql(output_field, conn; context = "output_field"))
     """
   else
     return """CASE
     $(join(column, "\n"))
-    ELSE $(format["else"])
+    ELSE $(_fo_need(format.else_, "else"))
     END
     """
   end
@@ -1608,16 +1704,16 @@ end
 # A single bare `When` reaches these two arms. They ignored `output_field` until #822, so
 # `Case(When(…); output_field = DateField())` rendered no cast on either engine while the vector form
 # cast on both — and the read path, which takes the declared type at its word, disagreed with the SQL.
-function CASE(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
-  return _output_field_cast("""CASE $(column) ELSE $(format["else"]) END""", format, conn)
+function CASE(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+  return _output_field_cast("""CASE $(column) ELSE $(_fo_need(format.else_, "else")) END""", format, conn)
 end
-function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function CASE(column::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   resp::String = """CASE
     $(join(column, "\n"))
-    ELSE $(format["else"])
+    ELSE $(_fo_need(format.else_, "else"))
     END
     """
-  output_field = get(format, "output_field", nothing)
+  output_field = format.output_field
   if !isnothing(output_field) && output_field != ""
     return sqlite_cast_sql(resp, output_field, conn; context = "output_field")
   else
@@ -1625,23 +1721,23 @@ function CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
   end
 end
 # MySQL (#1130 phase 2c): SQLite's body, cast through `_output_field_cast` (`CAST(… AS T)`).
-CASE(column::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) =
+CASE(column::Vector{Any}, format::FnOptions, conn::PormGMySQL) =
   _output_field_cast("""CASE
     $(join(column, "\n"))
-    ELSE $(format["else"])
+    ELSE $(_fo_need(format.else_, "else"))
     END
     """, format, conn)
 
-function WHEN(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
-  return "WHEN $(column) THEN $(format["then"])" |> string
+function WHEN(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+  return "WHEN $(column) THEN $(_fo_need(format.then, "then"))" |> string
 end
 
 # #852: each casts to its `output_field` on both engines — see `_output_field_cast`.
-function COALESCE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function COALESCE(columns::Vector{Any}, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return _output_field_cast("COALESCE($(join(columns, ", ")))", format, conn)
 end
 
-function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function GREATEST(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   return _output_field_cast("GREATEST($(join(columns, ", ")))", format, conn)
 end
 
@@ -1650,54 +1746,54 @@ end
 # COALESCE rotations (#844, `_null_skipping_operands` in querybuilder/select_nodes.jl), which is what
 # makes these two match PostgreSQL's. The rotations carry no `output_field`, so the #852 cast is
 # applied once, here, to the whole `MAX`/`MIN`.
-function GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function GREATEST(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return _output_field_cast("MAX($(join(columns, ", ")))", format, conn)
 end
 
-function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function LEAST(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   return _output_field_cast("LEAST($(join(columns, ", ")))", format, conn)
 end
 
-function LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function LEAST(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return _output_field_cast("MIN($(join(columns, ", ")))", format, conn)
 end
 
 # MySQL (#1130 phase 2c): its own `GREATEST`/`LEAST` (`MAX`/`MIN` are aggregates there), which return
 # NULL if any argument is NULL, as SQLite's do (measured on 8.4: `GREATEST(1, NULL, 3)` is NULL), so
 # the operands arrive as the same NULL-skipping COALESCE rotations (#844, `_greatest_skips_nulls`).
-GREATEST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) =
+GREATEST(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) =
   _output_field_cast("GREATEST($(join(columns, ", ")))", format, conn)
-LEAST(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) =
+LEAST(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) =
   _output_field_cast("LEAST($(join(columns, ", ")))", format, conn)
 
 # #1150 — `NullIf(a, b)` is `a` or NULL, so it has `a`'s type. PostgreSQL resolves it with `b` for the
 # `=` it is defined by, so over an integer `a` and a fraction `b` (`integer_kind`, set by the build)
 # it is a `numeric` there; PormG casts it back to `a`'s type, which is exact. SQLite returns `a` itself.
-function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function NULLIF(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   sql = "NULLIF($(columns[1]), $(columns[2]))"
-  kind = get(format, "integer_kind", nothing)
+  kind = format.integer_kind
   return kind === nothing ? sql : "($(sql))::$(_pg_integer_type(kind))"
 end
-function NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function NULLIF(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return "NULLIF($(columns[1]), $(columns[2]))"
 end
 # MySQL keeps `a`'s type whatever `b` is (measured on 8.4: `NULLIF(<BIGINT 5>, 4.5)` is the integer 5),
 # so `integer_kind` asks nothing of it, as on SQLite.
-NULLIF(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "NULLIF($(columns[1]), $(columns[2]))"
+NULLIF(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) = "NULLIF($(columns[1]), $(columns[2]))"
 
-function LOWER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function LOWER(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "LOWER($(column))"
 end
 
-function UPPER(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function UPPER(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "UPPER($(column))"
 end
 
-function LENGTH(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function LENGTH(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite})
   return "LENGTH($(column))"
 end
 # MySQL's `LENGTH` counts bytes (`Räikkönen` is 11); `CHAR_LENGTH` counts characters, as `Length` means.
-LENGTH(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CHAR_LENGTH($(column))"
+LENGTH(column::String, format::FnOptions, conn::PormGMySQL) = "CHAR_LENGTH($(column))"
 
 # #1147 — over an integer (`integer_kind`, set by the build from `_integer_operand_kind`) `Abs`, `Floor`
 # and `Ceil` keep it, as SQLite does: an integer `Floor("grid") / 2` divides as an integer on both
@@ -1709,11 +1805,11 @@ LENGTH(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CHAR_LENGT
 _pg_integer_type(::CInt16) = "smallint"
 _pg_integer_type(::CInt32) = "integer"
 _pg_integer_type(::CInt64) = "bigint"
-function ABS(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  get(format, "integer_kind", nothing) === nothing || return "ABS($(column))"
+function ABS(column::String, format::FnOptions, conn::PormGPostgres)
+  format.integer_kind === nothing || return "ABS($(column))"
   return "ABS(($(column))::numeric)"
 end
-function ABS(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function ABS(column::String, format::FnOptions, conn::PormGSQLite)
   return "ABS($(column))"
 end
 
@@ -1723,9 +1819,9 @@ end
 # `numeric`, exact for every `bigint`, and casts back to the operand's type, as `FLOOR`/`CEIL` do.
 # SQLite renders the integer itself: its `ROUND` goes through a double, so
 # `CAST(ROUND(9007199254740993) AS INTEGER)` is `9007199254740992`.
-function ROUND(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  kind = get(format, "integer_kind", nothing)
-  precision = get(format, "precision", 0)
+function ROUND(column::String, format::FnOptions, conn::PormGPostgres)
+  kind = format.integer_kind
+  precision = format.precision
   # #1196: over an integer the places add nothing and are not bound — except a negative precision,
   # which rounds to tens, hundreds, … and stays bound (#1167); the result is cast back either way.
   if kind !== nothing
@@ -1741,9 +1837,9 @@ function ROUND(column::String, format::Dict{String,Any}, conn::PormGPostgres)
   end
 end
 
-function ROUND(column::String, format::Dict{String,Any}, conn::PormGSQLite)
-  get(format, "integer_kind", nothing) === nothing || return "($(column))"
-  precision = get(format, "precision", 0)
+function ROUND(column::String, format::FnOptions, conn::PormGSQLite)
+  format.integer_kind === nothing || return "($(column))"
+  precision = format.precision
   if precision isa AbstractString || precision != 0
     return "ROUND($(column), $(precision))"
   else
@@ -1751,7 +1847,7 @@ function ROUND(column::String, format::Dict{String,Any}, conn::PormGSQLite)
   end
 end
 
-function REPLACE(columns::Vector{Any}, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function REPLACE(columns::Vector{Any}, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "REPLACE($(columns[1]), $(columns[2]), $(columns[3]))"
 end
 
@@ -1759,16 +1855,16 @@ end
 # (it will not narrow a `bigint` to choose a function), so it is cast — the `POWER` pattern. SQLite
 # has no `lpad` at all: `pormg_lpad`/`pormg_rpad` are registered on every connection by the SQLite
 # extension, with PostgreSQL's semantics.
-function LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function LPAD(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   return "LPAD($(columns[1]), ($(columns[2]))::integer, $(columns[3]))"
 end
-function LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function LPAD(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return "pormg_lpad($(columns[1]), $(columns[2]), $(columns[3]))"
 end
-function RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function RPAD(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   return "RPAD($(columns[1]), ($(columns[2]))::integer, $(columns[3]))"
 end
-function RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function RPAD(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return "pormg_rpad($(columns[1]), $(columns[2]), $(columns[3]))"
 end
 # MySQL (#1130 phase 2c-3b): its own `LPAD`/`RPAD`, which cut a longer string and repeat the fill by
@@ -1777,12 +1873,12 @@ end
 # (`empty_fill`), which renders that cut, `LEFT(x, n)`, with the fill's marker kept in its place
 # (`CONCAT` of the empty string) so the values bind in text order. A fill COLUMN empty on a row
 # still answers `''` there.
-function _mysql_pad(name::String, columns::Vector{Any}, format::Dict{String,Any})
-  get(format, "empty_fill", false) === true && return "CONCAT(LEFT($(columns[1]), $(columns[2])), $(columns[3]))"
+function _mysql_pad(name::String, columns::Vector{Any}, format::FnOptions)
+  format.empty_fill && return "CONCAT(LEFT($(columns[1]), $(columns[2])), $(columns[3]))"
   return "$(name)($(columns[1]), $(columns[2]), $(columns[3]))"
 end
-LPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = _mysql_pad("LPAD", columns, format)
-RPAD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = _mysql_pad("RPAD", columns, format)
+LPAD(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) = _mysql_pad("LPAD", columns, format)
+RPAD(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) = _mysql_pad("RPAD", columns, format)
 
 # #1332: `Substr`, as `SUBSTR(x, pos[, len])`. PostgreSQL has `substr(text, integer[, integer])` and no
 # `bigint` form, so the bound position and length are cast, as `LPAD`'s length is; `Substr` refuses
@@ -1794,68 +1890,68 @@ function SUBSTR(columns::Vector{Any}, conn::PormGPostgres)
 end
 SUBSTR(columns::Vector{Any}, conn::Union{PormGSQLite,PormGMySQL}) = "SUBSTR($(join(columns, ", ")))"
 
-function TRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function TRIM(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "TRIM($(column))"
 end
 
-function LTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function LTRIM(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "LTRIM($(column))"
 end
 
-function RTRIM(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
+function RTRIM(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite,PormGMySQL})
   return "RTRIM($(column))"
 end
 
-function FLOOR(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  kind = get(format, "integer_kind", nothing)
+function FLOOR(column::String, format::FnOptions, conn::PormGPostgres)
+  kind = format.integer_kind
   kind === nothing || return "FLOOR(($(column))::numeric)::$(_pg_integer_type(kind))"
   return "FLOOR(($(column))::numeric)"
 end
-function FLOOR(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function FLOOR(column::String, format::FnOptions, conn::PormGSQLite)
   return "FLOOR($(column))"
 end
 
-function CEIL(column::String, format::Dict{String,Any}, conn::PormGPostgres)
-  kind = get(format, "integer_kind", nothing)
+function CEIL(column::String, format::FnOptions, conn::PormGPostgres)
+  kind = format.integer_kind
   kind === nothing || return "CEIL(($(column))::numeric)::$(_pg_integer_type(kind))"
   return "CEIL(($(column))::numeric)"
 end
-function CEIL(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function CEIL(column::String, format::FnOptions, conn::PormGSQLite)
   return "CEIL($(column))"
 end
 
-function SQRT(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function SQRT(column::String, format::FnOptions, conn::PormGPostgres)
   return "SQRT(($(column))::numeric)"
 end
-function SQRT(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function SQRT(column::String, format::FnOptions, conn::PormGSQLite)
   return "SQRT($(column))"
 end
 
-function EXP(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function EXP(column::String, format::FnOptions, conn::PormGPostgres)
   return "EXP(($(column))::numeric)"
 end
-function EXP(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function EXP(column::String, format::FnOptions, conn::PormGSQLite)
   return "EXP($(column))"
 end
 
-function LN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function LN(column::String, format::FnOptions, conn::PormGPostgres)
   return "LN(($(column))::numeric)"
 end
-function LN(column::String, format::Dict{String,Any}, conn::PormGSQLite)
+function LN(column::String, format::FnOptions, conn::PormGSQLite)
   return "LN($(column))"
 end
 
-function POWER(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function POWER(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   return "POWER(($(columns[1]))::numeric, ($(columns[2]))::numeric)"
 end
-function POWER(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function POWER(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return "POWER($(columns[1]), $(columns[2]))"
 end
 
-function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function MOD(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   return "MOD(($(columns[1]))::numeric, ($(columns[2]))::numeric)"
 end
-function MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGSQLite)
+function MOD(columns::Vector{Any}, format::FnOptions, conn::PormGSQLite)
   return "MOD($(columns[1]), $(columns[2]))"
 end
 
@@ -1864,9 +1960,9 @@ end
 # no cast, only the `+ 0` that types an operand made of parameters (`_mysql_integer_operand`). `SQRT`/`EXP`/`LN`/`POWER` compute a DOUBLE whatever the operand, and `FLOOR`/`CEIL`
 # a `BIGINT` over a decimal; the read parser turns either into the decimal it means (#1121).
 # `SQRT(-1)`, `LN(0)` and `MOD(x, 0)` are NULL, as on SQLite; an overflowing `EXP`/`POWER` raises.
-ABS(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"
-FLOOR(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "FLOOR($(_mysql_integer_operand(column, format)))"
-CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(_mysql_integer_operand(column, format)))"
+ABS(column::String, format::FnOptions, conn::PormGMySQL) = "ABS($(_mysql_integer_operand(column, format)))"
+FLOOR(column::String, format::FnOptions, conn::PormGMySQL) = "FLOOR($(_mysql_integer_operand(column, format)))"
+CEIL(column::String, format::FnOptions, conn::PormGMySQL) = "CEIL($(_mysql_integer_operand(column, format)))"
 # MySQL types a value that comes from parameters by the function it stands in when it prepares the
 # statement, not by the values bound: over integers `ABS(?)`, `ABS(COALESCE(?, ?))`, `FLOOR(GREATEST(…))`
 # and `ABS(CASE WHEN `x` > ? THEN ? ELSE ? END)` are a DOUBLE and `ROUND(?)` a DECIMAL (measured on 8.4).
@@ -1874,27 +1970,27 @@ CEIL(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "CEIL($(_mysq
 # where `CAST(? AS SIGNED)` would wrap one past 2^63) and never changes its value; a bare column
 # reference is typed by its column and stays as it is.
 const _MYSQL_COLUMN_REFERENCE = r"^`[^`]+`(\.`[^`]+`)?$"
-_mysql_integer_operand(column::String, format::Dict{String,Any}) =
-  get(format, "integer_kind", nothing) === nothing || occursin(_MYSQL_COLUMN_REFERENCE, column) ? column : "($(column) + 0)"
-SQRT(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "SQRT($(column))"
-EXP(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "EXP($(column))"
-LN(column::String, format::Dict{String,Any}, conn::PormGMySQL) = "LN($(column))"
-POWER(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "POWER($(columns[1]), $(columns[2]))"
-MOD(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGMySQL) = "MOD($(columns[1]), $(columns[2]))"
+_mysql_integer_operand(column::String, format::FnOptions) =
+  format.integer_kind === nothing || occursin(_MYSQL_COLUMN_REFERENCE, column) ? column : "($(column) + 0)"
+SQRT(column::String, format::FnOptions, conn::PormGMySQL) = "SQRT($(column))"
+EXP(column::String, format::FnOptions, conn::PormGMySQL) = "EXP($(column))"
+LN(column::String, format::FnOptions, conn::PormGMySQL) = "LN($(column))"
+POWER(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) = "POWER($(columns[1]), $(columns[2]))"
+MOD(columns::Vector{Any}, format::FnOptions, conn::PormGMySQL) = "MOD($(columns[1]), $(columns[2]))"
 
 # `ROUND` on MySQL rounds a DECIMAL or an integer half away from zero, but a DOUBLE half to even
 # (`ROUND(2.5E0)` is 2, `ROUND(1.25E0, 1)` is 1.2), so anything the build does not know to be a decimal
 # or an integer (`decimal_operand`, `integer_kind`) is rounded as `DECIMAL(65,30)`: half away from
 # zero, as `Round` means and as PostgreSQL's `::numeric` rounds. The cast takes the double's shortest
 # digits (`2.675` → `2.68`), and clamps a value from 1e35 up to the largest it holds.
-function ROUND(column::String, format::Dict{String,Any}, conn::PormGMySQL)
-  precision = get(format, "precision", 0)
+function ROUND(column::String, format::FnOptions, conn::PormGMySQL)
+  precision = format.precision
   places = (precision isa AbstractString || precision != 0) ? ", $(precision)" : ""
-  exact = get(format, "integer_kind", nothing) !== nothing || get(format, "decimal_operand", false) === true
+  exact = format.integer_kind !== nothing || format.decimal_operand
   return exact ? "ROUND($(_mysql_integer_operand(column, format))$(places))" : "ROUND(CAST($(column) AS DECIMAL(65,30))$(places))"
 end
 
-function F(column::String, format::Dict{String,Any}, conn::Union{PormGPostgres,PormGSQLite})
+function F(column::String, format::FnOptions, conn::Union{PormGPostgres,PormGSQLite})
   # For simple field references, just return the column name
   # The actual processing is handled in QueryBuilder._get_select_query
   return column
@@ -3965,10 +4061,10 @@ end
 # empty array, so `"pit_laps__@len" => 0` could never match one, while `cardinality('{}')` is 0. A
 # NULL array is NULL under both — Django's `len` gives the same pair of answers (it wraps
 # `array_length` in a `COALESCE(…, 0)` guarded by an `IS NULL` test to get there).
-function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGPostgres)
+function ARRAY_LEN(column::String, format::FnOptions, conn::PormGPostgres)
   return "cardinality($(column))"
 end
-function ARRAY_LEN(column::String, format::Dict{String,Any}, conn::PormGBackend)
+function ARRAY_LEN(column::String, format::FnOptions, conn::PormGBackend)
   throw(_capability_error(conn, :arrays, "The @len transform (array cardinality)"))
 end
 
@@ -4225,21 +4321,21 @@ search(conn::PormGAbstractType, vector::AbstractString, query) =
 # `Models.search_vector_expression` writes an index on it from the same functions
 # (docs/src/read/full_text_search.md → Indexing). A sum of vectors (`v1 + v2`, #1021) holds the two
 # rendered vectors as its columns and concatenates them, each keeping its own config and weight.
-function SEARCH_VECTOR(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  if get(format, "combinator", nothing) !== nothing
-    format["combinator"] == "||" && length(columns) == 2 || throw(InvalidValueError(
+function SEARCH_VECTOR(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
+  if format.combinator !== nothing
+    format.combinator == "||" && length(columns) == 2 || throw(InvalidValueError(
       "A sum of SearchVectors concatenates two of them with ||; got a malformed node (#1021).", :format))
     return "($(columns[1]) || $(columns[2]))"
   end
-  return ts_weighted_sql(ts_vector_document_sql(columns, get(format, "config", nothing)), get(format, "weight", nothing))
+  return ts_weighted_sql(ts_vector_document_sql(columns, format.config), format.weight)
 end
-SEARCH_VECTOR(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
+SEARCH_VECTOR(column::String, format::FnOptions, conn::PormGPostgres) =
   SEARCH_VECTOR(Any[column], format, conn)
 
-function SEARCH_QUERY(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function SEARCH_QUERY(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   # #1021: `a & b`, `a | b`, `~a` — the operands are rendered queries, combined by `tsquery`'s own
   # operators. Parenthesized, so a nested combination keeps the grouping it was written with.
-  op = get(format, "combinator", nothing)
+  op = format.combinator
   if op !== nothing
     if op in ("&&", "||") && length(columns) == 2
       return "($(columns[1]) $(op) $(columns[2]))"
@@ -4249,12 +4345,12 @@ function SEARCH_QUERY(columns::Vector{Any}, format::Dict{String,Any}, conn::Porm
     throw(InvalidValueError("A combined SearchQuery is two queries under && or ||, or one under !!; " *
                             "got a malformed node (#1021).", :format))
   end
-  fn = get(_TS_QUERY_FUNCTIONS, get(format, "search_type", "plain"), nothing)
+  fn = get(_TS_QUERY_FUNCTIONS, format.search_type, nothing)
   fn === nothing && throw(InvalidValueError(
     "search_type is one of \"plain\", \"phrase\", \"websearch\" or \"raw\" (#31).", :format))
-  return "$(fn)($(ts_config_prefix(get(format, "config", nothing)))$(columns[1]))"
+  return "$(fn)($(ts_config_prefix(format.config))$(columns[1]))"
 end
-SEARCH_QUERY(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
+SEARCH_QUERY(column::String, format::FnOptions, conn::PormGPostgres) =
   SEARCH_QUERY(Any[column], format, conn)
 
 # `ts_rank` returns `real`, which LibPQ reads as a `Float32`; the cast makes it the `Float64` every
@@ -4262,13 +4358,13 @@ SEARCH_QUERY(column::String, format::Dict{String,Any}, conn::PormGPostgres) =
 # integer bitmask checked to 0..63, and an `Int` prints only digits. The weights (#1021) are printed
 # for the same reason, as a `float4[]` literal of four finite numbers in 0..1, re-checked here because
 # the node's kwargs are mutable; a `Float64` prints only digits, `.`, `e` and `-`.
-function SEARCH_RANK(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
-  fn = get(format, "cover_density", false) === true ? "ts_rank_cd" : "ts_rank"
-  n = get(format, "normalization", nothing)
+function SEARCH_RANK(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
+  fn = format.cover_density ? "ts_rank_cd" : "ts_rank"
+  n = format.normalization
   n === nothing || (n isa Integer && 0 <= n <= 63) || throw(InvalidValueError(
     "normalization is an integer bitmask from 0 to 63 (#31).", :range))
   tail = n === nothing ? "" : ", $(Int(n))"
-  w = ts_rank_weights(get(format, "weights", nothing))
+  w = ts_rank_weights(format.weights)
   head = w === nothing ? "" : "'{$(join(string.(w), ","))}'::float4[], "
   return "($(fn)($(head)$(columns[1]), $(columns[2])$(tail)))::double precision"
 end
@@ -4295,17 +4391,17 @@ end
 # `columns` is the document, the query and, when any option was given, the one bound options string.
 # The document is cast to text, as each `SEARCH_VECTOR` operand is: `ts_headline` takes only text, so a
 # number column or a rank would otherwise fail at the server rather than read as its text.
-function SEARCH_HEADLINE(columns::Vector{Any}, format::Dict{String,Any}, conn::PormGPostgres)
+function SEARCH_HEADLINE(columns::Vector{Any}, format::FnOptions, conn::PormGPostgres)
   args = Any["($(columns[1]))::text", columns[2:end]...]
-  return "ts_headline($(ts_config_prefix(get(format, "config", nothing)))$(join(args, ", ")))"
+  return "ts_headline($(ts_config_prefix(format.config))$(join(args, ", ")))"
 end
 
 # The build refuses all four on SQLite first (`_render_function_typed`); these are the backstop that
 # keeps a hand-built node from reaching the driver as a `MethodError`.
-SEARCH_VECTOR(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchVector"))
-SEARCH_QUERY(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchQuery"))
-SEARCH_RANK(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchRank"))
-SEARCH_HEADLINE(column, format::Dict{String,Any}, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchHeadline"))
+SEARCH_VECTOR(column, format::FnOptions, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchVector"))
+SEARCH_QUERY(column, format::FnOptions, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchQuery"))
+SEARCH_RANK(column, format::FnOptions, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchRank"))
+SEARCH_HEADLINE(column, format::FnOptions, conn::PormGAbstractType) = throw(fts_capability_error(conn, "SearchHeadline"))
 
 # #635: POSIX regular-expression lookups — PostgreSQL only. `~` is case-sensitive, `~*` folds case;
 # the pattern is the bound placeholder like every renderer here, and it is never LIKE-escaped or

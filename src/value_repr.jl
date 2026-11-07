@@ -320,6 +320,197 @@ end
 # where the value is typed but not the SAME type on every driver — Postgres.jl hands back a bare
 # `Period` for a one-component interval — an ARRAY (#28), and a computed number that means a float
 # while PostgreSQL computed a `numeric` (#1121).
+# #1605 / #1599 I5: the table is `_read_parser` below, one concrete `ReadParser` per (kind, backend),
+# and `value_parser` is derived from it, so the two cannot disagree. The typed read (`list(T)`) needs a
+# parser whose TYPE does not depend on the run-time kind: a `Dict{Symbol,Function}`, or a tuple of
+# distinct functions, is a dynamic call per cell, and a trimmed build (`juliac --trim`) has no compiled
+# target for one. It also needs the kind decided without a dispatch on an abstract `CanonicalType`,
+# which is round 3's row-14 shape (#1600). So each backend has ONE method, whose body walks the kinds
+# with `isa`. The backend stays a dispatch: it is concrete wherever the pool is (#1622).
+"""
+    ReadParser
+
+Slot 3 as a value: which parser undoes a column's stored representation (`code`), plus the declared
+width a decimal parser applies (`precision`, `scale`), the array kind an array parser normalizes to
+(`array`) and the projection a raising parser names (`label`). Concrete, so a row decoder holds one per
+field in a tuple of one type and calls each statically. `(p::ReadParser)(v)` applies it; the code
+`_RP_NONE` returns `v` unchanged.
+"""
+struct ReadParser
+  code::UInt8
+  precision::Int
+  scale::Int
+  array::Union{Nothing,CArray}
+  label::Union{Nothing,String}
+end
+const _RP_NONE                    = 0x00
+const _RP_PG_INTERVAL             = 0x01
+const _RP_PG_ARRAY                = 0x02
+const _RP_COMPUTED_FLOAT          = 0x03
+const _RP_SQLITE_TIMESTAMP        = 0x04
+const _RP_SQLITE_DATE             = 0x05
+const _RP_SQLITE_TIME             = 0x06
+const _RP_SQLITE_INTERVAL         = 0x07
+const _RP_SQLITE_BOOL             = 0x08
+const _RP_SQLITE_COMPUTED_DECIMAL = 0x09
+const _RP_SQLITE_DECIMAL          = 0x0a
+const _RP_MYSQL_INTERVAL          = 0x0b
+const _RP_MYSQL_UTC_DATETIME      = 0x0c
+const _RP_MYSQL_DATETIME          = 0x0d
+const _RP_MYSQL_TIME              = 0x0e
+const _RP_MYSQL_DECLARED_DECIMAL  = 0x0f
+
+ReadParser(code::UInt8) = ReadParser(code, 0, 0, nothing, nothing)
+const NO_READ_PARSER = ReadParser(_RP_NONE)
+_rp_label(::Nothing) = nothing
+_rp_label(label) = String(label)
+
+has_parser(p::ReadParser)::Bool = p.code !== _RP_NONE
+
+# Apply it. One branch per code, each a call to a named parser in `Dialect`, so the call is static for
+# any concrete `v`.
+function (p::ReadParser)(v)
+  c = p.code
+  c === _RP_NONE                    && return v
+  c === _RP_PG_INTERVAL             && return Dialect._parse_postgres_interval(v)
+  c === _RP_PG_ARRAY                && return Models.normalize_pg_array(v, (p.array::CArray).element)
+  c === _RP_COMPUTED_FLOAT          && return Dialect._parse_computed_float(v)
+  c === _RP_SQLITE_TIMESTAMP        && return Dialect._parse_sqlite_timestamp(v)
+  c === _RP_SQLITE_DATE             && return Dialect._parse_sqlite_date(v)
+  c === _RP_SQLITE_TIME             && return Dialect._parse_sqlite_time(v)
+  c === _RP_SQLITE_INTERVAL         && return Dialect._parse_sqlite_interval(v)
+  c === _RP_SQLITE_BOOL             && return Dialect._parse_sqlite_bool(v)
+  c === _RP_SQLITE_COMPUTED_DECIMAL && return Dialect._parse_sqlite_computed_decimal(v)
+  c === _RP_SQLITE_DECIMAL          && return Dialect._parse_sqlite_decimal(v, p.precision, p.scale, p.label)
+  c === _RP_MYSQL_INTERVAL          && return Dialect._parse_mysql_interval(v)
+  c === _RP_MYSQL_UTC_DATETIME      && return Dialect._parse_mysql_utc_datetime(v)
+  c === _RP_MYSQL_DATETIME          && return Dialect._parse_mysql_datetime(v)
+  c === _RP_MYSQL_TIME              && return Dialect._parse_mysql_time(v)
+  c === _RP_MYSQL_DECLARED_DECIMAL  && return Dialect._parse_mysql_declared_decimal(v, p.precision, p.scale, p.label)
+  return v
+end
+
+"""
+    read_parser(kind, backend, label = nothing) -> ReadParser
+
+The slot-3 table: the parser that undoes `backend`'s stored representation of `kind`, or
+`NO_READ_PARSER` where the backend delivers a typed value already. One method per backend.
+"""
+function read_parser end
+# `@nospecialize` on the kind: it arrives as the abstract `CanonicalType` (the build records it so), and
+# one compiled instance per backend is what lets a caller holding an abstract kind invoke it statically
+# instead of dispatching on the kind's run-time type, which a trimmed build cannot (round 3 of #1600).
+
+# PostgreSQL needs few: the drivers deliver typed values.
+function read_parser(@nospecialize(k::CanonicalType), ::PormGPostgres, label = nothing)::ReadParser
+  # #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
+  k isa CInterval && return ReadParser(_RP_PG_INTERVAL)
+  # #28, the same reason as INTERVAL and further apart: LibPQ returns the raw `{…}` text for every array
+  # but the numeric ones (and those as offset-indexed `Array`s), Postgres.jl a typed `Vector` or a
+  # `Vector{Any}`. The cell gives every driver shape one result, a 1-based `Vector{T}`.
+  k isa CArray && return ReadParser(_RP_PG_ARRAY, 0, 0, k, nothing)
+  # #1121: a computed number that means a float — `Avg`/`Sqrt`/`Mod` over an integer, any of the
+  # `numeric` functions over a float, float arithmetic — reads as a `Float64`, as Django's
+  # `convert_value` makes it one by `output_field`. PostgreSQL computes several of them as `numeric`
+  # (`ROUND(x::numeric, d)`, `avg(integer)`), which the driver hands back as a `Decimal`. No model
+  # column records it (`field_canonical_kind` names no float), so this never runs on a stored float.
+  k isa CFloat64 && return ReadParser(_RP_COMPUTED_FLOAT)
+  return NO_READ_PARSER
+end
+
+function read_parser(@nospecialize(k::CanonicalType), ::PormGSQLite, label = nothing)::ReadParser
+  k isa CDateTime && return ReadParser(_RP_SQLITE_TIMESTAMP)
+  k isa CDate     && return ReadParser(_RP_SQLITE_DATE)
+  k isa CTime     && return ReadParser(_RP_SQLITE_TIME)
+  k isa CInterval && return ReadParser(_RP_SQLITE_INTERVAL)
+  # #953, #965: SQLite hands back a boolean, column or expression, as the 0/1 it stores, where
+  # PostgreSQL delivers a `Bool`. Recorded for a boolean read by the read view (`_read_kind`, which
+  # `_field_read_kind` shares for a wildcard).
+  k isa CBool     && return ReadParser(_RP_SQLITE_BOOL)
+  # #1121, as on PostgreSQL; SQLite can hand back an INTEGER where a row's value is whole.
+  k isa CFloat64  && return ReadParser(_RP_COMPUTED_FLOAT)
+  if k isa CDecimal
+    # #1121: a WIDTH-LESS decimal is never a column (`max_digits` is an `Int`): it is a computed number
+    # that means a decimal — `Sum`/`Avg`/`Abs`/`Round` over a `DecimalField`, decimal arithmetic — which
+    # SQLite computes as a REAL or an INTEGER. It reads as a `Decimal`, as PostgreSQL's `numeric` does,
+    # through 15 significant digits (`Dialect._parse_sqlite_computed_decimal`, Django's rule). It claims
+    # no exactness: the double is what SQLite computed.
+    k.precision === nothing && k.scale === nothing && return ReadParser(_RP_SQLITE_COMPUTED_DECIMAL)
+    # #648: exact only for a column narrow enough that SQLite stored every accepted value exactly — the
+    # width `Dialect.field_to_column` refuses to exceed. A wider kind (a column created outside PormG, or
+    # before that refusal) gets NO parser, so its cells arrive raw, as they always have: declining is the
+    # fail-open answer, where parsing would dress a rounded double up as an exact value.
+    (k.precision === nothing || k.scale === nothing) && return NO_READ_PARSER
+    k.precision > Dialect.SQLITE_EXACT_DECIMAL_DIGITS && return NO_READ_PARSER
+    # #1110: the same width reaches it from a `Cast` or an `output_field` that declares `numeric(p, s)`
+    # (`_unapplied_decimal_width`), and it applies the declaration SQLite ignored: it rounds to `s`, and a
+    # value too wide for `p` raises `StatementError` (SQLSTATE 22003) on that row, naming `label`.
+    return ReadParser(_RP_SQLITE_DECIMAL, k.precision, k.scale, nothing, _rp_label(label))
+  end
+  return NO_READ_PARSER
+end
+
+# MySQL (#1130, #1270). MySQL.jl delivers typed values: `Date`, `Time`, a `Decimal` for a DECIMAL
+# (the extension's exact conversion), a `DateTime` for a DATETIME, with no zone. These kinds need
+# undoing:
+# - a boolean is a `TINYINT(1)`, and the wire has no boolean, so it arrives as the 0/1 it stores
+#   (`Int8`; a comparison as an `Int64`), as on SQLite;
+# - a `DateTimeField` is a DATETIME read in the session's pinned UTC, so a time-zone-aware one becomes
+#   that `ZonedDateTime`, as PostgreSQL's `timestamptz` is;
+# - a computed number that means a float (`Avg` over an integer, #1121) arrives as MySQL's DECIMAL.
+# - a `DurationField` is a BIGINT of microseconds (#1130), read as the `Dates.CompoundPeriod` SQLite
+#   reads, in the same units; a computed one (`SUM`, `/`) arrives as a DECIMAL and is rounded to the
+#   microsecond.
+# - a date, a timestamp or a time MySQL computed as TEXT (`NULLIF` over one, phase 5b) arrives as that
+#   text, so the temporal kinds parse it back (`Dialect._parse_mysql_datetime`, `_parse_mysql_time`);
+#   a value MySQL.jl decoded passes unchanged.
+function read_parser(@nospecialize(k::CanonicalType), ::PormGMySQL, label = nothing)::ReadParser
+  k isa CBool     && return ReadParser(_RP_SQLITE_BOOL)
+  k isa CInterval && return ReadParser(_RP_MYSQL_INTERVAL)
+  k isa CDateTime && return ReadParser(k.with_timezone ? _RP_MYSQL_UTC_DATETIME : _RP_MYSQL_DATETIME)
+  k isa CDate     && return ReadParser(_RP_SQLITE_DATE)
+  k isa CTime     && return ReadParser(_RP_MYSQL_TIME)
+  k isa CFloat64  && return ReadParser(_RP_COMPUTED_FLOAT)
+  if k isa CDecimal
+    # A computed number that means a decimal (#1121, phase 2c-2): MySQL computes `Sqrt`/`Power`/`Exp`/`Ln`
+    # over a decimal as a DOUBLE and `Floor`/`Ceil` over one as a `BIGINT`, so a width-less decimal reads
+    # through SQLite's computed-decimal parser (15 significant digits; a `Decimal` passes unchanged).
+    k.precision === nothing && k.scale === nothing && return ReadParser(_RP_SQLITE_COMPUTED_DECIMAL)
+    (k.precision === nothing || k.scale === nothing) && return NO_READ_PARSER
+    # #1110: a declared `numeric(p, s)` is computed at `DECIMAL(65, s)` (`Dialect.cast_type_sql`), so the
+    # read applies `p`: a value too wide raises `StatementError` (SQLSTATE 22003) on that row, naming
+    # `label`, where MySQL's `DECIMAL(p, s)` would have clamped it. A `DecimalField` column records the
+    # same kind, and its values pass unchanged while the live column is as declared; a value from a wider
+    # live column (one made by hand) that its field cannot hold raises, as on SQLite.
+    return ReadParser(_RP_MYSQL_DECLARED_DECIMAL, k.precision, k.scale, nothing, _rp_label(label))
+  end
+  return NO_READ_PARSER
+end
+read_parser(@nospecialize(::CanonicalType), ::PormGBackend, label = nothing)::ReadParser = NO_READ_PARSER
+
+# `value_parser` as a `Function`, for the row terminals and the write path, which keep parsers in a
+# `Dict{Symbol,Function}`: the named `Dialect` function where the parser is one (so
+# `value_parser(CDate(), sqlite) === Dialect._parse_sqlite_date`), a closure where it carries a width or
+# an array kind. Derived from `read_parser`, so the two cannot disagree. Only the declared decimals read
+# `label`; every other parser ignores it, as none of them raises.
+function _as_function(p::ReadParser)::Union{Nothing,Function}
+  c = p.code
+  c === _RP_NONE                    && return nothing
+  c === _RP_PG_INTERVAL             && return Dialect._parse_postgres_interval
+  c === _RP_COMPUTED_FLOAT          && return Dialect._parse_computed_float
+  c === _RP_SQLITE_TIMESTAMP        && return Dialect._parse_sqlite_timestamp
+  c === _RP_SQLITE_DATE             && return Dialect._parse_sqlite_date
+  c === _RP_SQLITE_TIME             && return Dialect._parse_sqlite_time
+  c === _RP_SQLITE_INTERVAL         && return Dialect._parse_sqlite_interval
+  c === _RP_SQLITE_BOOL             && return Dialect._parse_sqlite_bool
+  c === _RP_SQLITE_COMPUTED_DECIMAL && return Dialect._parse_sqlite_computed_decimal
+  c === _RP_MYSQL_INTERVAL          && return Dialect._parse_mysql_interval
+  c === _RP_MYSQL_UTC_DATETIME      && return Dialect._parse_mysql_utc_datetime
+  c === _RP_MYSQL_DATETIME          && return Dialect._parse_mysql_datetime
+  c === _RP_MYSQL_TIME              && return Dialect._parse_mysql_time
+  return v -> p(v)   # an array kind or a declared decimal: the parser carries its parameters
+end
+
 """
     value_parser(kind, backend) -> Union{Function, Nothing}
     value_parser(kind, backend, label) -> Union{Function, Nothing}
@@ -346,88 +537,8 @@ recognise the value and refuse it, rather than failing to recognise it. A `Decim
 records the same kind, so a column's value too wide for its field raises too: one the live column
 holds only when it is wider than the field (made by hand, or not migrated yet).
 """
-value_parser(::CanonicalType, ::PormGPostgres) = nothing
-# #581: `Dates.CompoundPeriod` on every engine and driver — a type pin, not a re-decomposition.
-value_parser(::CInterval,     ::PormGPostgres) = Dialect._parse_postgres_interval
-# #28, the same reason as INTERVAL and further apart: LibPQ returns the raw `{…}` text for every array
-# but the numeric ones (and those as offset-indexed `Array`s), Postgres.jl a typed `Vector` or a
-# `Vector{Any}`. The cell gives every driver shape one result, a 1-based `Vector{T}`.
-value_parser(k::CArray,       ::PormGPostgres) = v -> Models.normalize_pg_array(v, k.element)
-value_parser(::CDateTime, ::PormGSQLite) = Dialect._parse_sqlite_timestamp
-value_parser(::CDate,     ::PormGSQLite) = Dialect._parse_sqlite_date
-value_parser(::CTime,     ::PormGSQLite) = Dialect._parse_sqlite_time
-value_parser(::CInterval, ::PormGSQLite) = Dialect._parse_sqlite_interval
-# #953, #965: SQLite hands back a boolean, column or expression, as the 0/1 it stores, where
-# PostgreSQL delivers a `Bool`. Recorded for a boolean read by the read view (`_read_kind`, which
-# `_field_read_kind` shares for a wildcard).
-value_parser(::CBool,     ::PormGSQLite) = Dialect._parse_sqlite_bool
-# #648: exact only for a column narrow enough that SQLite stored every accepted value exactly — the
-# width `Dialect.field_to_column` refuses to exceed. A wider kind (a column created outside PormG, or
-# before that refusal) gets NO parser, so its cells arrive raw, as they always have: declining is the
-# fail-open answer, where parsing would dress a rounded double up as an exact value.
-#
-# #1110: the same width reaches it from a `Cast` or an `output_field` that declares `numeric(p, s)`
-# (`_unapplied_decimal_width`), and it applies the declaration SQLite ignored: it rounds to `s`, and a
-# value too wide for `p` raises `StatementError` (SQLSTATE 22003) on that row, naming `label`.
-#
-# #1121: a WIDTH-LESS decimal is never a column (`max_digits` is an `Int`): it is a computed number
-# that means a decimal — `Sum`/`Avg`/`Abs`/`Round` over a `DecimalField`, decimal arithmetic — which
-# SQLite computes as a REAL or an INTEGER. It reads as a `Decimal`, as PostgreSQL's `numeric` does,
-# through 15 significant digits (`Dialect._parse_sqlite_computed_decimal`, Django's rule). It claims
-# no exactness: the double is what SQLite computed.
-function value_parser(k::CDecimal, ::PormGSQLite, label = nothing)
-  k.precision === nothing && k.scale === nothing && return Dialect._parse_sqlite_computed_decimal
-  (k.precision === nothing || k.scale === nothing) && return nothing
-  k.precision > Dialect.SQLITE_EXACT_DECIMAL_DIGITS && return nothing
-  p, s = k.precision, k.scale
-  return v -> Dialect._parse_sqlite_decimal(v, p, s, label)
-end
-# Every other parser ignores the label: none of them raises.
-value_parser(k::CanonicalType, backend::PormGBackend, label) = value_parser(k, backend)
-# #1121: a computed number that means a float — `Avg`/`Sqrt`/`Mod` over an integer, any of the
-# `numeric` functions over a float, float arithmetic — reads as a `Float64`, as Django's
-# `convert_value` makes it one by `output_field`. PostgreSQL computes several of them as `numeric`
-# (`ROUND(x::numeric, d)`, `avg(integer)`), which the driver hands back as a `Decimal`; SQLite can
-# hand back an INTEGER where a row's value is whole. No model column records it (`field_canonical_kind`
-# names no float), so this never runs on a stored float.
-value_parser(::CFloat64, ::PormGPostgres) = Dialect._parse_computed_float
-value_parser(::CFloat64, ::PormGSQLite) = Dialect._parse_computed_float
-# MySQL (#1130, #1270). MySQL.jl delivers typed values: `Date`, `Time`, a `Decimal` for a DECIMAL
-# (the extension's exact conversion), a `DateTime` for a DATETIME, with no zone. These kinds need
-# undoing:
-# - a boolean is a `TINYINT(1)`, and the wire has no boolean, so it arrives as the 0/1 it stores
-#   (`Int8`; a comparison as an `Int64`), as on SQLite;
-# - a `DateTimeField` is a DATETIME read in the session's pinned UTC, so a time-zone-aware one becomes
-#   that `ZonedDateTime`, as PostgreSQL's `timestamptz` is;
-# - a computed number that means a float (`Avg` over an integer, #1121) arrives as MySQL's DECIMAL.
-# - a `DurationField` is a BIGINT of microseconds (#1130), read as the `Dates.CompoundPeriod` SQLite
-#   reads, in the same units; a computed one (`SUM`, `/`) arrives as a DECIMAL and is rounded to the
-#   microsecond.
-# - a date, a timestamp or a time MySQL computed as TEXT (`NULLIF` over one, phase 5b) arrives as that
-#   text, so the temporal kinds parse it back (`Dialect._parse_mysql_datetime`, `_parse_mysql_time`);
-#   a value MySQL.jl decoded passes unchanged.
-value_parser(::CBool, ::PormGMySQL) = Dialect._parse_sqlite_bool
-value_parser(::CInterval, ::PormGMySQL) = Dialect._parse_mysql_interval
-value_parser(k::CDateTime, ::PormGMySQL) = k.with_timezone ? Dialect._parse_mysql_utc_datetime : Dialect._parse_mysql_datetime
-value_parser(::CDate, ::PormGMySQL) = Dialect._parse_sqlite_date
-value_parser(::CTime, ::PormGMySQL) = Dialect._parse_mysql_time
-value_parser(::CFloat64, ::PormGMySQL) = Dialect._parse_computed_float
-# A computed number that means a decimal (#1121, phase 2c-2): MySQL computes `Sqrt`/`Power`/`Exp`/`Ln`
-# over a decimal as a DOUBLE and `Floor`/`Ceil` over one as a `BIGINT`, so a width-less decimal reads
-# through SQLite's computed-decimal parser (15 significant digits; a `Decimal` passes unchanged).
-#
-# #1110: a declared `numeric(p, s)` is computed at `DECIMAL(65, s)` (`Dialect.cast_type_sql`), so the
-# read applies `p`: a value too wide raises `StatementError` (SQLSTATE 22003) on that row, naming
-# `label`, where MySQL's `DECIMAL(p, s)` would have clamped it. A `DecimalField` column records the
-# same kind, and its values pass unchanged while the live column is as declared; a value from a wider
-# live column (one made by hand) that its field cannot hold raises, as on SQLite.
-function value_parser(k::CDecimal, ::PormGMySQL, label = nothing)
-  k.precision === nothing && k.scale === nothing && return Dialect._parse_sqlite_computed_decimal
-  (k.precision === nothing || k.scale === nothing) && return nothing
-  p, s = k.precision, k.scale
-  return v -> Dialect._parse_mysql_declared_decimal(v, p, s, label)
-end
-value_parser(::CanonicalType, ::PormGBackend) = nothing
+value_parser(k::CanonicalType, backend::PormGBackend) = _as_function(read_parser(k, backend))
+value_parser(k::CanonicalType, backend::PormGBackend, label) = _as_function(read_parser(k, backend, label))
 
 
 # ── Slot 4: the Julia type a read delivers (#1632) ───────────────────────────────────────────────

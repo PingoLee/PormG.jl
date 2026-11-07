@@ -365,13 +365,25 @@ end
 # (`FirstValue(F("points") * 3)`). SQLite shifted each value by one position and read the label's
 # `"-Q"` as the offset. Found beside #789, whose GROUP BY copy of that term exposed it.
 # A no-op on PostgreSQL apart from the `$N` numbering, which travels with the text.
-function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  func_name = Symbol(v.function_name)
+# #1611: the window renderers by name, as explicit branches over the eight names the constructors build
+# (`getfield(Dialect, Symbol(name))` was a binding looked up at run time). One function per call shape.
+function _window_no_column_sql(name::String, over::String, conn::_SQLEngine)
+  name == "RANK" && return Dialect.RANK(over, conn)
+  name == "DENSE_RANK" && return Dialect.DENSE_RANK(over, conn)
+  name == "ROW_NUMBER" && return Dialect.ROW_NUMBER(over, conn)
+  throw(QueryBuildError("$(name) requires a column argument; got nothing"))
+end
+function _window_column_sql(name::String, column::String, over::String, conn::_SQLEngine)
+  name == "FIRST_VALUE" && return Dialect.FIRST_VALUE(column, over, conn)
+  name == "LAST_VALUE" && return Dialect.LAST_VALUE(column, over, conn)
+  throw(QueryBuildError("The window function $(name) takes no column argument."))
+end
 
+function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   if v.column === nothing
     v.function_name in ["LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE"] &&
       throw(QueryBuildError("$(v.function_name) requires a column argument; got nothing"))
-    return getfield(Dialect, func_name)(_build_over_clause(v.over, instruc), instruc.connection)
+    return _window_no_column_sql(v.function_name, _build_over_clause(v.over, instruc), instruc.connection)
   end
 
   # #887: a subquery column renders with the projection's alias, so a #194 refusal of its correlation
@@ -391,14 +403,15 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     end
     _check_temporal_mix(v, instruc)   # #1200: the operand and its default, once both render
     over_sql = _build_over_clause(v.over, instruc)
-    return getfield(Dialect, func_name)(resolved_column, over_sql, resolved_kwargs, instruc.connection)
+    return v.function_name == "LAG" ? Dialect.LAG(resolved_column, over_sql, resolved_kwargs, instruc.connection) :
+                                      Dialect.LEAD(resolved_column, over_sql, resolved_kwargs, instruc.connection)
   elseif v.function_name == "NTH_VALUE"
     n = get(v.kwargs, "n", nothing)
     n isa Integer || throw(QueryBuildError("NthValue requires a positive integer n"))
     n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
-    return getfield(Dialect, func_name)(resolved_column, n, _build_over_clause(v.over, instruc), instruc.connection)
+    return Dialect.NTH_VALUE(resolved_column, n, _build_over_clause(v.over, instruc), instruc.connection)
   else
-    return getfield(Dialect, func_name)(resolved_column, _build_over_clause(v.over, instruc), instruc.connection)
+    return _window_column_sql(v.function_name, resolved_column, _build_over_clause(v.over, instruc), instruc.connection)
   end
 end
 # #74: extract the single source table alias from a fully-resolved bare column reference like
@@ -773,12 +786,38 @@ _text_operand_advice(operand) = operand isa SQLText ?
   "uuid, \e[4m\e[32mToChar\e[0m for a timestamp, a \e[4m\e[32mCase\e[0m for a boolean; a float, a " *
   "decimal, an interval or a JSON document reads differently on each engine, so format it in Julia"
 
-# The Dialect renderer of a scalar function, by its name. A function added since #1346 takes no
-# `Dict{String,Any}` option bag and is called with its typed arguments (`Substr`, #1332); the rest are
-# looked up by name and handed `kwargs`, the one lookup left here for `test_type_ratchet.jl` to count.
+# The Dialect renderer of a scalar function, by its name. A function added since #1346 takes no option
+# bag and is called with its typed arguments (`Substr`, #1332); the rest are handed their options as
+# `Dialect.FnOptions`, built here from the resolved `kwargs` (#1610): the one place the string-keyed
+# bag becomes typed slots, so no renderer reads a key.
 function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, conn::_SQLEngine)
   name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
-  return getfield(Dialect, Symbol(name))(column, kwargs, conn)
+  return _dialect_function_sql(name, column, Dialect.FnOptions(kwargs), conn)
+end
+
+# #1611 — the renderer by its name, as one branch per name, generated at definition time. It was
+# `getfield(Dialect, Symbol(name))(…)`: a binding looked up by a name at run time, which a static
+# compiler cannot follow (`juliac --trim`, #1599). The names are exactly the `Dialect` functions with a
+# method taking `(column, ::FnOptions, conn)`, read from the method table when this file is loaded,
+# so a renderer added to `Dialect` is reachable with no list to keep in step.
+const _FN_OPTIONS_RENDERERS = let found = String[]
+  for n in names(Dialect; all = true)
+    isdefined(Dialect, n) || continue
+    f = getglobal(Dialect, n)
+    f isa Function || continue
+    takes = any(methods(f)) do m
+      p = Base.unwrap_unionall(m.sig).parameters
+      length(p) == 4 && p[3] === Dialect.FnOptions
+    end
+    takes && push!(found, String(n))
+  end
+  Tuple(sort!(found))
+end
+let arms = [:(name == $s && return Dialect.$(Symbol(s))(column, opts, conn)) for s in _FN_OPTIONS_RENDERERS]
+  @eval function _dialect_function_sql(name::AbstractString, column, opts::Dialect.FnOptions, conn::_SQLEngine)
+    $(arms...)
+    throw(QueryBuildError("No SQL function renderer is named $(name)."))
+  end
 end
 
 function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;

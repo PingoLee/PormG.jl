@@ -400,7 +400,7 @@ end
     # The Dialect arms are the backstop for a node that reaches them some other way.
     for f in (PormG.Dialect.SEARCH_VECTOR, PormG.Dialect.SEARCH_QUERY, PormG.Dialect.SEARCH_RANK,
               PormG.Dialect.SEARCH_HEADLINE)
-      @test _err31(() -> f(Any["x"], Dict{String,Any}(), _FTS_SL)) isa BackendCapabilityError
+      @test _err31(() -> f(Any["x"], PormG.Dialect.FnOptions(), _FTS_SL)) isa BackendCapabilityError
     end
     @test _err31(() -> PormG.Dialect.search(_FTS_SL, "a", "b")) isa BackendCapabilityError
     @test _err31(() -> PormG.Dialect.ts_vector_sql("a", nothing, _FTS_SL)) isa BackendCapabilityError

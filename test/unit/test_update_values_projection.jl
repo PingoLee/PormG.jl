@@ -40,17 +40,17 @@ PormG.config["uv668_sl"] = PormG.Configuration.Settings(
 # Inline F1-flavoured fixtures, one module per backend.
 module UpdateValuesPg
 import PormG.Models
-Models.@models Uv668_result
 Uv668_result = Models.Model("uv668_result",
     id = Models.IDField(), year = Models.IntegerField(), points = Models.IntegerField())
+Models.@models Uv668_result
 Models.set_models(@__MODULE__, "uv668_pg")
 end
 
 module UpdateValuesSl
 import PormG.Models
-Models.@models Uv668_result
 Uv668_result = Models.Model("uv668_result",
     id = Models.IDField(), year = Models.IntegerField(), points = Models.IntegerField())
+Models.@models Uv668_result
 Models.set_models(@__MODULE__, "uv668_sl")
 end
 

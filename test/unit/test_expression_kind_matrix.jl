@@ -95,7 +95,6 @@ for (modname, key) in ((:EkmPGModels, "ekm_pg"), (:EkmSLModels, "ekm_sl"), (:Ekm
   @eval module $modname
   import PormG
   import PormG.Models
-  Models.@models Race Driver Constructor Constructor_results Result New_join_position Field_validation_scratch
   Race = Models.Model(
     raceid = Models.IDField(),
     year = Models.IntegerField(),
@@ -141,6 +140,7 @@ for (modname, key) in ((:EkmPGModels, "ekm_pg"), (:EkmSLModels, "ekm_sl"), (:Ekm
     uuid_token = Models.UUIDField(unique = true),
     payload = Models.JSONField(null = true),
   )
+  Models.@models Race Driver Constructor Constructor_results Result New_join_position Field_validation_scratch
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

@@ -61,7 +61,6 @@ module OpfModels
 import PormG
 import PormG.Models
 
-Models.@models Opf_row
 Opf_row = Models.Model("opf_row",
   id   = Models.IDField(),
   qty  = Models.IntegerField(null = true),
@@ -69,6 +68,7 @@ Opf_row = Models.Model("opf_row",
   note = Models.CharField(null = true),
 )
 
+Models.@models Opf_row
 PormG.Models.set_models(@__MODULE__, "opf_mock")
 end
 

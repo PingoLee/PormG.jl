@@ -64,7 +64,6 @@ module TmxModels
 import PormG
 import PormG.Models
 
-Models.@models Tmx_circuit Tmx_race
 Tmx_circuit = Models.Model("tmx_circuit",
   id     = Models.IDField(),
   opened = Models.DateField(null = true),
@@ -84,6 +83,7 @@ Tmx_race = Models.Model("tmx_race",
   circuit  = Models.ForeignKey(Tmx_circuit, on_delete = "CASCADE"),
 )
 
+Models.@models Tmx_circuit Tmx_race
 PormG.Models.set_models(@__MODULE__, "tmx_mock")
 end
 

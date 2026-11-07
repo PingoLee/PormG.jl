@@ -17,7 +17,6 @@ module ManyToManyUnitModels
 import PormG
 import PormG.Models
 
-Models.@models Driver Driver_championship
 Driver = Models.Model("drivers",
   id = Models.IDField(),
   surname = Models.CharField(),
@@ -29,6 +28,7 @@ Driver_championship = Models.Model("driver_championships",
   drivers = Models.ManyToManyField(Driver, related_name="championships"),
 )
 
+Models.@models Driver Driver_championship
 PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -51,7 +51,6 @@ module ManyToManyDbTableModels
   import PormG
   import PormG.Models
 
-  Models.@models Team Driver Membership Squad Tester Enrolment
   Team = Models.Model("team", db_table = "racing_team",
     id = Models.IDField(),
     name = Models.CharField(),
@@ -88,6 +87,7 @@ module ManyToManyDbTableModels
     squad = Models.ForeignKey(Squad, on_delete = Models.CASCADE),
   )
 
+  Models.@models Team Driver Membership Squad Tester Enrolment
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -113,7 +113,6 @@ module ManyToManyDbColumnModels
   import PormG
   import PormG.Models
 
-  Models.@models Marque Pilot Contract Livery Scout Signing
   Marque = Models.Model("marque", db_table = "racing_marque",
     id = Models.IDField(),
     name = Models.CharField(),
@@ -153,6 +152,7 @@ module ManyToManyDbColumnModels
     livery_id = Models.ForeignKey(Livery, db_column = "lvr", on_delete = Models.CASCADE),
   )
 
+  Models.@models Marque Pilot Contract Livery Scout Signing
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -1238,7 +1238,6 @@ module ManyToManySelfModels
 import PormG
 import PormG.Models
 
-Models.@models Teammate Rival
 Teammate = Models.Model("teammate",
   id = Models.IDField(),
   driverref = Models.CharField(),
@@ -1250,6 +1249,7 @@ Rival = Models.Model("rival",
   rivals = Models.ManyToManyField("Rival", related_name="rival_of"),
 )
 
+Models.@models Teammate Rival
 PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -1746,10 +1746,10 @@ PormG.config["m2m_tx_mock_1399"] = PormG.Configuration.Settings(
 module ManyToManyTx1399
 import PormG
 import PormG.Models
-Models.@models Driver Season
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+Models.@models Driver Season
 PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
 end
 
@@ -1820,12 +1820,12 @@ end
 module ManyToManyKeys1413
 import PormG
 import PormG.Models
-Models.@models Livery Grid Season
 Livery = Models.Model("liveries", uid = Models.UUIDField(primary_key = true), name = Models.CharField())
 Grid = Models.Model("grids", slot = Models.CharField(primary_key = true, max_length = 8))
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   liveries = Models.ManyToManyField(Livery, related_name = "seasons"),
   grids = Models.ManyToManyField(Grid, related_name = "seasons"))
+Models.@models Livery Grid Season
 PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
 end
 
@@ -1885,10 +1885,10 @@ PormG.config["m2m_my_mock_1413"] = PormG.Configuration.Settings(
 module ManyToManyMy1413
 import PormG
 import PormG.Models
-Models.@models Driver Season
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+Models.@models Driver Season
 PormG.Models.set_models(@__MODULE__, "m2m_my_mock_1413")
 end
 
@@ -1980,10 +1980,10 @@ PormG.config["m2m_sl_mock_1473"] = PormG.Configuration.Settings(
 module ManyToManySL1473
 import PormG
 import PormG.Models
-Models.@models Driver Season
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+Models.@models Driver Season
 PormG.Models.set_models(@__MODULE__, "m2m_sl_mock_1473")
 end
 

@@ -63,7 +63,6 @@ module UttModels
 import PormG
 import PormG.Models
 
-Models.@models Utt_race
 Utt_race = Models.Model("utt_race",
   raceid         = Models.IDField(),
   year           = Models.IntegerField(),
@@ -74,6 +73,7 @@ Utt_race = Models.Model("utt_race",
   meta           = Models.JSONField(null = true),
 )
 
+Models.@models Utt_race
 PormG.Models.set_models(@__MODULE__, "utt_mock")
 end
 

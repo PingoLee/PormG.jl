@@ -60,7 +60,6 @@ PormG.config["sub_mock_pg"] = PormG.Configuration.Settings(
 module SubModelsSL
 import PormG
 import PormG.Models
-Models.@models Sub_team Sub_code Sub_driver Sub_result
 Sub_team = Models.Model("sub_team", id = Models.IDField(), name = Models.CharField())
 Sub_code = Models.Model("sub_code", code = Models.CharField(primary_key = true), label = Models.CharField())
 Sub_driver = Models.Model("sub_driver",
@@ -83,13 +82,13 @@ Sub_result = Models.Model("sub_result",
   driver = Models.ForeignKey(Sub_driver, on_delete = "CASCADE", null = true),
   note   = Models.CharField(null = true),
 )
+Models.@models Sub_team Sub_code Sub_driver Sub_result
 PormG.Models.set_models(@__MODULE__, "sub_mock_sl")
 end
 
 module SubModelsPG
 import PormG
 import PormG.Models
-Models.@models Sub_team Sub_code Sub_driver Sub_result
 Sub_team = Models.Model("sub_team", id = Models.IDField(), name = Models.CharField())
 Sub_code = Models.Model("sub_code", code = Models.CharField(primary_key = true), label = Models.CharField())
 Sub_driver = Models.Model("sub_driver",
@@ -112,6 +111,7 @@ Sub_result = Models.Model("sub_result",
   driver = Models.ForeignKey(Sub_driver, on_delete = "CASCADE", null = true),
   note   = Models.CharField(null = true),
 )
+Models.@models Sub_team Sub_code Sub_driver Sub_result
 PormG.Models.set_models(@__MODULE__, "sub_mock_pg")
 end
 

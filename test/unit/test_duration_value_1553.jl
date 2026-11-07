@@ -52,7 +52,6 @@ module Dv1553Models
 import PormG
 import PormG.Models
 
-Models.@models Dv_lap
 Dv_lap = Models.Model("dv_lap",
   id        = Models.IDField(),
   grid      = Models.IntegerField(null = true),
@@ -63,6 +62,7 @@ Dv_lap = Models.Model("dv_lap",
   code      = Models.CharField(null = true),
 )
 
+Models.@models Dv_lap
 PormG.Models.set_models(@__MODULE__, "dv1553_mock")
 end
 

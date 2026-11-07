@@ -36,13 +36,13 @@ import PormG
 import PormG.Models
 
 # The F1 `results` table, narrowed to what the projections read.
-Models.@models Wp_result
 Wp_result = Models.Model("wp_result",
   resultid      = Models.IDField(),
   points        = Models.FloatField(null = true),
   positionorder = Models.IntegerField(null = true),
 )
 
+Models.@models Wp_result
 PormG.Models.set_models(@__MODULE__, "wp_mock")
 end
 

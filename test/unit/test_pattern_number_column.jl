@@ -40,7 +40,6 @@ module PncModels
 import PormG
 import PormG.Models
 
-Models.@models Pnc_driver Pnc_result
 Pnc_driver = Models.Model("pnc_driver",
   driverid = Models.IDField(),
   surname  = Models.CharField(),
@@ -57,6 +56,7 @@ Pnc_result = Models.Model("pnc_result",
   date            = Models.DateField(null = true),
 )
 
+Models.@models Pnc_driver Pnc_result
 PormG.Models.set_models(@__MODULE__, "pnc_mock")
 end
 

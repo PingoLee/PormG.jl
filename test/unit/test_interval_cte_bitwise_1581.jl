@@ -47,7 +47,6 @@ import PormG
 import PormG.Models
 
 # F1-shaped: a lap with its grid slot, points, lap time, race date and driver code.
-Models.@models Ib_lap
 Ib_lap = Models.Model("ib_lap",
   id        = Models.IDField(),
   grid      = Models.IntegerField(null = true),
@@ -58,6 +57,7 @@ Ib_lap = Models.Model("ib_lap",
   code      = Models.CharField(null = true),
 )
 
+Models.@models Ib_lap
 PormG.Models.set_models(@__MODULE__, "ib1581_mock")
 end
 

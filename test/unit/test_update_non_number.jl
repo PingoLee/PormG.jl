@@ -41,7 +41,6 @@ import PormG
 import PormG.Models
 
 # The F1 driver, with a few columns of the types under test.
-Models.@models Unn_driver Unn_result
 Unn_driver = Models.Model("unn_driver",
   driverid = Models.IDField(),
   token    = Models.UUIDField(null = true),
@@ -66,6 +65,7 @@ Unn_result = Models.Model("unn_result",
   telemetry       = Models.BinaryField(null = true),
 )
 
+Models.@models Unn_driver Unn_result
 PormG.Models.set_models(@__MODULE__, "unn_mock")
 end
 

@@ -69,7 +69,6 @@ module PanModels
 import PormG
 import PormG.Models
 
-Models.@models Pan_grand Pan_parent Pan_child
 Pan_grand = Models.Model("pan_grand",
   id   = Models.IDField(),
   code = Models.CharField(),
@@ -89,6 +88,7 @@ Pan_child = Models.Model("pan_child",
   parent = Models.ForeignKey(Pan_parent, on_delete = "CASCADE", related_name = "pan_kids", null = true),
 )
 
+Models.@models Pan_grand Pan_parent Pan_child
 PormG.Models.set_models(@__MODULE__, "pan_mock")
 end
 

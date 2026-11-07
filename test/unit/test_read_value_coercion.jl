@@ -56,7 +56,6 @@ PormG.config["rvc_mock"] = PormG.Configuration.Settings(
 module RvcModels
 import PormG
 import PormG.Models
-Models.@models Rvc_team Rvc_row Rvc_flag_team Rvc_flag
 Rvc_team = Models.Model("rvc_team", id = Models.IDField(), founded = Models.DateField(null = true))
 Rvc_row = Models.Model("rvc_row",
   id    = Models.IDField(),
@@ -85,6 +84,7 @@ Rvc_flag = Models.Model("rvc_flag",
   finished = Models.BooleanField(null = true),
   recorded = Models.DateField(null = true),
 )
+Models.@models Rvc_team Rvc_row Rvc_flag_team Rvc_flag
 PormG.Models.set_models(@__MODULE__, "rvc_mock")
 end
 const RVC = RvcModels

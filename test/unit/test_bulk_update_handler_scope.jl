@@ -42,7 +42,6 @@ PormG.config["bh665_sl"] = PormG.Configuration.Settings(
 # `_module`, which a bare `Model(...)` leaves as `nothing`.
 module BulkHandlerScopePg
 import PormG.Models
-Models.@models Bh665_driver Bh665_result
 Bh665_driver = Models.Model("bh665_driver", id = Models.IDField(), surname = Models.CharField())
 Bh665_result = Models.Model("bh665_result",
     id     = Models.IDField(),
@@ -50,12 +49,12 @@ Bh665_result = Models.Model("bh665_result",
     year   = Models.IntegerField(),
     points = Models.IntegerField(),
 )
+Models.@models Bh665_driver Bh665_result
 Models.set_models(@__MODULE__, "bh665_pg")
 end
 
 module BulkHandlerScopeSl
 import PormG.Models
-Models.@models Bh665_driver Bh665_result
 Bh665_driver = Models.Model("bh665_driver", id = Models.IDField(), surname = Models.CharField())
 Bh665_result = Models.Model("bh665_result",
     id     = Models.IDField(),
@@ -63,6 +62,7 @@ Bh665_result = Models.Model("bh665_result",
     year   = Models.IntegerField(),
     points = Models.IntegerField(),
 )
+Models.@models Bh665_driver Bh665_result
 Models.set_models(@__MODULE__, "bh665_sl")
 end
 

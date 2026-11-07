@@ -46,7 +46,6 @@ module UseModels
 import PormG
 import PormG.Models
 
-Models.@models Use_driver Use_result
 Use_driver = Models.Model("use_driver",
   driverid = Models.IDField(),
   code     = Models.CharField(null = true),
@@ -64,6 +63,7 @@ Use_result = Models.Model("use_result",
   racedate     = Models.DateField(null = true),
 )
 
+Models.@models Use_driver Use_result
 PormG.Models.set_models(@__MODULE__, "use_mock")
 end
 

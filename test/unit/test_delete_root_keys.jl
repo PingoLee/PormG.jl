@@ -48,7 +48,6 @@ PormG.config["rk1342_sqlite"] = PormG.Configuration.Settings(
 module RkModels
 import PormG
 import PormG.Models
-Models.@models Rk_circuit Rk_race Rk_result Rk_lap Rk_flag Rk_note
 Rk_circuit = Models.Model("rk_circuit", id = Models.IDField(), name = Models.CharField())
 Rk_race = Models.Model("rk_race",
   id      = Models.IDField(),
@@ -74,6 +73,7 @@ Rk_note = Models.Model("rk_note",
   body   = Models.CharField(),
   result = Models.ForeignKey(Rk_result, on_delete = "SET_NULL", related_name = "notes", null = true),
 )
+Models.@models Rk_circuit Rk_race Rk_result Rk_lap Rk_flag Rk_note
 PormG.Models.set_models(@__MODULE__, "rk1342_sqlite")
 end
 

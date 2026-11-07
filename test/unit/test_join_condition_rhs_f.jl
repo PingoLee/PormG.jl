@@ -35,7 +35,6 @@ PormG.config["join_rhs_f_sl"] = PormG.Configuration.Settings(
 module JoinRhsFPGModels
 import PormG
 import PormG.Models
-Models.@models Driver Constructor Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -57,13 +56,13 @@ Result = Models.Model("result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Driver Constructor Result
 PormG.Models.set_models(@__MODULE__, "join_rhs_f_pg")
 end
 
 module JoinRhsFSLModels
 import PormG
 import PormG.Models
-Models.@models Driver Constructor Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -85,6 +84,7 @@ Result = Models.Model("result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Driver Constructor Result
 PormG.Models.set_models(@__MODULE__, "join_rhs_f_sl")
 end
 

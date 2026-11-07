@@ -113,7 +113,6 @@ PormG.config["jcr_sl"] = PormG.Configuration.Settings(
 module JcrModels
 import PormG
 import PormG.Models
-Models.@models Constructor Driver Result
 Constructor = Models.Model("jcr_constructor", constructorid = Models.IDField(), name = Models.CharField())
 Driver = Models.Model("jcr_driver",
   driverid = Models.IDField(),
@@ -128,6 +127,7 @@ Result = Models.Model("jcr_result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Constructor Driver Result
 PormG.Models.set_models(@__MODULE__, "jcr_sl")
 end
 
@@ -394,13 +394,13 @@ PormG.config["jcr_pg"] = PormG.Configuration.Settings(
 module JcrNetModels
 import PormG
 import PormG.Models
-Models.@models Session Badge
 Session = Models.Model("jcr_session", sessionid = Models.IDField(), client_ip = Models.GenericIPAddressField())
 Badge = Models.Model("jcr_badge",
   badgeid = Models.IDField(),
   badge_net = Models.CIDRField(),
   session = Models.ForeignKey(Session, on_delete = "CASCADE", related_name = "badges"),
 )
+Models.@models Session Badge
 PormG.Models.set_models(@__MODULE__, "jcr_pg")
 end
 

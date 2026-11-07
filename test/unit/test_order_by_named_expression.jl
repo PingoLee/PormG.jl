@@ -50,7 +50,6 @@ PormG.config["order_named_expr_sl"] = PormG.Configuration.Settings(
 module OrderNamedExprPg
 import PormG
 import PormG.Models
-Models.@models Result
 Result = Models.Model("result",
   resultid      = Models.IDField(),
   raceid        = Models.IntegerField(),
@@ -59,13 +58,13 @@ Result = Models.Model("result",
   points        = Models.FloatField(),
   date          = Models.DateField(null = true),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_named_expr_pg")
 end
 
 module OrderNamedExprSl
 import PormG
 import PormG.Models
-Models.@models Result
 Result = Models.Model("result",
   resultid      = Models.IDField(),
   raceid        = Models.IntegerField(),
@@ -74,6 +73,7 @@ Result = Models.Model("result",
   points        = Models.FloatField(),
   date          = Models.DateField(null = true),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_named_expr_sl")
 end
 

@@ -41,8 +41,8 @@ PormG.config["datefn_mock"] = PormG.Configuration.Settings(
 module DateFnModels
 import PormG
 import PormG.Models
-Models.@models Datefn_race
 Datefn_race = Models.Model("datefn_race", id = Models.IDField(), date = Models.DateField(null = true))
+Models.@models Datefn_race
 PormG.Models.set_models(@__MODULE__, "datefn_mock")
 end
 

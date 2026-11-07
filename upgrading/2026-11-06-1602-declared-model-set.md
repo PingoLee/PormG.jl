@@ -11,8 +11,8 @@
 
 Registration used to find a module's models by walking its names (`names(mod; all = true,
 imported = true)`, then a second pass with `usings = true`) and keeping every value that was a model.
-It now reads a declaration the module carries, `Models.@models Circuit Race`, which lists the
-model bindings:
+It now reads a declaration the module carries, `Models.@models Circuit Race`, written after the
+models. The line binds the module's `MODEL_SET`, which holds those models and their bindings:
 
 | | before | now |
 |---|---|---|
@@ -29,6 +29,11 @@ models it found depended on how each was brought into scope.
 
 An `@import_models` file that writes its own `Models.@models` line is read as written; a top-level
 `X = Models.Model(…)` the line leaves out is not registered, and loading the file warns naming it.
+
+The line captures the models its bindings hold when it runs, so it goes after their definitions (a
+binding not yet assigned fails at the line with `UndefVarError`). A model rebound by hand afterwards
+is registered only once the line runs again; the Revise reload re-evaluates the whole module, so it
+does. A module that already binds a global named `MODEL_SET` must rename it.
 
 ### How to find the calls to migrate
 

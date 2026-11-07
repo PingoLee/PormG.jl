@@ -42,7 +42,6 @@ module IfcModels
 import PormG
 import PormG.Models
 
-Models.@models Ifc_result
 Ifc_result = Models.Model("ifc_result",
   resultid = Models.IDField(),
   grid     = Models.IntegerField(null = true),
@@ -53,6 +52,7 @@ Ifc_result = Models.Model("ifc_result",
   date     = Models.DateField(null = true),
 )
 
+Models.@models Ifc_result
 PormG.Models.set_models(@__MODULE__, "ifc_mock")
 end
 

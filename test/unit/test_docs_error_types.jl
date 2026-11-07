@@ -216,7 +216,6 @@ module DocErrCycleModels
 import PormG
 import PormG.Models
 
-Models.@models Docerr_cycle_a Docerr_cycle_b
 Docerr_cycle_a = Models.Model("docerr_cycle_a",
     id   = Models.IDField(),
     code = Models.CharField(),
@@ -230,6 +229,7 @@ Docerr_cycle_b = Models.Model("docerr_cycle_b",
              related_name = "docerr_cycle_bs", null = true),
 )
 
+Models.@models Docerr_cycle_a Docerr_cycle_b
 PormG.Models.set_models(@__MODULE__, "docerr_cycle")
 end
 
@@ -244,7 +244,6 @@ module DocErrToManyModels
 import PormG
 import PormG.Models
 
-Models.@models Docerr_tm_sponsor Docerr_tm_driver Docerr_tm_result
 Docerr_tm_sponsor = Models.Model("docerr_tm_sponsor",
     sponsorid = Models.IDField(),
     name      = Models.CharField(),
@@ -262,6 +261,7 @@ Docerr_tm_result = Models.Model("docerr_tm_result",
     driverid = Models.ForeignKey(Docerr_tm_driver, on_delete = "CASCADE", related_name = "results"),
 )
 
+Models.@models Docerr_tm_sponsor Docerr_tm_driver Docerr_tm_result
 PormG.Models.set_models(@__MODULE__, "docerr_tomany")
 end
 

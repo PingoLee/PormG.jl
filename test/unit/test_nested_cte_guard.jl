@@ -83,7 +83,6 @@ module NcgModels
 import PormG
 import PormG.Models
 
-Models.@models Ncg_grand Ncg_parent Ncg_child
 Ncg_grand = Models.Model("ncg_grand",
   id   = Models.IDField(),
   code = Models.CharField(),
@@ -101,6 +100,7 @@ Ncg_child = Models.Model("ncg_child",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Ncg_grand Ncg_parent Ncg_child
 PormG.Models.set_models(@__MODULE__, "ncg_mock")
 end
 

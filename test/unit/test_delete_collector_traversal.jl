@@ -76,8 +76,6 @@ module DctChain
 import PormG
 import PormG.Models
 
-# #1602: the loop below binds its models with `Core.eval`, so the set names them all.
-Models.@models(Dct_c01, Dct_c02, Dct_c03, Dct_c04, Dct_c05, Dct_c06, Dct_c07, Dct_c08, Dct_c09, Dct_c10, Dct_c11, Dct_c12, Dct_c13, Dct_c14)
 const CHAIN_N = 14
 
 Dct_c01 = Models.Model("dct_c01", id = Models.IDField(), code = Models.CharField())
@@ -92,6 +90,8 @@ let prev = Dct_c01
     prev = m
   end
 end
+# #1602: the loop above binds its models with `Core.eval`, so the set names them all.
+Models.@models(Dct_c01, Dct_c02, Dct_c03, Dct_c04, Dct_c05, Dct_c06, Dct_c07, Dct_c08, Dct_c09, Dct_c10, Dct_c11, Dct_c12, Dct_c13, Dct_c14)
 
 PormG.Models.set_models(@__MODULE__, "dct_mock")
 end
@@ -108,7 +108,6 @@ import PormG.Models
 # it contributes a parameterized JOIN to the root query WITHOUT adding a cascade path — the same
 # trick `test_delete_multipath_alignment.jl`'s `Dmp_root` plays, and the only way to give the plan
 # two DISTINCT sentinels.
-Models.@models Dct_top Dct_root Dct_mid Dct_leaf Dct_dleaf
 Dct_top = Models.Model("dct_top", id = Models.IDField(), tag = Models.CharField())
 
 Dct_root = Models.Model("dct_root",
@@ -133,6 +132,7 @@ Dct_dleaf = Models.Model("dct_dleaf",
   mid = Models.ForeignKey(Dct_mid, on_delete = "SET_DEFAULT", related_name = "dleaves", null = true, default = 0),
 )
 
+Models.@models Dct_top Dct_root Dct_mid Dct_leaf Dct_dleaf
 PormG.Models.set_models(@__MODULE__, "dct_mock")
 end
 
@@ -143,7 +143,6 @@ module DctCycle
 import PormG
 import PormG.Models
 
-Models.@models Dct_x Dct_y
 Dct_x = Models.Model("dct_x",
   id   = Models.IDField(),
   code = Models.CharField(),
@@ -155,6 +154,7 @@ Dct_y = Models.Model("dct_y",
   x  = Models.ForeignKey(Dct_x, on_delete = "CASCADE", related_name = "ys", null = true),
 )
 
+Models.@models Dct_x Dct_y
 PormG.Models.set_models(@__MODULE__, "dct_mock")
 end
 

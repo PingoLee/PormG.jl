@@ -46,7 +46,6 @@ PormG.config["order_agg_group_sl"] = PormG.Configuration.Settings(
 module OrderAggGroupPg
 import PormG
 import PormG.Models
-Models.@models Result
 Result = Models.Model("result",
   resultid      = Models.IDField(),
   raceid        = Models.IntegerField(),
@@ -54,13 +53,13 @@ Result = Models.Model("result",
   grid          = Models.IntegerField(null = true),
   points        = Models.FloatField(),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_agg_group_pg")
 end
 
 module OrderAggGroupSl
 import PormG
 import PormG.Models
-Models.@models Result
 Result = Models.Model("result",
   resultid      = Models.IDField(),
   raceid        = Models.IntegerField(),
@@ -68,6 +67,7 @@ Result = Models.Model("result",
   grid          = Models.IntegerField(null = true),
   points        = Models.FloatField(),
 )
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "order_agg_group_sl")
 end
 

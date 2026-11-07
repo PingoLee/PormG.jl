@@ -548,9 +548,10 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # The Revise reload callback re-registers without the implicit load (#1248)
-# What it tests: the Revise extension's callback (`ext/PormGReviseExt.jl`) calls
-#   `set_models(mod_obj, dir; implicit = false)`, and `src/Utils.jl` carries no second callback — a
-#   source pin. Since #1487 the core default is a no-op in `Models`, so the extension's is the only
+# What it tests: the Revise extension's callback (`ext/PormGReviseExt.jl`) re-registers through
+#   `Models._register_again!` (#1606: by key for a module registered by key), whose folder arm calls
+#   `set_models(mod, …; implicit = false)`, and `src/Utils.jl` carries no second callback — a source
+#   pin. Since #1487 the core default is a no-op in `Models`, so the extension's is the only
 #   one; `test_reload.jl`'s package child drives it live under Revise. No SQL.
 # Why it matters: `set_models`' default is `isinteractive()`, and Revise runs in a REPL, so a
 #   callback using the default would load a folder that was unloaded between edits. A reload is not
@@ -558,11 +559,14 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the Revise reload callback passes implicit = false (#1248)" begin
   root = pkgdir(PormG)
-  callback_calls(file) = [m.match for m in eachmatch(r"invokelatest\(PormG\.Models\.set_models,[^\n]*",
+  callback_calls(file) = [m.match for m in eachmatch(r"invokelatest\(PormG\.Models\.(set_models|_register_again!),[^\n]*",
                                                     read(joinpath(root, file), String))]
   calls = callback_calls("ext/PormGReviseExt.jl")
   @test length(calls) == 1
-  @test occursin("set_models, mod_obj, dir; implicit = false)", only(calls))
+  @test occursin("_register_again!, mod_obj, dir)", only(calls))
+  models_src = read(joinpath(root, "src/Models.jl"), String)
+  again = match(r"function _register_again!\(.*?\nend\n"s, models_src)
+  @test again !== nothing && occursin("set_models(mod, String(path); implicit = false)", again.match)
   @test isempty(callback_calls("src/Utils.jl"))
   @test !occursin("add_callback", read(joinpath(root, "src/Utils.jl"), String))
 end

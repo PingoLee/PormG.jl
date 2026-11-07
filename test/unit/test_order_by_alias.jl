@@ -77,7 +77,6 @@ module AliasOrderModels
 import PormG
 import PormG.Models
 
-Models.@models Ao_parent Ao_child
 Ao_parent = Models.Model("ao_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),
@@ -90,6 +89,7 @@ Ao_child = Models.Model("ao_child",
   qty    = Models.IntegerField(null = true),
 )
 
+Models.@models Ao_parent Ao_child
 PormG.Models.set_models(@__MODULE__, "alias_order_mock")
 end
 

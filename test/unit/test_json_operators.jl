@@ -26,12 +26,12 @@ PormG.config["json_operator_mock"] = PormG.Configuration.Settings(
 module JsonOperatorModels
 import PormG
 import PormG.Models
-Models.@models Json_op_scratch
 Json_op_scratch = Models.Model("json_op_scratch",
   id = Models.IDField(),
   name = Models.CharField(),                 # a non-JSON field, to test the operator's type guard
   payload = Models.JSONField(null = true),
 )
+Models.@models Json_op_scratch
 PormG.Models.set_models(@__MODULE__, "json_operator_mock")
 end
 

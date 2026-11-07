@@ -59,7 +59,6 @@ module FImmutModels
 import PormG
 import PormG.Models
 
-Models.@models Fi_parent Fi_child
 Fi_parent = Models.Model("fi_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),
@@ -71,6 +70,7 @@ Fi_child = Models.Model("fi_child",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Fi_parent Fi_child
 PormG.Models.set_models(@__MODULE__, "f_immut_mock")
 end
 

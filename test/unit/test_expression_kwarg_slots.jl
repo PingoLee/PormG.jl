@@ -53,7 +53,6 @@ module EksModels
 import PormG
 import PormG.Models
 
-Models.@models Eks_driver Eks_result
 Eks_driver = Models.Model("eks_driver",
   id      = Models.IDField(),
   surname = Models.CharField(),
@@ -69,6 +68,7 @@ Eks_result = Models.Model("eks_result",
   payload       = Models.JSONField(null = true),
 )
 
+Models.@models Eks_driver Eks_result
 PormG.Models.set_models(@__MODULE__, "eks_mock")
 end
 

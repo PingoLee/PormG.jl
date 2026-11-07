@@ -120,7 +120,6 @@ PormG.config["jrs_sl"] = PormG.Configuration.Settings(
 module JrsModels
 import PormG
 import PormG.Models
-Models.@models Team Sponsor Driver Status Result
 Team = Models.Model("jrs_team", teamid = Models.IDField(), name = Models.CharField())
 Sponsor = Models.Model("jrs_sponsor", sponsorid = Models.IDField(), name = Models.CharField())
 Driver = Models.Model("jrs_driver",
@@ -136,6 +135,7 @@ Result = Models.Model("jrs_result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   status_id = Models.ForeignKey(Status, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Team Sponsor Driver Status Result
 PormG.Models.set_models(@__MODULE__, "jrs_sl")
 end
 

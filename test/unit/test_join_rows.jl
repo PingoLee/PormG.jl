@@ -53,7 +53,6 @@ module JoinRowsModels
 import PormG
 import PormG.Models
 
-Models.@models Jr_team Jr_sponsor Jr_driver Jr_result Jr_badge
 Jr_team = Models.Model("jr_team",
   id   = Models.IDField(),
   name = Models.CharField(null = true),
@@ -96,6 +95,7 @@ Jr_badge = Models.Model("jr_badge",
   ],
 )
 
+Models.@models Jr_team Jr_sponsor Jr_driver Jr_result Jr_badge
 PormG.Models.set_models(@__MODULE__, "join_rows_mock")
 end
 

@@ -127,8 +127,9 @@ Models.@models Status Circuit Race Driver Constructor Result Just_a_test_deletio
 end
 ```
 
-- The module ends with `Models.@models …`, naming every model binding (#1602). That list is the
-  module's model set: registration reads it, and PormG never scans a module's names for models.
+- The module ends with `Models.@models …`, naming every model binding (#1602), after the models:
+  the line binds the module's `MODEL_SET`, which holds them. That is the module's model set:
+  registration reads it, and PormG never scans a module's names for models.
   `generate_models_from_db` and the Django importer write it, and `@import_models` and
   `@models_module` add it from the file's top-level `X = Models.Model(…)` assignments when the file
   does not. A module registered with `set_models` after a plain `include` (the package boot below)
@@ -840,7 +841,8 @@ end
 ```
 
 See [The Bootstrap Sequence](configuration/setup.md#The-Bootstrap-Sequence) for why this is the
-package boot in development and in production alike.
+package boot in development and in production alike. With a connection built in code
+(`register_connection`), bind by key instead: `PormG.Models.set_models(models; key = "f1")` (#1606).
 
 ### Inline Models (without a separate file)
 If you define models directly in code rather than a separate file, use the `@models_module` macro:

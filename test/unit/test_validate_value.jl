@@ -34,7 +34,6 @@ for (engine, key) in pairs(KEYS_1239)
   @eval module $modname
     import PormG
     import PormG.Models as Mo
-    Mo.@models Driver Result
     Driver = Mo.Model("driver", driverid = Mo.IDField(), surname = Mo.CharField(max_length = 30))
     Result = Mo.Model("result",
       resultid = Mo.IDField(),
@@ -58,6 +57,7 @@ for (engine, key) in pairs(KEYS_1239)
       driverid = Mo.ForeignKey(Driver, null = true),
       teammates = Mo.ManyToManyField(Driver, related_name = "teammate_results"),
       search = Mo.SearchVectorField(generated_from = ("notes",), config = "english", null = true))
+    Mo.@models Driver Result
     PormG.Models.set_models(@__MODULE__, $key)
   end
 end

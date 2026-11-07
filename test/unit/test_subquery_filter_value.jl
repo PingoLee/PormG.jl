@@ -38,7 +38,6 @@ PormG.config["sq_filter_sl"] = PormG.Configuration.Settings(
 module SqFilterPGModels
 import PormG
 import PormG.Models
-Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -51,13 +50,13 @@ Result = Models.Model("result",
   chassis = Models.CharField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "sq_filter_pg")
 end
 
 module SqFilterSLModels
 import PormG
 import PormG.Models
-Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -70,6 +69,7 @@ Result = Models.Model("result",
   chassis = Models.CharField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "sq_filter_sl")
 end
 

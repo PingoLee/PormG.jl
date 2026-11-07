@@ -56,7 +56,6 @@ module CtoModels
 import PormG
 import PormG.Models
 
-Models.@models Cto_team Cto_driver
 Cto_team = Models.Model("cto_team",
   id     = Models.IDField(),
   name   = Models.CharField(),
@@ -73,6 +72,7 @@ Cto_driver = Models.Model("cto_driver",
   team    = Models.ForeignKey(Cto_team, on_delete = "CASCADE"),
 )
 
+Models.@models Cto_team Cto_driver
 PormG.Models.set_models(@__MODULE__, "cto_mock")
 end
 

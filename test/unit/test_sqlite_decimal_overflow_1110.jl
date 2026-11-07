@@ -37,12 +37,12 @@ for (modname, key) in ((:M1110SL, "mock1110_sl"), (:M1110PG, "mock1110_pg"))
   @eval module $modname
   import PormG
   import PormG.Models
-  Models.@models Driver Constructor_results
   Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField())
   Constructor_results = Models.Model(
     constructorresultsid = Models.IDField(),
     points = Models.DecimalField(max_digits = 10, decimal_places = 2),
   )
+  Models.@models Driver Constructor_results
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

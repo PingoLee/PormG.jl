@@ -56,7 +56,6 @@ module RanModels
 import PormG
 import PormG.Models
 
-Models.@models Ran_grand Ran_parent Ran_child
 Ran_grand = Models.Model("ran_grand",
   id   = Models.IDField(),
   code = Models.CharField(),
@@ -86,6 +85,7 @@ Ran_child = Models.Model("ran_child",
   grand  = Models.ForeignKey(Ran_grand, on_delete = "CASCADE", related_name = "ran_gkids", null = true),
 )
 
+Models.@models Ran_grand Ran_parent Ran_child
 PormG.Models.set_models(@__MODULE__, "ran_mock")
 end
 

@@ -19,7 +19,6 @@ module P3kModels
 import PormG
 import PormG.Models
 # `ref` is the upsert target; `code` a second, nullable unique key.
-Models.@models Team Car Status Stint Garage Sponsor Season Kit
 Team = Models.Model("p3k_team",
   id = Models.IDField(),
   ref = Models.CharField(unique = true),
@@ -57,6 +56,7 @@ Kit = Models.Model("p3k_kit",
   id = Models.IDField(),
   slug = Models.CharField(unique = true),
   blob = Models.BinaryField(null = true))
+Models.@models Team Car Status Stint Garage Sponsor Season Kit
 end
 
 # The tables, in drop order (children first).

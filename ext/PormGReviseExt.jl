@@ -33,7 +33,9 @@ function _revise_add_revise_callback(path::String, mod_obj::Module, dir::String)
                     return nothing
                 end
                 # A reload is not a direct registration: it never loads a folder, even in a REPL (#1248).
-                Base.invokelatest(PormG.Models.set_models, mod_obj, dir; implicit = false)
+                # `dir` is the folder, or the key for a module registered with `set_models(mod; key)`
+                # (#1606); `_register_again!` binds by whichever the registration recorded.
+                Base.invokelatest(PormG.Models._register_again!, mod_obj, dir)
             catch e
                 @warn "PormG: reloading the edited models file failed" file = path exception = e
             end

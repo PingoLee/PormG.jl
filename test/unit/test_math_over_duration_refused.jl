@@ -57,7 +57,6 @@ module ModModels
 import PormG
 import PormG.Models
 
-Models.@models Mod_result
 Mod_result = Models.Model("mod_result",
   resultid       = Models.IDField(),
   grid           = Models.IntegerField(null = true),
@@ -68,6 +67,7 @@ Mod_result = Models.Model("mod_result",
   time           = Models.TimeField(null = true),   # #1406
 )
 
+Models.@models Mod_result
 PormG.Models.set_models(@__MODULE__, "mod_mock")
 end
 

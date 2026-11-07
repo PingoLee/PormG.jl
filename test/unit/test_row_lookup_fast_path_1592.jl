@@ -35,7 +35,6 @@ PormG.config["row_lookup_1592"] = PormG.Configuration.Settings(
 module RowLookup1592Models
 import PormG
 import PormG.Models
-Models.@models Constructor Driver
 Constructor = Models.Model("rl1592_constructor", constructorid = Models.IDField(), name = Models.CharField())
 Driver = Models.Model("rl1592_driver",
   driverid      = Models.IDField(),
@@ -43,6 +42,7 @@ Driver = Models.Model("rl1592_driver",
   points        = Models.IntegerField(),
   constructorid = Models.ForeignKey(Constructor, pk_field = "constructorid", related_name = "drivers_fk"),
   teams         = Models.ManyToManyField(Constructor, related_name = "drivers"))
+Models.@models Constructor Driver
 PormG.Models.set_models(@__MODULE__, "row_lookup_1592")
 end
 const RL = RowLookup1592Models

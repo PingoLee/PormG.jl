@@ -678,7 +678,6 @@ module FkShortFormModels
 import PormG
 import PormG.Models
 
-Models.@models Fkscircuit Race Lap
 Fkscircuit = Models.Model("fkscircuit", id = Models.IDField(), name = Models.CharField())
 
 # Race carries a forward FK spelled `circuit_id`...
@@ -704,6 +703,7 @@ Lap = Models.Model("fks_lap",
   name = Models.CharField(),
   race_id = Models.ForeignKey(Race, pk_field = "id", related_name = "circuit"))
 
+Models.@models Fkscircuit Race Lap
 PormG.Models.set_models(@__MODULE__, "fkshort_mock")
 end
 
@@ -765,7 +765,6 @@ module FkShortFormPrefixedModels
 import PormG
 import PormG.Models
 
-Models.@models Fkspcircuit Race Lap
 Fkspcircuit = Models.Model("fkspcircuit", id = Models.IDField(), name = Models.CharField())
 
 Race = Models.Model("fksp_race",
@@ -778,6 +777,7 @@ Lap = Models.Model("fksp_lap",
   name = Models.CharField(),
   race_id = Models.ForeignKey(Race, pk_field = "id", related_name = "circuit"))
 
+Models.@models Fkspcircuit Race Lap
 PormG.Models.set_models(@__MODULE__, "fkshort_prefixed")
 end
 
@@ -841,13 +841,13 @@ module EmptyPrefixReverseModels
 import PormG
 import PormG.Models
 
-Models.@models Epteam Epdriver
 Epteam = Models.Model("epteam", id = Models.IDField(), name = Models.CharField())
 Epdriver = Models.Model("epdriver",
   id = Models.IDField(),
   surname = Models.CharField(),
   team_id = Models.ForeignKey(Epteam, pk_field = "id", related_name = "drivers"))
 
+Models.@models Epteam Epdriver
 PormG.Models.set_models(@__MODULE__, "empty_prefix_q")
 end
 

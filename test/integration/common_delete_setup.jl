@@ -23,7 +23,6 @@ end
 module delete_protect_scratch_models
 import PormG.Models
 
-Models.@models Delete_protect_parent_scratch Delete_protect_child_scratch
 Delete_protect_parent_scratch = Models.Model("delete_protect_parent_scratch",
     id   = Models.IDField(),
     name = Models.CharField()
@@ -40,6 +39,7 @@ Delete_protect_child_scratch = Models.Model("delete_protect_child_scratch",
     label     = Models.CharField(null = true)
 )
 
+Models.@models Delete_protect_parent_scratch Delete_protect_child_scratch
 end
 
 if !@isdefined(ProtectM)
@@ -51,12 +51,12 @@ module keyless_delete_scratch_models
 import PormG.Models
 
 # No IDField — tests the keyless-model delete path.
-Models.@models Keyless_delete_scratch
 Keyless_delete_scratch = Models.Model("keyless_delete_scratch",
     bucket = Models.CharField(),
     label  = Models.CharField(null = true)
 )
 
+Models.@models Keyless_delete_scratch
 end
 
 if !@isdefined(KeylessM)
@@ -67,7 +67,6 @@ end
 module keyless_related_delete_scratch_models
 import PormG.Models
 
-Models.@models Keyless_related_parent_scratch Keyless_related_child_scratch
 Keyless_related_parent_scratch = Models.Model("keyless_related_parent_scratch",
     id   = Models.IDField(),
     name = Models.CharField()
@@ -84,6 +83,7 @@ Keyless_related_child_scratch = Models.Model("keyless_related_child_scratch",
     label     = Models.CharField()
 )
 
+Models.@models Keyless_related_parent_scratch Keyless_related_child_scratch
 end
 
 if !@isdefined(KeylessRelatedM)
@@ -94,7 +94,6 @@ end
 module do_nothing_delete_scratch_models
 import PormG.Models
 
-Models.@models Do_nothing_parent_scratch Do_nothing_child_scratch
 Do_nothing_parent_scratch = Models.Model("do_nothing_parent_scratch",
     id   = Models.IDField(),
     name = Models.CharField()
@@ -112,6 +111,7 @@ Do_nothing_child_scratch = Models.Model("do_nothing_child_scratch",
     label     = Models.CharField(null = true)
 )
 
+Models.@models Do_nothing_parent_scratch Do_nothing_child_scratch
 end
 
 if !@isdefined(DoNothingM)
@@ -122,7 +122,6 @@ end
 module set_null_guard_scratch_models
 import PormG.Models
 
-Models.@models Set_null_guard_parent_scratch Set_null_guard_child_scratch
 Set_null_guard_parent_scratch = Models.Model("set_null_guard_parent_scratch",
     id   = Models.IDField(),
     name = Models.CharField()
@@ -143,6 +142,7 @@ Set_null_guard_child_scratch = Models.Model("set_null_guard_child_scratch",
     label     = Models.CharField(null = true)
 )
 
+Models.@models Set_null_guard_parent_scratch Set_null_guard_child_scratch
 end
 
 if !@isdefined(SetNullGuardM)
@@ -157,7 +157,6 @@ end
 module set_default_guard_scratch_models
 import PormG.Models
 
-Models.@models Set_default_guard_parent_scratch Set_default_guard_child_scratch
 Set_default_guard_parent_scratch = Models.Model("set_default_guard_parent_scratch",
     id   = Models.IDField(),
     name = Models.CharField()
@@ -178,6 +177,7 @@ Set_default_guard_child_scratch = Models.Model("set_default_guard_child_scratch"
     label     = Models.CharField(null = true)
 )
 
+Models.@models Set_default_guard_parent_scratch Set_default_guard_child_scratch
 end
 
 if !@isdefined(SetDefaultGuardM)
@@ -198,7 +198,6 @@ import PormG.Models
 # once per path with a different scoping query each time. `collector.field_updates` used to ASSIGN
 # where `collector.objects` appends, so the second path silently replaced the first and one path's
 # leaves were never nulled.
-Models.@models Mp_root_scratch Mp_mid_scratch Mp_leaf_scratch
 Mp_root_scratch = Models.Model("mp_root_scratch",
     id   = Models.IDField(),
     name = Models.CharField()
@@ -220,6 +219,7 @@ Mp_leaf_scratch = Models.Model("mp_leaf_scratch",
     label = Models.CharField()
 )
 
+Models.@models Mp_root_scratch Mp_mid_scratch Mp_leaf_scratch
 end
 
 if !@isdefined(MultipathSetNullM)
@@ -235,7 +235,6 @@ import PormG.Models
 # foreign key to a driver, and a driver CASCADEs from its team. Deleting the teams with no favourite
 # driver nulls the favourite of a team whose favourite driver the cascade deletes: before #1370 the
 # root's DELETE re-read its own filter after that UPDATE and deleted that team too.
-Models.@models Ot_team_scratch Ot_team_view_scratch Ot_driver_scratch Ot_lineage_scratch Ot_lineage_default_scratch Ot_rival_team_scratch Ot_rival_driver_scratch Ot_tree_scratch Ot_tree_driver_scratch
 Ot_team_scratch = Models.Model("ot_team_scratch",
     id               = Models.IDField(),
     name             = Models.CharField(),
@@ -305,6 +304,7 @@ Ot_tree_driver_scratch = Models.Model("ot_tree_driver_scratch",
                   related_name = "ot_tree_drivers")
 )
 
+Models.@models Ot_team_scratch Ot_team_view_scratch Ot_driver_scratch Ot_lineage_scratch Ot_lineage_default_scratch Ot_rival_team_scratch Ot_rival_driver_scratch Ot_tree_scratch Ot_tree_driver_scratch
 end
 
 if !@isdefined(OwnTableM)

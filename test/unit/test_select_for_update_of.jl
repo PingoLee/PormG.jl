@@ -40,7 +40,6 @@ PormG.config["sfu_of_sl"] = PormG.Configuration.Settings(
 module SfuOfModels
 import PormG
 import PormG.Models
-Models.@models Circuit Race Sponsor Driver Constructor Result
 Circuit = Models.Model("circuit",
   circuitid = Models.IDField(),
   name      = Models.CharField(),
@@ -72,6 +71,7 @@ Result = Models.Model("result",
   # Django-style `<name>_id` column, so `team` and `team_id` are two spellings of ONE relation.
   team_id       = Models.ForeignKey(Constructor, on_delete = "CASCADE", related_name = "team_results"),
 )
+Models.@models Circuit Race Sponsor Driver Constructor Result
 PormG.Models.set_models(@__MODULE__, "sfu_of_pg")
 end
 
@@ -83,7 +83,6 @@ const SFU = SfuOfModels
 module SfuOfModelsSL
 import PormG
 import PormG.Models
-Models.@models Circuit Race Constructor Result
 Circuit = Models.Model("circuit",
   circuitid = Models.IDField(),
   name      = Models.CharField(),
@@ -101,6 +100,7 @@ Result = Models.Model("result",
   raceid        = Models.ForeignKey(Race, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", related_name = "results", null = true),
 )
+Models.@models Circuit Race Constructor Result
 PormG.Models.set_models(@__MODULE__, "sfu_of_sl")
 end
 

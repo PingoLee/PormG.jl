@@ -34,7 +34,6 @@ PormG.config["cjoinon_sl"] = PormG.Configuration.Settings(
 module CJoinOnPGModels
 import PormG
 import PormG.Models
-Models.@models Lap Circuit
 Lap = Models.Model("laps",
   id = Models.IDField(),
   raceid = Models.IntegerField(),
@@ -48,13 +47,13 @@ Circuit = Models.Model("circuits",
   raceid = Models.IntegerField(),
   name = Models.CharField(),
 )
+Models.@models Lap Circuit
 PormG.Models.set_models(@__MODULE__, "cjoinon_pg")
 end
 
 module CJoinOnSLModels
 import PormG
 import PormG.Models
-Models.@models Lap Circuit
 Lap = Models.Model("laps",
   id = Models.IDField(),
   raceid = Models.IntegerField(),
@@ -68,6 +67,7 @@ Circuit = Models.Model("circuits",
   raceid = Models.IntegerField(),
   name = Models.CharField(),
 )
+Models.@models Lap Circuit
 PormG.Models.set_models(@__MODULE__, "cjoinon_sl")
 end
 
@@ -343,7 +343,6 @@ end
 module CJoinOnRelModels
 import PormG
 import PormG.Models
-Models.@models Sponsor Driver Result
 Sponsor = Models.Model("sponsor",
   sponsorid = Models.IDField(),
   name = Models.CharField(),
@@ -359,6 +358,7 @@ Result = Models.Model("result",
   grid = Models.IntegerField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Sponsor Driver Result
 PormG.Models.set_models(@__MODULE__, "cjoinon_sl")
 end
 

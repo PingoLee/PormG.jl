@@ -48,7 +48,6 @@ module PtcModels
 import PormG
 import PormG.Models
 
-Models.@models Ptc_race Ptc_pit
 Ptc_race = Models.Model("ptc_race",
   raceid   = Models.IDField(),
   round    = Models.IntegerField(),
@@ -68,6 +67,7 @@ Ptc_pit = Models.Model("ptc_pit",
   duration = Models.DurationField(null = true),
 )
 
+Models.@models Ptc_race Ptc_pit
 PormG.Models.set_models(@__MODULE__, "ptc_mock")
 end
 

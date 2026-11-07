@@ -486,11 +486,11 @@ PormG.config["q_agg_path_sl"] = PormG.Configuration.Settings(connections = QAggP
 
 module QAggPath
 import PormG, PormG.Models
-Models.@models Driver Result
 Driver = Models.Model("q_agg_path_driver", driverid = Models.IDField(), forename = Models.CharField(),
                       surname = Models.CharField())
 Result = Models.Model("q_agg_path_result", resultid = Models.IDField(), points = Models.FloatField(),
                       driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"))
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "q_agg_path_sl")
 end
 
@@ -686,12 +686,12 @@ import PormG, PormG.Models
 # The relation targets the race's DATE (a unique key), not its integer id: since #1068 a date part
 # over a relation reads the key it holds, and `raceid__@year` over an integer key is refused. Keyed by
 # a date, the spelling these tests use as their vehicle stays legal, and still collides as before.
-Models.@models Race Result
 Race = Models.Model("q_agg_tx_race", raceid = Models.IDField(), year = Models.IntegerField(),
                     date = Models.DateField(unique = true))
 Result = Models.Model("q_agg_tx_result", resultid = Models.IDField(), points = Models.FloatField(),
                       race_date = Models.DateField(),
                       raceid = Models.ForeignKey(Race, pk_field = "date", on_delete = "CASCADE"))
+Models.@models Race Result
 PormG.Models.set_models(@__MODULE__, "q_agg_tx_sl")
 end
 

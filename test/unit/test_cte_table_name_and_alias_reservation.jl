@@ -61,7 +61,6 @@ module CtsModels
 import PormG
 import PormG.Models
 
-Models.@models Cts_grand Cts_parent Cts_child Cts_orphan Cts_tag Cts_item
 Cts_grand = Models.Model("cts_grand",
   id   = Models.IDField(),
   code = Models.CharField(),
@@ -101,6 +100,7 @@ Cts_item = Models.Model("cts_item",
   tags = Models.ManyToManyField(Cts_tag, related_name = "cts_items"),
 )
 
+Models.@models Cts_grand Cts_parent Cts_child Cts_orphan Cts_tag Cts_item
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -112,12 +112,12 @@ module CtsOther
 import PormG
 import PormG.Models
 
-Models.@models Cts_other_parent
 Cts_other_parent = Models.Model("cts_other_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),
 )
 
+Models.@models Cts_other_parent
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -126,13 +126,13 @@ import PormG
 import PormG.Models
 import ..CtsOther
 
-Models.@models Cts_cross_child
 Cts_cross_child = Models.Model("cts_cross_child",
   id     = Models.IDField(),
   parent = Models.ForeignKey(CtsOther.Cts_other_parent, on_delete = "CASCADE", related_name = "cts_cross_kids", null = true),
   note   = Models.CharField(null = true),
 )
 
+Models.@models Cts_cross_child
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -143,12 +143,12 @@ module CtsFarDb
 import PormG
 import PormG.Models
 
-Models.@models Cts_far_parent
 Cts_far_parent = Models.Model("cts_far_parent",
   id  = Models.IDField(),
   sku = Models.CharField(),
 )
 
+Models.@models Cts_far_parent
 PormG.Models.set_models(@__MODULE__, "cts_mock_b")
 end
 
@@ -157,13 +157,13 @@ import PormG
 import PormG.Models
 import ..CtsFarDb
 
-Models.@models Cts_far_child
 Cts_far_child = Models.Model("cts_far_child",
   id     = Models.IDField(),
   parent = Models.ForeignKey(CtsFarDb.Cts_far_parent, on_delete = "CASCADE", related_name = "cts_far_kids", null = true),
   note   = Models.CharField(null = true),
 )
 
+Models.@models Cts_far_child
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 
@@ -441,7 +441,6 @@ end
 module CtsPolluted
 import PormG
 import PormG.Models
-Models.@models Cts_polluted_parent Cts_polluted_child
 module TwinA; export cts_twin; const cts_twin = 1; end
 module TwinB; export cts_twin; const cts_twin = 1; end
 using .TwinA, .TwinB
@@ -459,6 +458,7 @@ Cts_polluted_child = Models.Model("cts_polluted_child",
 
 # `set_models` runs the sibling walker (`_collect_models_and_bindings`); before the guard this line
 # was the first thing to throw.
+Models.@models Cts_polluted_parent Cts_polluted_child
 PormG.Models.set_models(@__MODULE__, "cts_mock")
 end
 

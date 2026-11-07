@@ -69,7 +69,6 @@ module AdmModels
 import PormG
 import PormG.Models
 
-Models.@models Adm_parent Adm_child
 Adm_parent = Models.Model("adm_parent", id = Models.IDField(), sku = Models.CharField())
 Adm_child = Models.Model("adm_child",
   id     = Models.IDField(),
@@ -78,6 +77,7 @@ Adm_child = Models.Model("adm_child",
   qty    = Models.IntegerField(null = true),
   day    = Models.DateField(null = true),   # #878: a date operand for the transforms' subquery
 )
+Models.@models Adm_parent Adm_child
 PormG.Models.set_models(@__MODULE__, "adm_mock")
 end
 

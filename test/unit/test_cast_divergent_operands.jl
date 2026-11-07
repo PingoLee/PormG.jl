@@ -85,7 +85,6 @@ module CcdModels
 import PormG
 import PormG.Models
 
-Models.@models Ccd_team Ccd_driver
 Ccd_team = Models.Model("ccd_team",
   id     = Models.IDField(),
   name   = Models.CharField(),
@@ -109,6 +108,7 @@ Ccd_driver = Models.Model("ccd_driver",
   team     = Models.ForeignKey(Ccd_team, on_delete = "CASCADE"),
 )
 
+Models.@models Ccd_team Ccd_driver
 PormG.Models.set_models(@__MODULE__, "ccd_mock")
 end
 

@@ -87,7 +87,6 @@ end
 
 module Sqs1634Models
 import PormG.Models
-Models.@models Car Lap
 Car = Models.Model("sqs1634_car",
   id = Models.IDField(),
   ref = Models.CharField(max_length = 32),
@@ -99,6 +98,7 @@ Lap = Models.Model("sqs1634_lap",
   id = Models.IDField(),
   lap = Models.IntegerField(),
   car = Models.ForeignKey(Car, pk_field = "id", on_delete = "CASCADE", related_name = "laps"))
+Models.@models Car Lap
 end
 
 const _SQS1634_KEY = "sqs1634"

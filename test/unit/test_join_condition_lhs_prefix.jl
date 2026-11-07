@@ -40,7 +40,6 @@ PormG.config["join_lhs_sl"] = PormG.Configuration.Settings(
 module JoinLhsPGModels
 import PormG
 import PormG.Models
-Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -54,13 +53,13 @@ Result = Models.Model("result",
   dob = Models.DateField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "join_lhs_pg")
 end
 
 module JoinLhsSLModels
 import PormG
 import PormG.Models
-Models.@models Driver Result
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   code = Models.CharField(),
@@ -74,6 +73,7 @@ Result = Models.Model("result",
   dob = Models.DateField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "join_lhs_sl")
 end
 

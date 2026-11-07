@@ -60,7 +60,6 @@ import PormG.Models
 
 # Every mapped field's PHYSICAL name differs from its FIELD name, so any assertion that sees a
 # physical name outside the CTE body is a real failure and not a naming coincidence.
-Models.@models Cdc_parent Cdc_child Cdc_plain Cdc_odd Cdc_odd_child
 Cdc_parent = Models.Model("cdc_parent",
   id   = Models.IDField(),
   sku  = Models.CharField(db_column = "product_sku"),
@@ -94,6 +93,7 @@ Cdc_odd_child = Models.Model("cdc_odd_child",
   odd = Models.ForeignKey(Cdc_odd, on_delete = "CASCADE", null = true),
 )
 
+Models.@models Cdc_parent Cdc_child Cdc_plain Cdc_odd Cdc_odd_child
 PormG.Models.set_models(@__MODULE__, "cte_dbcol_mock")
 end
 

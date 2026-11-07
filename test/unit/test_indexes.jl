@@ -46,7 +46,6 @@ import PormG.Models
 
 # Two plain columns, auto-derived index name (<table>_<cols>_idx). Many rows share a
 # (raceid, lap) pair — one per driver — so this is an index, not a uniqueness rule.
-Models.@models Lap_time Grid_slot
 Lap_time = Models.Model("lap_times",
   id       = Models.IDField(),
   raceid   = Models.IntegerField(),
@@ -64,6 +63,7 @@ Grid_slot = Models.Model("grid_slots",
   indexes  = [Models.Index(fields = ("race", "position"), name = "grid_slot_lookup")],
 )
 
+Models.@models Lap_time Grid_slot
 PormG.Models.set_models(@__MODULE__, "ix_mock_pg")
 end
 const IXM = IndexUnitModels
@@ -276,7 +276,6 @@ module IndexAdvancedModels
 import PormG
 import PormG.Models
 
-Models.@models Result_ix Driver_ix
 Result_ix = Models.Model("result_ix",
   id       = Models.IDField(),
   raceid   = Models.IntegerField(),
@@ -292,6 +291,7 @@ Driver_ix = Models.Model("driver_ix",
     Models.Index(fields = ("dob",), method = "brin"),
   ],
 )
+Models.@models Result_ix Driver_ix
 PormG.Models.set_models(@__MODULE__, "ix_mock_pg")
 end
 const IXA = IndexAdvancedModels

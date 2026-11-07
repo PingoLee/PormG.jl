@@ -42,7 +42,6 @@ for (modname, key) in ((:MrMyModels, "mr_my"), (:MrPGModels, "mr_pg"), (:MrSLMod
   @eval module $modname
   import PormG
   import PormG.Models
-  Models.@models Race Driver Result
   Race = Models.Model(
     raceid = Models.IDField(),
     year = Models.IntegerField(),
@@ -66,6 +65,7 @@ for (modname, key) in ((:MrMyModels, "mr_my"), (:MrPGModels, "mr_pg"), (:MrSLMod
     laps = Models.IntegerField(),
     fastestlaptime = Models.DurationField(null = true),
   )
+  Models.@models Race Driver Result
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end
@@ -77,20 +77,20 @@ PormG.config["mr_my_cross"] = PormG.Configuration.Settings(connections = MrMockM
 module MrMyCrossA
 import PormG
 import PormG.Models
-Models.@models Team Driver
 Team = Models.Model(teamid = Models.IDField(), name = Models.CharField(), country = Models.CharField())
 Driver = Models.Model(driverid = Models.IDField(), surname = Models.CharField(), nationality = Models.CharField(),
   teamid = Models.ForeignKey(Team, pk_field = "teamid", on_delete = "RESTRICT", null = true))
+Models.@models Team Driver
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 module MrMyCrossB
 import PormG
 import PormG.Models
 import ..MrMyCrossA
-Models.@models Lap
 Lap = Models.Model(lapid = Models.IDField(),
   driverid = Models.ForeignKey(MrMyCrossA.Driver, pk_field = "driverid", on_delete = "RESTRICT", related_name = "laps"),
   position = Models.IntegerField(null = true))
+Models.@models Lap
 PormG.Models.set_models(@__MODULE__, "mr_my_cross")
 end
 
@@ -385,10 +385,10 @@ PormG.config["mr_sl338"] = PormG.Configuration.Settings(connections = MrMockSQLi
 module MrSL338Models
 import PormG
 import PormG.Models
-Models.@models Race Result
 Race = Models.Model(raceid = Models.IDField(), year = Models.IntegerField())
 Result = Models.Model(resultid = Models.IDField(),
   raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))
+Models.@models Race Result
 PormG.Models.set_models(@__MODULE__, "mr_sl338")
 end
 
@@ -1730,7 +1730,6 @@ for (modname, key, conn) in ((:MrMyUp, "mr_my_up", MrMockMySQL()), (:MrPGUp, "mr
   import PormG
   import PormG.Models
   # Two unique keys besides the pk; NOT NULL, so a row always supplies both.
-  Models.@models Circuit Constructor Status Standing Season Token Grid Pit Seat Entry Badge
   Circuit = Models.Model("circuit", circuitid = Models.IDField(), circuitref = Models.CharField(unique = true),
                          name = Models.CharField(unique = true), location = Models.CharField(null = true))
   # A nullable unique key: a row that leaves it NULL cannot conflict on it.
@@ -1776,6 +1775,7 @@ for (modname, key, conn) in ((:MrMyUp, "mr_my_up", MrMockMySQL()), (:MrPGUp, "mr
                        raceid = Models.IntegerField(null = true),
                        ticket = Models.UUIDField(unique = true, auto_add = true), note = Models.CharField(null = true),
                        constraints = [Models.UniqueConstraint(fields = ("ref", "raceid"))])
+  Models.@models Circuit Constructor Status Standing Season Token Grid Pit Seat Entry Badge
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

@@ -4,7 +4,7 @@ A models module declares its model set; registration never scans the module's na
 Registration used to find a module's models by walking `names(mod; all = true, imported = true)` and
 again with `usings = true` (#354), reading every name and keeping what was a model: reflection a
 `juliac --trim` binary cannot follow (#1599 round 3, row 8), and action at a distance. A module now
-carries `__pormg_models__::ModelSet`, written by `Models.@models Circuit Race` (the Generator writes
+carries `MODEL_SET::ModelSet`, written by `Models.@models Circuit Race` (the Generator writes
 it) or added by `@import_models` / `import_models` / `@models_module` from the file's top-level
 `X = Models.Model(…)` assignments. One parser, `_declared_model_bindings`, serves every writer.
 
@@ -66,8 +66,10 @@ end
 @testset "@models writes the set; _with_model_set adds one only when it is missing (#1602)" begin
   mod = Module(:DmsMacro)
   Core.eval(mod, :(import PormG.Models))
+  Core.eval(mod, :(Circuit = Models.Model(circuitid = Models.IDField())))
+  Core.eval(mod, :(Race = Models.Model(raceid = Models.IDField())))
   Core.eval(mod, :(Models.@models Circuit Race))
-  set = Models._model_set(mod)
+  set = Base.invokelatest(Models._model_set, mod)
   @test set isa Models.ModelSet
   @test set.bindings == [:Circuit, :Race]
   # Macro expansion wraps the error in a `LoadError`; the `ArgumentError` is its `error`.
@@ -92,7 +94,8 @@ end
 # What it tests: `set_models` on a module that declares `Circuit` and `Race` binds both and fills
 #   `Model(; …)`'s empty name from the declared binding; `get_all_models` returns the declared models
 #   in declaration order; a module with no declaration raises `ModelDefinitionError` naming the module
-#   and `Models.@models`; a declared binding that is unbound or not a model is refused by name.
+#   and `Models.@models`; a declared binding that is unbound fails at the `@models` line (it captures
+#   the models, #1606) and one that holds no model is refused there by name.
 #   `get_all_models` of an undeclared module is empty. No SQL.
 # Why it matters: the refusal is what replaces the scan — an undeclared module is told what to add
 #   instead of having its models guessed.
@@ -121,14 +124,13 @@ end
 
   unbound = Module(:DmsUnbound)
   Core.eval(unbound, :(import PormG.Models))
-  Core.eval(unbound, :(Models.@models Ghost))
-  err = try Base.invokelatest(Models.set_models, unbound, "dms_mock"); nothing catch e; e end
-  @test err isa PormG.ModelDefinitionError && occursin("`Ghost`", err.msg)
+  # The set captures the models when its line runs (#1606), so an unbound binding fails right there.
+  err = try Core.eval(unbound, :(Models.@models Ghost)); nothing catch e; e end
+  @test err isa UndefVarError && err.var === :Ghost
 
   notmodel = Module(:DmsNotModel)
   Core.eval(notmodel, :(import PormG.Models; Laps = 58))
-  Core.eval(notmodel, :(Models.@models Laps))
-  err = try Base.invokelatest(Models.set_models, notmodel, "dms_mock"); nothing catch e; e end
+  err = try Core.eval(notmodel, :(Models.@models Laps)); nothing catch e; e end
   @test err isa PormG.ModelDefinitionError && occursin("`Laps` holds a Int64", err.msg)
 end
 

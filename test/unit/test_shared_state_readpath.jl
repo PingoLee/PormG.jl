@@ -37,13 +37,13 @@ module SharedStateReadPathModels
 import PormG
 import PormG.Models
 
-Models.@models Result
 Result = Models.Model("ss_results",
   id = Models.IDField(),
   driverid = Models.IntegerField(),
   points = Models.IntegerField(null=true),
 )
 
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "ss_mock")
 end
 

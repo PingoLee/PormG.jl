@@ -496,13 +496,13 @@ PormG.config[KEY_1638] = PormG.Configuration.Settings(
 module Models1638
 import PormG
 import PormG.Models
-Models.@models Status Result
 Status = Models.Model("t1638_status", statusid = Models.IDField(), status = Models.CharField())
 Result = Models.Model("t1638_result",
   resultid = Models.IDField(),
   statusid = Models.ForeignKey(Status, pk_field = "statusid", on_delete = "CASCADE", related_name = "results"),
   points   = Models.IntegerField(),
 )
+Models.@models Status Result
 PormG.Models.set_models(@__MODULE__, "t1638_pg")
 end
 

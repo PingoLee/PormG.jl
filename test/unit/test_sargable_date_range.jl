@@ -59,7 +59,6 @@ import PormG
 import PormG.Models
 using PormG.Models: Model, IDField, DateField, DateTimeField, CharField, ForeignKey, ManyToManyField
 
-Models.@models _SdrTeam _SdrTag _SdrEvent _SdrLog
 _SdrTeam = Model("sdr_teams",
   id         = IDField(),
   founded    = DateField(),
@@ -87,6 +86,7 @@ _SdrLog = Model("sdr_logs",
   eventid = ForeignKey(_SdrEvent, pk_field="id", related_name="logs"),
 )
 
+Models.@models _SdrTeam _SdrTag _SdrEvent _SdrLog
 PormG.Models.set_models(@__MODULE__, "sargable_mock")
 end
 

@@ -45,7 +45,6 @@ module UdsModels
 import PormG
 import PormG.Models
 
-Models.@models Uds_team Uds_driver
 Uds_team = Models.Model("uds_team",
   id     = Models.IDField(),
   budget = Models.DecimalField(max_digits = 12, decimal_places = 3, null = true),
@@ -62,6 +61,7 @@ Uds_driver = Models.Model("uds_driver",
   team    = Models.ForeignKey(Uds_team, on_delete = "CASCADE"),
 )
 
+Models.@models Uds_team Uds_driver
 PormG.Models.set_models(@__MODULE__, "uds_mock")
 end
 

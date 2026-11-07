@@ -3,13 +3,13 @@ module automatic_models
 import PormG.Models
 import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING
 
-Models.@models Just_a_test_deletion
 Just_a_test_deletion::Models.ModelType = Models.Model("just_a_test_deletion",
   id = Models.IDField(),
   name = Models.CharField(),
   test_result = Models.ForeignKey("result", null=true, pk_field="resultid"),
   test_result2 = Models.ForeignKey("result", null=true, pk_field="resultid"))
 
+Models.@models Just_a_test_deletion
 Models.set_models(@__MODULE__, @__DIR__)
 
 end

@@ -41,7 +41,6 @@ PormG.config["zsa_mock"] = PormG.Configuration.Settings(
 module ZsaModels
 import PormG
 import PormG.Models
-Models.@models Race Result
 Race = Models.Model("zsa_race", id = Models.IDField(), name = Models.CharField())
 Result = Models.Model("zsa_result",
   id     = Models.IDField(),
@@ -51,6 +50,7 @@ Result = Models.Model("zsa_result",
   fee    = Models.DecimalField(max_digits = 12, decimal_places = 2, null = true),
   laps   = Models.IntegerField(null = true),
 )
+Models.@models Race Result
 PormG.Models.set_models(@__MODULE__, "zsa_mock")
 end
 

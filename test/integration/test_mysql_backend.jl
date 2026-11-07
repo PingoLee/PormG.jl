@@ -82,10 +82,10 @@ _conninfo_1618(info::AbstractDict) =
 module P1Models
 import PormG
 import PormG.Models
-Models.@models Absent
 Absent = Models.Model("pormg_my_phase1_absent",
   statusid = Models.IDField(),
   status = Models.CharField(max_length = 20))
+Models.@models Absent
 end
 
 @testset "MySQL backend, phase 1 (#1130)" begin

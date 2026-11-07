@@ -48,7 +48,6 @@ module CteErgoModels
 import PormG
 import PormG.Models
 
-Models.@models Cte_race Cte_result
 Cte_race = Models.Model("cte_race",
   raceid = Models.IDField(),
   year = Models.IntegerField(),
@@ -61,6 +60,7 @@ Cte_result = Models.Model("cte_result",
   positionorder = Models.IntegerField(),
 )
 
+Models.@models Cte_race Cte_result
 PormG.Models.set_models(@__MODULE__, "cte_ergo_mock")
 end
 

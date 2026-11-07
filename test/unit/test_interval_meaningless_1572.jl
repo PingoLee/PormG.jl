@@ -45,7 +45,6 @@ module Im1572Models
 import PormG
 import PormG.Models
 
-Models.@models Im_lap
 Im_lap = Models.Model("im_lap",
   id        = Models.IDField(),
   grid      = Models.IntegerField(null = true),
@@ -56,6 +55,7 @@ Im_lap = Models.Model("im_lap",
   code      = Models.CharField(null = true),
 )
 
+Models.@models Im_lap
 PormG.Models.set_models(@__MODULE__, "im1572_mock")
 end
 

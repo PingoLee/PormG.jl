@@ -44,7 +44,6 @@ for (modname, key) in ((:JcardPGModels, "jcard_pg"), (:JcardSLModels, "jcard_sl"
   @eval module $modname
   import PormG
   import PormG.Models
-  Models.@models Team Sponsor Driver Profile Result
   Team = Models.Model("team",
     teamid = Models.IDField(),
     name = Models.CharField(),
@@ -76,6 +75,7 @@ for (modname, key) in ((:JcardPGModels, "jcard_pg"), (:JcardSLModels, "jcard_sl"
     carno = Models.ForeignKey(Driver, pk_field = "number", on_delete = "CASCADE", null = true,
                               related_name = "numbered_results"),
   )
+  Models.@models Team Sponsor Driver Profile Result
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

@@ -37,7 +37,6 @@ module ModelDeepcopyModels
 import PormG
 import PormG.Models
 
-Models.@models Mdc_driver Mdc_results
 Mdc_driver = Models.Model("mdc_driver",
   driverid = Models.IDField(),
   surname = Models.CharField(),
@@ -49,6 +48,7 @@ Mdc_results = Models.Model("mdc_results",
   points = Models.IntegerField(null = true),
 )
 
+Models.@models Mdc_driver Mdc_results
 PormG.Models.set_models(@__MODULE__, "mdc_mock")
 end
 

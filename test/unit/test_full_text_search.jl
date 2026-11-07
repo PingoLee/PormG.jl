@@ -46,7 +46,6 @@ PormG.config["fts31"] = PormG.Configuration.Settings(connections = _FTS_PG, chan
 module FtsModels31
 import PormG
 import PormG.Models
-Models.@models Driver Race Result Report Story
 Driver = Models.Model("driver",
   driverid = Models.IDField(),
   forename = Models.CharField(max_length = 255),
@@ -78,6 +77,7 @@ Story = Models.Model("story",
   body     = Models.TextField(null = true),
   search   = Models.SearchVectorField(generated_from = ("title", "body"), config = "english", weights = ("A", "B")),
 )
+Models.@models Driver Race Result Report Story
 PormG.Models.set_models(@__MODULE__, "fts31")
 end
 const _F = FtsModels31

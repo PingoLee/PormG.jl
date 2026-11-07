@@ -51,7 +51,6 @@ module CustomJoinCopyModels
 import PormG
 import PormG.Models
 
-Models.@models Cjc_driver Cjc_results
 Cjc_driver = Models.Model("cjc_driver",
   driverid = Models.IDField(),
   surname = Models.CharField(),
@@ -64,6 +63,7 @@ Cjc_results = Models.Model("cjc_results",
   points = Models.IntegerField(null = true),
 )
 
+Models.@models Cjc_driver Cjc_results
 PormG.Models.set_models(@__MODULE__, "cjc_mock")
 end
 

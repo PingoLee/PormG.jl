@@ -243,13 +243,11 @@ const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
   "src/models/fields.jl" => 2,                   # a field type's default instance by its name; a field
                                                  # type's accepted keywords by a name that arrives as a
                                                  # string (#1333: the importers, the refusal message)
-  "src/querybuilder/build_helpers.jl" => 1,      # a lookup transform by name
+  # #1611: the querybuilder's operator, function and transform lookups are branches generated at
+  # definition time from their name lists, and a related model by its binding goes through
+  # `Models._resolve_target_model` (`_bound_model`, join_conditions.jl). execution_write.jl's one site is
+  # `_row_related_model`, which the model-graph work (#1601) removes.
   "src/querybuilder/execution_write.jl" => 1,    # a foreign key's target model by binding name (#211)
-  "src/querybuilder/filter_nodes.jl" => 1,       # Dialect operator by name
-  "src/querybuilder/filter_operators.jl" => 3,   # Dialect operators by name
-  "src/querybuilder/join_conditions.jl" => 5,    # a related model by binding name (#211)
-  "src/querybuilder/select_nodes.jl" => 1,       # Dialect function by name; the two call sites share
-                                                 # `_function_sql` since #1332
 )
 
 @testset "#1346: getfield(<x>, Symbol(…)) sites match the reviewed counts" begin

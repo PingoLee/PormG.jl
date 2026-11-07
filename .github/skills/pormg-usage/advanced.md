@@ -153,8 +153,8 @@ M.Lap_times.objects.
 PormG.Configuration.load_many(["db", "db_reporting"]; env = "dev")   # several static configs
 M.Driver.objects.filter("nationality" => "British").db("db_reporting").list()
 
-PormG.register_connection("tenant_42", "postgres://user:pass@host/tenant_42"; env = "prod")  # at runtime
-PormG.config["tenant_42"].change_data = true    # runtime connections start read-only
+PormG.register_connection("tenant_42", "postgres://user:pass@host/tenant_42"; env = "prod",
+                          change_data = true)   # at runtime; read-only unless change_data = true
 M.Driver.objects.db("tenant_42").list()
 ```
 

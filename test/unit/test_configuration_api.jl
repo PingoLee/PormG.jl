@@ -2134,7 +2134,10 @@ end
             logs, err = refused(() -> PormG.Configuration.register_connection("cfg1256_t", ":memory:";
                                                                               adapter = "Oracle", env = "test"))
             @test err isa PormG.InvalidConfigurationError
-            @test occursin("Unsupported adapter: Oracle", sprint(showerror, err))
+            # The refusal names what it accepts and does not echo the value (#1606 review: a resolver
+            # answer with its entries swapped would put the URL into the message).
+            @test occursin("unsupported `adapter`", sprint(showerror, err))
+            @test !occursin("Oracle", sprint(showerror, err))
             @test !closed_old(logs)
             # Discrimination: an accepted re-registration does close the old pool, with the warning.
             logs, err = refused(() -> PormG.Configuration.register_connection("cfg1256_t", ":memory:";

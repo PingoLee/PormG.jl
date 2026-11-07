@@ -228,3 +228,80 @@ end
     cols = (resultid = Int64[1], points = Float64[25.0])
     @test_throws ArgumentError PormG.ConnectionPool._decoded(pg, cols, decoder)
 end
+
+# ── A stand-in SQLite pool: its handle is not an `SQLite.DB` ────────────────────────────────────────
+# So the SQLite worker reaches core's `backend_execute_rows` fallback (`decode_on_worker` over the
+# materialized result `backend_execute` returns), not the extension's stepping method. The fields are
+# `SQLiteConnectionPool`'s, as the pool mocks in test_fetch_retry_safety.jl copy them; `rows` is the
+# materialized result the "driver" returns, and `fail_times` makes the next statements fail with a lost
+# connection that never ran (retry-safe), as a drop before the statement reached the database.
+mutable struct DcFakeConn
+    closed::Bool
+end
+Base.close(c::DcFakeConn) = (c.closed = true; nothing)
+struct DcNeverRan <: Exception end
+Base.showerror(io::IO, ::DcNeverRan) = print(io, "mock: connection lost before the statement ran")
+
+mutable struct DcMockSQLitePool <: PormG.PormGSQLite
+    connections::Vector{Any}
+    available::Vector{Bool}
+    connection_string::String
+    pool_size::Int
+    split_read_write::Bool
+    writer_slot::Int
+    reader_cursor::Int
+    lock::ReentrantLock
+    write_lock::ReentrantLock
+    rows::Vector{NamedTuple{(:resultid, :points), Tuple{Int64, Float64}}}
+    fail_times::Int
+    executed::Int
+    renewals::Int
+end
+DcMockSQLitePool(rows; fail_times::Int = 0) =
+    DcMockSQLitePool(Any[DcFakeConn(false)], [true], "mock://sqlite", 1, false, 1, 0, ReentrantLock(),
+                     ReentrantLock(), rows, fail_times, 0, 0)
+PormG.backend_is_alive(::DcMockSQLitePool, conn) = conn isa DcFakeConn && !conn.closed
+PormG.backend_connect(::DcMockSQLitePool; read_only::Bool = false) = DcFakeConn(false)
+PormG.backend_renew_connection(pool::DcMockSQLitePool, conn; read_only::Bool = false) =
+    (pool.renewals += 1; DcFakeConn(false))
+# Runs on the global SQLite worker: no @test in here.
+function PormG.backend_execute(pool::DcMockSQLitePool, conn, sql::String, params)
+    pool.executed += 1
+    pool.fail_times > 0 && (pool.fail_times -= 1; throw(DcNeverRan()))
+    return pool.rows
+end
+PormG.backend_is_connection_error(::DcMockSQLitePool, e) = e isa DcNeverRan
+PormG.backend_is_retry_safe(::DcMockSQLitePool, ::DcNeverRan) = true
+
+_dc_decoder(::Type{T}) where T = _DC_QB._RowDecoder{T}((PormG.NO_READ_PARSER, PormG.NO_READ_PARSER),
+                                                      _DC_QB._TypedReadSite("a typed read into $(T)", "dc1605_result"))
+_dc_fetch_error(pool, decoder) = try fetch(pool, "SELECT resultid, points FROM results"; _decode = decoder); nothing catch e; e end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests: a typed read on an SQLite-family pool whose handle is not an `SQLite.DB`, so the worker runs
+# core's `backend_execute_rows` fallback: the rows decode, and an error the row type's own constructor
+# raises while a row is built.
+# Expected: the decoded rows; then the `ArgumentError` itself, not a `StatementError` wrapping it, and
+# the pool's slot is free afterwards.
+# Matters: the fallback decodes on the worker inside its `try`, where a thrown error becomes the
+# statement's; it records the error on the decoder as the extension's stepping method does, so the
+# contract the extension keeps holds on every pool that reaches the worker.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "core's backend_execute_rows fallback decodes, and an error building a row reaches the caller unwrapped (#1605)" begin
+    ok = DcMockSQLitePool([(resultid = 1, points = 10.0), (resultid = 2, points = 18.0)])
+    @test fetch(ok, "SELECT resultid, points FROM results"; _decode = _dc_decoder(DcCheckedRow)) ==
+          [DcCheckedRow(1, 10.0), DcCheckedRow(2, 18.0)]
+    bad = DcMockSQLitePool([(resultid = 1, points = 10.0), (resultid = 2, points = 25.0)])
+    err = _dc_fetch_error(bad, _dc_decoder(DcCheckedRow))
+    @test err isa ArgumentError
+    @test !(err isa PormG.DatabaseError)
+    @test occursin("points above 20", sprint(showerror, err))
+    @test bad.executed == 1                 # a row-building error is not a lost connection: not re-run
+    @test all(bad.available)                # the slot was released
+    # The fallback's two halves, alone: a recorded error comes back from `decoded_on_worker`, and a
+    # decoder that is not the query builder's is called as it is.
+    d = _dc_decoder(DcCheckedRow)
+    @test PormG.decode_on_worker(d, bad.rows) == DcCheckedRow[]
+    @test_throws ArgumentError PormG.decoded_on_worker(d, DcCheckedRow[])
+    @test PormG.decode_on_worker(length, [1, 2, 3]) == 3
+end

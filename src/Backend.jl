@@ -132,15 +132,21 @@ Kernel._server_version(pool::PormGMySQL)::Int = backend_mysql_version(pool)
 
 # #1605: the typed read's execute. `decode` is the query builder's row decoder (a callable returning
 # `Vector{T}`), handed down so the rows are decoded where the driver's result is concrete, never across a
-# call typed `Any`. The fallback decodes the materialized result `backend_execute` returns, which is
-# right for every driver: an extension adds a method only to decode without materializing (SQLite steps
-# its statement straight into `T`). Not in the loop above: a missing driver raises from `backend_execute`.
+# call typed `Any`. Only SQLite's worker calls it (PostgreSQL and MySQL decode in `fetch`, after the
+# statement's `try`). The fallback decodes the materialized result `backend_execute` returns, through
+# `decode_on_worker`, so a row-building error is recorded rather than thrown inside the worker's `try`,
+# where it would come back wrapped as the statement's `StatementError`; it serves an SQLite-family pool
+# whose handle is not an `SQLite.DB` (a test's stand-in). The SQLite extension adds a method to decode
+# without materializing (it steps its statement straight into `T`) and records the same way. Not in the
+# loop above: a missing driver raises from `backend_execute`.
 function backend_execute_rows end
 backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =
-  decode(backend_execute(pool, conn, sql, params))
-# What `fetch` does with the rows a worker decoded, outside its `try`: the query builder's decoder raises
-# an error the worker recorded instead of throwing (`QueryBuilder._RowDecoder`), so it reaches the caller
-# unwrapped. Any other value is the rows.
+  decode_on_worker(decode, backend_execute(pool, conn, sql, params))
+# The worker's half: decode a materialized result. The query builder's decoder records an error it
+# raises instead of throwing it (`QueryBuilder._RowDecoder`); any other decoder is called as it is.
+decode_on_worker(decode, result) = decode(result)
+# `fetch`'s half, outside its `try`: the query builder's decoder raises an error the worker recorded,
+# so it reaches the caller unwrapped. Any other value is the rows.
 decoded_on_worker(decode, result) = result
 
 # #1548: a server round trip on an idle connection, asked at checkout only for a slot idle past the pool's

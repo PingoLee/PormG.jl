@@ -196,6 +196,17 @@ _RowDecoder{T}(parsers::P, site::_TypedReadSite) where {T,P<:Tuple{Vararg{ReadPa
 
 # The worker's half: record the error and stop (the extension returns the rows it has, unread).
 _decode_failed!(d::_RowDecoder, e::Exception) = (d.failure[] = e; nothing)
+# The same for Backend.jl's fallback, which decodes a materialized result on the worker (a stand-in
+# SQLite pool's): an error the decode raises is recorded, and `decoded_on_worker` raises it.
+function decode_on_worker(d::_RowDecoder{T}, result)::Vector{T} where T
+  try
+    return d(result)
+  catch e
+    (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement
+    _decode_failed!(d, e)
+    return T[]
+  end
+end
 # `fetch`'s half, outside its `try`: raise what the worker recorded, unwrapped.
 function decoded_on_worker(d::_RowDecoder{T}, result) where T
   f = d.failure[]

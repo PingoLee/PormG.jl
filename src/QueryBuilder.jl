@@ -58,7 +58,7 @@ import PormG: backend_postgres_parameter_limit   # PostgreSQL: the driver's bind
 # undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.
 import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_kind
 import PormG: read_parser, ReadParser, NO_READ_PARSER   # #1605: the concrete slot 3 the typed read decodes with
-import PormG: decoded_on_worker   # #1605: raise a row-building error the SQLite worker recorded
+import PormG: decode_on_worker, decoded_on_worker   # #1605: record, then raise, a row-building error on the SQLite worker
 # #1632 — slot 4: the Julia type a read delivers, which `show_query = :struct` writes into a struct.
 import PormG: julia_type, _JULIA_TYPE_ENGINES
 # #721 — the SQLite collector binds through the same table, so a literal never reaches SQLite.jl's

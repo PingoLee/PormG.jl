@@ -239,7 +239,7 @@ end
 
 @testset "_settings_key finds the entry by identity, else falls back to the folder" begin
     s = Configuration.Settings(db_def_folder = "/srv/app/db")
-    cfg = Dict{String,PormG.PormGSettings}("db" => s)
+    cfg = Dict{String,PormG.Configuration.Settings}("db" => s)
     @test Configuration._settings_key(s, cfg) == "db"
     # An equal-looking but distinct entry is not the same entry.
     @test Configuration._settings_key(Configuration.Settings(db_def_folder = "/srv/app/db"), cfg) == "/srv/app/db"

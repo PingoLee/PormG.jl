@@ -1428,7 +1428,7 @@ function init_migrations(settings::PormGSettings)
   init_migrations(settings.connections)
 end
 
-function init_migrations(db::String; config::Dict{String,PormGSettings} = config)
+function init_migrations(db::String; config::Dict{String,Settings} = config)
   settings = config[db]
   init_migrations(settings)
 end
@@ -1729,7 +1729,7 @@ function status(settings::PormGSettings)::MigrationStatus
   status(settings.connections, settings)
 end
 
-function status(db::String; config::Dict{String,PormGSettings} = config)::MigrationStatus
+function status(db::String; config::Dict{String,Settings} = config)::MigrationStatus
   settings = config[db]
   status(settings)
 end
@@ -2055,7 +2055,7 @@ function dry_run(settings::PormGSettings)::DryRunResult
   dry_run(settings.connections, settings)
 end
 
-function dry_run(db::String; config::Dict{String,PormGSettings} = config)::DryRunResult
+function dry_run(db::String; config::Dict{String,Settings} = config)::DryRunResult
   settings = config[db]
   dry_run(settings)
 end
@@ -2860,7 +2860,7 @@ function check(settings::PormGSettings; kwargs...)::SchemaCheckResult
   check(settings.connections, settings; kwargs...)
 end
 
-function check(db::String; config::Dict{String,PormGSettings} = config, kwargs...)::SchemaCheckResult
+function check(db::String; config::Dict{String,Settings} = config, kwargs...)::SchemaCheckResult
   settings = config[db]
   check(settings; kwargs...)
 end
@@ -4042,7 +4042,7 @@ end
 # String-based entry point
 # ==============================================================================
 
-function migrate(db::String; config::Dict{String,PormGSettings} = config, kwargs...)::MigrationResult
+function migrate(db::String; config::Dict{String,Settings} = config, kwargs...)::MigrationResult
   settings = config[db]
   migrate(settings.connections, settings; kwargs...)
 end
@@ -4096,7 +4096,7 @@ function mark_applied(connection::_SQLEngine, settings::PormGSettings,
   @info("Marked version $version as applied.")
 end
 
-function mark_applied(db::String, version::String, name::String; config::Dict{String,PormGSettings} = config, kwargs...)
+function mark_applied(db::String, version::String, name::String; config::Dict{String,Settings} = config, kwargs...)
   settings = config[db]
   mark_applied(settings.connections, settings, version, name; kwargs...)
 end
@@ -4133,7 +4133,7 @@ function mark_failed(connection::_SQLEngine, settings::PormGSettings,
   @info("Marked version $version as failed.")
 end
 
-function mark_failed(db::String, version::String; config::Dict{String,PormGSettings} = config)
+function mark_failed(db::String, version::String; config::Dict{String,Settings} = config)
   settings = config[db]
   mark_failed(settings.connections, settings, version)
 end
@@ -4158,7 +4158,7 @@ function remove_migration_record(connection::_SQLEngine, settings::PormGSettings
   @info("Removed migration record for version $version.")
 end
 
-function remove_migration_record(db::String, version::String; config::Dict{String,PormGSettings} = config)
+function remove_migration_record(db::String, version::String; config::Dict{String,Settings} = config)
   settings = config[db]
   remove_migration_record(settings.connections, settings, version)
 end
@@ -4218,7 +4218,7 @@ function discard_pending_migration(settings::PormGSettings; backup::Bool = true)
   return (discarded = true, path = pending_path, backup = backup_path, tables = tables, statements = statements)
 end
 
-function discard_pending_migration(db::String; config::Dict{String,PormGSettings} = config, backup::Bool = true)
+function discard_pending_migration(db::String; config::Dict{String,Settings} = config, backup::Bool = true)
   settings = config[db]
   discard_pending_migration(settings; backup = backup)
 end
@@ -4297,7 +4297,7 @@ function run_once(f::Function, connection::_SQLEngine, settings::PormGSettings,
   return _run_once_locked(f, connection, settings, step, transaction, timeouts)
 end
 
-function run_once(f::Function, db::String, name::AbstractString; config::Dict{String,PormGSettings} = config,
+function run_once(f::Function, db::String, name::AbstractString; config::Dict{String,Settings} = config,
                   transaction::Bool = true, lock_wait::Real = 30)::Symbol
   settings = config[db]
   return run_once(f, settings.connections, settings, name; transaction = transaction, lock_wait = lock_wait)
@@ -4424,7 +4424,7 @@ not loaded raises `InvalidConfigurationError`. Inside an open transaction on tha
 lock that serializes it is released.
 """
 function ensure_table!(model::PormGModel, key::String; indexes::Bool = true, force::Bool = false,
-                       config::Dict{String,PormGSettings} = config)::Symbol
+                       config::Dict{String,Settings} = config)::Symbol
   haskey(config, key) || throw(InvalidConfigurationError(
     "ensure_table!: no configuration is loaded under \"$(key)\". Load it first — " *
     "`PormG.Configuration.load($(repr(key)); env = \"…\")`."))

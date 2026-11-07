@@ -38,14 +38,15 @@ const _EB_REVIEWED = Dict(
   #     yet) and any other (three); the `url:` / `postgres_driver:` warnings are SQLite-only advice
   #     that fires only for `adapter: SQLite`; `_peek_driver` (#1232) names each adapter to pick the
   #     driver extension `load` checks, and leaves any other adapter to the reader that refuses it
-  #     (three);
+  #     (three); `_build_connection_pool!` builds each adapter's own pool and refuses any other
+  #     (three; the scan sees them since #1606 reads `adapter` typed, where it indexed the dict);
   #   - ConnectionPool: waiting for the SQLite worker before closing a handle, and SQLite's benign
   #     "no transaction is active" rollback — quirks whose other arm is the engine-neutral path;
   #   - planner: SQLite's reserved `sqlite_` index prefix, and its three `ADD COLUMN` limits, whose
   #     other arm is the plain `ADD COLUMN` every engine has;
   #   - importers: the SQLite-only and MySQL-only importers' capability refusals (each reads its own
   #     catalog, so the other arm is a refusal, not another engine's path); tools: the setup wizard's choice.
-  "src/Configuration.jl" => 11,
+  "src/Configuration.jl" => 14,
   "src/ConnectionPool.jl" => 2,
   "src/migrations/importers.jl" => 2,
   "src/migrations/planner.jl" => 4,

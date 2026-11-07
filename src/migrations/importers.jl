@@ -285,7 +285,7 @@ function import_models_from_postgres(db::String;
   include_table::Union{Vector{String}, Nothing} = nothing,
   include_views::Bool = false,
   file::String="automatic_models.jl",
-  config::Dict{String,PormGSettings} = config)
+  config::Dict{String,Settings} = config)
   
   settings = Configuration.get_settings(db)
   Configuration._require_folder_backed(settings, "import_models_from_postgres")

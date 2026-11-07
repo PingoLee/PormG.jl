@@ -584,9 +584,10 @@ if HAS_CONFIG_LOWER
   # ───────────────────────────────────────────────────────────────────────────
   @testset "no credential survives serialization" begin
     settings = _settings649()
-    # `PormG.config` is a `Dict{String,PormGSettings}`; JSON's own `lower(::AbstractDict)` walks it
-    # to our method, so the real global needs no separate arm — asserted here with a stand-in of
-    # the same type rather than by mutating the process-wide config.
+    # `PormG.config` is a `Dict{String,Settings}` (#1622); JSON's own `lower(::AbstractDict)` walks a
+    # dict of settings to our method, so the real global needs no separate arm — asserted here with a
+    # stand-in typed by the abstract root (which covers the concrete one) rather than by mutating the
+    # process-wide config.
     config_like = Dict{String, PormG.PormGSettings}("j649" => settings)
 
     holders = Pair{String, Any}[

@@ -362,3 +362,50 @@ end
     merge!(PormG.config, saved)
   end
 end
+
+# What: `register_connection`'s `change_data` / `change_db` keywords, and the same entries in a
+#   connection resolver's `Dict`.
+# Expected: both default to `false` (read-only, as before); passed `true`, the entry records them; a
+#   resolver's `"change_data" => true` registers a writable entry; a value that is not a `Bool` raises
+#   `InvalidConfigurationError` naming the entry.
+# Why: an app with its configuration in code (no `connection.yml`, the path a trimmed build takes,
+#   #1599 proposal 1) could only write by setting `config[key].change_data = true` by hand (#1606).
+@testset "register_connection states writes and migrations (#1606)" begin
+  saved = copy(PormG.config)
+  saved_resolver = Configuration._CONNECTION_RESOLVER[]
+  try
+    Configuration.register_connection("reg1606_ro", "file:reg1606_ro?mode=memory&cache=shared";
+                                      adapter = "SQLite", env = "dev", pool_size = 1)
+    @test PormG.config["reg1606_ro"].change_data === false
+    @test PormG.config["reg1606_ro"].change_db === false
+    Configuration.register_connection("reg1606_rw", "file:reg1606_rw?mode=memory&cache=shared";
+                                      adapter = "SQLite", env = "dev", pool_size = 1,
+                                      change_data = true, change_db = true)
+    @test PormG.config["reg1606_rw"].change_data === true
+    @test PormG.config["reg1606_rw"].change_db === true
+
+    Configuration.set_connection_resolver(k -> k == "reg1606_res" ?
+      Dict("url" => "file:reg1606_res?mode=memory&cache=shared", "adapter" => "SQLite",
+           "pool_size" => 1, "env" => "dev", "change_data" => true) :
+      k == "reg1606_bad" ?
+      Dict("url" => "file:reg1606_bad?mode=memory&cache=shared", "adapter" => "SQLite",
+           "env" => "dev", "change_data" => "yes") : nothing)
+    @test Configuration.get_settings("reg1606_res").change_data === true
+    @test Configuration.get_settings("reg1606_res").change_db === false
+    err = try
+      Configuration.get_settings("reg1606_bad"); nothing
+    catch e
+      e
+    end
+    @test err isa PormG.InvalidConfigurationError
+    @test occursin("\"change_data\"", sprint(showerror, err))
+    @test !haskey(PormG.config, "reg1606_bad")
+  finally
+    Configuration._CONNECTION_RESOLVER[] = saved_resolver
+    for k in ("reg1606_ro", "reg1606_rw", "reg1606_res")
+      haskey(PormG.config, k) && Configuration.unregister_connection(k)
+    end
+    empty!(PormG.config)
+    merge!(PormG.config, saved)
+  end
+end

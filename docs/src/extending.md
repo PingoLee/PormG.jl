@@ -91,13 +91,23 @@ PormG.set_connection_resolver() do key
 end
 ```
 
-### `register_connection(key, url; adapter, pool_size, env)`
+### `register_connection(key, url; adapter, pool_size, env, change_data, change_db)`
 
 Register a connection pool dynamically at runtime (instead of from a `connection.yml` folder).
 The environment it records follows `load`'s rule: `env =`, else a non-blank `PORMG_ENV`, else — in a
 REPL only — `"dev"`; a service that states neither gets `InvalidConfigurationError` (#1256). A
 resolver's tuple carries no environment, so a host whose process does not export `PORMG_ENV` returns
 the `Dict` form with `"env"`. See [Dynamic & Multi-Tenancy](configuration/dynamic.md).
+
+`change_data` and `change_db` are the `config:` settings of `connection.yml`: `change_data = true`
+lets the entry write, `change_db = true` lets it run migrations. Both default to `false`, so an
+entry is read-only unless it says so. A resolver's `Dict` states them with `"change_data"` and
+`"change_db"` entries. An app that keeps its whole configuration in code needs no YAML:
+
+```julia
+PormG.Configuration.register_connection("f1", "postgresql://f1:…@db.internal/f1";
+                                        env = "prod", change_data = true)
+```
 
 !!! note "Planned hook"
     Nitro guards a call to `PormG.register_field_hook(:PasswordField, :auto_hash, …)` with

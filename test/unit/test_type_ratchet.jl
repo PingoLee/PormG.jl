@@ -89,8 +89,11 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   # abstract `SQLType*` families in querybuilder/types.jl.
   "ext/PormGLibPQExt.jl" => 3,
   "src/AdvisoryLock.jl" => 1,
-  "src/Configuration.jl" => 4,
+  "src/Configuration.jl" => 2,
   "src/ConnectionPool.jl" => 9,
+  "src/Kernel.jl" => 2,                 # #1622: `Settings` moved here from Configuration.jl with its two
+                                        # open fields, `connections` (any pool, test stand-ins included)
+                                        # and the `before_connect` callable
   "src/Models.jl" => 4,                 # #1604: `ModelType.name::String` (was `AbstractString`)
   "src/column_ir.jl" => 4,
   "src/exceptions.jl" => 3,

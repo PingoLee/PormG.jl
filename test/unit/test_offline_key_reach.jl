@@ -181,6 +181,10 @@ const _OKR_REVIEWED = Dict(
   # Closes the slots a pool opened. An offline pool opens none, so it closes nothing; `register_offline`
   # calls it when it replaces an offline entry (both exercised in the testset above).
   ("src/ConnectionPool.jl", "close_pool!") => 3,
+  # `with_pool`'s closed dispatch (#1622): it picks the concrete type to call `f` with and decides
+  # nothing about liveness, so an offline pool takes its arm like any other and is refused where it
+  # always was, in `ensure_before_connect!` before a driver sees it.
+  ("src/ConnectionPool.jl", "isa") => 4,
   # `_is_live_pool`: the type check, then `!_is_offline_pool(pool)` (#1453).
   ("src/querybuilder/deletion.jl", "isa") => 3,
   # `{:postgres}` (Postgres.jl). An offline pool is `{:libpq}`, so no method under it matches one.
@@ -199,7 +203,7 @@ const _OKR_MENTIONS = Dict(
   "src/Configuration.jl" => 2,           # `_is_offline_pool`'s docstring
   # the three struct definitions, plus the reviewed methods above (`_version_at_hand` names its type
   # three times: the signature, the live fallthrough, the version text)
-  "src/ConnectionPool.jl" => 17,
+  "src/ConnectionPool.jl" => 24,         # + `with_pool` (#1622): its four arms and its docstring's three names
   "src/Kernel.jl" => 3,                  # the backend markers' docstring
   "src/Migrations.jl" => 1,              # the import behind `introspection.jl`'s scratch-pool constructor call
   "src/querybuilder/deletion.jl" => 3,   # `_is_live_pool` (reviewed)

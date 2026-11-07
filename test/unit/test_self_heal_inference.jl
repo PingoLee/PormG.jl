@@ -34,7 +34,7 @@ using PormG.Models: Model, IDField
   @test PormG.Models._infer_self_heal_key(other, [m], Dict("db" => s1)) === nothing
 
   # No connections configured → nothing (length != 1).
-  @test PormG.Models._infer_self_heal_key(m, [m], Dict{String,PormG.PormGSettings}()) === nothing
+  @test PormG.Models._infer_self_heal_key(m, [m], Dict{String,PormG.Configuration.Settings}()) === nothing
 
   # A lone `register_connection` entry → nothing (#683). The caller re-registers through the
   # entry's `db_def_folder`, which for a dynamic entry is only the label "dynamic_connection";

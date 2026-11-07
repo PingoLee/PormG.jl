@@ -2,6 +2,7 @@ module Configuration
 
 import YAML
 import PormG: PormGSettings, PormGBackend, PormGPostgres, PormGPostgresParam, PormGSQLite, PormGMySQL, config, PormGModel
+import PormG.Kernel: Settings  # the struct `config` holds (#1622); its keyword constructor is below
 import PormG: _SQLEngine  # every engine (#1130): the pool a Settings holds, the transaction context's pool
 import PormG: model_table_name  # physical table name (db_table when set, #59) — defined in Kernel
 import PormG: ConfigurationError, InvalidConfigurationError  # semantic error taxonomy (#239); defined in Kernel
@@ -175,6 +176,62 @@ function _is_interactive()::Bool
   return stored === nothing ? isinteractive() : stored
 end
 
+# ── Configuration is read at run time (#1606) ──────────────────────────────────
+#
+# A heap image (a sysimage, a `juliac` executable) saves every global as the build left it. A
+# configuration loaded while one is written travels in it, the database password in the pool's
+# connection string included, and at run time `load` finds the key and returns early (#1225), so the
+# image serves the build machine's settings instead of the deployment's. Measured on a `juliac`
+# executable whose entry loaded at its top level: the password was in the artifact (`strings`), and
+# the key was in `config` at start. So configuration is read at run time:
+#   - `load`, `register_connection`, `register_offline` and the two hook setters refuse while an image
+#     is written. The refusal is what keeps a credential out of the file: nothing is read or stored.
+#   - `__init__` drops any entry an image still carries (one written into `config` by hand). That
+#     removes it from the running program, not from the file's bytes, so its warning says so.
+# A package image is not a heap image: it saves none of PormG's state, and a package that loads in
+# its module body (precompile time) loads again in its `__init__`, as `configuration/setup.md` says.
+
+# Whether Julia is writing a heap image now: generating output, and not incrementally (a package
+# image is incremental). `_BUILDING` is the tests' stand-in, as `_INTERACTIVE` is: `nothing` (the
+# default) asks the runtime, a stored `Bool` answers.
+const _BUILDING = Ref{Union{Nothing, Bool}}(nothing)
+function _building_image()::Bool
+  stored = _BUILDING[]
+  stored === nothing || return stored
+  return _heap_image(ccall(:jl_generating_output, Cint, ()) == 1, Base.JLOptions().incremental != 0)
+end
+# The rule itself, apart from the runtime it asks: a heap image is output that is not incremental.
+_heap_image(generating::Bool, incremental::Bool)::Bool = generating && !incremental
+
+# The refusal, named by the call the app made.
+function _refuse_while_building(call::String)::Nothing
+  _building_image() || return nothing
+  throw(InvalidConfigurationError(
+    "`$(call)` was called while an image (a sysimage or a `juliac` executable) is being built. The " *
+    "image would keep the configuration, its credentials included, and serve it in place of the " *
+    "deployment's: PormG reads configuration at run time. Call it from `main` or from the app's " *
+    "`__init__`, not at the top level of the code the build runs."))
+end
+
+# Entries in `config` when this module initializes: only an image can hold them, written while it was
+# built. They are dropped, not closed: their pools hold driver handles from the build process, which
+# are not valid in this one. Returns how many were dropped.
+function _drop_image_entries!(cfg::Dict{String,Settings} = config)::Int
+  n = length(cfg)
+  n == 0 && return 0
+  dropped = sort!(collect(keys(cfg)))
+  empty!(cfg)
+  @warn "PormG dropped the connections this image was built with: configuration is read at run " *
+        "time. Load it in `main` or `__init__`. The image file may still hold their settings, " *
+        "credentials included: rebuild it without loading at build time, and rotate them." keys = dropped
+  return n
+end
+
+function __init__()
+  _drop_image_entries!()
+  return nothing
+end
+
 """
     set_before_connect_hook(f::Function)
 
@@ -199,6 +256,8 @@ When no hook is registered, connections proceed normally. A key loaded with its 
 longer has to test `key == "…"` and be registered from both the module body and `__init__`.
 """
 function set_before_connect_hook(f::Function)
+  # #1606: a hook set while an image is built travels in it, with anything its closure captured.
+  _refuse_while_building("PormG.Configuration.set_before_connect_hook")
   _BEFORE_CONNECT_HOOK[] = f
   return f
 end
@@ -212,6 +271,8 @@ The function `f` should accept a `key::String` and return:
 - A `Tuple` of `(url, adapter, pool_size)` or a `Dict` with those keys.
 """
 function set_connection_resolver(f::Function)
+  # #1606: a resolver set while an image is built travels in it, with anything its closure captured.
+  _refuse_while_building("PormG.Configuration.set_connection_resolver")
   _CONNECTION_RESOLVER[] = f
 end
 
@@ -473,7 +534,10 @@ end
 # enough: in `atomic(a) do; atomic(b) do; …`, it names only B, while A's transaction is still open.
 # A closed context is stepped over wherever it sits in the chain (#839): a block can end while a
 # block opened under it by another task is still running.
-function _tx_context_for(pool::_SQLEngine)
+# `@nospecialize` (#1622): the body only compares the pool by identity, so one method instance serves
+# every engine, and a caller holding the abstract `_SQLEngine` (the query builder's `connection`)
+# resolves to it statically. The same holds for the pool-identity helpers below.
+function _tx_context_for(@nospecialize(pool::_SQLEngine))
   ctx = _tx_context[]
   while ctx !== nothing && ctx.depth > 0
     if _is_closed(ctx)
@@ -492,7 +556,7 @@ end
 Whether a transaction is open on `pool`, in this block or any enclosing one. Unlike
 `in_transaction_context()`, a transaction on a different database does not count (#831).
 """
-in_transaction_on(pool::_SQLEngine) = _tx_context_for(pool) !== nothing
+in_transaction_on(@nospecialize(pool::_SQLEngine)) = _tx_context_for(pool) !== nothing
 
 """
     current_transaction_depth() -> Int
@@ -538,8 +602,12 @@ starts a fresh table, because the reservations are keyed by table name only (#83
 including on a throw. A spawned task that is still running after the block ends no longer sees it
 as open: its statements run in autocommit on a connection of their own (#839).
 """
-function with_tx_context(f::Function, pool::_SQLEngine, conn;
-                         abandoned_await::Union{Nothing, Threads.Atomic{Bool}} = nothing)
+function with_tx_context(f::F, pool::_SQLEngine, @nospecialize(conn);
+                         abandoned_await::Union{Nothing, Threads.Atomic{Bool}} = nothing) where {F<:Function}
+  # `@nospecialize(conn)` (#1622): the connection comes from a pool slot or the transaction context,
+  # both untyped (`Any`), and this only stores it; one instance per (body, pool) serves every handle
+  # type, so a caller holding the `Any` resolves to it statically. (Here, not above the signature: a
+  # comment between a docstring and its definition detaches it, #612.)
   # The enclosing block still running, not merely the one in scope (#839): a task that outlived
   # its block and opens one of its own starts a fresh chain at depth 1.
   old_ctx = _open_tx_context()
@@ -574,13 +642,13 @@ end
 # Record that a statement's await inside the open block on `pool` was abandoned by an interrupt
 # (#1588). Called by `await_result` for an in-transaction `FetchTask`; a no-op outside a block. The
 # block's cleanup reads it even when the body caught the interrupt or raised its own error instead.
-function _mark_abandoned_await!(pool::_SQLEngine)
+function _mark_abandoned_await!(@nospecialize(pool::_SQLEngine))
   ctx = _tx_context_for(pool)
   ctx === nothing || (ctx.abandoned_await[] = true)
   return nothing
 end
 
-function connection_key_for_pool(pool::_SQLEngine)::Union{String, Nothing}
+function connection_key_for_pool(@nospecialize(pool::_SQLEngine))::Union{String, Nothing}
   for (key, settings) in config
     if settings.connections === pool
       return key
@@ -595,7 +663,14 @@ end
 # `get_settings` resolved from `.db(...)`, a `connection =` override or the model's binding — not
 # the model's binding alone, which a `.db()` call overrides (#838). Raw `fetch` is deliberately
 # looser: it runs in autocommit on a pool with no open transaction, as Django does per connection.
-function ensure_transaction_scope(model::PormGModel, pool::_SQLEngine)
+# A model's name for a message, read without a dynamic `getproperty` on the abstract `PormGModel`
+# (`ModelType` overloads it), so the refusal below stays a static path (#1622).
+function _model_label(@nospecialize(model::PormGModel))::String
+  n = isdefined(model, :name) ? getfield(model, :name) : nothing
+  return n isa String ? n : n isa SubString{String} ? String(n) : "(unnamed model)"
+end
+
+function ensure_transaction_scope(@nospecialize(model::PormGModel), @nospecialize(pool::_SQLEngine))
   in_transaction_context() || return
   in_transaction_on(pool) && return
   active_key = connection_key_for_pool(get_tx_pool())
@@ -608,7 +683,7 @@ function ensure_transaction_scope(model::PormGModel, pool::_SQLEngine)
   # sibling check, `ConnectionPool.atomic(durable=true)`, reported the same class as
   # QueryBuildError until #268 gave both one honest home.
   throw(TransactionError("Active transaction on connection $(active_desc) cannot include model \
-    $(model.name) on connection $(target_desc), which has no transaction open. Wrap the call in \
+    $(_model_label(model)) on connection $(target_desc), which has no transaction open. Wrap the call in \
     $(fix) to give it a transaction of its own on that database (it commits separately: there is \
     no two-phase commit), or move it outside the current transaction."))
 end
@@ -616,10 +691,13 @@ end
 # The connection of the open transaction on `pool`, or `nothing`. Every path that reuses the
 # ambient connection must go through here rather than `get_tx_connection()`, which does not say
 # which pool the connection came from (#831).
-function transaction_connection_for(pool::_SQLEngine)
+function transaction_connection_for(@nospecialize(pool::_SQLEngine))
   ctx = _tx_context_for(pool)
   return ctx === nothing ? nothing : ctx.conn
 end
+# A settings entry with no pool built yet has no transaction open on it. The `Nothing` method also
+# closes the union the query builder holds (`Union{Nothing, _SQLEngine}`), so that call resolves (#1622).
+transaction_connection_for(::Nothing) = nothing
 transaction_connection_for(settings::PormGSettings) = transaction_connection_for(settings.connections)
 
 # The reservations live in the transaction context on `pool`, the pool the insert runs on — not the
@@ -740,7 +818,7 @@ function _peek_default_env(db_settings_file::String, loader::F = YAML.load)::Uni
 end
 
 function _resolve_loaded_key(path_or_key::String,
-                            config::Dict{String,PormGSettings} = config;
+                            config::Dict{String,Settings} = config;
                             folder::String = path_or_key)::Union{Nothing, String}
   # The dict is a parameter, not the global: `load` accepts a `config=` override, and answering
   # "is this folder already loaded?" against the global while writing to a local dict mixes two
@@ -783,6 +861,50 @@ function _already_loaded(settings::PormGSettings, folder::AbstractString, env::S
   return !isempty(settings.loaded_folder) && settings.loaded_folder == _canonical_folder_path(folder)
 end
 
+# ── Typed reads of the configuration block (#1606; #1599 row 4) ────────────────────────────────────
+#
+# `db_config_settings` is a `Dict{String,Any}`: the parsed YAML block, or what `register_connection`
+# stored. Every value read from it is an `Any`, so each use of one (`adapter == "SQLite"`,
+# `parse(Int, string(v))`) was a dynamic call: one dispatch per read under the JIT, and a verifier row in
+# a `juliac --trim` build. These readers narrow the value once, by the types a YAML scalar or a keyword
+# argument can have, and return a concrete type. A value of any other type takes the one dynamic
+# `string(v)` it always took (`_cfg_text_other`).
+
+# A setting as text: `nothing` when unset, otherwise the value spelled as a string, as `string(v)` did.
+function _cfg_text(@nospecialize(v))::Union{Nothing, String}
+  v === nothing && return nothing
+  v isa String && return v
+  v isa SubString{String} && return String(v)
+  v isa Symbol && return String(v)
+  v isa Bool && return v ? "true" : "false"
+  v isa Int && return string(v)
+  v isa Float64 && return string(v)
+  return _cfg_text_other(v)
+end
+@noinline _cfg_text_other(@nospecialize(v))::String = string(v)
+
+# The text of `key` in the block, or `nothing` when it is absent or `nothing`.
+_cfg_string(settings::PormGSettings, key::String)::Union{Nothing, String} =
+  _cfg_text(get(settings.db_config_settings, key, nothing))
+
+# An integer setting: `default` when the key is absent, else the value parsed as `parse(Int, string(v))`
+# did, so a value that is not an integer still raises.
+function _cfg_int(settings::PormGSettings, key::String, default::Int)::Int
+  haskey(settings.db_config_settings, key) || return default
+  v = settings.db_config_settings[key]
+  v isa Int && return v
+  return parse(Int, something(_cfg_text(v), "nothing"))
+end
+
+# Whether a raw setting reads as true: a `Bool`, or one of the usual truthy strings.
+function _cfg_truthy(@nospecialize(v))::Bool
+  v isa Bool && return v
+  return lowercase(strip(something(_cfg_text(v), "nothing"))) in ("1", "true", "yes", "on")
+end
+
+# A real number as Float64, for a value no branch of `_config_secs` names (a `Rational`, a `BigFloat`).
+@noinline _cfg_float_other(@nospecialize(v::Real))::Float64 = Float64(v)
+
 # Parse a seconds-valued pool setting from connection.yml. Returns `default` when the key is absent OR
 # the value can't be parsed to a Float64. Pure parser — no `> 0` policy; callers pick the default and
 # any enforcement. Consolidates the tryparse idiom for pool_timeout / idle_timeout / max_lifetime /
@@ -790,7 +912,11 @@ end
 function _config_secs(settings::PormGSettings, key::String, default::Float64 = 0.0)::Float64
   haskey(settings.db_config_settings, key) || return default
   v = settings.db_config_settings[key]
-  return v isa Real ? Float64(v) : something(tryparse(Float64, strip(string(v))), default)
+  v isa Float64 && return v
+  v isa Int && return Float64(v)
+  v isa Bool && return Float64(v)
+  v isa Real && return _cfg_float_other(v)
+  return something(tryparse(Float64, strip(something(_cfg_text(v), "nothing"))), default)
 end
 
 # Parse a boolean pool setting from connection.yml. Returns `default` when the key is absent; otherwise
@@ -798,9 +924,7 @@ end
 # for `sqlite_split_read_write` so new bool keys (e.g. `fail_fast_on_connect`, #72) don't re-duplicate it.
 function _config_bool(settings::PormGSettings, key::String, default::Bool)::Bool
   haskey(settings.db_config_settings, key) || return default
-  v = settings.db_config_settings[key]
-  v isa Bool && return v
-  return lowercase(strip(string(v))) in ("1", "true", "yes", "on")
+  return _cfg_truthy(settings.db_config_settings[key])
 end
 
 # The environment variable that picks the PostgreSQL driver when no configuration names one (#788).
@@ -812,19 +936,20 @@ const POSTGRES_DRIVER_ENV = "PORMG_POSTGRES_DRIVER"
 # `register_connection` kwarg — when set, else `ENV[POSTGRES_DRIVER_ENV]`, else LibPQ. A value is the
 # package's name, matched case-insensitively against `_PG_DRIVER_PACKAGES`, so the accepted spellings
 # and the drivers a pool can hold are one list. `source` names where a bad value came from.
-function _resolve_postgres_driver(raw; source::AbstractString)::Symbol
-  if _is_unset(raw)
-    raw = get(ENV, POSTGRES_DRIVER_ENV, nothing)
-    _is_unset(raw) && return :libpq
+function _resolve_postgres_driver(@nospecialize(raw); source::AbstractString)::Symbol
+  text = _cfg_text(raw)   # #1606: the setting as text once, so what follows is typed
+  if _is_unset(text)
+    text = get(ENV, POSTGRES_DRIVER_ENV, nothing)
+    _is_unset(text) && return :libpq
     source = "environment variable $(POSTGRES_DRIVER_ENV)"
   end
-  wanted = lowercase(strip(string(raw)))
+  wanted = lowercase(strip(text))
   for (driver, package) in pairs(_PG_DRIVER_PACKAGES)
     lowercase(package) == wanted && return driver
   end
   throw(InvalidConfigurationError(
     "$(source): `postgres_driver` must be one of $(join(values(_PG_DRIVER_PACKAGES), " or ")) " *
-    "(case-insensitive); got $(repr(string(raw)))"))
+    "(case-insensitive); got $(repr(text))"))
 end
 
 # Enforce the pool_timeout policy: `<= 0` ("never wait") is a cross-framework footgun, so fall back to
@@ -887,8 +1012,7 @@ end
 
 function _build_connection_pool!(settings::PormGSettings, path::String)
   # Extract pool size from config (defaults to 3)
-  pool_size = haskey(settings.db_config_settings, "pool_size") ?
-              parse(Int, string(settings.db_config_settings["pool_size"])) : 3
+  pool_size = _cfg_int(settings, "pool_size", 3)
 
   # Default acquire timeout (#126), seconds; absent = DEFAULT_POOL_TIMEOUT. Values <= 0 fall back (a
   # "never wait" setting is ambiguous across frameworks and a footgun), warned once at build.
@@ -904,26 +1028,16 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   # pool_timeout, then raise a truthful PoolConnectError (#72). Default on; set `false` to keep waiting.
   fail_fast_on_connect = _config_bool(settings, "fail_fast_on_connect", true)
 
-  sqlite_split_read_write = false
-  if haskey(settings.db_config_settings, "sqlite_split_read_write")
-    raw_value = settings.db_config_settings["sqlite_split_read_write"]
-    sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
-  elseif haskey(settings.db_config_settings, "options") && isa(settings.db_config_settings["options"], Dict)
-    options = settings.db_config_settings["options"]
-    if haskey(options, "sqlite_split_read_write")
-      raw_value = options["sqlite_split_read_write"]
-      sqlite_split_read_write = raw_value isa Bool ? raw_value : lowercase(strip(string(raw_value))) in ("1", "true", "yes", "on")
-    end
-  end
+  sqlite_split_read_write = haskey(settings.db_config_settings, "sqlite_split_read_write") ?
+    _config_bool(settings, "sqlite_split_read_write", false) :
+    _options_split_read_write(get(settings.db_config_settings, "options", nothing))
 
-  if settings.db_config_settings["adapter"] == "SQLite"
-    dbname =  if haskey(settings.db_config_settings, "host") && settings.db_config_settings["host"] !== nothing
-      settings.db_config_settings["host"]
-        elseif haskey(settings.db_config_settings, "database") && settings.db_config_settings["database"] !== nothing
-          settings.db_config_settings["database"]
-        else
-          nothing
-        end
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  adapter = _cfg_string(settings, "adapter")
+  # #1606: the pool is built into a local, so the monitor calls below take it at its concrete type;
+  # `settings.connections` reads back as the field's untyped union.
+  pool = if adapter == "SQLite"
+    dbname = something(_cfg_string(settings, "host"), _cfg_string(settings, "database"), Some(nothing))
 
     # SQLite reads two unrelated kinds of string here: a filesystem path, and its own keywords (#545) —
     # the `:memory:` in-memory database and `file:` URI filenames. Only a path may be resolved
@@ -949,30 +1063,30 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     end
 
     @pormg_debug false
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
 
-  elseif settings.db_config_settings["adapter"] == "PostgreSQL"
+  elseif adapter == "PostgreSQL"
     dns = String[]
 
     # Check for direct URL/Connection String support. A blank `url:` counts as unset, not as an
     # empty DSN: gating on `!== nothing` meant `url: ''` discarded every credential below it and
     # handed libpq an empty conninfo, which falls back to PGHOST/PGUSER or the local socket as the
     # OS user — a fully-populated-looking config silently connecting to the wrong database (#348).
-    if !_is_unset(get(settings.db_config_settings, "url", nothing))
-      dns_str = settings.db_config_settings["url"]
+    url = _cfg_string(settings, "url")
+    if !_is_unset(url)
+      dns_str = url
     else
       # Standard parameters loop
       for key in ["host", "hostaddr", "port", "password", "passfile", "connect_timeout", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey"]
-        get!(settings.db_config_settings, key, nothing)
-        settings.db_config_settings[key] !== nothing && push!(dns, string("$key=", _conninfo_value(key, settings.db_config_settings[key])))
+        v = _cfg_text(get!(settings.db_config_settings, key, nothing))
+        v === nothing || push!(dns, string(key, "=", _conninfo_value(key, v)))
       end
 
-      get!(settings.db_config_settings, "database", nothing)
-      settings.db_config_settings["database"] !== nothing && push!(dns, string("dbname=", _conninfo_value("database", settings.db_config_settings["database"])))
+      v = _cfg_text(get!(settings.db_config_settings, "database", nothing))
+      v === nothing || push!(dns, string("dbname=", _conninfo_value("database", v)))
 
-      get!(settings.db_config_settings, "username", nothing)
-      settings.db_config_settings["username"] !== nothing && push!(dns, string("user=", _conninfo_value("username", settings.db_config_settings["username"])))
+      v = _cfg_text(get!(settings.db_config_settings, "username", nothing))
+      v === nothing || push!(dns, string("user=", _conninfo_value("username", v)))
 
       dns_str = join(dns, " ")
     end
@@ -980,32 +1094,28 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     driver = _resolve_postgres_driver(get(settings.db_config_settings, "postgres_driver", nothing);
                                       source = "connection.yml")
 
-    # Use parent module reference to avoid circular dependency during module loading
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
 
-  elseif settings.db_config_settings["adapter"] == "MySQL"
-    CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
-    settings.connections = CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
-                                                  pool_size=pool_size, pool_timeout=pool_timeout,
-                                                  fail_fast_on_connect=fail_fast_on_connect)
+  elseif adapter == "MySQL"
+    CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
+                           pool_size=pool_size, pool_timeout=pool_timeout,
+                           fail_fast_on_connect=fail_fast_on_connect)
 
   else
-    adapter = settings.db_config_settings["adapter"]
-    throw(InvalidConfigurationError("Unsupported adapter: $(adapter)"))
+    throw(InvalidConfigurationError("Unsupported adapter: $(something(adapter, "nothing"))"))
   end
+  settings.connections = pool
 
   # Opt the pool into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured.
   # No-op when the respective keys are 0/absent. All three merge into one PoolMonitorState.
-  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   # #1548: ping a connection idle past `validate_after_idle` seconds before it is handed out. Absent or
   # unreadable, the engine's default: 60 on MySQL, off elsewhere. First, because above 0 on a backend
   # without the feature it raises, and a refused configuration must not leave its pool installed: a
   # second `load` would find it (`_already_loaded`) and run without the refusal. No pool is connected or
   # monitored yet, so dropping it is all the undoing there is.
-  validate_after_idle = _config_secs(settings, "validate_after_idle", CP._default_validate_after_idle(settings.connections))
+  validate_after_idle = _config_secs(settings, "validate_after_idle", CP._default_validate_after_idle(pool))
   try
-    CP.enable_idle_validation!(settings.connections; after = validate_after_idle)
+    CP.enable_idle_validation!(pool; after = validate_after_idle)
   catch
     # swallows nothing: drops the refused pool, then rethrows.
     settings.connections = nothing
@@ -1013,12 +1123,20 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
   end
   reap_on = idle_timeout > 0 || max_lifetime > 0
   reap_on &&
-    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+    CP.enable_reaping!(pool; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
   leak_detection_threshold > 0 &&
-    CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
+    CP.enable_leak_detection!(pool; threshold=leak_detection_threshold)
 
   return settings
 end
+
+# `sqlite_split_read_write` under `options:`, the older spelling, read as `_build_connection_pool!` did.
+function _options_split_read_write(@nospecialize(options))::Bool
+  options isa AbstractDict || return false
+  return _options_split_read_write_in(options)
+end
+@noinline _options_split_read_write_in(@nospecialize(options::AbstractDict))::Bool =
+  haskey(options, "sqlite_split_read_write") ? _cfg_truthy(options["sqlite_split_read_write"]) : false
 
 """
     _configured_extensions(settings::PormGSettings)::Vector{String}
@@ -1156,9 +1274,9 @@ end
 # from inside the precompile worker: the build needed the database and its credentials, and with the
 # database down it waited out the pool's connect timeout before warning. Nothing is lost for a
 # package image: it saves none of PormG's state, so the run-time `load` in `__init__` comes back
-# here. A sysimage or `juliac` build keeps the loaded key, so its run-time `load` returns early
-# (#1225) and the probe never runs; a missing extension then surfaces at the first `iunaccent_*`
-# query. `extensions:` is still validated at precompile time, by `_configured_extensions` in `load`.
+# here. A sysimage or `juliac` build keeps no configuration (#1606: `load` refuses while the image is
+# written), so its run-time `load` comes back here too. `extensions:` is still validated at precompile
+# time, by `_configured_extensions` in `load`.
 # `generating` is a keyword so the unit test can take the precompile branch.
 function _check_configured_extensions!(settings::PormGSettings;
                                        generating::Bool = ccall(:jl_generating_output, Cint, ()) == 1)::Nothing
@@ -1177,7 +1295,8 @@ function _check_configured_extensions!(settings::PormGSettings;
     if extension == "unaccent"
       # Literal name only — never interpolate the raw YAML value into SQL.
       installed = try
-        backend_num_rows(settings.connections, CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
+        CP.with_pool(backend_num_rows, settings.connections,   # #1622: the pool at its concrete type
+                     CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
       catch e
         @warn "Could not verify PostgreSQL extension state" extension=extension db_def_folder=settings.db_def_folder exception=e
         continue
@@ -1430,6 +1549,26 @@ function _warn_unknown_top_level_keys(db_conn_data::AbstractDict, app_env::Abstr
   return nothing
 end
 
+# One `config:` key onto `settings` (#1606): a branch per entry of `VALID_CONFIG_KEYS`, in place of a
+# `setfield!` by the key's name, so each assignment is typed. A value of the wrong type raises the
+# `TypeError` the `setfield!` raised. A string starting with ":" is still read as a Symbol first, which
+# no field takes, as before.
+function _set_config_key!(settings::Settings, key::String, @nospecialize(raw))::Nothing
+  v = (raw isa String && startswith(raw, ":")) ? Symbol(raw[2:end]) : raw
+  if key == "change_db"
+    settings.change_db = v::Bool
+  elseif key == "change_data"
+    settings.change_data = v::Bool
+  elseif key == "django_prefix"
+    settings.django_prefix = v::Union{Nothing, String}
+  elseif key == "time_zone"
+    settings.time_zone = v::String
+  elseif key == "model_file"
+    settings.model_file = v::String
+  end
+  return nothing
+end
+
 """
     read_db_connection_data(path::String, settings::PormGSettings) :: Dict{String,Any}
 
@@ -1498,9 +1637,9 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
     cfg = get(env_block, "config", nothing)
     if cfg isa AbstractDict
       for (k, v) in cfg
-        k_str = string(k)
+        k_str = something(_cfg_text(k), "nothing")
         if k_str in VALID_CONFIG_KEYS
-          setfield!(settings, Symbol(k_str), ((isa(v, String) && startswith(v, ":")) ? Symbol(v[2:end]) : v) )
+          _set_config_key!(settings, k_str, v)
         elseif k_str in VALID_CONNECTION_KEYS
           # Exact membership only — no `_suggest_name` fallback in this direction, which would
           # resolve `connections:` to `options` and mislabel an internal-field attempt.
@@ -1547,7 +1686,7 @@ end
 # unexplained failure in whatever request was holding one. The close itself logs a second line
 # (`@warn`, with the count it actually force-closed) if any were still out when the window expired.
 function _warn_pool_takeover(msg::String, path::String, existing::String,
-                             config::Dict{String,PormGSettings})
+                             config::Dict{String,Settings})
   in_use = 0
   try
     pool = config[existing].connections
@@ -1623,7 +1762,8 @@ spelling or another spelling of the same folder, raises `InvalidConfigurationErr
 included: loading would replace the offline entry with a live pool. Call `unregister_connection(key)`
 first, or load under another key.
 """
-function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,PormGSettings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
+function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothing} = nothing, env::Union{Nothing,String} = nothing, scaffold::Bool = false, config::Dict{String,Settings} = config, implicit::Bool = false, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
+  _refuse_while_building("PormG.Configuration.load")   # #1606: configuration is read at run time
   # create settings if does not exists
   path === nothing && (path = DB_PATH )
 
@@ -1767,7 +1907,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
       _warn_pool_takeover("PormG: this folder was already loaded under a key the implicit load " *
                           "minted; re-registering it under the key you asked for and discarding " *
                           "the implicit entry.", folder, existing, config)
-      config[existing].connections !== nothing && close_pool!(config[existing].connections)
+      _close_entry_pool!(config[existing])
       delete!(config, existing)
     else
       # The existing key is at least as explicit as this one, so keep it and refresh it in place
@@ -1790,7 +1930,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
                           "environment or folder, or over an entry the implicit load minted; its " *
                           "pool is closed and rebuilt.", folder, key, config)
     end
-    close_pool!(config[key].connections)
+    _close_entry_pool!(config[key])
   end
 
   # With `root` the field is the folder and the key is short (#857), so the two stop coinciding —
@@ -1809,7 +1949,7 @@ function load(path::Union{String,Nothing} = nothing; context::Union{Module,Nothi
   config[key] = Settings(app_env = selected_env, db_def_folder = stored_folder, implicit = implicit,
                          loaded_folder = _canonical_folder_path(folder),
                          before_connect = something(before_connect, previous_hook, Some(nothing)))
-  settings::PormGSettings = config[key]
+  settings::Settings = config[key]
 
   # Both given `folder`, the spelling checked against the filesystem above. The pool builder
   # resolves a relative SQLite `database:` inside it, so under `root` that file is `pwd`-free too.
@@ -1846,7 +1986,7 @@ The server form loads short keys from a known project root, whatever the working
 PormG.Configuration.load_many(["db", "db_analytics"]; root = APP_ROOT, env = "prod")
 ```
 """
-function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,PormGSettings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
+function load_many(paths::AbstractVector{<:AbstractString}; env::Union{Nothing,String} = nothing, config::Dict{String,Settings} = config, root::Union{Nothing,AbstractString} = nothing, force::Bool = false, before_connect::Union{Nothing,Function} = nothing)
   loaded_keys = String[]
   for path in paths
     key = String(path)
@@ -1891,7 +2031,7 @@ end
 # `config` (a `Settings` built by hand, or a `config=` override). For messages that tell the user
 # what to call next: since `load(…; root)` (#857) the folder is no longer the key, and
 # `migrate(db::String)` looks its argument up as a key.
-function _settings_key(settings::PormGSettings, config::Dict{String,PormGSettings} = config)::String
+function _settings_key(settings::PormGSettings, config::Dict{String,Settings} = config)::String
   for (k, v) in config
     v === settings && return k
   end
@@ -1928,21 +2068,9 @@ connection(key::String) = connection(; key = key)
 function _resolve_lazily!(key::String)::Nothing
   (haskey(config, key) || _CONNECTION_RESOLVER[] === nothing) && return nothing
   try
+    # The user's function: one dynamic call. Its answer is converted once, by `_register_resolved!`.
     res = _CONNECTION_RESOLVER[](key)
-    if res !== nothing
-      if res isa Tuple
-        url, adapter, pool_size = res
-        register_connection(key, url; adapter=adapter, pool_size=pool_size)
-      elseif res isa Dict
-        url = get(res, "url", nothing)
-        adapter = get(res, "adapter", "PostgreSQL")
-        pool_size = get(res, "pool_size", 3)
-        postgres_driver = get(res, "postgres_driver", nothing)
-        env = get(res, "env", nothing)
-        url !== nothing && register_connection(key, url; adapter=adapter, pool_size=pool_size,
-                                               postgres_driver=postgres_driver, env=env)
-      end
-    end
+    res === nothing || _register_resolved!(key, res)
   catch e
     # A refusal from `register_connection` — no environment stated (#1256), an unsupported adapter —
     # is the caller's to see: logging it and then raising "not found" hid what to fix.
@@ -1950,6 +2078,43 @@ function _resolve_lazily!(key::String)::Nothing
     @error "Error in lazy connection resolver for key '$key'" exception=(e, catch_backtrace())
   end
   return nothing
+end
+
+# What a connection resolver answered, registered (#1606: typed once, here). A `(url, adapter,
+# pool_size)` tuple, or a `Dict` with "url" and optional "adapter", "pool_size", "postgres_driver",
+# "env", "change_db" and "change_data". A value of the wrong type raises `InvalidConfigurationError`
+# naming the entry. Any other answer registers nothing, as before.
+function _register_resolved!(key::String, @nospecialize(res))::Nothing
+  if res isa Tuple
+    length(res) >= 3 || throw(InvalidConfigurationError(
+      "the connection resolver answered a tuple for \"$(key)\" that is not (url, adapter, pool_size)."))
+    register_connection(key, _resolved_text(key, "url", res[1]);
+                        adapter = _resolved_text(key, "adapter", res[2]),
+                        pool_size = _resolved_int(key, "pool_size", res[3]))
+  elseif res isa AbstractDict
+    url = get(res, "url", nothing)
+    url === nothing && return nothing
+    register_connection(key, _resolved_text(key, "url", url);
+                        adapter = _resolved_text(key, "adapter", get(res, "adapter", "PostgreSQL")),
+                        pool_size = _resolved_int(key, "pool_size", get(res, "pool_size", 3)),
+                        postgres_driver = _cfg_text(get(res, "postgres_driver", nothing)),
+                        env = _cfg_text(get(res, "env", nothing)),
+                        change_db = _resolved_bool(key, "change_db", get(res, "change_db", false)),
+                        change_data = _resolved_bool(key, "change_data", get(res, "change_data", false)))
+  end
+  return nothing
+end
+function _resolved_text(key::String, entry::String, @nospecialize(v))::String
+  v isa AbstractString && return something(_cfg_text(v), "")
+  throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be text."))
+end
+function _resolved_int(key::String, entry::String, @nospecialize(v))::Int
+  v isa Int && return v
+  throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be an Int."))
+end
+function _resolved_bool(key::String, entry::String, @nospecialize(v))::Bool
+  v isa Bool && return v
+  throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be true or false."))
 end
 
 # The environment a `register_connection` entry records (#1256): the #1228 rule `load` follows, with
@@ -1973,7 +2138,7 @@ function _registered_env(env::Union{Nothing, AbstractString}, key::String)::Stri
   return DEV
 end
 
-function get_settings(key::String)
+function get_settings(key::String)::Settings
   _resolve_lazily!(key)
   haskey(config, key) || throw(InvalidConfigurationError("Settings for key '$(key)' not found. Ensure it is loaded via 'load()' or registered via 'register_connection()'."))
   return config[key]  
@@ -1994,8 +2159,20 @@ neither gets `InvalidConfigurationError`, before any pool is built or replaced. 
 `postgres_driver` picks the driver of a PostgreSQL pool, as the `postgres_driver:` key does in
 `connection.yml`: `"LibPQ"` or `"Postgres"`. Unset, it falls back to the
 `PORMG_POSTGRES_DRIVER` environment variable, then LibPQ.
+
+`change_data` and `change_db` are the `config:` settings of the same names in `connection.yml`:
+`change_data = true` lets the entry write (`create`, `update`, `delete`, bulk writes), and
+`change_db = true` lets it run `makemigrations`/`migrate`. Both default to `false`, so an entry is
+read-only unless it says otherwise. A connection resolver states them with `"change_data"` and
+`"change_db"` entries in the `Dict` it returns.
+
+```julia
+PormG.Configuration.register_connection("f1", "postgresql://f1:…@db.internal/f1";
+                                        env = "prod", change_data = true)
+```
 """
-function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing)
+function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing, change_db::Bool = false, change_data::Bool = false)
+  _refuse_while_building("PormG.Configuration.register_connection")   # #1606
   # SAFETY: Deny using folder paths as dynamic keys to avoid hijacking static configs
   if isdir(key)
     throw(InvalidConfigurationError("Cannot register dynamic connection using key '$(key)'. Folder paths are reserved for static configurations loaded via 'load()'."))
@@ -2013,7 +2190,10 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   adapter == "MySQL" && throw(InvalidConfigurationError(
     "register_connection does not take `adapter = \"MySQL\"`: a MySQL connection is configured by " *
     "its keys (`host:`, `port:`, `username:`, `password:`, `database:`) in connection.yml, through `load`."))
-  adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
+  # The value is not echoed (#1606 review): a resolver answer with its entries swapped would put the
+  # connection URL, password included, into the message.
+  adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError(
+    "register_connection: unsupported `adapter`; expected \"PostgreSQL\" or \"SQLite\"."))
   app_env = _registered_env(env, key)
 
   if haskey(config, key)
@@ -2027,7 +2207,9 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   settings = Settings(
     app_env = app_env,
     db_def_folder = "dynamic_connection",
-    dynamic = true
+    dynamic = true,
+    change_db = change_db,       # #1606: an app with its configuration in code can write
+    change_data = change_data,
   )
   
   settings.db_config_settings = Dict{String, Any}(
@@ -2045,22 +2227,25 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
-  if adapter == "PostgreSQL"
+  # A local, so the monitor calls below take the pool at its concrete type (#1622).
+  pool = if adapter == "PostgreSQL"
     driver = _resolve_postgres_driver(postgres_driver; source = "register_connection")
-    settings.connections = CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
   elseif adapter == "SQLite"
     _is_unset(postgres_driver) ||
       @warn "register_connection: `postgres_driver` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key=key
-    settings.connections = CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
   else
-    throw(InvalidConfigurationError("Unsupported adapter: $adapter"))
+    throw(InvalidConfigurationError(
+      "register_connection: unsupported `adapter`; expected \"PostgreSQL\" or \"SQLite\"."))
   end
+  settings.connections = pool
 
   # Opt into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured. No-ops when 0.
   (idle_timeout > 0 || max_lifetime > 0) &&
-    CP.enable_reaping!(settings.connections; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
+    CP.enable_reaping!(pool; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
   leak_detection_threshold > 0 &&
-    CP.enable_leak_detection!(settings.connections; threshold=leak_detection_threshold)
+    CP.enable_leak_detection!(pool; threshold=leak_detection_threshold)
 
   config[key] = settings
   return key
@@ -2166,6 +2351,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
                           server_version::Union{Nothing, Integer} = nothing,
                           django_prefix::Union{Nothing, AbstractString} = nothing,
                           change_data::Bool = true)::String
+  _refuse_while_building("PormG.Configuration.register_offline")   # #1606
   adapter in (:postgres, :sqlite) || throw(InvalidConfigurationError(
     "register_offline: `adapter` must be :postgres or :sqlite, got $(repr(adapter))."))
   # #1452: the version an offline SQLite key renders for. Checked before anything is replaced.
@@ -2197,7 +2383,9 @@ function register_offline(key::String; adapter::Symbol = :postgres,
   return key
 end
 
-_is_offline(settings)::Bool = get(settings.db_config_settings, "offline", false) === true
+# #1622 wall 3: typed by the concrete `Settings`. The lease path (`ensure_before_connect!`) reached it with
+# `config[key]` of the abstract type, which is why it was unresolved; typing `config` resolved it.
+_is_offline(settings::Settings)::Bool = get(settings.db_config_settings, "offline", false) === true
 _is_offline_key(key::Union{Nothing,String})::Bool = key !== nothing && _is_offline(config[key])
 
 function _offline_config_settings(adapter::Symbol, server_version::Union{Nothing, Integer})::Dict{String, Any}
@@ -2268,11 +2456,25 @@ function close_pool!(pool::_SQLEngine; kwargs...)
 end
 
 function close_pool!(db::String; kwargs...)
-  settings::PormGSettings = get_settings(db)
-  if settings.connections !== nothing
-    close_pool!(settings.connections; kwargs...)
-  end
+  settings::Settings = get_settings(db)
+  settings.connections === nothing && return nothing
+  # #1622: through the closed pool dispatch, so the close resolves for every pool PormG builds. On the
+  # field's untyped value it was a dynamic call, which a trimmed image refused at run time.
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  return CP.with_pool(_close_pool_with, settings.connections, values(kwargs))
 end
+
+# Close the pool of one entry, whichever registry holds it (`load` takes a `config =` of its own), at
+# the pool's concrete type (#1622). An entry with no pool has nothing to close.
+function _close_entry_pool!(settings::Settings; kwargs...)
+  settings.connections === nothing && return nothing
+  return getfield(parentmodule(@__MODULE__), :ConnectionPool).with_pool(_close_pool_with, settings.connections, values(kwargs))
+end
+
+# A named function rather than a closure: a closure would capture `CP` as a `Module` value, and the
+# call through it would not fold. Here the module lookup is a constant expression, as above.
+_close_pool_with(pool::_SQLEngine, kwargs::NamedTuple) =
+  getfield(parentmodule(@__MODULE__), :ConnectionPool).close_pool!(pool; kwargs...)
 
 """
     ping(path_or_key::String) -> Bool
@@ -2285,13 +2487,16 @@ function ping(path_or_key::String)::Bool
   key = _resolve_loaded_key(path_or_key)
   key === nothing && return false
 
-  settings::PormGSettings = config[key]
-  pool = settings.connections
-  pool === nothing && return false
+  settings::Settings = config[key]
+  settings.connections === nothing && return false
+  # #1622: the lease and the liveness check run with the pool at its concrete type.
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  return CP.with_pool(_ping_pool, settings.connections, key, settings)
+end
 
+function _ping_pool(pool::_SQLEngine, key::String, settings::Settings)::Bool
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   conn = nothing
-
   try
     conn = CP._acquire_in_mode(pool, :read; timeout_seconds=5, max_retries=1)
     return backend_is_alive(pool, conn)
@@ -2333,7 +2538,7 @@ function status(path_or_key::String)
     )
   end
 
-  settings::PormGSettings = config[key]
+  settings::Settings = config[key]
   return (
     key = key,
     loaded = true,
@@ -2350,69 +2555,28 @@ end
 # and reconnect_db() inside the fetch() cycle. Old direct handle logic removed.
 
 #
-# Settings struct
+# Settings: the struct is `Kernel.Settings` (#1622), so `config` can name it. Its keyword constructor
+# stays here, because its defaults (`_pormg_env()`, `DEV`) are this module's.
 #
 
-mutable struct Settings <: PormGSettings
-  app_env::String
-  db_def_folder::String # the folder; equal to the key unless `load(…; root)` was used (#857)
-  model_file::String
-  db_config_settings::Dict{String,Any}
-  change_db::Bool # Enable makemigrations and migrations functionality in the app
-  change_data::Bool # Enable the change of the database (upgrade, delete) in the app
-  connections::Union{Nothing, _SQLEngine}
-  time_zone::String
-  django_prefix::Union{Nothing, String}
-  # #553: `true` only for an entry `Models.set_models` minted through its implicit load, recorded
-  # at construction via `load(...; implicit = true)`. Not in `VALID_CONFIG_KEYS`, so YAML cannot set
-  # it. `Models._pick_connect_key` and `load`'s migrate branch both key on it — both used to infer
-  # it from `isabspath(key)`, which the relative `set_models(mod, "db")` form inverts.
-  implicit::Bool
-  # #623: `true` only for an entry `register_connection` created, recorded at construction. Not in
-  # `VALID_CONFIG_KEYS`, so YAML cannot set it. Every "is this a folder?" check keys on it — they
-  # used to compare `db_def_folder` against the literal "dynamic_connection", which a static folder
-  # of that name also stores, so that folder read as dynamic.
-  dynamic::Bool
-  # #1225: the canonical folder this entry was loaded from, resolved when `load` built it, or `""` for
-  # an entry built by hand. Without `root` the stored `db_def_folder` is relative ("db"), so it names a
-  # different folder after a `cd`; a repeated `load` compares the request against this instead, or it
-  # would keep a pool built from another directory's `connection.yml`. Internal, not YAML-settable.
-  loaded_folder::String
-  # #1232: this key's own `before_connect` hook, from `load(…; before_connect = f)`, or `nothing` to
-  # use the process-wide one (`set_before_connect_hook`). Not YAML-settable; never displayed or
-  # serialized (`display.jl` and `json_lower.jl` render an allowlist of slots).
-  before_connect::Union{Nothing, Function}
-
-  Settings(;
-      app_env             = something(_pormg_env(), DEV),
-      db_def_folder       = DB_PATH,
-      model_file          = MODEL_FILE,
-      db_config_settings  = Dict{String,Any}(),
-      change_db           = false,
-      change_data         = false,
-      connections         = nothing,
-          time_zone           = UTC_TIMEZONE,
-      django_prefix       = nothing,
-      implicit            = false,
-      dynamic             = false,
-      loaded_folder       = "",
-      before_connect      = nothing
-  ) =
-  new(
-      app_env,
-      db_def_folder,
-      model_file,
-      db_config_settings,
-      change_db,
-      change_data,
-      connections,
-      time_zone,
-      django_prefix,
-      implicit,
-      dynamic,
-      loaded_folder,
-      before_connect
-  )
+function Settings(;
+    app_env             = something(_pormg_env(), DEV),
+    db_def_folder       = DB_PATH,
+    model_file          = MODEL_FILE,
+    db_config_settings  = Dict{String,Any}(),
+    change_db           = false,
+    change_data         = false,
+    connections         = nothing,
+    time_zone           = UTC_TIMEZONE,
+    django_prefix       = nothing,
+    implicit            = false,
+    dynamic             = false,
+    loaded_folder       = "",
+    before_connect      = nothing,
+)::Settings
+  # The positional constructor converts each value to its field's type, as the inner `new(...)` did.
+  return Settings(app_env, db_def_folder, model_file, db_config_settings, change_db, change_data,
+                  connections, time_zone, django_prefix, implicit, dynamic, loaded_folder, before_connect)
 end
 
 """
@@ -2459,7 +2623,7 @@ function __cleanup__()
       # were still checked out — is kept on purpose: a lease outstanding at process exit is exactly
       # the leak diagnostic an operator wants once, and it never fires for a clean shutdown.
       try
-        close_pool!(settings.connections; drain_seconds = 0)
+        _close_entry_pool!(settings; drain_seconds = 0)
       catch e
         @debug "PormG atexit cleanup: error closing pool for '$path'" exception=e
       end

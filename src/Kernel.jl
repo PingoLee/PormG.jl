@@ -306,7 +306,51 @@ abstract type PormGError <: Exception end
 # SECTION: Shared state
 #═══════════════════════════════════════════════════════════════════════════════
 
-const config::Dict{String,PormGSettings} = Dict()
+"""
+    Settings <: PormGSettings
+
+One loaded connection: what `load` read from a folder's `connection.yml`, or what `register_connection`
+was given, and the pool built from it. `PormG.config` maps each key to one, and
+`Configuration.get_settings(key)` returns it.
+
+Defined here, in layer 1, so that `config` can name it (#1622): with `config` typed by the abstract
+`PormGSettings`, every `get_settings(key).x` read was an `Any`, one dynamic dispatch per read under the
+JIT and a verifier row under `juliac --trim` (#1599, row 2). `PormGSettings` stays the abstract root
+that `display.jl` and `json_lower.jl` dispatch on. The keyword constructor, whose defaults are
+`Configuration`'s, is defined there.
+"""
+mutable struct Settings <: PormGSettings
+  app_env::String
+  db_def_folder::String # the folder; equal to the key unless `load(…; root)` was used (#857)
+  model_file::String
+  db_config_settings::Dict{String,Any}
+  change_db::Bool # Enable makemigrations and migrations functionality in the app
+  change_data::Bool # Enable the change of the database (upgrade, delete) in the app
+  connections::Union{Nothing, _SQLEngine}
+  time_zone::String
+  django_prefix::Union{Nothing, String}
+  # #553: `true` only for an entry `Models.set_models` minted through its implicit load, recorded
+  # at construction via `load(...; implicit = true)`. Not in `VALID_CONFIG_KEYS`, so YAML cannot set
+  # it. `Models._pick_connect_key` and `load`'s migrate branch both key on it — both used to infer
+  # it from `isabspath(key)`, which the relative `set_models(mod, "db")` form inverts.
+  implicit::Bool
+  # #623: `true` only for an entry `register_connection` created, recorded at construction. Not in
+  # `VALID_CONFIG_KEYS`, so YAML cannot set it. Every "is this a folder?" check keys on it — they
+  # used to compare `db_def_folder` against the literal "dynamic_connection", which a static folder
+  # of that name also stores, so that folder read as dynamic.
+  dynamic::Bool
+  # #1225: the canonical folder this entry was loaded from, resolved when `load` built it, or `""` for
+  # an entry built by hand. Without `root` the stored `db_def_folder` is relative ("db"), so it names a
+  # different folder after a `cd`; a repeated `load` compares the request against this instead, or it
+  # would keep a pool built from another directory's `connection.yml`. Internal, not YAML-settable.
+  loaded_folder::String
+  # #1232: this key's own `before_connect` hook, from `load(…; before_connect = f)`, or `nothing` to
+  # use the process-wide one (`set_before_connect_hook`). Not YAML-settable; never displayed or
+  # serialized (`display.jl` and `json_lower.jl` render an allowlist of slots).
+  before_connect::Union{Nothing, Function}
+end
+
+const config::Dict{String,Settings} = Dict{String,Settings}()
 
 # Introspection/DDL constraint readers. Declared here as empty generics because `Dialect` and
 # `Migrations` both extend AND call them, so neither can own the binding.

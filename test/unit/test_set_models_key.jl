@@ -95,12 +95,9 @@ end
 @testset "a register_connection key binds, writes, reads and rebinds by key (#1606)" begin
   key = "smk_sqlite"
   file = joinpath(mktempdir(), "smk.sqlite")
-  Configuration.register_connection(key, file; adapter = "SQLite", env = "test", pool_size = 1)
+  Configuration.register_connection(key, file; adapter = "SQLite", env = "test", pool_size = 1,
+                                    change_db = true, change_data = true)
   try
-    # The write flags `register_connection` does not take yet (the configuration session's).
-    settings = PormG.get_settings(key)
-    settings.change_db = true
-    settings.change_data = true
 
     mod = _smk_models(:SmkSqlite)
     Base.invokelatest(Models.set_models, mod; key = key)

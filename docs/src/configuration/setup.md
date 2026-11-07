@@ -192,3 +192,35 @@ With `root`, the key is still `"db"` (the string as passed), and the folder is
 `makemigrations` and `migrate`, the models file, and a relative SQLite `database:`. Leave `root` out
 and `load` behaves exactly as before. The path must be relative when `root` is given. An absolute
 one is refused, since `joinpath` would silently discard the root.
+
+### Built images read their configuration at run time
+A sysimage or a `juliac` executable saves the state of the process that built it. A configuration
+loaded in that process would travel in the file, the database password included, and the running
+program would serve the build machine's settings instead of the deployment's. So PormG reads
+configuration at run time only:
+
+- `load`, `load_many`, `register_connection`, `register_offline`, `set_connection_resolver` and
+  `set_before_connect_hook` raise `InvalidConfigurationError` while an image is being written: at
+  the top level of a `juliac` entry script, for example.
+- When the program starts, PormG drops any connection the image still holds, with a warning naming
+  the keys. The file itself may still contain that connection's settings: rebuild it without loading
+  at build time, and rotate its credentials.
+
+Load and bind your models in `main`, or in your package's `__init__` (which a build does not run):
+
+```julia
+function (@main)(args::Vector{String})::Cint
+    PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")
+    PormG.Models.set_models(MyApp.models, "db")
+    # … serve
+    return 0
+end
+```
+
+Binding models at the top level of the entry script fails too, but with a different error: with no
+configuration loaded, `set_models` reports that the folder is not loaded.
+
+A package image is not affected. Precompiling a package saves none of PormG's state, so a package
+that loads in its module body loads again in its `__init__`, as above. What a package keeps in its
+**own** globals is a different matter: a `const` holding a `Settings` (`const S = get_settings("db")`)
+is saved in that package's image, credentials included. Read settings at run time instead.

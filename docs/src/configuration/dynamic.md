@@ -6,15 +6,17 @@ For applications that connect to databases on the fly (e.g., per user or per sub
 
 Register a connection pool manually at any time using a connection string or adapter-specific parameters:
 
-!!! warning "Dynamically registered connections are read-only until you enable writes"
-    `register_connection` builds its `Settings` from the defaults, so `change_data` and
-    `change_db` are **`false`** — and there is no `connection.yml` `config:` block to set them in.
-    The first write raises `WritesDisabledError`. Enable it on the settings object directly:
+!!! warning "Dynamically registered connections are read-only unless you enable writes"
+    `change_data` and `change_db` default to **`false`**, as in `connection.yml`, so the first write
+    to an entry registered without them raises `WritesDisabledError`. Pass them to
+    `register_connection` (#1606):
 
     ```julia
-    PormG.register_connection("tenant_01", "postgres://user:pass@host/db_01"; env = "prod")
-    PormG.config["tenant_01"].change_data = true    # otherwise every write is refused
+    PormG.register_connection("tenant_01", "postgres://user:pass@host/db_01"; env = "prod",
+                              change_data = true)    # writes; `change_db = true` for migrations
     ```
+
+    A connection resolver states them with `"change_data"` and `"change_db"` entries in its `Dict`.
 
 !!! note "Limitation: keys are namespaced against static configs"
     Three guards, all `InvalidConfigurationError`. Two on the way in: a key that names an existing
@@ -52,8 +54,8 @@ no folder (#1606). It is the form for a connection built in code: `register_conn
 no folder for the folder form, `set_models(models, "db")`, to match.
 
 ```julia
-PormG.register_connection("f1", "db/f1.sqlite"; adapter = "SQLite", env = "prod")
-PormG.config["f1"].change_data = true                  # writes are off for a dynamic entry
+PormG.register_connection("f1", "db/f1.sqlite"; adapter = "SQLite", env = "prod",
+                          change_data = true)          # writes are off unless asked for
 PormG.Models.set_models(models; key = "f1")            # `models` ends with `Models.@models …`
 ```
 

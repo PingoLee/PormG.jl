@@ -7,6 +7,7 @@ import PormG: PormGSettings, PormGPostgres, PormGSQLite, PormGMySQL, backend_exe
 import PormG: _backend_name  # #1129: the engine's name in the contention error
 import PormG.Configuration: get_settings
 import PormG.ConnectionPool: acquire_connection, release_connection
+import PormG.ConnectionPool: with_pool  # the closed pool dispatch (#1622)
 # This module is the only one outside ConnectionPool that talks to the driver directly, so no
 # `fetch`/`with_transaction` seam covers it — it has to funnel its own failures through the
 # database-error boundary (#268) or `with_advisory_lock` would be the last public entry point
@@ -317,7 +318,7 @@ PormG.with_advisory_lock(M.Constructor.objects.object.model.connect_key, "update
 end
 ```
 """
-function with_advisory_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL}, key::AbstractString;
+function with_advisory_lock(f::F, pool::Union{PormGPostgres, PormGMySQL}, key::AbstractString;
                             wait::Bool = false,
                             timeout_ms::Int = 5_000,
                             interval_ms::Int = 100,
@@ -329,7 +330,7 @@ function with_advisory_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL},
                             # (#277). Without it here, `on_missing_lock = :error` would be a
                             # MethodError on the one backend that satisfies it. Still validated, so
                             # a typo fails on PostgreSQL too rather than lying in wait for SQLite.
-                            on_missing_lock::Symbol = :warn)
+                            on_missing_lock::Symbol = :warn) where {F<:Function}
   _validate_on_missing_lock(on_missing_lock)
   _refuse_nul_key(key)
   conn = acquire_connection(pool)
@@ -420,8 +421,11 @@ function with_advisory_lock(f::Function, pool::Union{PormGPostgres, PormGMySQL},
 end
 
 # Convenience wrappers for Settings/PormGSettings objects
-with_advisory_lock(f::Function, settings::PormGSettings, key::AbstractString; kwargs...) =
-  with_advisory_lock(f, settings.connections, key; kwargs...)
+# Through the closed pool dispatch (#1622): `settings.connections` alone is an untyped value.
+with_advisory_lock(f::F, settings::PormGSettings, key::AbstractString; kwargs...) where {F<:Function} =
+  with_pool(_with_advisory_lock_on, settings.connections, f, key, values(kwargs))
+_with_advisory_lock_on(pool, f::F, key::AbstractString, kwargs::NamedTuple) where {F<:Function} =
+  with_advisory_lock(f, pool, key; kwargs...)
 
 # ==============================================================================
 # SQLite: no advisory locks exist, so the body runs UNPROTECTED (#277)
@@ -485,8 +489,8 @@ end
 
 # `kwargs...` still swallows wait/timeout_ms/strategy/interval_ms so the PostgreSQL call shape stays
 # portable — that tolerance is the whole point of the no-op.
-function with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString;
-                            on_missing_lock::Symbol = :warn, kwargs...)
+function with_advisory_lock(f::F, conn::PormGSQLite, key::AbstractString;
+                            on_missing_lock::Symbol = :warn, kwargs...) where {F<:Function}
   _validate_on_missing_lock(on_missing_lock)
   _refuse_nul_key(key)   # SQLite never sends the key; refused anyway so a call site behaves alike
 
@@ -509,7 +513,7 @@ function with_advisory_lock(f::Function, conn::PormGSQLite, key::AbstractString;
 end
 
 # Wrapper to use by database name string
-function with_advisory_lock(f::Function, db::String, key::AbstractString; kwargs...)
+function with_advisory_lock(f::F, db::String, key::AbstractString; kwargs...) where {F<:Function}
   @pormg_debug false
   settings = get_settings(db)
   return with_advisory_lock(f, settings, key; kwargs...)

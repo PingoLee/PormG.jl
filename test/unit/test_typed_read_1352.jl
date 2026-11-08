@@ -208,6 +208,45 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The projection `list(T)` sets is the one `values(...)` would set (#1695)
+# Expected: with no `values(...)`, `_typed_projection!` leaves the same projection nodes as
+# `values("driverid", "surname", "code", "dob")` — node type, path, alias and custom alias, in
+# order — on a copy, never on the caller's handler; the string-list `_values!` still refuses a
+# duplicate name. No SQL. Matters: #1695 gave the typed read its own `_values!` method for a list of
+# strings (the `Any` list was a dynamic call per element, and a `MethodError` in a trimmed image), and
+# that method must build what the general one builds.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "list(T)'s projection equals values(fieldnames(T)...) (#1695)" begin
+    QB = PormG.QueryBuilder
+    node(v) = (typeof(v), v.field, v._as, v.custom_as)
+
+    caller = _tr_q()
+    typed = QB._typed_query(caller, TrDriverRow)
+    by_values = _tr_q()
+    by_values.values("driverid", "surname", "code", "dob")
+    @test typed !== caller && isempty(caller.object.values)
+    @test map(node, typed.object.values) == map(node, by_values.object.values)
+    @test length(typed.object.values) == 4
+
+    # A `SubString` list takes the same method and builds the same nodes.
+    sub = _tr_q()
+    @test which(QB._values!, (typeof(sub.object), Vector{SubString{String}})) ===
+          which(QB._values!, (typeof(sub.object), Vector{String}))
+    @test which(QB._values!, (typeof(sub.object), Vector{String})) !==
+          which(QB._values!, (typeof(sub.object), Vector{Any}))
+    QB._values!(sub.object, split("driverid surname code dob"))
+    @test map(node, sub.object.values) == map(node, by_values.object.values)
+
+    # The string-list method resets the projection to a fresh vector rather than emptying the shared one.
+    shared = by_values.object.values
+    QB._values!(by_values.object, ["surname"])
+    @test length(shared) == 4 && length(by_values.object.values) == 1
+
+    e = _tr_caught(() -> QB._values!(_tr_q().object, ["driverid", "driverid"]))
+    @test e isa QueryBuildError && occursin("twice", e.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Types a row cannot be built into are refused up front (#1352)
 # Expected: QueryBuildError for an abstract type, a Dict, PormGRow, a Tuple and a struct whose inner
 # constructor replaced the positional one. Matters: the failure names the declaration, not a

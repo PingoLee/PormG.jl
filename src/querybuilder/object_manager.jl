@@ -216,6 +216,24 @@ function _values!(q::SQLObject, values)
   return q
 end
 
+# #1695 — a projection that is a list of field names only: the typed read's `fieldnames(T)`
+# (`_typed_projection!`). The method above takes the public `values(...)`'s mix of strings,
+# references, functions and pairs and tells them apart with `isa`, and over an untyped list each
+# element's `_values_field` call was a dispatch at run time. In a trimmed image that call had no
+# compiled target (`MethodError: _values_field(::String)`, round 4 of #1600). Here every element is a
+# string, so the call is static. What it builds is what the method above builds for the same names,
+# and it ends with the same duplicate-name check.
+#
+# A fresh vector, never `empty!`: `_terminal_copy` shares `values` with the caller's handler.
+function _values!(q::SQLObject, values::AbstractVector{<:AbstractString})
+  q.values = Vector{Union{SQLTypeText,SQLTypeField}}()
+  for v in values
+    push!(q.values, _values_field(v))
+  end
+  _reject_duplicate_projection_names(q)
+  return q
+end
+
 # The output name a path projects under when nothing renames it, as `_values_field` spells it: the
 # path itself, a transform suffix folded to `__<part>`, and a CTE or joined handle prefixed with its
 # relation. `nothing` for an expression, which has no name of its own.

@@ -70,6 +70,12 @@ end
 struct _TspOtherSettings <: PormG.PormGSettings end
 # A test's own stand-in pool, which `with_pool` hands on through its open arm.
 struct _TspStandInPool <: PormG.PormGSQLite end
+# A typed-read row type, for the projection pin (#1695).
+struct _TspRaceRow
+  raceid::Int64
+  year::Int64
+  name::String
+end
 
 @testset "Trim shape pins (#1599)" begin
 
@@ -305,6 +311,36 @@ struct _TspStandInPool <: PormG.PormGSQLite end
     @test isempty(_dynamic_calls(K._has_feature, (Type{PormG.ConnectionPool.SQLiteConnectionPool}, Symbol)))
     @test isempty(_dynamic_calls(K._feature_since, (Type{PormG.ConnectionPool.SQLiteConnectionPool}, Symbol)))
     @test isempty(_dynamic_calls_kw(K._supports, (PormG.ConnectionPool.SQLiteConnectionPool, Symbol)))
+  end
+
+  # What: the typed read's projection (`list(T)` with no `values(...)`), `_typed_projection!` and
+  #   the `_values!` it calls.
+  # Expected: `_typed_projection!` calls a `_values!` whose optimized code makes no dynamic call to
+  #   `_values_field`, and it calls at least one (the pin cannot pass by finding nothing).
+  # Why: the projection was an `Any[...]` list, so the general `_values!` called `_values_field` on an
+  #   abstract element: a dispatch per element under the JIT, and `MethodError: _values_field(::String)`
+  #   at run time in the trimmed fixture's `list(T)` (round 4 of #1600, #1695).
+  @testset "the typed read's projection calls _values_field statically (#1695)" begin
+    QB = PormG.QueryBuilder
+    ci, _ = only(code_typed(QB._typed_projection!, (QB.ObjectHandler, Type{_TspRaceRow}); optimize = true))
+    callees = Any[]
+    for stmt in ci.code
+      (stmt isa Expr && stmt.head === :invoke) || continue
+      mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      (mi isa Core.MethodInstance && mi.def isa Method && mi.def.name === :_values!) || continue
+      push!(callees, mi.specTypes)
+    end
+    @test !isempty(callees)
+    for tt in callees
+      dyn = String[]
+      for (vci, _) in Base.code_typed_by_type(tt; optimize = true), (i, stmt) in enumerate(vci.code)
+        (stmt isa Expr && stmt.head === :call) || continue
+        _tsp_callee_type(vci, stmt.args[1]) <: Core.Builtin && continue
+        occursin("_values_field", string(stmt)) && push!(dyn, "$(i): $(stmt)")
+      end
+      @test isempty(dyn)
+      isempty(dyn) || @info "dynamic _values_field calls" tt dyn
+    end
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

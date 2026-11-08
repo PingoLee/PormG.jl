@@ -1290,7 +1290,7 @@ const FilterNode = Union{OperObject,QObject,QorObject,FExpression,OuterRefObject
     with_projection_node(f, node, args...) -> f(node, args...)
 
 `f(node, args...)` with `node` at its concrete type, for an element of `SQLObjectQuery.values`
-(`ProjectionNode`). Any other value raises the `MethodError` a dispatch with no method would.
+(`ProjectionNode`). Any other value raises a `MethodError` naming `f` and the value (`_unlisted_node`).
 """
 function with_projection_node(f::F, @nospecialize(node), args::Vararg{Any,N}) where {F,N}
   node isa SQLField && return f(node, args...)
@@ -1303,8 +1303,8 @@ end
 
 `f(node, args...)` with `node` at its concrete type, for an element of `SQLObjectQuery.filter`
 (`FilterNode`). Its six members are past inference's union-splitting limit, so a call on an element
-that does not go through here dispatches at run time. Any other value raises the `MethodError` a
-dispatch with no method would.
+that does not go through here dispatches at run time. Any other value raises a `MethodError` naming
+`f` and the value (`_unlisted_node`).
 """
 function with_filter_node(f::F, @nospecialize(node), args::Vararg{Any,N}) where {F,N}
   node isa OperObject && return f(node, args...)
@@ -1321,7 +1321,7 @@ end
 
 `f(params, args...)` with the parameter collector at its concrete type (`ParamCollector`), for the
 `parameters` slot of an instruction or a query. The caller takes the `nothing` arm first. Any other
-value raises the `MethodError` a dispatch with no method would.
+value raises a `MethodError` naming `f` and the value (`_unlisted_node`).
 """
 function with_collector(f::F, @nospecialize(params), args::Vararg{Any,N}) where {F,N}
   params isa SQLiteParameterizedQuery && return f(params, args...)
@@ -1331,7 +1331,10 @@ function with_collector(f::F, @nospecialize(params), args::Vararg{Any,N}) where 
 end
 
 # A value outside a closed set. The slots are typed by their unions, so nothing outside one can be stored
-# there; this is the refusal a dynamic dispatch would have raised, without the dynamic call.
+# there; a caller that hands a walk something else (a value read from elsewhere, `nothing` where the
+# caller skipped its `nothing` arm) gets a `MethodError` naming `f` and the value, raised without a
+# dynamic call. It is the error class a call with no method raised before, not its text: when `f` has an
+# untyped method, Julia lists it as a candidate, so read the message as "`f` was not called on this".
 @noinline _unlisted_node(f, @nospecialize(node), args::Vararg{Any,N}) where {N} =
   throw(MethodError(f, (node, args...)))
 

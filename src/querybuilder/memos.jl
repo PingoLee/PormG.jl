@@ -108,7 +108,7 @@ memo_key(ns::Symbol, name::AbstractString)::MemoKey = (ns, String(name))
 # #1698: `SQLField`, the memo's element type since `InstructionObject.cache` is a `Dict{MemoKey,SQLField}`.
 # The container built here must be of exactly that type: assigning a `Dict{MemoKey,SQLTypeField}` into
 # the slot CONVERTS it, so the dict this accessor returned would be a copy and the first write into it
-# would be lost (measured on this branch before the fix: `test_projection_names.jl`'s #706 case).
+# would be lost (`test_projection_names.jl`'s #706 case seeds the memo first and reads it back).
 memo_projection(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,SQLField} =
   (memo = instruc.cache; memo === nothing ? nothing : get(memo, key, nothing))
 memo_projection(::SQLInstruction, ::Nothing)::Nothing = nothing

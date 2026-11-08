@@ -21,6 +21,7 @@
 using Test
 using PormG
 using PormG: Configuration
+using InteractiveUtils: InteractiveUtils
 
 # The type of the callee of `stmt` (an `Expr(:call, …)`) in the optimized `ci`.
 function _tsp_callee_type(ci::Core.CodeInfo, callee)::Type
@@ -101,29 +102,34 @@ function _slot_element_calls(@nospecialize(tt))::Vector{String}
   return found
 end
 
-# Every concrete struct PormG's modules define that is a subtype of one of `roots` (#1698).
-function _concrete_subtypes(roots::Tuple)::Set{DataType}
-  mods = Module[]
-  function addmod!(m::Module)
-    m in mods && return
-    push!(mods, m)
-    for n in names(m; all = true)
-      isdefined(m, n) || continue
-      x = getglobal(m, n)
-      x isa Module && x !== m && parentmodule(x) === m && addmod!(x)
+# Every struct PormG or one of its loaded driver extensions defines below one of `roots`, found by walking
+# `subtypes` down from each root (#1698): the concrete ones, and the ones a type parameter leaves open
+# (`struct Foo{T} <: SQLTypeF`), which no closed union can list and which the pin therefore refuses. A
+# struct a test file defines is not PormG's and is skipped.
+function _node_subtypes(roots::Tuple)
+  owners = Module[PormG]
+  for e in (:PormGLibPQExt, :PormGPostgresExt, :PormGSQLiteExt, :PormGMySQLExt)
+    ext = Base.get_extension(PormG, e)
+    ext === nothing || push!(owners, ext)
+  end
+  ours(@nospecialize(T)) = Base.moduleroot(parentmodule(T)) in owners
+  concrete = Set{DataType}(); open = Set{Any}(); seen = Set{Any}()
+  stack = Any[roots...]
+  while !isempty(stack)
+    T = pop!(stack)
+    T in seen && continue
+    push!(seen, T)
+    if T isa UnionAll
+      ours(T) && push!(open, T)
+    elseif T isa DataType && isconcretetype(T)
+      ours(T) && push!(concrete, T)
+    elseif T isa DataType && isabstracttype(T)
+      append!(stack, InteractiveUtils.subtypes(T))
     end
   end
-  addmod!(PormG)
-  out = Set{DataType}()
-  for m in mods, n in names(m; all = true)
-    isdefined(m, n) || continue
-    x = getglobal(m, n); x isa Type || continue
-    d = Base.unwrap_unionall(x)
-    (d isa DataType && parentmodule(d) === m && isconcretetype(d)) || continue
-    any(r -> d <: r, roots) && push!(out, d)
-  end
-  return out
+  return concrete, open
 end
+_concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
 
 # A visitor for the walk pins (#1698): a real call, not a builtin and not inlined, so a walk that reaches
 # it statically shows an `:invoke`.
@@ -462,9 +468,11 @@ end
     @test fieldtype(QB.InstructionObject, :cache) === Union{Nothing, Dict{QB.MemoKey, QB.SQLField}}
     @test fieldtype(QB.InstructionObject, :ungrouped_order_terms) === Union{Nothing, Vector{QB.SQLField}}
     src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "types.jl"), String)
+    # The walk's body without its comment lines, so a commented-out arm does not count as one.
     function walk_body(name)
       start = findfirst("function $(name)(", src)[1]
-      return src[start:findnext("\nend", src, start)[end]]
+      body = src[start:findnext("\nend", src, start)[end]]
+      return join(filter(l -> !startswith(lstrip(l), "#"), split(body, '\n')), '\n')
     end
     for (union, roots, walk, var) in (
         (QB.ProjectionNode, (PormG.SQLTypeText, PormG.SQLTypeField), "with_projection_node", "node"),
@@ -472,7 +480,9 @@ end
         (QB.ParamCollector, (PormG.AbstractPormGParam,), "with_collector", "params"))
       members = Set{DataType}(Base.uniontypes(union))
       @test all(isconcretetype, members)
-      @test _concrete_subtypes(roots) == members
+      concrete, open = _node_subtypes(roots)
+      @test concrete == members
+      @test isempty(open)   # a parametric node struct cannot be listed in a closed union
       body = walk_body(walk)
       for T in members
         @test occursin("$(var) isa $(nameof(T)) && return f($(var), args...)", body)
@@ -511,7 +521,13 @@ end
   # What: the readers of the slots the trimmed fixture's `list(T)` reaches: the duplicate-name check and
   #   its label, the WHERE loop, the alias scans of the filters, the typed read's output name, and the
   #   instruction-level parameter verbs (`with_bucket`, `set_context!`, `add_parameter!`, the marks).
-  # Expected: no dynamic call taking a slot element at an abstract type (`_slot_element_calls`).
+  # Expected: no dynamic call taking a slot element at an abstract type (`_slot_element_calls`). Measured
+  #   on main (7c02952) with the same detector: `_reject_duplicate_projection_names`, `get_filter_query`,
+  #   `_first_projection_alias_filter`, `with_bucket`, `set_context!`, `_positional_bucket` and
+  #   `add_parameter!` each made such a call there. `_filters_name_alias` passed on main too: its element
+  #   was narrowed by `f isa ExistsObject && continue` to a union the detector does not flag. The
+  #   `_describe_projection` and `_typed_output_name` rows and the two marks were not in that measurement;
+  #   with those four they guard against a regression rather than prove the change.
   # Why: `_reject_duplicate_projection_names` and `_describe_projection` were the two reads round 4 of
   #   #1600 stopped at (`==(::Any, "*")`, then `_describe_projection(::SQLField)`), and
   #   `with_bucket(f, instruc.parameters, …)` was the call site above 469 verifier rows: the build ran in

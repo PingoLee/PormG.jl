@@ -92,11 +92,11 @@ end
 # `Base.deepcopy(::SQLTypeField)` has always been, and is spelled per concrete type: `deepcopy` on the
 # vector's abstract element type was a dynamic call with a run-time walk behind it, which a trimmed build
 # has no compiled target for (`juliac --trim`, the verifier reached it from `list(T)`). An `SQLText` (a
-# `Value(x)` literal) is immutable and is only read, so it is its own copy.
+# `Value(x)` literal) is immutable and is only read, so it is its own copy. The element is a
+# `ProjectionNode` (#1698), so these two arms are the whole set.
 function _projection_copy(v::ProjectionNode)
   v isa SQLText && return v
-  v isa SQLTypeField && return _field_copy(v)
-  return deepcopy(v)   # an `SQLTypeText` other than `SQLText` (none in src/): the generic copy, JIT-only
+  return _field_copy(v::SQLField)
 end
 # One method, so a call on an abstract `SQLTypeField` slot (`SQLOrder.field`) is still static. Narrowed
 # to `SQLField`, the one `SQLTypeField` in src/, `deepcopy` is the one-level `Base.deepcopy(::SQLTypeField)`

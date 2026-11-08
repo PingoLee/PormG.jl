@@ -3,7 +3,7 @@
 # row predicate stands. Predicates on a projection alias render through `projection_types.jl`.
 
 """
-  get_filter_query(object::SQLObject, instruc::SQLInstruction)
+  get_filter_query(object::SQLObjectQuery, instruc::SQLInstruction)
 
   Iterates over the filter of the object and generates the WHERE query for the given SQLInstruction object.
 
@@ -128,9 +128,10 @@ function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
                                          label = _having_subquery_label(string(_having_leaf_label(having_part)))))
       end
     end
-  else
-    throw(FilterError("Invalid filter entry: a $(typeof(v)) is not a Q, Qor, or operator expression."))
   end
+  # No `else`: the three arms cover every `FilterNode` member (#1698). The refusal for any other entry
+  # ("Invalid filter entry") could not be reached once the slot was closed; `_filter!` refuses at
+  # declaration what the slot cannot hold.
   return nothing
 end
 

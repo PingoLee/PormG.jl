@@ -506,7 +506,8 @@ end
 add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) =
   with_collector(_add_parameter_on, instruc.parameters, value, contains, operator, sql_type)::String
 # `add_parameter!` on the collector, positionally: `with_collector` passes no keywords (#1698). An
-# instruction with no collector raises the `MethodError` the keyword call on `nothing` raised.
+# instruction with no collector (`_declaration_instruction`, a test's bare instruction) raises a
+# `MethodError` naming `_add_parameter_on` and `nothing`, where it named `add_parameter!(::Nothing, …)`.
 _add_parameter_on(sq, value, contains::Bool, operator::String, sql_type::Union{Nothing,String}) =
   add_parameter!(sq, value; contains=contains, operator=operator, sql_type=sql_type)
 

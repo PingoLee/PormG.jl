@@ -408,6 +408,9 @@ const DOCERR_CASES = [
         # `on` is the whole ON clause, and a CTE is joined by its own `.with()` declaration, not by
         # someone else's join. Refused at the call, before any SQL is planned. FilterError rather
         # than QueryBuildError because this is about what a FILTER element may reference.
+        # The cjoin_on cases pass the model itself: these fixtures live in `Main`, which declares no
+        # model set, so a binding NAME resolves to nothing since #1601 and the build stops at
+        # "No model is bound" before the refusal under test (#1699).
         "read/custom_joins.md — a CTE(...) reference inside a join ON clause is refused",
         FilterError,
         () -> begin
@@ -416,7 +419,7 @@ const DOCERR_CASES = [
             q = DOCERR_RESULT_PG.objects
             q.with("ev" => ev)
             q.values("resultid")
-            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = [CTE("ev", "status") => "Finished"])
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d", on = [CTE("ev", "status") => "Finished"])
             q.list(show_query = :dict)
         end,
     ),
@@ -434,7 +437,7 @@ const DOCERR_CASES = [
             q = DOCERR_RESULT_PG.objects
             q.with("ev" => ev)
             q.values("resultid")
-            q.cjoin_on("DOCERR_DRIVER_PG", alias = "d", on = ["ev__status" => "Finished"])
+            q.cjoin_on(DOCERR_DRIVER_PG, alias = "d", on = ["ev__status" => "Finished"])
             q.list(show_query = :dict)
         end,
     ),
@@ -859,14 +862,15 @@ const DOCERR_CASES = [
         # #982. Binding emits each `cjoin_on` alias after the aliases its ON clause names; two that
         # name each other have no such order. The doc says this raises and names the two. (It
         # replaced #435's case: a predicate naming a later join is no longer moved onto it, so a
-        # `cjoin_on` can no longer be left with no ON clause.)
+        # `cjoin_on` can no longer be left with no ON clause.) The model object, not its name: see
+        # the #444 entry (#1699).
         "read/custom_joins.md — two cjoin_on aliases whose ON clauses name each other are refused",
         QueryBuildError,
         () -> begin
             q = DOCERR_RESULT_PG.objects
             q.values("resultid")
-            q.cjoin_on("DOCERR_STATUS_PG", alias = "d1", on = [Joined("d1", "status") == Joined("d2", "status")])
-            q.cjoin_on("DOCERR_STATUS_PG", alias = "d2", on = [Joined("d2", "statusid") == Joined("d1", "statusid")])
+            q.cjoin_on(DOCERR_STATUS_PG, alias = "d1", on = [Joined("d1", "status") == Joined("d2", "status")])
+            q.cjoin_on(DOCERR_STATUS_PG, alias = "d2", on = [Joined("d2", "statusid") == Joined("d1", "statusid")])
             q.list(show_query = :dict)
         end,
     ),
@@ -874,13 +878,14 @@ const DOCERR_CASES = [
         # #448. The shape that used to RENDER: `points` is a column of the base model, so nothing in
         # this ON clause names `d`, and the join emitted pairing every `docerr_status` row with every
         # matched base row. Binding refuses it from the conditions (#982). The docs use this exact
-        # `points__@gt` shape, so the case is the doc sentence made executable.
+        # `points__@gt` shape, so the case is the doc sentence made executable. The model object, not
+        # its name: see the #444 entry (#1699).
         "read/custom_joins.md — a cjoin_on ON clause that never names its own alias is refused",
         QueryBuildError,
         () -> begin
             q = DOCERR_RESULT_PG.objects
             q.values("resultid")
-            q.cjoin_on("DOCERR_STATUS_PG", alias = "d", on = ["points__@gt" => 10])
+            q.cjoin_on(DOCERR_STATUS_PG, alias = "d", on = ["points__@gt" => 10])
             q.list(show_query = :dict)
         end,
     ),
@@ -3633,6 +3638,24 @@ const DOCERR_CASES = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The fixtures above cannot be named by their binding (#1699)
+# Expected: naming DOCERR_DRIVER_PG by its binding raises QueryBuildError("No model is bound as …"),
+# because `Main` declares no model set (#1601). Why: the loop below refuses any case that stops at
+# that message, by its text. If the message is reworded (#1704), this goes red first, rather than
+# the loop's guard passing for every case without checking anything.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "The docs-error fixtures are not resolvable by binding name (#1699)" begin
+    err = try
+        PormG.QueryBuilder._require_bound_model(DOCERR_RESULT_PG, "DOCERR_DRIVER_PG")
+        nothing
+    catch e
+        e
+    end
+    @test err isa QueryBuildError
+    @test err isa QueryBuildError && occursin("No model is bound as", err.msg)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Documented error types: every build-time claim raises the type its page names
 # Runs each documented failure and asserts the raised type. The `!isa ArgumentError` assertion is
 # independent rather than redundant: it pins the #231/#239 clean break that both `api.md` and
@@ -3652,6 +3675,13 @@ const DOCERR_CASES = [
             # would otherwise pass silently — so assert the failure happens before its type.
             @test err !== nothing
             @test err isa expected
+            # A case that stops at "No model is bound" never reached the refusal it documents, and
+            # for a QueryBuildError claim the line above passes anyway (#1699: the #982 and #448
+            # cases did, while the two FilterError cases went red). No page documents that refusal.
+            # The string arm's other refusal, "cjoin_on target model '…' not found in module", is
+            # left out on purpose: custom_joins.md documents it (a misspelled name is a
+            # QueryBuildError at run time). The testset before this one pins the matched text.
+            @test !(err isa QueryBuildError && occursin("No model is bound as", err.msg))
             @test err isa PormGError
             @test !(err isa ArgumentError)
         end

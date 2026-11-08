@@ -107,9 +107,16 @@ end
 # (`struct Foo{T} <: SQLTypeF`), which no closed union can list and which the pin therefore refuses. A
 # struct a test file defines is not PormG's and is skipped.
 function _node_subtypes(roots::Tuple)
+  # Every extension `Project.toml` declares, so one added later is counted without editing this list.
+  # Read section-aware without a TOML dependency, as `test_compat_guards.jl` does: the `test` target
+  # does not carry the TOML stdlib.
   owners = Module[PormG]
-  for e in (:PormGLibPQExt, :PormGPostgresExt, :PormGSQLiteExt, :PormGMySQLExt)
-    ext = Base.get_extension(PormG, e)
+  section = ""
+  for raw in eachline(joinpath(pkgdir(PormG), "Project.toml"))
+    line = strip(raw)
+    startswith(line, "[") && (section = line; continue)
+    (section == "[extensions]" && occursin('=', line)) || continue
+    ext = Base.get_extension(PormG, Symbol(strip(first(split(line, '=')))))
     ext === nothing || push!(owners, ext)
   end
   ours(@nospecialize(T)) = Base.moduleroot(parentmodule(T)) in owners

@@ -225,9 +225,11 @@ function build(object::SQLObject;
       # one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree about the same
       # connection. With `django_prefix: ''` the old spelling produced `django == "_"`, so the reverse-join
       # table fallback prefixed every unpinned table with an underscore.
-      # #1698: set after construction, not as a keyword. A `Union{Nothing,String}` value made the keyword
-      # `NamedTuple` abstract, so the `@kwdef` constructor call was a dynamic `kwcall`: the trimmed
-      # fixture's `list(T)` stopped there once the slots before it were closed.
+      # #1698: set after construction, not as a keyword. The other keywords' values are each one concrete
+      # type in a specialized instance of this closure (a keyword argument or a `let` binding); this one
+      # is computed from `settings` at run time, a `Union{Nothing,String}`, which made the keyword
+      # `NamedTuple` abstract, so the `@kwdef` constructor call was an unresolved `kwcall` in the trimmed
+      # fixture's `list(T)` once the slots before it were closed. A keyword added here keeps that rule.
       app_label = Models._django_app_label(settings)
       instruct.django = app_label === nothing ? nothing : app_label * "_"   # TODO, remover
 

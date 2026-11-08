@@ -86,6 +86,26 @@ function _group_role(v::Union{SQLTypeText,SQLTypeField}, instruc::SQLInstruction
   return :group
 end
 
+# #1612 — the node `get_select_query` renders into. The render writes the resolved SQL into the node's
+# `field` and stores it in `instruc.select`, so a projection the caller's handler holds is copied first
+# (#43, #1624: the build writes nothing into the handler). The copy is one level, as
+# `Base.deepcopy(::SQLTypeField)` has always been, and is spelled per concrete type: `deepcopy` on the
+# vector's abstract element type was a dynamic call with a run-time walk behind it, which a trimmed build
+# has no compiled target for (`juliac --trim`, the verifier reached it from `list(T)`). An `SQLText` (a
+# `Value(x)` literal) is immutable and is only read, so it is its own copy.
+function _projection_copy(v::Union{SQLTypeText,SQLTypeField})
+  v isa SQLText && return v
+  v isa SQLTypeField && return _field_copy(v)
+  return deepcopy(v)   # an `SQLTypeText` other than `SQLText` (none in src/): the generic copy, JIT-only
+end
+# One method, so a call on an abstract `SQLTypeField` slot (`SQLOrder.field`) is still static. Narrowed
+# to `SQLField`, the one `SQLTypeField` in src/, `deepcopy` is the one-level `Base.deepcopy(::SQLTypeField)`
+# in types.jl, called statically (and the slots the memo keys read stay that method's to copy, #1004).
+function _field_copy(v::SQLTypeField)
+  v isa SQLField && return deepcopy(v)::SQLField
+  return deepcopy(v)
+end
+
 """
   get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
 
@@ -105,7 +125,7 @@ function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instr
   # which the readers called mid-build already guard with `isassigned`.
   resize!(instruc.select, length(values))
   for i in eachindex(values) # linear indexing
-    v_copy = deepcopy(values[i])
+    v_copy = _projection_copy(values[i])
     mark = parameter_mark(instruc)   # #1130: what this projection binds, for `projection_params`
 
     # SQLText (from Value(x)) is a literal value, not a column reference.
@@ -402,7 +422,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
   from_columns = nothing   # #1130: the FROM tables' column names, read on the first term that needs them
   for v in object.order
     found_in_select = false
-    v_field_copy = deepcopy(v.field)
+    v_field_copy = _field_copy(v.field)   # #1612: one level, per concrete type (see `_projection_copy`)
 
     # Check if the ORDER BY target matches a selected alias. Only those aliases can be
     # referenced directly in ORDER BY. Cached join paths created while resolving CTE join_field

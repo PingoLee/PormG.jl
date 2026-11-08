@@ -259,6 +259,18 @@ refusal names the field, the field's type and the column's type, never the value
 A typed row is a read-only projection, like jOOQ's `fetchInto` or sqlx's `query_as!`: it has no lazy
 relations, no many-to-many accessors and no `save()`. Use `.list()` for those.
 
+#### Typed reads in a trimmed build
+
+An application compiled ahead of time with `juliac --trim` keeps only the code the compiler can follow
+from its entry point. Of the read terminals, such a build supports the typed read only: `list(T)`,
+`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)` and `latest(T, …)`. They decode the driver's
+result straight into `T`, and every call on the way is typed. The terminals that hold their values as
+`Any` are JIT-only: `.list()`, `.first()` and `.get()` without a type (their `PormGRow` rows),
+`list(:dict)`, `list(:json)`, a raw `fetch` or `execute`, and reading a query as a Tables.jl table
+(`DataFrame(query)`). Under the JIT nothing changes, and every terminal works as this page describes.
+A trimmed build does not yet run a query end to end; [#1599](https://github.com/PingoLee/PormG.jl/issues/1599)
+tracks the rest of the work.
+
 #### Writing `T`: `show_query = :struct`
 
 You do not have to work out each field's type by hand. Every read terminal takes

@@ -455,7 +455,7 @@ function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::
     # place. #508 phase 2 closed that gap from the other side: `FObject` is immutable and
     # `_retag_cte_string`'s function arm constructs, so there is no in-place write left for the
     # shallow copy to fail to cover.
-    return SQLOrder(_bind_cte_string!(deepcopy(x.field), q),
+    return SQLOrder(_bind_cte_string!(_field_copy(x.field), q),   # #1612: the same one-level copy
                     x.order, x.orientation, x._as, x.nulls)
   end
   return x
@@ -582,16 +582,24 @@ end
 # rebuilt — while every other slot, and every node not on such a path, is shared with `q`. This pass
 # used to rewrite `q`'s own nodes in place, safe only because every read entry point deep-copied the
 # handler first; that copy is gone now that the build writes nothing.
+# #1612: an ORDER BY term's CTE-rooted path, bound on a one-level copy of its field (the field is the
+# caller's, #1624). The field is read once into a local, so the `isa` narrows it for the copy.
+function _bind_cte_order(o::SQLTypeOrder, q::SQLObject)::SQLTypeOrder
+  o isa SQLOrder || return o
+  f = o.field
+  f isa SQLField || return o
+  return SQLOrder(_bind_cte_string!(_field_copy(f), q), o.order, o.orientation, o._as, o.nulls)
+end
+
 function _resolve_cte_string_paths(q::SQLObject)::SQLObject
   # A query with no CTE cannot have a CTE-rooted path, so it pays one `isempty` and nothing else.
   # That is most of the neutrality argument for this pass, for free.
   isempty(q.ctes) && return q
 
-  values = Union{SQLTypeText,SQLTypeField}[v isa SQLField ? _bind_cte_string!(deepcopy(v), q) : v for v in q.values]
+  # #1612: `_field_copy`, the one-level copy `deepcopy(::SQLTypeField)` makes, named per concrete type.
+  values = Union{SQLTypeText,SQLTypeField}[v isa SQLField ? _bind_cte_string!(_field_copy(v), q) : v for v in q.values]
   filter = FilterType[_bind_cte_filter(f, q) for f in q.filter]
-  order = SQLTypeOrder[o.field isa SQLField ?
-             SQLOrder(_bind_cte_string!(deepcopy(o.field), q), o.order, o.orientation, o._as, o.nulls) : o
-           for o in q.order]
+  order = SQLTypeOrder[_bind_cte_order(o, q) for o in q.order]
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
   # `custom_join` conditions are refused where they are bound (`_bind_join_conditions!`, #977): stored

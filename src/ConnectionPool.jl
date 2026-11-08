@@ -31,6 +31,7 @@ import PormG: UnsafeMutationError
 import PormG: DatabaseError, IntegrityError, OperationalError, StatementError
 # Backend generics — driver bodies live in ext/PormGLibPQExt.jl / ext/PormGSQLiteExt.jl.
 import PormG: backend_connect, backend_renew_connection, backend_is_alive, backend_ping, backend_execute,
+              backend_execute_rows, decoded_on_worker,   # #1605: the typed read decodes on the SQLite worker
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
@@ -2788,6 +2789,15 @@ struct SQLiteAsyncResponse
   payload::Any
 end
 
+# #1605: a statement whose rows the worker decodes before answering (the typed read's `decode`, see
+# `fetch`). It rides in the work item's `params` slot, so the item gains no field; the worker unwraps it
+# and calls `backend_execute_rows`, and the decoder runs on the worker, where SQLite's statement is
+# stepped and finalized.
+struct _DecodeWith{P,D}
+  params::P
+  decode::D
+end
+
 # A single global worker serializes all SQLite async operations across all pool instances.
 # This is intentional: SQLite supports only one concurrent writer per file, and even for
 # reads, WAL mode only provides limited concurrency at the file level. A shared queue
@@ -2855,8 +2865,12 @@ function _ensure_sqlite_async_worker!()
         # the response channel.
         response = try
           # Dispatches into the SQLite extension's backend_execute (materialized + retry), in the
-          # latest world: this task lives forever (see `_call_latest`).
-          SQLiteAsyncResponse(true, _call_latest(backend_execute, item.pool, item.conn, item.sql, item.params))
+          # latest world: this task lives forever (see `_call_latest`). A typed read's statement
+          # (#1605) carries its decoder, and the worker decodes the rows before answering.
+          params = item.params
+          SQLiteAsyncResponse(true, params isa _DecodeWith ?
+            _call_latest(backend_execute_rows, item.pool, item.conn, item.sql, params.params, params.decode) :
+            _call_latest(backend_execute, item.pool, item.conn, item.sql, params))
         catch e
           SQLiteAsyncResponse(false, e)
         finally
@@ -2882,14 +2896,15 @@ Internal helper that funnels a SQLite query through the single global worker so 
 statements run serialized on one thread, then returns a `Task` the caller awaits. This
 keeps the main event loop responsive while waiting for the database.
 """
-function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params)
+function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params; decode = nothing)
   _ensure_sqlite_async_worker!()
 
   response = Channel{Any}(1)
   # Stamped when queued, not when the worker takes it: a statement queued behind others is running on
   # the pool's behalf, not a lease nobody returns (#1637).
   mark = _note_statement_start!(pool, conn)
-  work_item = SQLiteAsyncWorkItem(pool, conn, sql, params, response, mark)
+  work_item = SQLiteAsyncWorkItem(pool, conn, sql, decode === nothing ? params : _DecodeWith(params, decode),
+                                  response, mark)
 
   # Count this statement as outstanding BEFORE it can reach the worker (#327), and synchronously —
   # on the caller's task, not inside the `@async` below. Doing it in the task would leave a window
@@ -3292,7 +3307,8 @@ orders = await_result(task2)
 function fetch_async(connection::_SQLEngine, sql::String;
   conn = nothing,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
-  ignore_tx::Bool = false)
+  ignore_tx::Bool = false,
+  _decode = nothing)   # #1605: the typed read's row decoder, internal (see `fetch`)
 
   # #218: this is the single funnel every fetch/fetch_async path reaches (delegates and the
   # sync `fetch` — including its reconnect retry — all land here), so normalize manual-params
@@ -3318,7 +3334,7 @@ function fetch_async(connection::_SQLEngine, sql::String;
     # Use transaction context connection - don't acquire a new one
     conn = tx_conn
     err = try
-      task = _execute_async(connection, conn, sql, params)
+      task = _execute_async(connection, conn, sql, params, _decode)
       # Return a special FetchTask that won't release the connection
       return FetchTask(task, connection, conn, true)  # true = in_transaction
     catch e
@@ -3332,7 +3348,7 @@ function fetch_async(connection::_SQLEngine, sql::String;
       conn = _acquire_for_statement(connection, sql)
     end
     err = try
-      task = _execute_async(connection, conn, sql, params)
+      task = _execute_async(connection, conn, sql, params, _decode)
       return FetchTask(task, connection, conn, false; borrowed = borrowed)  # false = not in transaction
     catch e
       # If EXEC fails immediately, release the connection — only one this call acquired (#970)
@@ -3345,6 +3361,8 @@ end
 # The settings forms reach the pool through `with_pool` (#1622), so the call on it is static for every
 # pool PormG builds; `settings.connections` alone is an untyped value. The same holds for every
 # settings or by-key form below.
+# No `_decode` here (#1605): a typed read decodes through `fetch`, which finishes the decode
+# (`_decoded`); a task from these forms would hand back undecoded rows, or rows short of a recorded error.
 fetch_async(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx)
 fetch_async(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = with_pool(_fetch_async_on, settings.connections, sql, conn, params, ignore_tx)
 _fetch_async_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool) = fetch_async(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
@@ -3368,16 +3386,25 @@ Wrap a read you know is safe to run twice in [`with_read_retry`](@ref) to retry 
 function fetch(connection::_SQLEngine, sql::String;
   conn = nothing,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
-  ignore_tx::Bool = false)
+  ignore_tx::Bool = false,
+  _decode = nothing)
   @pormg_debug false
   # Manual-params NULL normalization happens in the fetch_async funnel this delegates to (#218) —
   # `fetch` only forwards params, never inspects their values.
+  #
+  # #1605: `_decode` is the typed read's row decoder (`QueryBuilder._RowDecoder`), internal and not API.
+  # The rows are decoded where the driver's result is concrete: on SQLite's worker, inside
+  # `backend_execute_rows`, or here, on the result PostgreSQL's and MySQL's handles deliver
+  # (`_decoded`). Either way this returns the decoder's `Vector{T}` and the caller asserts it.
 
   # Use async-first approach: start async query then await
-  fetch_task = fetch_async(connection, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+  fetch_task = _decode === nothing ? fetch_async(connection, sql; conn=conn, params=params, ignore_tx=ignore_tx) :
+                                     fetch_async(connection, sql; conn=conn, params=params, ignore_tx=ignore_tx, _decode=_decode)
 
-  try
-    return await_result(fetch_task)
+  # #1605: the decode runs after the `try`, so an error it raises reaches the caller as it was raised,
+  # not wrapped as the statement's (`_as_database_error`), as when it ran after `fetch` returned.
+  raw = try
+    await_result(fetch_task)
   catch e
     root = _as_database_error(connection, e)
     # Never retry inside a transaction context or on a caller-pinned conn (#138): the retry
@@ -3458,16 +3485,30 @@ function fetch(connection::_SQLEngine, sql::String;
         throw(root)
       end
       @warn "Lost connection to database. Retrying the statement on a renewed or freshly acquired connection..."
-      retry_task = fetch_async(connection, sql; params=params, ignore_tx=ignore_tx)
-      return await_result(retry_task)
+      retry_task = _decode === nothing ? fetch_async(connection, sql; params=params, ignore_tx=ignore_tx) :
+                                         fetch_async(connection, sql; params=params, ignore_tx=ignore_tx, _decode=_decode)
+      # In the `catch`: an error the decode raises here is not caught by this `try` either.
+      return _decoded(connection, await_result(retry_task), _decode)
     end
     throw(root)
   end
+  return _decoded(connection, raw, _decode)
 end
-fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx)
-fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx)
-_fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
+fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
+# #1605: `_decode` is forwarded only when set, so a `fetch` method that predates it (a test mock's, a
+# backend's own) is still called exactly as before for every untyped read.
+_fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, ::Nothing) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+_fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, decode) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx, _decode=decode)
 fetch(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
+
+# #1605: what `fetch` returns for a typed read. SQLite's worker has already decoded (`backend_execute_rows`
+# ran there); PostgreSQL's and MySQL's handles deliver the materialized result, decoded here.
+_decoded(::PormGSQLite, result, decode) = decoded_on_worker(decode, result)
+_decoded(::PormGPostgres, result, ::Nothing) = result
+_decoded(::PormGPostgres, result, decode) = decode(result)
+_decoded(::PormGMySQL, result, ::Nothing) = result
+_decoded(::PormGMySQL, result, decode) = decode(result)
 
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)
@@ -3753,6 +3794,12 @@ _after_begin_sql(::PormGMySQL) = String[]
 _execute_async(pool::PormGPostgres, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
 _execute_async(pool::PormGSQLite, conn, sql, params) = sqlite_execute_async(pool, conn, String(sql), params)
 _execute_async(pool::PormGMySQL, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
+# #1605: with the typed read's decoder. SQLite decodes on its worker; the others decode the result their
+# handle delivers, in `fetch` (`_decoded`), so the decoder is not passed to their driver call.
+_execute_async(pool::PormGSQLite, conn, sql, params, ::Nothing) = _execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGSQLite, conn, sql, params, decode) = sqlite_execute_async(pool, conn, String(sql), params; decode = decode)
+_execute_async(pool::PormGPostgres, conn, sql, params, decode) = _execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGMySQL, conn, sql, params, decode) = _execute_async(pool, conn, sql, params)
 _acquire_in_mode(pool::PormGPostgres, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)
 _acquire_in_mode(pool::PormGSQLite, mode::Symbol; kwargs...) = acquire_connection(pool; mode = mode, kwargs...)
 _acquire_in_mode(pool::PormGMySQL, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)

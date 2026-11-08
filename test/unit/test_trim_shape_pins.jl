@@ -177,7 +177,10 @@ struct _TspStandInPool <: PormG.PormGSQLite end
     @test_throws PormG.InvalidConfigurationError CP.with_pool(typeof, 42)
     # `pool` is `@nospecialize`, so the instance that runs is the one for `Any`: every arm is a static
     # call there (the four `isa` arms, the `Settings` unwrap, the open arm's `_with_unlisted_pool`).
-    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool)))
+    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool, Nothing)))
+    # The typed read's form (#1605): the last argument is its row decoder, concrete per `T`.
+    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool,
+                                                PormG.QueryBuilder._RowDecoder{NamedTuple{(:a,),Tuple{Int}},Tuple{PormG.ReadParser}})))
     @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._atomic_on), Any, typeof(identity), Bool)))
     # A settings entry with no pool built yet: every call that needs the pool refuses it the same way.
     PormG.config["_tsp_nopool"] = Configuration.Settings()

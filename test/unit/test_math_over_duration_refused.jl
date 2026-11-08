@@ -361,13 +361,13 @@ end
   for (fn, label) in ((:DATE, "@date"), (:QUARTER, "@quarter"), (:QUADRIMESTER, "@quadrimester"),
                       (:WEEK_DAY, "@week_day"))
     arm = getfield(PormG.Dialect, fn)
-    err = try arm("x", Dict{String,Any}("temporal_kind" => :interval), _MOD_MY); nothing catch e; e end
+    err = try arm("x", PormG.Dialect.FnOptions("temporal_kind" => :interval), _MOD_MY); nothing catch e; e end
     @test err isa QueryBuildError && _mod_calendar_refused(_mod_msg(err), label)
-    @test arm("x", Dict{String,Any}("temporal_kind" => :date), _MOD_MY) isa String
+    @test arm("x", PormG.Dialect.FnOptions("temporal_kind" => :date), _MOD_MY) isa String
   end
-  @test PormG.Dialect.QUARTER("x", Dict{String,Any}("temporal_kind" => :date), _MOD_MY) == "QUARTER(x)"
+  @test PormG.Dialect.QUARTER("x", PormG.Dialect.FnOptions("temporal_kind" => :date), _MOD_MY) == "QUARTER(x)"
   extract(part) = try
-    PormG.Dialect.EXTRACT("x", Dict{String,Any}("part" => part, "temporal_kind" => :interval), _MOD_MY)
+    PormG.Dialect.EXTRACT("x", PormG.Dialect.FnOptions("part" => part, "temporal_kind" => :interval), _MOD_MY)
   catch e
     e
   end

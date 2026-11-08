@@ -105,11 +105,22 @@ const PINNED_NAMES = _NamePin[
   (name = "LibPQ.libpq_c.PQfreemem",            status = :internal,   reader = "_preflight_conninfo"),
   # SQLite.jl
   (name = "SQLite.DB",                          status = :documented, reader = "PormG.backend_execute, _create_sqlite_connection, …"),
-  (name = "SQLite.Stmt",                        status = :documented, reader = "_sqlite_execute_materialized"),
+  (name = "SQLite.Stmt",                        status = :documented, reader = "_sqlite_execute_materialized, _sqlite_decode_rows (its `register` keyword: PINNED_KEYWORDS)"),
   (name = "SQLite.execute",                     status = :documented, reader = "PormG.backend_is_alive, _create_sqlite_connection"),
   (name = "SQLite.register",                    status = :documented, reader = "_create_sqlite_connection"),
   (name = "SQLite.C.sqlite3_interrupt",         status = :internal,   reader = "PormG.backend_cancel_query!"),
   (name = "SQLite.C.sqlite3_libversion_number", status = :internal,   reader = "PormG.backend_sqlite_version"),
+  # #1605: the typed read steps the statement and reads each cell by its storage class, as SQLite.jl's
+  # own non-strict `getvalue` does (1.6.1 through 1.11 read them the same way).
+  (name = "SQLite.C.SQLITE_NULL",               status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.SQLITE_INTEGER",            status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.SQLITE_FLOAT",              status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.SQLITE_TEXT",               status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.sqlite3_column_type",       status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.sqlite3_column_int64",      status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.C.sqlite3_column_double",     status = :internal,   reader = "_sqlite_cell"),
+  (name = "SQLite.sqlitevalue",                 status = :internal,   reader = "_sqlite_cell (TEXT and BLOB)"),
+  (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into"),
   # MySQL.jl
   (name = "MySQL.Connection",                   status = :documented, reader = "PormG.backend_execute, _open_connection, _run, …"),
   (name = "MySQL.connection_id",                status = :documented, reader = "PormG.backend_cancel_query!"),
@@ -162,6 +173,7 @@ const PINNED_FIELDS = _FieldPin[
   # the floor (1.6.1) has none, which the extension checks with `hasfield`. The #1521 testset in
   # test_connection_pool_liveness.jl reads it whenever it exists, so a rename still fails there.
   (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
+  (type = SQLite.Query, fields = [:stmt, :names], status = :internal, reader = "_sqlite_rows_into (#1605)"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
    reader = "PormG.backend_classify_error, backend_error_fields"),
   # MySQL.jl. `_ok_info` returns "" when the cursor has no `ok` field; the pin is what keeps that
@@ -200,6 +212,16 @@ const PINNED_METHODS = _MethodPin[
    reader = "_parse_iso_interval, for text its pattern does not match"),
   (f = Base.parse, sig = Tuple{Type{LibPQ.Dates.CompoundPeriod}, LibPQ.PQBinaryValue{LibPQ.oid(:interval)}},
    status = :internal, reader = "_interval_conversion, for a binary interval"),
+]
+
+# ── Keyword arguments PormG passes — a method without the keyword raises a `MethodError` ─────────────
+# `SQLite.Stmt(db, sql; register = false)` keeps a statement out of the database's registry, so `close!`
+# finalizes it at once. A pin on the name alone would stay green with the keyword gone, and the keyword
+# is declared (`register::Bool`, not a `kw...` catch-all), so `hasmethod` checks it.
+const _KeywordPin = @NamedTuple{f::Any, sig::Type, kw::Tuple{Vararg{Symbol}}, reader::String}
+const PINNED_KEYWORDS = _KeywordPin[
+  (f = SQLite.Stmt, sig = Tuple{SQLite.DB, String}, kw = (:register,),
+   reader = "_sqlite_execute_materialized, _sqlite_decode_rows (#1605)"),
 ]
 
 # ── The socket layer under Postgres.jl and MySQL.jl ────────────────────────────────────────────────
@@ -339,6 +361,9 @@ end
 @testset "#1494: the driver methods PormG calls exist, not only their names" begin
   for p in PINNED_METHODS
     @test hasmethod(p.f, p.sig) || error("$(p.f)($(p.sig)) is gone; read by $(p.reader)")
+  end
+  for p in PINNED_KEYWORDS
+    @test hasmethod(p.f, p.sig, p.kw) || error("$(p.f)($(p.sig); $(join(p.kw, ", "))) is gone; read by $(p.reader)")
   end
   method_pinned = Set{Any}(p.f for p in PINNED_METHODS)
   for p in PINNED_NAMES

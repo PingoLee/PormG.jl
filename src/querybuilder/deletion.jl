@@ -155,326 +155,327 @@ function delete(objct::SQLObjectHandler;
   model = objct.object.model
   
   # Resolve settings
-  settings, connection, conn_key = get_settings(objct, connection=connection)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct; connection = connection) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
     
-  # check if is allowed to delete
-  !settings.change_data && throw(_write_not_allowed("delete", conn_key))
+    # check if is allowed to delete
+    !settings.change_data && throw(_write_not_allowed("delete", conn_key))
 
-  if objct.object.limit !== nothing || objct.object.offset > 0 || !isempty(objct.object.order)
-    throw(UnsafeMutationError(
-      "Cannot call delete() on a query that has limit(), offset(), or order_by() set. " *
-      "The deletion collector operates on complete filtered object sets so counts, cascades, " *
-      "and constraint handling stay deterministic. Filter by primary key explicitly to delete " *
-      "a bounded set."
-    ))
-  end
+    if objct.object.limit !== nothing || objct.object.offset > 0 || !isempty(objct.object.order)
+      throw(UnsafeMutationError(
+        "Cannot call delete() on a query that has limit(), offset(), or order_by() set. " *
+        "The deletion collector operates on complete filtered object sets so counts, cascades, " *
+        "and constraint handling stay deterministic. Filter by primary key explicitly to delete " *
+        "a bounded set."
+      ))
+    end
 
-  if objct.object.distinct
-    throw(UnsafeMutationError(
-      "Cannot call delete() on a query with distinct(). " *
-      "DISTINCT collapses the result set, making the deletion collector's " *
-      "cascade counting unreliable. Remove distinct() or filter by primary key."
-    ))
-  end
+    if objct.object.distinct
+      throw(UnsafeMutationError(
+        "Cannot call delete() on a query with distinct(). " *
+        "DISTINCT collapses the result set, making the deletion collector's " *
+        "cascade counting unreliable. Remove distinct() or filter by primary key."
+      ))
+    end
 
-  if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, objct.object.values)
-    throw(UnsafeMutationError(
-      "Cannot call delete() on a query with group_by() / annotate aggregations. " *
-      "GROUP BY collapses rows, making cascade counting and constraint handling " *
-      "unreliable. Remove the aggregation or filter by primary key."
-    ))
-  end
+    if any(v -> isa(v, SQLTypeField) && isa(v.field, Union{SQLTypeFunction, SQLTypeF}) && v.field.aggregate, objct.object.values)
+      throw(UnsafeMutationError(
+        "Cannot call delete() on a query with group_by() / annotate aggregations. " *
+        "GROUP BY collapses rows, making cascade counting and constraint handling " *
+        "unreliable. Remove the aggregation or filter by primary key."
+      ))
+    end
 
-  # #433: a CTE-scoped delete is refused here, at the entry, rather than at either render site.
-  #
-  # The deletion collector re-uses THIS queryset in two ways: for a model with dependents it
-  # synthesizes `"<fk>__@in" => objct` (`find_related_objects!`), a nested subquery; and every model,
-  # leaf or not, renders its own statement from it (`_collector_predicate` — since #765 its filters
-  # on the target row, before that `WHERE pk IN (<objct>)`). Those paths reach different amounts of
-  # the query builder, so guarding downstream made the SAME user code succeed or fail depending on
-  # whether the target model happened to have a reverse relation — an invisible, schema-dependent
-  # split. (The root statement emits no `WITH` either, so a CTE has nowhere to live there.)
-  #
-  # What the refusal rests on is the ROOT statement: the `DELETE` emits no `WITH`, so a CTE the
-  # queryset declares — and any filter through it — has nowhere to be declared. #433 also measured an
-  # exemption re-opening a misbind: with a filter bound before the nested CTE, SQLite bound
-  # ["CTEVAL","INNERVAL","NOTEVAL"] against a text order of NOTEVAL, CTEVAL, INNERVAL — a silent
-  # WRONG DELETE. That half no longer holds: a nested `WITH` in a scoping subquery now binds in text
-  # order (#1292, `test_nested_cte_guard.jl` pins one under `delete()`), so lifting this refusal would
-  # need a `WITH` on the DELETE itself, not a binding fix.
-  #
-  # UnsafeMutationError, not the QueryBuildError the rest of the #433 family throws. The
-  # discriminator is not the query SHAPE — the identical query is legal on a read path and renders
-  # its `WITH` fine — it is that this is a MUTATION, which is the axis `UnsafeMutationError` names
-  # ("an UPDATE or DELETE ... in another unsafe shape"). `QueryBuildError` is the default bucket for
-  # what has no sharper category, and this has one. It also keeps the type uniform across the five
-  # guards in this function, so a caller catching `UnsafeMutationError` to mean "refine this delete"
-  # has no blind spot. (`update()`'s CTE refusal is a `QueryBuildError` only incidentally: it is
-  # raised deep in `_build_row_join`, where the statement kind is not known.)
-  if !isempty(objct.object.ctes)
-    throw(UnsafeMutationError(
-      "Cannot call \e[4m\e[32mdelete()\e[0m on a query that declares a CTE " *
-      "(\e[4m\e[31m$(join(collect(keys(objct.object.ctes)), ", "))\e[0m). A " *
-      "\e[4m\e[32mDELETE\e[0m statement emits no \e[4m\e[31mWITH\e[0m clause, so the CTE would " *
-      "never be declared for the rows it removes.\n  " *
-      "Resolve the CTE first and filter on its result, e.g. " *
-      "\e[4m\e[32m.filter(\"pk__@in\" => ids)\e[0m (#433)."
-    ))
-  end
+    # #433: a CTE-scoped delete is refused here, at the entry, rather than at either render site.
+    #
+    # The deletion collector re-uses THIS queryset in two ways: for a model with dependents it
+    # synthesizes `"<fk>__@in" => objct` (`find_related_objects!`), a nested subquery; and every model,
+    # leaf or not, renders its own statement from it (`_collector_predicate` — since #765 its filters
+    # on the target row, before that `WHERE pk IN (<objct>)`). Those paths reach different amounts of
+    # the query builder, so guarding downstream made the SAME user code succeed or fail depending on
+    # whether the target model happened to have a reverse relation — an invisible, schema-dependent
+    # split. (The root statement emits no `WITH` either, so a CTE has nowhere to live there.)
+    #
+    # What the refusal rests on is the ROOT statement: the `DELETE` emits no `WITH`, so a CTE the
+    # queryset declares — and any filter through it — has nowhere to be declared. #433 also measured an
+    # exemption re-opening a misbind: with a filter bound before the nested CTE, SQLite bound
+    # ["CTEVAL","INNERVAL","NOTEVAL"] against a text order of NOTEVAL, CTEVAL, INNERVAL — a silent
+    # WRONG DELETE. That half no longer holds: a nested `WITH` in a scoping subquery now binds in text
+    # order (#1292, `test_nested_cte_guard.jl` pins one under `delete()`), so lifting this refusal would
+    # need a `WITH` on the DELETE itself, not a binding fix.
+    #
+    # UnsafeMutationError, not the QueryBuildError the rest of the #433 family throws. The
+    # discriminator is not the query SHAPE — the identical query is legal on a read path and renders
+    # its `WITH` fine — it is that this is a MUTATION, which is the axis `UnsafeMutationError` names
+    # ("an UPDATE or DELETE ... in another unsafe shape"). `QueryBuildError` is the default bucket for
+    # what has no sharper category, and this has one. It also keeps the type uniform across the five
+    # guards in this function, so a caller catching `UnsafeMutationError` to mean "refine this delete"
+    # has no blind spot. (`update()`'s CTE refusal is a `QueryBuildError` only incidentally: it is
+    # raised deep in `_build_row_join`, where the statement kind is not known.)
+    if !isempty(objct.object.ctes)
+      throw(UnsafeMutationError(
+        "Cannot call \e[4m\e[32mdelete()\e[0m on a query that declares a CTE " *
+        "(\e[4m\e[31m$(join(collect(keys(objct.object.ctes)), ", "))\e[0m). A " *
+        "\e[4m\e[32mDELETE\e[0m statement emits no \e[4m\e[31mWITH\e[0m clause, so the CTE would " *
+        "never be declared for the rows it removes.\n  " *
+        "Resolve the CTE first and filter on its result, e.g. " *
+        "\e[4m\e[32m.filter(\"pk__@in\" => ids)\e[0m (#433)."
+      ))
+    end
 
-  # don't allow to delete without filter
-  if !allow_delete_all && objct.object.filter |> isempty
-    throw(UnsafeMutationError(
-      "Error in delete, the delete must have a filter. " *
-      "To delete every row, pass \e[4m\e[31mallow_delete_all = true\e[0m explicitly, e.g. " *
-      "Model.objects.delete(allow_delete_all = true) or delete(query; allow_delete_all = true)."
-    ))
-  end
+    # don't allow to delete without filter
+    if !allow_delete_all && objct.object.filter |> isempty
+      throw(UnsafeMutationError(
+        "Error in delete, the delete must have a filter. " *
+        "To delete every row, pass \e[4m\e[31mallow_delete_all = true\e[0m explicitly, e.g. " *
+        "Model.objects.delete(allow_delete_all = true) or delete(query; allow_delete_all = true)."
+      ))
+    end
   
-  # If no objects to delete, return early (unless we're just inspecting the query)
-  #
-  # #452: this probe deliberately stays OUTSIDE the transaction, unlike the per-path probes in
-  # `find_related_objects!` (moved inside, below). The asymmetry is the failure mode, not the cost:
-  # being wrong here yields a delete that found nothing, which is indistinguishable from the delete
-  # having run an instant earlier and can never produce a PARTIAL cascade. Being wrong there deletes
-  # the root and skips a dependent path. Keeping this one out also avoids opening a transaction —
-  # and, on SQLite, taking the process-wide write lock — for every no-op delete.
-  if show_query === :execute && objct |> !_exists
-    return 0, Dict{String, Integer}()
-  end
+    # If no objects to delete, return early (unless we're just inspecting the query)
+    #
+    # #452: this probe deliberately stays OUTSIDE the transaction, unlike the per-path probes in
+    # `find_related_objects!` (moved inside, below). The asymmetry is the failure mode, not the cost:
+    # being wrong here yields a delete that found nothing, which is indistinguishable from the delete
+    # having run an instant earlier and can never produce a PARTIAL cascade. Being wrong there deletes
+    # the root and skips a dependent path. Keeping this one out also avoids opening a transaction —
+    # and, on SQLite, taking the process-wide write lock — for every no-op delete.
+    if show_query === :execute && objct |> !_exists
+      return 0, Dict{String, Integer}()
+    end
 
-  # We'll track deletion counts
-  deleted_counter = Dict{String, Integer}()
+    # We'll track deletion counts
+    deleted_counter = Dict{String, Integer}()
 
-  # Definition of run_deletions (backend agnostic)
-  results = []
-  run_deletions = function(conn)
-    # Plan INSIDE the transaction (#452).
-    #
-    # `find_related_objects!` probes every cascade path with `_exists` and DROPS the ones that come
-    # back empty. That planning used to run before `BEGIN`, so a row inserted on a pruned path
-    # between the probe and the DELETE was never deleted: the root went, the dependent stayed. It is
-    # also what kept #452 itself invisible — the F1 fixture declares two CASCADE paths into
-    # `just_a_test_deletion`, and the second was always pruned because nothing populates it.
-    #
-    # On SQLite this closes the window: `BEGIN IMMEDIATE` plus the process-wide write lock means no
-    # other writer can commit while planning runs.
-    #
-    # On PostgreSQL it only NARROWS it, and the comment says so rather than implying otherwise:
-    # READ COMMITTED gives every statement a fresh snapshot even inside a transaction, so a
-    # concurrent insert between a probe and its DELETE is still possible.
-    #
-    # #460 took that decision and it is CLOSED as accepted, not open: PormG keeps pruning and
-    # documents the window (`docs/src/write/delete.md`, "Concurrency").
-    #
-    # Read the reason carefully, because #460's own issue body gets it wrong and so did the first
-    # draft of this comment. Both said the deferred foreign key makes a pruned path RAISE at COMMIT.
-    # It does not.
-    #
-    # MEASURED here: `Dialect._foreign_key_on_delete_sql` emits the field's OWN on_delete into the
-    # DDL, and `db_constraint` defaults TRUE (`Models.ForeignKey`), so the constraint carries the
-    # action rather than a bare reference. Confirmed by reading the deployed fixture's schema —
-    # `lap_times.raceid` is `ON DELETE CASCADE`, `lap_times.driverid` is `ON DELETE RESTRICT`.
-    #
-    # INFERRED, not measured (no PostgreSQL was available): that the database then performs the
-    # skipped CASCADE / SET NULL / SET DEFAULT itself. Not at COMMIT, as this comment first said:
-    # PostgreSQL documents that a referential action other than NO ACTION is not deferred, even on a
-    # DEFERRABLE constraint, so it runs when PormG deletes the parent row. It is the half worth
-    # re-checking on a live two-session setup before anyone leans further on it. If it holds, a pruned
-    # path costs only the per-table count in the return value, which tallies statements PormG itself
-    # issued (a filtered root's DELETE is scoped by its keys, so such an action cannot widen it, #1370).
-    #
-    # Note pruning is NOT limited to the actions that emit statements. The `_exists` probe below runs
-    # for EVERY reverse relation, before `handle_on_delete!` sees the action — that is exactly what
-    # makes PROTECT existence-driven. So a pruned PROTECT path means ProtectedError is not raised and
-    # the DELETE meets the DDL's `ON DELETE RESTRICT` instead, which PostgreSQL cannot defer: still a
-    # refusal, reported as the driver's error rather than ours.
-    #
-    # The exposed shapes are the ones with no database action to fall back on: `db_constraint=false`,
-    # and hand-written models over tables PormG did not create. That is a much narrower surface than
-    # "every delete", which is what makes accepting it the right call at this stage rather than
-    # merely the cheap one.
-    #
-    # Do not "fix" this by reaching for one of the alternatives without re-reading #460: raising the
-    # isolation level to REPEATABLE READ does NOT close it (the DELETE then misses the row too, it
-    # merely agrees with the probe); SERIALIZABLE closes it by making every delete retryable by
-    # contract; parent-row FOR UPDATE closes it at the cost of a lock per collected level. Each was
-    # weighed there and rejected for this pre-publish stage.
-    #
-    # #770 has since adopted the parent-row lock, but for a DIFFERENT gap — a parent that stops
-    # matching after its children are gone (`lock_objects`) — and it runs AFTER this planning. It does
-    # not un-prune a path: a row inserted on a path the probe dropped is still #460's residue, as above.
-    #
-    # Two costs, both accepted deliberately: SQLite now holds the write lock across the probe
-    # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
-    # BEGIN + ROLLBACK instead of throwing before any transaction existed.
-    #
-    # #1342, #1370: a filtered root with something to cascade to is resolved to its primary keys
-    # FIRST, and the cascade is planned from those keys. See `_root_key_plan`.
-    key_plan = _root_key_plan(connection, model, objct)
-    if key_plan === nothing
-      run_plan(conn, plan(deepcopy(objct)), false)
+    # Definition of run_deletions (backend agnostic)
+    results = []
+    run_deletions = function(conn)
+      # Plan INSIDE the transaction (#452).
+      #
+      # `find_related_objects!` probes every cascade path with `_exists` and DROPS the ones that come
+      # back empty. That planning used to run before `BEGIN`, so a row inserted on a pruned path
+      # between the probe and the DELETE was never deleted: the root went, the dependent stayed. It is
+      # also what kept #452 itself invisible — the F1 fixture declares two CASCADE paths into
+      # `just_a_test_deletion`, and the second was always pruned because nothing populates it.
+      #
+      # On SQLite this closes the window: `BEGIN IMMEDIATE` plus the process-wide write lock means no
+      # other writer can commit while planning runs.
+      #
+      # On PostgreSQL it only NARROWS it, and the comment says so rather than implying otherwise:
+      # READ COMMITTED gives every statement a fresh snapshot even inside a transaction, so a
+      # concurrent insert between a probe and its DELETE is still possible.
+      #
+      # #460 took that decision and it is CLOSED as accepted, not open: PormG keeps pruning and
+      # documents the window (`docs/src/write/delete.md`, "Concurrency").
+      #
+      # Read the reason carefully, because #460's own issue body gets it wrong and so did the first
+      # draft of this comment. Both said the deferred foreign key makes a pruned path RAISE at COMMIT.
+      # It does not.
+      #
+      # MEASURED here: `Dialect._foreign_key_on_delete_sql` emits the field's OWN on_delete into the
+      # DDL, and `db_constraint` defaults TRUE (`Models.ForeignKey`), so the constraint carries the
+      # action rather than a bare reference. Confirmed by reading the deployed fixture's schema —
+      # `lap_times.raceid` is `ON DELETE CASCADE`, `lap_times.driverid` is `ON DELETE RESTRICT`.
+      #
+      # INFERRED, not measured (no PostgreSQL was available): that the database then performs the
+      # skipped CASCADE / SET NULL / SET DEFAULT itself. Not at COMMIT, as this comment first said:
+      # PostgreSQL documents that a referential action other than NO ACTION is not deferred, even on a
+      # DEFERRABLE constraint, so it runs when PormG deletes the parent row. It is the half worth
+      # re-checking on a live two-session setup before anyone leans further on it. If it holds, a pruned
+      # path costs only the per-table count in the return value, which tallies statements PormG itself
+      # issued (a filtered root's DELETE is scoped by its keys, so such an action cannot widen it, #1370).
+      #
+      # Note pruning is NOT limited to the actions that emit statements. The `_exists` probe below runs
+      # for EVERY reverse relation, before `handle_on_delete!` sees the action — that is exactly what
+      # makes PROTECT existence-driven. So a pruned PROTECT path means ProtectedError is not raised and
+      # the DELETE meets the DDL's `ON DELETE RESTRICT` instead, which PostgreSQL cannot defer: still a
+      # refusal, reported as the driver's error rather than ours.
+      #
+      # The exposed shapes are the ones with no database action to fall back on: `db_constraint=false`,
+      # and hand-written models over tables PormG did not create. That is a much narrower surface than
+      # "every delete", which is what makes accepting it the right call at this stage rather than
+      # merely the cheap one.
+      #
+      # Do not "fix" this by reaching for one of the alternatives without re-reading #460: raising the
+      # isolation level to REPEATABLE READ does NOT close it (the DELETE then misses the row too, it
+      # merely agrees with the probe); SERIALIZABLE closes it by making every delete retryable by
+      # contract; parent-row FOR UPDATE closes it at the cost of a lock per collected level. Each was
+      # weighed there and rejected for this pre-publish stage.
+      #
+      # #770 has since adopted the parent-row lock, but for a DIFFERENT gap — a parent that stops
+      # matching after its children are gone (`lock_objects`) — and it runs AFTER this planning. It does
+      # not un-prune a path: a row inserted on a path the probe dropped is still #460's residue, as above.
+      #
+      # Two costs, both accepted deliberately: SQLite now holds the write lock across the probe
+      # SELECTs, and a `ProtectedError` / `ModelDefinitionError` raised while planning now costs a
+      # BEGIN + ROLLBACK instead of throwing before any transaction existed.
+      #
+      # #1342, #1370: a filtered root with something to cascade to is resolved to its primary keys
+      # FIRST, and the cascade is planned from those keys. See `_root_key_plan`.
+      key_plan = _root_key_plan(connection, model, objct)
+      if key_plan === nothing
+        run_plan(conn, plan(deepcopy(objct)), false)
+        return nothing
+      end
+      root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
+      show_query === :execute && isempty(root_keys) && return nothing
+      key = key_plan.entry[:key]
+      # #1377: a self-referential CASCADE is walked by keys, one level per read, and every level is a
+      # plan of its own, run deepest first; see `_walk_self_levels!`.
+      self_fks = _self_cascade_fields(model)
+      walked = length(self_fks) == 1 && !isempty(root_keys)
+      walk = walked ? _walk_self_levels!(results, connection, model, key, only(self_fks), root_keys, objct, show_query, conn) :
+                      (sets = AbstractVector[root_keys], loop_index = 0)
+      # Every chunk of every set is PLANNED before any statement runs, so a refusal the planner raises
+      # (`ProtectedError`, `ModelDefinitionError`) still comes before the first write, as it does for
+      # one plan — a caller who catches it inside its own transaction finds nothing deleted. A loop's set
+      # is one chunk (at most MAX_CASCADE_DEPTH + 1 rows, see `_walk_self_levels!`), tagged by its index.
+      collectors = [(plan(_keyed_root(model, key, chunk, objct), length(self_fks) == 1), i == walk.loop_index, length(level_keys))
+                    for (i, level_keys) in enumerate(walk.sets)
+                    for chunk in _root_key_chunks(connection, level_keys)]
+      for (collector, is_loop, loop_rows) in collectors
+        before = get(deleted_counter, model.name, 0)
+        run_plan(conn, collector, true)
+        # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
+        # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
+        # transaction (locked, or behind SQLite's single writer), so when the DELETE succeeds exactly
+        # these rows are gone: count them.
+        is_loop && show_query === :execute && (deleted_counter[model.name] = before + loop_rows)
+      end
       return nothing
     end
-    root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
-    show_query === :execute && isempty(root_keys) && return nothing
-    key = key_plan.entry[:key]
-    # #1377: a self-referential CASCADE is walked by keys, one level per read, and every level is a
-    # plan of its own, run deepest first; see `_walk_self_levels!`.
-    self_fks = _self_cascade_fields(model)
-    walked = length(self_fks) == 1 && !isempty(root_keys)
-    walk = walked ? _walk_self_levels!(results, connection, model, key, only(self_fks), root_keys, objct, show_query, conn) :
-                    (sets = AbstractVector[root_keys], loop_index = 0)
-    # Every chunk of every set is PLANNED before any statement runs, so a refusal the planner raises
-    # (`ProtectedError`, `ModelDefinitionError`) still comes before the first write, as it does for
-    # one plan — a caller who catches it inside its own transaction finds nothing deleted. A loop's set
-    # is one chunk (at most MAX_CASCADE_DEPTH + 1 rows, see `_walk_self_levels!`), tagged by its index.
-    collectors = [(plan(_keyed_root(model, key, chunk, objct), length(self_fks) == 1), i == walk.loop_index, length(level_keys))
-                  for (i, level_keys) in enumerate(walk.sets)
-                  for chunk in _root_key_chunks(connection, level_keys)]
-    for (collector, is_loop, loop_rows) in collectors
-      before = get(deleted_counter, model.name, 0)
-      run_plan(conn, collector, true)
-      # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
-      # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
-      # transaction (locked, or behind SQLite's single writer), so when the DELETE succeeds exactly
-      # these rows are gone: count them.
-      is_loop && show_query === :execute && (deleted_counter[model.name] = before + loop_rows)
+
+    # One plan over one root query: collect the cascade, probing each path.
+    plan = function(root_objct, skip_self_cascade::Bool = false)
+      collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
+      add_objects_to_collector!(collector, root_objct, model)
+      process_collector!(collector)
+      return collector
     end
-    return nothing
-  end
 
-  # One plan over one root query: collect the cascade, probing each path.
-  plan = function(root_objct, skip_self_cascade::Bool = false)
-    collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
-    add_objects_to_collector!(collector, root_objct, model)
-    process_collector!(collector)
-    return collector
-  end
-
-  # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
-  # the key step (#1342), so the root is not locked a second time.
-  run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
-    # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
-    # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
-    # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
-    #
-    # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
-    # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
-    # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
-    # The root is locked here anyway when the plan holds more entries of its own model than the key
-    # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
-    # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
-    if _locks_cascade_parents(connection)
-      for lock_model in _models_to_lock(collector)
-        root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
-        res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
-        push!(results, res)
+    # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
+    # the key step (#1342), so the root is not locked a second time.
+    run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
+      # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
+      # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
+      # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
+      #
+      # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
+      # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
+      # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
+      # The root is locked here anyway when the plan holds more entries of its own model than the key
+      # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
+      # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
+      if _locks_cascade_parents(connection)
+        for lock_model in _models_to_lock(collector)
+          root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
+          res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
+          push!(results, res)
+        end
       end
-    end
 
-    # Process fast deletes first (objects that can be deleted directly).
-    # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
-    # (the collector is built here since #452), and two meanings for one name in one scope is a
-    # reading hazard even where Julia's loop scoping makes it harmless.
-    for (fast_model, fast_keys) in collector.fast_deletes
-      res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
-      push!(results, res)
-      # Remove from objects to prevent double deletion
-      delete!(collector.objects, fast_model)
-    end
-
-    # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
-    # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
-    # statement count is still one per (field, value, model).
-    for ((field, value), affected_models) in collector.field_updates
-      for (affected_model, path_keys) in affected_models
-        res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
+      # Process fast deletes first (objects that can be deleted directly).
+      # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
+      # (the collector is built here since #452), and two meanings for one name in one scope is a
+      # reading hazard even where Julia's loop scoping makes it harmless.
+      for (fast_model, fast_keys) in collector.fast_deletes
+        res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
         push!(results, res)
+        # Remove from objects to prevent double deletion
+        delete!(collector.objects, fast_model)
       end
-    end
+
+      # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
+      # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
+      # statement count is still one per (field, value, model).
+      for ((field, value), affected_models) in collector.field_updates
+        for (affected_model, path_keys) in affected_models
+          res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
+          push!(results, res)
+        end
+      end
     
-    # Execute deletions in the sorted order
-    for model_to_delete in collector.sorted_models
-      _array = get(collector.objects, model_to_delete, [])        
-      if !isempty(_array)
-        res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
-        push!(results, res)
+      # Execute deletions in the sorted order
+      for model_to_delete in collector.sorted_models
+        _array = get(collector.objects, model_to_delete, [])        
+        if !isempty(_array)
+          res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+          push!(results, res)
+        end
       end
     end
-  end
 
-  tx_conn = transaction_connection_for(settings)
-  if show_query !== :execute
-    run_deletions(nothing)
-  elseif tx_conn !== nothing
-    run_deletions(tx_conn)
-  else
-    # Start transaction (backend specific SQL)
-    # BEGIN IMMEDIATE on SQLite, to prevent deadlocks.
-    begin_sql = _begin_write_sql(connection)
-    # Serialize SQLite writers around the whole BEGIN..COMMIT, matching
-    # run_in_transaction, so a concurrent delete/create never races on
-    # `BEGIN IMMEDIATE` (which would deadlock the single async worker). No-op on
-    # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
-    with_sqlite_write_lock(settings) do
-      _, conn = with_transaction(settings, begin_sql)
-      # Release/renew the connection exactly once in a single terminal finally, so a failed
-      # COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
-      local rollback_error = nothing
-      # The body's error, for the cancel gate in `finalize_transaction_connection!` (#1638): on
-      # Postgres.jl an interrupted statement is cancelled before the slot is renewed.
-      local body_error = nothing
-      try
-        # #276: same deferral as run_in_transaction — PormG's PG foreign keys are DEFERRABLE
-        # INITIALLY DEFERRED, so the collector's intermediate states (a child DELETEd before its
-        # parent, a SET_NULL applied mid-sweep) are legal there. Defer on SQLite too, or enforcement
-        # would reject an ordering PostgreSQL accepts. Resets at COMMIT; no-op on PostgreSQL.
-        # MySQL has no deferral (#1272): nothing runs here, and every statement is checked as it runs,
-        # so the order below is what keeps them valid — the SET_NULL/SET_DEFAULT updates before any
-        # DELETE, and children before their parents (`topological_sort`, which refuses a cycle there).
-        #
-        # INSIDE the try, not between it and the BEGIN: `with_transaction(…, conn=conn)` releases
-        # nothing on failure (conn_acquired = false), so a throw in that gap would skip the terminal
-        # finally entirely and strand this connection out of the pool holding an open
-        # BEGIN IMMEDIATE — i.e. the database write lock. The #139/#71 class.
-        for sql in _after_begin_sql(connection)
-          with_transaction(settings, sql, conn=conn)
-        end
-        with_tx_context(settings.connections, conn) do
-          run_deletions(conn)
-        end
-        # Commit — release_conn=false: the finally owns the single release.
-        with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
-      catch e
-        body_error = e
-        # Roll back on the still-leased connection. A rollback failure must not mask the body's
-        # error — capture it so the finally renews/discards the dirty connection instead of
-        # releasing it (#71), then rethrow the original.
+    tx_conn = transaction_connection_for(settings)
+    if show_query !== :execute
+      run_deletions(nothing)
+    elseif tx_conn !== nothing
+      run_deletions(tx_conn)
+    else
+      # Start transaction (backend specific SQL)
+      # BEGIN IMMEDIATE on SQLite, to prevent deadlocks.
+      begin_sql = _begin_write_sql(connection)
+      # Serialize SQLite writers around the whole BEGIN..COMMIT, matching
+      # run_in_transaction, so a concurrent delete/create never races on
+      # `BEGIN IMMEDIATE` (which would deadlock the single async worker). No-op on
+      # PostgreSQL. See ConnectionPool.with_sqlite_write_lock.
+      with_sqlite_write_lock(settings) do
+        _, conn = with_transaction(settings, begin_sql)
+        # Release/renew the connection exactly once in a single terminal finally, so a failed
+        # COMMIT never returns it to the pool before the cleanup ROLLBACK has run on it (#139).
+        local rollback_error = nothing
+        # The body's error, for the cancel gate in `finalize_transaction_connection!` (#1638): on
+        # Postgres.jl an interrupted statement is cancelled before the slot is renewed.
+        local body_error = nothing
         try
-          with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=false)
-        catch rollback_err
-          rollback_error = rollback_err
-          @error "Failed to rollback delete transaction" exception=rollback_err
+          # #276: same deferral as run_in_transaction — PormG's PG foreign keys are DEFERRABLE
+          # INITIALLY DEFERRED, so the collector's intermediate states (a child DELETEd before its
+          # parent, a SET_NULL applied mid-sweep) are legal there. Defer on SQLite too, or enforcement
+          # would reject an ordering PostgreSQL accepts. Resets at COMMIT; no-op on PostgreSQL.
+          # MySQL has no deferral (#1272): nothing runs here, and every statement is checked as it runs,
+          # so the order below is what keeps them valid — the SET_NULL/SET_DEFAULT updates before any
+          # DELETE, and children before their parents (`topological_sort`, which refuses a cycle there).
+          #
+          # INSIDE the try, not between it and the BEGIN: `with_transaction(…, conn=conn)` releases
+          # nothing on failure (conn_acquired = false), so a throw in that gap would skip the terminal
+          # finally entirely and strand this connection out of the pool holding an open
+          # BEGIN IMMEDIATE — i.e. the database write lock. The #139/#71 class.
+          for sql in _after_begin_sql(connection)
+            with_transaction(settings, sql, conn=conn)
+          end
+          with_tx_context(settings.connections, conn) do
+            run_deletions(conn)
+          end
+          # Commit — release_conn=false: the finally owns the single release.
+          with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
+        catch e
+          body_error = e
+          # Roll back on the still-leased connection. A rollback failure must not mask the body's
+          # error — capture it so the finally renews/discards the dirty connection instead of
+          # releasing it (#71), then rethrow the original.
+          try
+            with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=false)
+          catch rollback_err
+            rollback_error = rollback_err
+            @error "Failed to rollback delete transaction" exception=rollback_err
+          end
+          rethrow(e)
+        finally
+          finalize_transaction_connection!(settings, conn; rollback_error=rollback_error, body_error=body_error)
         end
-        rethrow(e)
-      finally
-        finalize_transaction_connection!(settings, conn; rollback_error=rollback_error, body_error=body_error)
       end
     end
-  end
 
-  if show_query !== :execute
-    return length(results) == 1 ? results[1] : results
-  end
+    if show_query !== :execute
+      return length(results) == 1 ? results[1] : results
+    end
 
-  total_deleted = sum(values(deleted_counter))
-  if total_deleted == 0
-    @warn("Warning in delete, no objects were deleted")  
-  end
+    total_deleted = sum(values(deleted_counter))
+    if total_deleted == 0
+      @warn("Warning in delete, no objects were deleted")  
+    end
   
-  return total_deleted, deleted_counter
+    return total_deleted, deleted_counter
+  end
 end
 delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 

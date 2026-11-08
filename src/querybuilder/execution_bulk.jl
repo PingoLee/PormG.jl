@@ -428,66 +428,67 @@ end
 """
 function allocate_primary_keys(objct::SQLObjectHandler, @nospecialize(src))
   model = objct.object.model
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
-  !settings.change_data && throw(_write_not_allowed("allocate_primary_keys", conn_key))
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
+    !settings.change_data && throw(_write_not_allowed("allocate_primary_keys", conn_key))
 
-  # #1393: a key the caller supplies has nothing to allocate from — no identity, no sequence, no rowid
-  # — and before this the call returned the frame with the ids missing (PostgreSQL's `nextval(NULL)`),
-  # or allocated ids a NOT NULL column without a default would never have drawn. Refused whatever the
-  # table holds, so the outcome does not depend on the data.
-  for f in model.field_names
-    _is_caller_supplied_id_key(model.fields[f]) || continue
-    throw(QueryBuildError("allocate_primary_keys: the primary key $(f) of model $(model.name) is " *
-      "IDField(generated = false), a key the caller supplies, so $(_backend_name(connection)) has no " *
-      "ids to allocate for it. Supply the key in the table, or declare IDField() for a key the " *
-      "database generates."))
-  end
-
-  # Read through the bulk frame (zero-copy); what is RETURNED is built by `_allocated_table`, which
-  # copies every column, so the result never aliases the caller's data (#132 review, #1344).
-  df = _bulk_frame(src, "allocate_primary_keys")
-  n = df.row_count
-  n == 0 && return _allocated_table(src, df)
-
-  # Find the single auto-generated primary key for this model
-  pk_fields = [f for f in model.field_names
-               if _is_auto_generated_bulk_primary_key(model.fields[f])]
-
-  isempty(pk_fields) && return _allocated_table(src, df)
-
-  if length(pk_fields) > 1
-    throw(QueryBuildError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
-  end
-
-  pk_field = pk_fields[1]
-
-  # Already has explicit values — return unchanged
-  if _has_bulk_column(df, pk_field)
-    col = _bulk_column(df, pk_field)
-    has_any = any(!_is_blank_bulk_primary_key_value(v) for v in col)
-    if has_any
-      has_blank = any(_is_blank_bulk_primary_key_value(v) for v in col)
-      if has_blank
-        n_blank = count(_is_blank_bulk_primary_key_value, col)
-        @warn "allocate_primary_keys: column '$pk_field' in model $(model.name) has mixed values — $n_blank blank row(s) alongside explicit pk values. " *
-              "The table is returned unchanged. Those blank rows will raise a QueryBuildError at bulk_insert time. " *
-              "Options: (1) supply a pk value for every row, (2) remove the column so all ids are allocated automatically, " *
-              "or (3) pre-fill the blank rows before calling allocate_primary_keys."
-      end
-      return _allocated_table(src, df)
+    # #1393: a key the caller supplies has nothing to allocate from — no identity, no sequence, no rowid
+    # — and before this the call returned the frame with the ids missing (PostgreSQL's `nextval(NULL)`),
+    # or allocated ids a NOT NULL column without a default would never have drawn. Refused whatever the
+    # table holds, so the outcome does not depend on the data.
+    for f in model.field_names
+      _is_caller_supplied_id_key(model.fields[f]) || continue
+      throw(QueryBuildError("allocate_primary_keys: the primary key $(f) of model $(model.name) is " *
+        "IDField(generated = false), a key the caller supplies, so $(_backend_name(connection)) has no " *
+        "ids to allocate for it. Supply the key in the table, or declare IDField() for a key the " *
+        "database generates."))
     end
-  end
 
-  ids = if _allocates_ids_in_transaction(connection) && transaction_connection_for(settings) === nothing
-    run_in_transaction(settings) do
+    # Read through the bulk frame (zero-copy); what is RETURNED is built by `_allocated_table`, which
+    # copies every column, so the result never aliases the caller's data (#132 review, #1344).
+    df = _bulk_frame(src, "allocate_primary_keys")
+    n = df.row_count
+    n == 0 && return _allocated_table(src, df)
+
+    # Find the single auto-generated primary key for this model
+    pk_fields = [f for f in model.field_names
+                 if _is_auto_generated_bulk_primary_key(model.fields[f])]
+
+    isempty(pk_fields) && return _allocated_table(src, df)
+
+    if length(pk_fields) > 1
+      throw(QueryBuildError("allocate_primary_keys: model $(model.name) has multiple auto-generated primary keys ($(join(pk_fields, ", "))); only models with a single auto-generated pk are supported"))
+    end
+
+    pk_field = pk_fields[1]
+
+    # Already has explicit values — return unchanged
+    if _has_bulk_column(df, pk_field)
+      col = _bulk_column(df, pk_field)
+      has_any = any(!_is_blank_bulk_primary_key_value(v) for v in col)
+      if has_any
+        has_blank = any(_is_blank_bulk_primary_key_value(v) for v in col)
+        if has_blank
+          n_blank = count(_is_blank_bulk_primary_key_value, col)
+          @warn "allocate_primary_keys: column '$pk_field' in model $(model.name) has mixed values — $n_blank blank row(s) alongside explicit pk values. " *
+                "The table is returned unchanged. Those blank rows will raise a QueryBuildError at bulk_insert time. " *
+                "Options: (1) supply a pk value for every row, (2) remove the column so all ids are allocated automatically, " *
+                "or (3) pre-fill the blank rows before calling allocate_primary_keys."
+        end
+        return _allocated_table(src, df)
+      end
+    end
+
+    ids = if _allocates_ids_in_transaction(connection) && transaction_connection_for(settings) === nothing
+      run_in_transaction(settings) do
+        _allocate_ids(model, connection, pk_field, n, settings)
+      end
+    else
       _allocate_ids(model, connection, pk_field, n, settings)
     end
-  else
-    _allocate_ids(model, connection, pk_field, n, settings)
-  end
 
-  return _allocated_table(src, df, pk_field, ids)
+    return _allocated_table(src, df, pk_field, ids)
+  end
 end
 
 allocate_primary_keys(model::PormGModel, @nospecialize(src)) = allocate_primary_keys(model |> object, src)
@@ -546,20 +547,21 @@ M.Driver.objects.create("forename" => "Auto")
 """
 function resync_sequences(objct::SQLObjectHandler)
   model = objct.object.model
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
-  !settings.change_data && throw(_write_not_allowed("resync_sequences", conn_key))
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
+    !settings.change_data && throw(_write_not_allowed("resync_sequences", conn_key))
 
-  # ALL of the model's declared pk fields — unlike _prepare_row_insert!'s pk_field (built from
-  # one specific insert dict), resync_sequences has no "this call" to condition on. Iterate
-  # model.field_names (the canonical ordered field list every other call site in this file uses
-  # for this purpose), not `keys(model.fields)`, which is an unordered Dict.
-  pk_field = String[f for f in model.field_names if model.fields[f].primary_key]
-  isempty(pk_field) && return pk_field
+    # ALL of the model's declared pk fields — unlike _prepare_row_insert!'s pk_field (built from
+    # one specific insert dict), resync_sequences has no "this call" to condition on. Iterate
+    # model.field_names (the canonical ordered field list every other call site in this file uses
+    # for this purpose), not `keys(model.fields)`, which is an unordered Dict.
+    pk_field = String[f for f in model.field_names if model.fields[f].primary_key]
+    isempty(pk_field) && return pk_field
 
-  connection isa _SQLEngine || throw(_unsupported_conn("resync_sequences()", connection))
-  _update_sequence(model, connection, pk_field, settings)
-  return pk_field
+    connection isa _SQLEngine || throw(_unsupported_conn("resync_sequences()", connection))
+    _update_sequence(model, connection, pk_field, settings)
+    return pk_field
+  end
 end
 resync_sequences(model::PormGModel) = resync_sequences(model |> object)
 resync_sequences(models::AbstractVector{<:PormGModel}) = (foreach(resync_sequences, models); nothing)
@@ -1772,227 +1774,228 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
   model = objct.object.model
 
   # Resolve settings
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
 
-  # check if is allowed to insert
-  !settings.change_data && throw(_write_not_allowed("bulk_insert", conn_key))
+    # check if is allowed to insert
+    !settings.change_data && throw(_write_not_allowed("bulk_insert", conn_key))
 
-  # Validated before the empty-frame return, so a typo'd field is refused on every input (#671).
-  _returning = _normalize_bulk_returning(returning, model)
+    # Validated before the empty-frame return, so a typo'd field is refused on every input (#671).
+    _returning = _normalize_bulk_returning(returning, model)
 
-  df = _bulk_frame(src, "bulk_insert")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+    df = _bulk_frame(src, "bulk_insert")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
 
-  # If no rows then nothing to do
-  if df.row_count == 0
-    @warn("Warning in bulk_insert, the table is empty")
-    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
-    show_query === :execute || return nothing
-    empty_rows = _returning === nothing ? nothing : _returning_table(src, _returning, [Any[] for _ in _returning])
-    return _bulk_result(0, empty_rows)
-  end
+    # If no rows then nothing to do
+    if df.row_count == 0
+      @warn("Warning in bulk_insert, the table is empty")
+      # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+      show_query === :execute || return nothing
+      empty_rows = _returning === nothing ? nothing : _returning_table(src, _returning, [Any[] for _ in _returning])
+      return _bulk_result(0, empty_rows)
+    end
 
-  # Prepare columns and the frame using centralized helpers
-  _columns = _normalize_bulk_columns(columns)
-  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert, settings)
+    # Prepare columns and the frame using centralized helpers
+    _columns = _normalize_bulk_columns(columns)
+    mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :insert, settings)
 
-  # Normalize/validate on_conflict against the participating insert columns (#123), then render
-  # the clause once here — it is identical for every chunk, and its `nothing`-ness is the flag
-  # that gates the sequence-resync retry inside _bulk_insert. Purely local (no DB round-trip),
-  # so :sql/:dict/:params modes validate and render identically.
-  _on_conflict = _normalize_on_conflict(on_conflict, model, fields_df, connection)
-  _on_conflict === nothing ||
-    _refuse_unnamed_bulk_target(model, on_conflict, _on_conflict.action, fields_df, mapping, df, connection)
-  on_conflict_sql = _on_conflict === nothing ? nothing :
-    Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection;
-                               noop = _bulk_noop_assignment(model, fields_df, connection))
+    # Normalize/validate on_conflict against the participating insert columns (#123), then render
+    # the clause once here — it is identical for every chunk, and its `nothing`-ness is the flag
+    # that gates the sequence-resync retry inside _bulk_insert. Purely local (no DB round-trip),
+    # so :sql/:dict/:params modes validate and render identically.
+    _on_conflict = _normalize_on_conflict(on_conflict, model, fields_df, connection)
+    _on_conflict === nothing ||
+      _refuse_unnamed_bulk_target(model, on_conflict, _on_conflict.action, fields_df, mapping, df, connection)
+    on_conflict_sql = _on_conflict === nothing ? nothing :
+      Dialect.on_conflict_clause(_on_conflict.action, _on_conflict.target, _on_conflict.set, connection;
+                                 noop = _bulk_noop_assignment(model, fields_df, connection))
 
-  # returning= (#671): the correlation key, and the pk to pre-allocate when the key is an auto pk
-  # the frame does not carry. Allocation is a write (it draws the sequence), so a dry run skips it
-  # and shows the statement without the pk column.
-  returning_key, allocate_pk = _returning === nothing ? (String[], nothing) :
-    _bulk_returning_key(model, on_conflict, fields_df, connection)
-  allocate_pk = show_query === :execute ? allocate_pk : nothing
-  do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
-  returning_sql = nothing
-  if _returning !== nothing && _insert_returns_rows(connection)
-    returned_fields = unique(vcat(returning_key, _returning))
-    returning_sql = "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
-      for field in returned_fields], ", ")
-  end
-  # A pre-allocated id is written explicitly, which a `generated_always` identity rejects unless the
-  # INSERT says OVERRIDING SYSTEM VALUE. Safe here: the ids came from that identity's own sequence.
-  # Only for pre-allocated ids — a pk the caller supplied still meets the column's refusal.
-  overriding = allocate_pk !== nothing && _overrides_generated_identity(connection) &&
-    hasproperty(model.fields[allocate_pk], :generated_always) &&
-    getfield(model.fields[allocate_pk], :generated_always)
+    # returning= (#671): the correlation key, and the pk to pre-allocate when the key is an auto pk
+    # the frame does not carry. Allocation is a write (it draws the sequence), so a dry run skips it
+    # and shows the statement without the pk column.
+    returning_key, allocate_pk = _returning === nothing ? (String[], nothing) :
+      _bulk_returning_key(model, on_conflict, fields_df, connection)
+    allocate_pk = show_query === :execute ? allocate_pk : nothing
+    do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
+    returning_sql = nothing
+    if _returning !== nothing && _insert_returns_rows(connection)
+      returned_fields = unique(vcat(returning_key, _returning))
+      returning_sql = "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
+        for field in returned_fields], ", ")
+    end
+    # A pre-allocated id is written explicitly, which a `generated_always` identity rejects unless the
+    # INSERT says OVERRIDING SYSTEM VALUE. Safe here: the ids came from that identity's own sequence.
+    # Only for pre-allocated ids — a pk the caller supplied still meets the column's refusal.
+    overriding = allocate_pk !== nothing && _overrides_generated_identity(connection) &&
+      hasproperty(model.fields[allocate_pk], :generated_always) &&
+      getfield(model.fields[allocate_pk], :generated_always)
 
-  # A pre-allocated pk joins the column list here, like any field the frame carries, backed by a
-  # private working-frame column (a whole-column addition, so the #132 invariant holds). The ids
-  # themselves are drawn inside the transaction, in `insert_loop` — SQLite's allocator requires one.
-  if allocate_pk !== nothing
-    id_column = _bulk_private_column(df, allocate_pk)
-    _add_bulk_column!(df, id_column, Vector{Int64}(undef, df.row_count))
-    mapping[allocate_pk] = id_column
-    push!(fields_df, allocate_pk)
-  end
-
-  # Cap the chunk so `effective_chunk × ncols` stays under the backend's bind-parameter limit
-  # (#84). On SQLite each INSERT row binds one param per field and adds nothing else, so
-  # per_row = ncols and there is no fixed per-statement overhead; on PostgreSQL a chunk binds one
-  # array per field (#672), so a positive chunk_size is not capped (see `_bulk_chunk_rows`).
-  # The SQLite read-back of `returning=` binds one parameter per key cell, never more than the
-  # chunk's own INSERT did.
-  effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(fields_df), 0, :bulk_insert)
-  effective_chunk < chunk_size &&
-    @debug "bulk_insert: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
-
-  # PostgreSQL collects each chunk as one array per field and binds them at flush (#672); SQLite
-  # binds each cell as it goes and collects `(?, ?, …)` row tuples.
-  pg_arrays = _bulk_binds_column_arrays(connection)
-  casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in fields_df] : String[]
-  # #28: an array column's source is text, cast back to its array type in the SELECT list.
-  source_casts = pg_arrays ? [_pg_bulk_source_cast(model.fields[field], connection) for field in fields_df] : String[]
-  new_columns() = [Any[] for _ in fields_df]
-
-  # Everything that depends on the field alone is resolved once per column, not once per cell
-  # (#704): the field-name half of `validate_field_data`, and the source column itself. Reading a
-  # cell as `row[mapping[field]]` looked the column up by NAME every time, which was over a third of
-  # a 100k-row insert's client-side time. `metas[j]` and `sources[j]` stay in `fields_df` order —
-  # the order the INSERT column list and the row source are built in.
-  metas = [_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
-  sources = [_bulk_column(df, mapping[field]) for field in fields_df]
-
-  results = []
-  total_rows = df.row_count
-  # returning= (#671): one column per requested field, filled at the input row's index.
-  returned_rows = _returning === nothing ? Vector{Any}[] : [Vector{Any}(missing, total_rows) for _ in _returning]
-  insert_loop = () -> begin
-    # Draw the pre-allocated ids inside the transaction, into the PormG-owned column set up above
-    # (never a caller vector). No sequence resync follows: the ids came from the sequence itself,
-    # so it is already past them.
+    # A pre-allocated pk joins the column list here, like any field the frame carries, backed by a
+    # private working-frame column (a whole-column addition, so the #132 invariant holds). The ids
+    # themselves are drawn inside the transaction, in `insert_loop` — SQLite's allocator requires one.
     if allocate_pk !== nothing
-      ids = _allocate_ids(model, connection, allocate_pk, total_rows, settings)
-      copyto!(_bulk_column(df, mapping[allocate_pk]), ids)
+      id_column = _bulk_private_column(df, allocate_pk)
+      _add_bulk_column!(df, id_column, Vector{Int64}(undef, df.row_count))
+      mapping[allocate_pk] = id_column
+      push!(fields_df, allocate_pk)
     end
-    # The key's cells, for matching. Only an executed call matches: a dry run allocated nothing, so
-    # an allocated pk key is not in its column list.
-    key_positions = show_query === :execute ? [findfirst(==(field), fields_df) for field in returning_key] : Int[]
-    key_metas = [metas[j] for j in key_positions]
-    key_sources = [sources[j] for j in key_positions]
 
-    rows = String[]
-    columns = new_columns()
-    count::Integer = 0
-    total::Integer = df.row_count
-    # Security: Create parameterized query
-    parameters = get_parameter(connection)
-    # For INSERT, all params go into the :select bucket (the row source)
-    set_context!(parameters, :select)
-    for index in 1:total
-      try
-        # Validation checks consistent with single insert(), row by row, so the first row that
-        # fails is the one reported, by its row and field (#875).
-        for (j, field) in enumerate(fields_df)
-          _validate_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index)
-        end
+    # Cap the chunk so `effective_chunk × ncols` stays under the backend's bind-parameter limit
+    # (#84). On SQLite each INSERT row binds one param per field and adds nothing else, so
+    # per_row = ncols and there is no fixed per-statement overhead; on PostgreSQL a chunk binds one
+    # array per field (#672), so a positive chunk_size is not capped (see `_bulk_chunk_rows`).
+    # The SQLite read-back of `returning=` binds one parameter per key cell, never more than the
+    # chunk's own INSERT did.
+    effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(fields_df), 0, :bulk_insert)
+    effective_chunk < chunk_size &&
+      @debug "bulk_insert: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
 
-        # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
-        if pg_arrays
-          foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
-        else
-          push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
-        end
-      catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, df, index)
-        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
-        throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
-                                op = "bulk_insert", model = model.name, row = index))   # the type, never `$(e)`: its text can quote the value (#971)
+    # PostgreSQL collects each chunk as one array per field and binds them at flush (#672); SQLite
+    # binds each cell as it goes and collects `(?, ?, …)` row tuples.
+    pg_arrays = _bulk_binds_column_arrays(connection)
+    casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in fields_df] : String[]
+    # #28: an array column's source is text, cast back to its array type in the SELECT list.
+    source_casts = pg_arrays ? [_pg_bulk_source_cast(model.fields[field], connection) for field in fields_df] : String[]
+    new_columns() = [Any[] for _ in fields_df]
+
+    # Everything that depends on the field alone is resolved once per column, not once per cell
+    # (#704): the field-name half of `validate_field_data`, and the source column itself. Reading a
+    # cell as `row[mapping[field]]` looked the column up by NAME every time, which was over a third of
+    # a 100k-row insert's client-side time. `metas[j]` and `sources[j]` stay in `fields_df` order —
+    # the order the INSERT column list and the row source are built in.
+    metas = [_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
+    sources = [_bulk_column(df, mapping[field]) for field in fields_df]
+
+    results = []
+    total_rows = df.row_count
+    # returning= (#671): one column per requested field, filled at the input row's index.
+    returned_rows = _returning === nothing ? Vector{Any}[] : [Vector{Any}(missing, total_rows) for _ in _returning]
+    insert_loop = () -> begin
+      # Draw the pre-allocated ids inside the transaction, into the PormG-owned column set up above
+      # (never a caller vector). No sequence resync follows: the ids came from the sequence itself,
+      # so it is already past them.
+      if allocate_pk !== nothing
+        ids = _allocate_ids(model, connection, allocate_pk, total_rows, settings)
+        copyto!(_bulk_column(df, mapping[allocate_pk]), ids)
       end
-      count += 1
-      if count == effective_chunk || index == total
-        source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, columns, casts), source_casts) :
-                                 "VALUES " * join(rows, ", ")
-        chunk_range = (index - count + 1):index
-        run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
-          on_conflict_sql = on_conflict_sql, returning_sql = returning_sql, overriding = overriding,
-          resync_retry = allocate_pk === nothing,
-          conflict = _on_conflict === nothing ? nothing : _on_conflict.action, rows = length(chunk_range))
-        res = if _returning === nothing || show_query !== :execute
-          run_chunk()
-        elseif _insert_returns_rows(connection)
-          # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
-          returned = _pg_bulk_returned(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
-          _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
-            chunk_range, do_nothing)
-          returned.row_count
-        else
-          # No RETURNING (SQLite, MySQL; see the #671 block above `_normalize_bulk_returning`). Under DO
-          # NOTHING, first note which keys the table already held, so a read-back row with one of
-          # them is not reported as written by this call. Every read runs on the pinned transaction
-          # connection. On SQLite nothing can land between them and the INSERT. On MySQL another
-          # session can: a row it inserts in between is skipped by the INSERT and, under REPEATABLE
-          # READ, invisible to both plain reads (`missing`, right), but under READ COMMITTED the
-          # read-back sees it as written by this call; a row it deletes in between is written by this
-          # call and reported `missing`, under either level. The count stays exact. Outside DO NOTHING
-          # the read-back locks (`_locks_rows`), to see every row the statement wrote or met (#1267).
-          chunk_keys = unique([Tuple(source[i] for source in key_sources) for i in chunk_range
-            if !any(source -> source[i] === nothing || ismissing(source[i]), key_sources)])
-          existing = Set{Any}()
-          if do_nothing
-            before = _bulk_read_back(objct, model, returning_key, chunk_keys, returning_key)
-            before_keys = _returned_columns(before, returning_key)
-            for r in 1:before.row_count
-              k = _bulk_returning_key_value(key_metas, returning_key, (column[r] for column in before_keys))
-              k === nothing || push!(existing, k)
-            end
+      # The key's cells, for matching. Only an executed call matches: a dry run allocated nothing, so
+      # an allocated pk key is not in its column list.
+      key_positions = show_query === :execute ? [findfirst(==(field), fields_df) for field in returning_key] : Int[]
+      key_metas = [metas[j] for j in key_positions]
+      key_sources = [sources[j] for j in key_positions]
+
+      rows = String[]
+      columns = new_columns()
+      count::Integer = 0
+      total::Integer = df.row_count
+      # Security: Create parameterized query
+      parameters = get_parameter(connection)
+      # For INSERT, all params go into the :select bucket (the row source)
+      set_context!(parameters, :select)
+      for index in 1:total
+        try
+          # Validation checks consistent with single insert(), row by row, so the first row that
+          # fails is the one reported, by its row and field (#875).
+          for (j, field) in enumerate(fields_df)
+            _validate_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index)
           end
-          written = run_chunk()   # counted before the read-back, which would overwrite changes()
-          returned = _bulk_read_back(objct, model, returning_key, chunk_keys,
-            unique(vcat(returning_key, _returning)); lock = !do_nothing && _locks_rows(connection))
-          _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
-            chunk_range, do_nothing, existing)
-          written
+
+          # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
+          cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
+          if pg_arrays
+            foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+          else
+            push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
+          end
+        catch e
+          _depuration_values_bulk_insert(fields_df, mapping, model, df, index)
+          e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
+          throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
+                                  op = "bulk_insert", model = model.name, row = index))   # the type, never `$(e)`: its text can quote the value (#971)
         end
-        push!(results, res)
-        count = 0
-        rows = String[]
-        columns = new_columns()
-        parameters = get_parameter(connection)
-        set_context!(parameters, :select)
+        count += 1
+        if count == effective_chunk || index == total
+          source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, columns, casts), source_casts) :
+                                   "VALUES " * join(rows, ", ")
+          chunk_range = (index - count + 1):index
+          run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
+            on_conflict_sql = on_conflict_sql, returning_sql = returning_sql, overriding = overriding,
+            resync_retry = allocate_pk === nothing,
+            conflict = _on_conflict === nothing ? nothing : _on_conflict.action, rows = length(chunk_range))
+          res = if _returning === nothing || show_query !== :execute
+            run_chunk()
+          elseif _insert_returns_rows(connection)
+            # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
+            returned = _pg_bulk_returned(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
+            _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
+              chunk_range, do_nothing)
+            returned.row_count
+          else
+            # No RETURNING (SQLite, MySQL; see the #671 block above `_normalize_bulk_returning`). Under DO
+            # NOTHING, first note which keys the table already held, so a read-back row with one of
+            # them is not reported as written by this call. Every read runs on the pinned transaction
+            # connection. On SQLite nothing can land between them and the INSERT. On MySQL another
+            # session can: a row it inserts in between is skipped by the INSERT and, under REPEATABLE
+            # READ, invisible to both plain reads (`missing`, right), but under READ COMMITTED the
+            # read-back sees it as written by this call; a row it deletes in between is written by this
+            # call and reported `missing`, under either level. The count stays exact. Outside DO NOTHING
+            # the read-back locks (`_locks_rows`), to see every row the statement wrote or met (#1267).
+            chunk_keys = unique([Tuple(source[i] for source in key_sources) for i in chunk_range
+              if !any(source -> source[i] === nothing || ismissing(source[i]), key_sources)])
+            existing = Set{Any}()
+            if do_nothing
+              before = _bulk_read_back(objct, model, returning_key, chunk_keys, returning_key)
+              before_keys = _returned_columns(before, returning_key)
+              for r in 1:before.row_count
+                k = _bulk_returning_key_value(key_metas, returning_key, (column[r] for column in before_keys))
+                k === nothing || push!(existing, k)
+              end
+            end
+            written = run_chunk()   # counted before the read-back, which would overwrite changes()
+            returned = _bulk_read_back(objct, model, returning_key, chunk_keys,
+              unique(vcat(returning_key, _returning)); lock = !do_nothing && _locks_rows(connection))
+            _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
+              chunk_range, do_nothing, existing)
+            written
+          end
+          push!(results, res)
+          count = 0
+          rows = String[]
+          columns = new_columns()
+          parameters = get_parameter(connection)
+          set_context!(parameters, :select)
+        end
       end
+
+      # One sequence sync per call, after the last chunk, as `bulk_copy` does (#704) — not one per
+      # chunk, which cost two round trips each (100 chunks: ~1.9 s of a 5.4 s insert). Nothing between
+      # chunks needs it, because every chunk runs in this one transaction and no row in it depends on
+      # the sequence being current. When the pk column takes part, every row carries an explicit pk
+      # (a blank/explicit mix is refused in `_drop_blank_auto_primary_keys!`), so no chunk draws from
+      # the sequence. `pk_exist` can also be true with the pk NOT taking part: `columns = ["id", …]`
+      # naming a column the frame lacks. Then every row draws from the sequence, and the final
+      # resync to MAX(pk) is at most a correction of drift that predates the call. A chunk's
+      # duplicate-key retry still resyncs on its own. This does not make the call safe for concurrent
+      # writers, and never did: `setval` is not transactional, but the rows it accounts for stay
+      # invisible until commit.
+      show_query === :execute && pk_exist && _update_sequence(model, connection, pk_field, settings)
     end
 
-    # One sequence sync per call, after the last chunk, as `bulk_copy` does (#704) — not one per
-    # chunk, which cost two round trips each (100 chunks: ~1.9 s of a 5.4 s insert). Nothing between
-    # chunks needs it, because every chunk runs in this one transaction and no row in it depends on
-    # the sequence being current. When the pk column takes part, every row carries an explicit pk
-    # (a blank/explicit mix is refused in `_drop_blank_auto_primary_keys!`), so no chunk draws from
-    # the sequence. `pk_exist` can also be true with the pk NOT taking part: `columns = ["id", …]`
-    # naming a column the frame lacks. Then every row draws from the sequence, and the final
-    # resync to MAX(pk) is at most a correction of drift that predates the call. A chunk's
-    # duplicate-key retry still resyncs on its own. This does not make the call safe for concurrent
-    # writers, and never did: `setval` is not transactional, but the rows it accounts for stay
-    # invisible until commit.
-    show_query === :execute && pk_exist && _update_sequence(model, connection, pk_field, settings)
+    if show_query !== :execute || transaction_connection_for(settings) !== nothing
+      insert_loop()
+    else
+      run_in_transaction(insert_loop, settings)
+    end
+
+    if show_query !== :execute
+      return length(results) == 1 ? results[1] : results
+    end
+
+    # Executed, each chunk contributed its inserted-row count (#670).
+    _returning === nothing && return _bulk_result(sum(results; init = 0))
+    # A table of the caller's kind (#1344 phase 4), one row per input row.
+    return _bulk_result(sum(results; init = 0), _returning_table(src, _returning, returned_rows))
+
   end
-
-  if show_query !== :execute || transaction_connection_for(settings) !== nothing
-    insert_loop()
-  else
-    run_in_transaction(insert_loop, settings)
-  end
-
-  if show_query !== :execute
-    return length(results) == 1 ? results[1] : results
-  end
-
-  # Executed, each chunk contributed its inserted-row count (#670).
-  _returning === nothing && return _bulk_result(sum(results; init = 0))
-  # A table of the caller's kind (#1344 phase 4), one row per input row.
-  return _bulk_result(sum(results; init = 0), _returning_table(src, _returning, returned_rows))
-
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
 bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))
@@ -2321,86 +2324,87 @@ function bulk_copy(objct::SQLObjectHandler, @nospecialize(src);
   model = objct.object.model
   
   # Resolve settings
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
 
-  _supports(connection, :copy) || throw(_capability_error(connection, :copy, "bulk_copy"; why = "Use bulk_insert instead."))
+    _supports(connection, :copy) || throw(_capability_error(connection, :copy, "bulk_copy"; why = "Use bulk_insert instead."))
 
-  # check if is allowed to insert
-  !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))
+    # check if is allowed to insert
+    !settings.change_data && throw(_write_not_allowed("bulk_copy", conn_key))
 
-  df = _bulk_frame(src, "bulk_copy")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+    df = _bulk_frame(src, "bulk_copy")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
 
-  # If no rows then nothing to do
-  if df.row_count == 0
-    @warn("Warning in bulk_copy, the table is empty")
-    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
-    return show_query === :execute ? _bulk_result(0) : nothing
-  end
+    # If no rows then nothing to do
+    if df.row_count == 0
+      @warn("Warning in bulk_copy, the table is empty")
+      # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+      return show_query === :execute ? _bulk_result(0) : nothing
+    end
 
-  # Prepare columns and the frame using centralized helpers
-  _columns = _normalize_bulk_columns(columns)
-  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy, settings)
+    # Prepare columns and the frame using centralized helpers
+    _columns = _normalize_bulk_columns(columns)
+    mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, _columns, :copy, settings)
 
-  # Security: Quote table name and physical column names (db_column when set, #50).
-  # The CSV is positional (HEADER FALSE), so the data order still matches.
-  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-  quoted_fields = [safe_column_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
+    # Security: Quote table name and physical column names (db_column when set, #50).
+    # The CSV is positional (HEADER FALSE), so the data order still matches.
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+    quoted_fields = [safe_column_identifier(Models.model_column(model, string(field)), connection) for field in fields_df]
 
-  # Construct the COPY command (CSV format for safety). NULL marker disambiguates ""
-  # (quoted, an empty string) from missing (unquoted sentinel, NULL) — see _BULK_COPY_NULL (#86).
-  sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE, NULL '$(_BULK_COPY_NULL)')"
+    # Construct the COPY command (CSV format for safety). NULL marker disambiguates ""
+    # (quoted, an empty string) from missing (unquoted sentinel, NULL) — see _BULK_COPY_NULL (#86).
+    sql = "COPY $(safe_table_name) ($(join(quoted_fields, ", "))) FROM STDIN WITH (FORMAT CSV, HEADER FALSE, NULL '$(_BULK_COPY_NULL)')"
   
-  if show_query !== :execute
-    return _show_query_result(show_query, sql, connection, model, Symbol("bulk_copy"))
-  end
-
-  # The field-name half of `validate_field_data`, once per column rather than once per cell (#704).
-  metas = [_validate_field_name(model, field, "bulk_copy"; allow_primary_key = true) for field in fields_df]
-
-  # Process in chunks
-  chunk_size = 10000
-  total_rows = df.row_count
-
-  copy_loop = () -> begin
-    copied = 0
-    for i in 1:chunk_size:total_rows
-      end_idx = min(i + chunk_size - 1, total_rows)
-
-      # Build a FORMATTED chunk so COPY stores the SAME values as bulk_insert/create() (#86), one
-      # column at a time (`_format_copy_column`), in fields_df order so the columns align
-      # positionally with the COPY column list (HEADER FALSE).
-      nrows = end_idx - i + 1
-      formatted_columns = AbstractVector[_format_copy_column(model, field, f_meta, _bulk_column(df, mapping[field]), i, nrows)
-                                         for (field, f_meta) in zip(fields_df, metas)]
-
-      # Strings quoted, missing as the unquoted NULL sentinel, so an empty string ("") round-trips
-      # as "" while missing round-trips as NULL (#86, #1344 phase 5: `_copy_csv_cell!`).
-      csv_data = _copy_csv_chunk(formatted_columns, nrows)
-
-      # The COPY command tag carries the chunk's row count (#670).
-      copied += fetch_copy(settings, sql, [csv_data])
+    if show_query !== :execute
+      return _show_query_result(show_query, sql, connection, model, Symbol("bulk_copy"))
     end
 
-    # Update sequence if PK was provided
-    pk_exist && _update_sequence(model, connection, pk_field, settings)
-    copied
-  end
+    # The field-name half of `validate_field_data`, once per column rather than once per cell (#704).
+    metas = [_validate_field_name(model, field, "bulk_copy"; allow_primary_key = true) for field in fields_df]
 
-  total_copied = try
-    has_active_tx = transaction_connection_for(settings) !== nothing
-    if has_active_tx
-      copy_loop()
-    else
-      run_in_transaction(copy_loop, settings)
+    # Process in chunks
+    chunk_size = 10000
+    total_rows = df.row_count
+
+    copy_loop = () -> begin
+      copied = 0
+      for i in 1:chunk_size:total_rows
+        end_idx = min(i + chunk_size - 1, total_rows)
+
+        # Build a FORMATTED chunk so COPY stores the SAME values as bulk_insert/create() (#86), one
+        # column at a time (`_format_copy_column`), in fields_df order so the columns align
+        # positionally with the COPY column list (HEADER FALSE).
+        nrows = end_idx - i + 1
+        formatted_columns = AbstractVector[_format_copy_column(model, field, f_meta, _bulk_column(df, mapping[field]), i, nrows)
+                                           for (field, f_meta) in zip(fields_df, metas)]
+
+        # Strings quoted, missing as the unquoted NULL sentinel, so an empty string ("") round-trips
+        # as "" while missing round-trips as NULL (#86, #1344 phase 5: `_copy_csv_cell!`).
+        csv_data = _copy_csv_chunk(formatted_columns, nrows)
+
+        # The COPY command tag carries the chunk's row count (#670).
+        copied += fetch_copy(settings, sql, [csv_data])
+      end
+
+      # Update sequence if PK was provided
+      pk_exist && _update_sequence(model, connection, pk_field, settings)
+      copied
     end
-  catch e
-    @error "Error in bulk_copy" exception=e sql=sql
-    rethrow(e)
+
+    total_copied = try
+      has_active_tx = transaction_connection_for(settings) !== nothing
+      if has_active_tx
+        copy_loop()
+      else
+        run_in_transaction(copy_loop, settings)
+      end
+    catch e
+      @error "Error in bulk_copy" exception=e sql=sql
+      rethrow(e)
+    end
+
+    return _bulk_result(total_copied)
+
   end
-
-  return _bulk_result(total_copied)
-
 end
 bulk_copy(model::PormGModel, @nospecialize(src); kwargs...) = bulk_copy(model |> object, src; kwargs...)
 
@@ -2908,175 +2912,176 @@ function _bulk_update(objct::SQLObjectHandler, @nospecialize(src),
   model = objct.object.model
   
   # Resolve settings
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
 
-  # check if is allowed to insert
-  !settings.change_data && throw(_write_not_allowed("bulk_update", conn_key))
+    # check if is allowed to insert
+    !settings.change_data && throw(_write_not_allowed("bulk_update", conn_key))
 
-  # #665: the statement is built from a private copy of the handler. The caller's handler is never
-  # written, and its filters are the statement's scope, AND'd with match_on= and filters= — the
-  # Django shape (`queryset.filter(pk__in=…).update(…)`) and what `update()`/`delete()` already do.
-  # Before this, the handler's filters were cleared in place: its scope was silently dropped, and
-  # `filters=` was left behind on the caller's handler.
-  work = deepcopy(objct)
-  _reject_unsafe_bulk_update_shape(work.object)
+    # #665: the statement is built from a private copy of the handler. The caller's handler is never
+    # written, and its filters are the statement's scope, AND'd with match_on= and filters= — the
+    # Django shape (`queryset.filter(pk__in=…).update(…)`) and what `update()`/`delete()` already do.
+    # Before this, the handler's filters were cleared in place: its scope was silently dropped, and
+    # `filters=` was left behind on the caller's handler.
+    work = deepcopy(objct)
+    _reject_unsafe_bulk_update_shape(work.object)
 
-  df = _bulk_frame(src, "bulk_update")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+    df = _bulk_frame(src, "bulk_update")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
 
-  # If no rows then nothing to do
-  if df.row_count == 0
-    @warn("Warning in bulk_update, the table is empty")
-    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
-    return show_query === :execute ? _bulk_result(0) : nothing
-  end
-
-  # Prepare columns and the frame using centralized helpers
-  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
-
-  # Resolve row-matching keys (match_on) and static predicates (filters).
-  pks = [field for field in model.field_names if model.fields[field].primary_key]
-  dinanic_filters, static_filters =
-    _resolve_bulk_update_keys!(df, model, mapping, fields_df, match_on, filters, pks)
-
-  _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
-
-  # An UPDATE has no projection. A plain `values()` left on the handler would still be rendered by
-  # build() into the `:select` bucket — the bucket every chunk binds its rows into — so it is
-  # dropped here rather than misbound (aggregates were already refused above).
-  empty!(work.object.values)
-  for filter in static_filters
-    work.filter(filter)
-  end
-  # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
-  # `mutation`: a membership subquery over this model's own table is read through a derived table on
-  # MySQL, which refuses a subquery on the table an UPDATE writes (error 1093, #1130 phase 3a).
-  instruction = build(work.object, connection=connection, semi_join=true, mutation=true)
-
-  # Build a list of row value strings by applying each model field formatter.
-  rows = String[]
-  # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
-  deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
-  # set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
-
-  # Security: Build safe SET clause with quoted identifiers
-  safe_set_parts = []
-  for field in fields_df
-    if !(field in deny_fields)
-      # @pormg_debug
-      # SET target uses the physical column (db_column) and is quoted escape-only like any physical
-      # name; the source.* reference and the VALUES/CTE source column list stay the FIELD name (#50)
-      # and are therefore ALIASES — they name columns of a derived table PormG invents here, not
-      # anything that exists in the schema — so they keep the fail-closed `quote_identifier` (#394).
-      # No cast here on either backend: on PostgreSQL the `source` columns are already typed by
-      # their `unnest($n::<type>[])` arrays (#672).
-      quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
-      quoted_source_field = quote_identifier(field, connection)
-      # The one exception (#28): an array column's `source` column is the text of its literal, so it
-      # is cast back to the column's array type here — see `_pg_bulk_source_cast`.
-      source_cast = _bulk_binds_column_arrays(connection) ? _pg_bulk_source_cast(model.fields[field], connection) : ""
-      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
+    # If no rows then nothing to do
+    if df.row_count == 0
+      @warn("Warning in bulk_update, the table is empty")
+      # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+      return show_query === :execute ? _bulk_result(0) : nothing
     end
-  end
 
-  # Security: Create parameterized query.
-  # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
-  # the `$1…$k` numbering already rendered into `instruction._where`. It is the fixed prefix of
-  # every chunk's statement and is never written after this point: each chunk binds its rows into
-  # its own fork (#73), so a row that throws mid-chunk discards only that local collector. On
-  # PostgreSQL a chunk's rows are its column arrays, bound after the prefix as `$k+1…` (#672).
-  base_parameters = instruction.parameters
-  joined_columns = unique(vcat(fields_df, dinanic_filters))
+    # Prepare columns and the frame using centralized helpers
+    mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
 
-  # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
-  # limit (#84). On SQLite and MySQL each row binds one param per set column *and* per match key
-  # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
-  # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
-  effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
-    base_parameters.parameter_count, :bulk_update)
-  effective_chunk < chunk_size &&
-    @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
+    # Resolve row-matching keys (match_on) and static predicates (filters).
+    pks = [field for field in model.field_names if model.fields[field].primary_key]
+    dinanic_filters, static_filters =
+      _resolve_bulk_update_keys!(df, model, mapping, fields_df, match_on, filters, pks)
 
-  # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
-  # SQLite and MySQL bind each cell as they go and collect `(?, ?, …)` row tuples, for SQLite's VALUES
-  # CTE and MySQL's `VALUES ROW(…)` derived table (`_values_row_prefix`).
-  pg_arrays = _bulk_binds_column_arrays(connection)
-  casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
-  new_columns() = [Any[] for _ in joined_columns]
+    _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
 
-  # Resolved once per column, not once per cell (#704), as in `bulk_insert`: the field-name half of
-  # `validate_field_data` for the SET columns (the only ones validated — match keys and static
-  # filters are skipped, since they are not written), and every source column by position. The
-  # `joined_*` vectors stay in `joined_columns` order, which the row source and `casts` follow.
-  set_fields = [field for field in fields_df if !(field in deny_fields)]
-  set_metas = [_validate_field_name(model, field, "bulk_update"; allow_primary_key = false) for field in set_fields]
-  set_sources = [_bulk_column(df, mapping[field]) for field in set_fields]
-  joined_metas = [model.fields[field] for field in joined_columns]
-  joined_sources = [_bulk_column(df, mapping[field]) for field in joined_columns]
+    # An UPDATE has no projection. A plain `values()` left on the handler would still be rendered by
+    # build() into the `:select` bucket — the bucket every chunk binds its rows into — so it is
+    # dropped here rather than misbound (aggregates were already refused above).
+    empty!(work.object.values)
+    for filter in static_filters
+      work.filter(filter)
+    end
+    # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
+    # `mutation`: a membership subquery over this model's own table is read through a derived table on
+    # MySQL, which refuses a subquery on the table an UPDATE writes (error 1093, #1130 phase 3a).
+    instruction = build(work.object, connection=connection, semi_join=true, mutation=true)
 
-  results = []
-  # A chunk's rows bind into the :select context (the row source)
-  new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
-  update_loop = () -> begin
-    count::Integer = 0
-    total::Integer = df.row_count
+    # Build a list of row value strings by applying each model field formatter.
     rows = String[]
-    columns = new_columns()
-    chunk_parameters = new_chunk_parameters()
-    for index in 1:total
-      try
-        # Validation checks consistent with single update(), on the SET columns only
-        for (j, field) in enumerate(set_fields)
-          _validate_bulk_cell(model, field, set_metas[j], set_sources[j][index], "bulk_update", index)
-        end
+    # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
+    deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
+    # set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
 
-        # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-        cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
-        if pg_arrays
-          foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
-        else
-          push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
-        end
-      catch e
-        _depuration_values_bulk_insert(fields_df, mapping, model, df, index; op = "bulk_update")
-        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
-        throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
-                                op = "bulk_update", model = model.name, row = index))   # the type, never `$(e)` (#971)
-      end
-      count += 1
-      if count == effective_chunk || index == total
-        source_sql = pg_arrays ? _pg_unnest_source!(chunk_parameters, columns, casts) :
-                                 "VALUES " * join(_values_row_prefix(connection) .* rows, ", ")
-        res = _bulk_update(model, settings, connection, joined_columns, source_sql, String.(safe_set_parts), dinanic_filters, show_query, instruction, chunk_parameters)
-        push!(results, res)
-        count = 0
-        rows = String[]
-        columns = new_columns()
-        chunk_parameters = new_chunk_parameters()
+    # Security: Build safe SET clause with quoted identifiers
+    safe_set_parts = []
+    for field in fields_df
+      if !(field in deny_fields)
+        # @pormg_debug
+        # SET target uses the physical column (db_column) and is quoted escape-only like any physical
+        # name; the source.* reference and the VALUES/CTE source column list stay the FIELD name (#50)
+        # and are therefore ALIASES — they name columns of a derived table PormG invents here, not
+        # anything that exists in the schema — so they keep the fail-closed `quote_identifier` (#394).
+        # No cast here on either backend: on PostgreSQL the `source` columns are already typed by
+        # their `unnest($n::<type>[])` arrays (#672).
+        quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
+        quoted_source_field = quote_identifier(field, connection)
+        # The one exception (#28): an array column's `source` column is the text of its literal, so it
+        # is cast back to the column's array type here — see `_pg_bulk_source_cast`.
+        source_cast = _bulk_binds_column_arrays(connection) ? _pg_bulk_source_cast(model.fields[field], connection) : ""
+        push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
       end
     end
+
+    # Security: Create parameterized query.
+    # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
+    # the `$1…$k` numbering already rendered into `instruction._where`. It is the fixed prefix of
+    # every chunk's statement and is never written after this point: each chunk binds its rows into
+    # its own fork (#73), so a row that throws mid-chunk discards only that local collector. On
+    # PostgreSQL a chunk's rows are its column arrays, bound after the prefix as `$k+1…` (#672).
+    base_parameters = instruction.parameters
+    joined_columns = unique(vcat(fields_df, dinanic_filters))
+
+    # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
+    # limit (#84). On SQLite and MySQL each row binds one param per set column *and* per match key
+    # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
+    # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
+    effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
+      base_parameters.parameter_count, :bulk_update)
+    effective_chunk < chunk_size &&
+      @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
+
+    # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
+    # SQLite and MySQL bind each cell as they go and collect `(?, ?, …)` row tuples, for SQLite's VALUES
+    # CTE and MySQL's `VALUES ROW(…)` derived table (`_values_row_prefix`).
+    pg_arrays = _bulk_binds_column_arrays(connection)
+    casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
+    new_columns() = [Any[] for _ in joined_columns]
+
+    # Resolved once per column, not once per cell (#704), as in `bulk_insert`: the field-name half of
+    # `validate_field_data` for the SET columns (the only ones validated — match keys and static
+    # filters are skipped, since they are not written), and every source column by position. The
+    # `joined_*` vectors stay in `joined_columns` order, which the row source and `casts` follow.
+    set_fields = [field for field in fields_df if !(field in deny_fields)]
+    set_metas = [_validate_field_name(model, field, "bulk_update"; allow_primary_key = false) for field in set_fields]
+    set_sources = [_bulk_column(df, mapping[field]) for field in set_fields]
+    joined_metas = [model.fields[field] for field in joined_columns]
+    joined_sources = [_bulk_column(df, mapping[field]) for field in joined_columns]
+
+    results = []
+    # A chunk's rows bind into the :select context (the row source)
+    new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
+    update_loop = () -> begin
+      count::Integer = 0
+      total::Integer = df.row_count
+      rows = String[]
+      columns = new_columns()
+      chunk_parameters = new_chunk_parameters()
+      for index in 1:total
+        try
+          # Validation checks consistent with single update(), on the SET columns only
+          for (j, field) in enumerate(set_fields)
+            _validate_bulk_cell(model, field, set_metas[j], set_sources[j][index], "bulk_update", index)
+          end
+
+          # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
+          cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
+          if pg_arrays
+            foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+          else
+            push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
+          end
+        catch e
+          _depuration_values_bulk_insert(fields_df, mapping, model, df, index; op = "bulk_update")
+          e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
+          throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
+                                  op = "bulk_update", model = model.name, row = index))   # the type, never `$(e)` (#971)
+        end
+        count += 1
+        if count == effective_chunk || index == total
+          source_sql = pg_arrays ? _pg_unnest_source!(chunk_parameters, columns, casts) :
+                                   "VALUES " * join(_values_row_prefix(connection) .* rows, ", ")
+          res = _bulk_update(model, settings, connection, joined_columns, source_sql, String.(safe_set_parts), dinanic_filters, show_query, instruction, chunk_parameters)
+          push!(results, res)
+          count = 0
+          rows = String[]
+          columns = new_columns()
+          chunk_parameters = new_chunk_parameters()
+        end
+      end
+    end
+
+    # Wrap the whole chunk loop in one transaction on BOTH backends so a mid-chunk
+    # failure rolls back every already-flushed chunk (#85). This mirrors bulk_insert
+    # (`:749`) and bulk_copy (`:873`); a prior `!(connection isa PormGPostgres)` term
+    # here routed SQLite to the bare loop, leaving chunks 1…K-1 committed on a chunk-K
+    # failure. Skip the wrap only for dry-runs (`show_query !== :execute`) or when an
+    # outer transaction is already open (`has_active_tx`, to avoid a nested BEGIN).
+    has_active_tx = transaction_connection_for(settings) !== nothing
+    if show_query !== :execute || has_active_tx
+      update_loop()
+    else
+      run_in_transaction(update_loop, settings)
+    end
+
+    if show_query !== :execute
+      return length(results) == 1 ? results[1] : results
+    end
+
+    # Executed, each chunk returned its matched-row count (#670).
+    return _bulk_result(sum(results; init = 0))
+
   end
-
-  # Wrap the whole chunk loop in one transaction on BOTH backends so a mid-chunk
-  # failure rolls back every already-flushed chunk (#85). This mirrors bulk_insert
-  # (`:749`) and bulk_copy (`:873`); a prior `!(connection isa PormGPostgres)` term
-  # here routed SQLite to the bare loop, leaving chunks 1…K-1 committed on a chunk-K
-  # failure. Skip the wrap only for dry-runs (`show_query !== :execute`) or when an
-  # outer transaction is already open (`has_active_tx`, to avoid a nested BEGIN).
-  has_active_tx = transaction_connection_for(settings) !== nothing
-  if show_query !== :execute || has_active_tx
-    update_loop()
-  else
-    run_in_transaction(update_loop, settings)
-  end
-
-  if show_query !== :execute
-    return length(results) == 1 ? results[1] : results
-  end
-
-  # Executed, each chunk returned its matched-row count (#670).
-  return _bulk_result(sum(results; init = 0))
-
 end
 
 function _bulk_update(model::PormGModel,

@@ -605,13 +605,14 @@ so the double refuses what PormG refuses (#1239).
 function validate_value(model::PormGModel, field::AbstractString, value)
   name = String(field)
   validate_field_data(model, name, value, "validate_value"; allow_primary_key = true)
-  _, connection, _ = get_settings(object(model))
-  # Formatted for the engine the model is bound to, as `create` formats it (a duration is its
-  # microseconds on MySQL, #1348).
-  formatted = _format_single(model.fields[name], name, value, "validate_value"; conn = connection)
-  # The engine's bind, as `create` runs it, for the refusals that live there; its output is discarded.
-  add_parameter!(get_parameter(connection), formatted)
-  return formatted
+  return _with_connection(object(model)) do _, connection, _
+    # Formatted for the engine the model is bound to, as `create` formats it (a duration is its
+    # microseconds on MySQL, #1348).
+    formatted = _format_single(model.fields[name], name, value, "validate_value"; conn = connection)
+    # The engine's bind, as `create` runs it, for the refusals that live there; its output is discarded.
+    add_parameter!(get_parameter(connection), formatted)
+    return formatted
+  end
 end
 
 # `validate_field_data`, split at the seam between what depends on the field alone and what depends

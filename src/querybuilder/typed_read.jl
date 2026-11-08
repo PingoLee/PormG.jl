@@ -469,15 +469,16 @@ end
 # come back as `Vector{T}` (asserted: a typeassert, not a dispatch) and no driver result crosses a call
 # typed `Any`.
 function _execute_select_rows(q::SQLObjectHandler, ::Type{T})::Vector{T} where T
-  settings, connection, conn_key = get_settings(q)
-  rendered = _render_select(q, connection=connection, show_query=:execute)
-  _refuse_lock_outside_transaction(q, rendered.instruction)
-  # `op` names the read, not the terminal: `first(T)`, `get(T, …)` and the others run this same body.
-  decoder = _RowDecoder{T}(_typed_read_parsers(T, rendered.instruction, connection),
-                           _TypedReadSite("a typed read into $(T)", q.object.model.name))
-  # On the pool `get_settings` resolved, which is what `fetch(settings, …)` delegates to: its type is the
-  # pool's, where the settings' is not concrete yet (#1622).
-  return _fetch_rows(connection, rendered.sql, rendered.instruction.parameters, decoder)::Vector{T}
+  return _with_connection(q) do settings, connection, conn_key
+    rendered = _render_select(q, connection=connection, show_query=:execute)
+    _refuse_lock_outside_transaction(q, rendered.instruction)
+    # `op` names the read, not the terminal: `first(T)`, `get(T, …)` and the others run this same body.
+    decoder = _RowDecoder{T}(_typed_read_parsers(T, rendered.instruction, connection),
+                             _TypedReadSite("a typed read into $(T)", q.object.model.name))
+    # On the pool `_with_connection` resolved, which is what `fetch(settings, …)` delegates to, at its
+    # concrete type (#1622, #1693).
+    return _fetch_rows(connection, rendered.sql, rendered.instruction.parameters, decoder)::Vector{T}
+  end
 end
 
 # The statement's parameters, split by hand over the three collectors a build makes: the instruction's

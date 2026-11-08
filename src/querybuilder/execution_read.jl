@@ -396,38 +396,42 @@ function inspect_query(q::SQLObjectHandler; connection::Union{Nothing, _SQLEngin
 
   # Force builder to run without execution
   # We reuse the internal query building logic
-  settings, conn, conn_key = get_settings(q, connection=connection)
+  return _with_connection(q; connection = connection) do settings, conn, conn_key
+    # `operation` and `q` are rebound below: fresh bindings, so the closure never reassigns what it
+    # captures, which would box them (#1693).
+    let operation = operation, q = q
+      # 1. Operation detection heuristic
+      if operation === nothing
+        if !isempty(q.object.insert)
+          # If it has data in the 'insert' field, it's either an INSERT or an UPDATE.
+          # UPDATE typically has filters (WHERE), INSERT typically does not.
+          operation = isempty(q.object.filter) ? :insert : :update
+        else
+          # Default to :select (safe, most common)
+          # Note: :delete is ambiguous with :select if only filters are present,
+          # so it must be explicitly requested via inspect_query(operation=:delete)
+          operation = :select
+        end
+      end
   
-  # 1. Operation detection heuristic
-  if operation === nothing
-    if !isempty(q.object.insert)
-      # If it has data in the 'insert' field, it's either an INSERT or an UPDATE.
-      # UPDATE typically has filters (WHERE), INSERT typically does not.
-      operation = isempty(q.object.filter) ? :insert : :update
-    else
-      # Default to :select (safe, most common)
-      # Note: :delete is ambiguous with :select if only filters are present,
-      # so it must be explicitly requested via inspect_query(operation=:delete)
-      operation = :select
+      # 2. Delegate to appropriate dry-run
+      operation === :select && return query(q, show_query=:inspection, connection=conn)
+      q = deepcopy(q)
+      if operation === :insert
+          return insert(q.object, show_query=:inspection, connection=conn)
+      elseif operation === :update
+          return update(q.object, show_query=:inspection, connection=conn)
+      elseif operation === :delete
+          res = delete(q, show_query=:inspection, connection=conn)
+          # delete() returns (total_deleted, counter_dict) when executing.
+          # In inspection mode it returns a single Dict (simple delete) or a
+          # Vector of Dicts (cascaded delete with SET_NULL / SET_DEFAULT / CASCADE
+          # steps).  Return the result as-is so callers can inspect every step.
+          return res isa Tuple ? res[2] : res
+      else
+          throw(QueryBuildError("Unsupported or unknown operation for inspection: $operation"))
+      end
     end
-  end
-  
-  # 2. Delegate to appropriate dry-run
-  operation === :select && return query(q, show_query=:inspection, connection=conn)
-  q = deepcopy(q)
-  if operation === :insert
-      return insert(q.object, show_query=:inspection, connection=conn)
-  elseif operation === :update
-      return update(q.object, show_query=:inspection, connection=conn)
-  elseif operation === :delete
-      res = delete(q, show_query=:inspection, connection=conn)
-      # delete() returns (total_deleted, counter_dict) when executing.
-      # In inspection mode it returns a single Dict (simple delete) or a
-      # Vector of Dicts (cascaded delete with SET_NULL / SET_DEFAULT / CASCADE
-      # steps).  Return the result as-is so callers can inspect every step.
-      return res isa Tuple ? res[2] : res
-  else
-      throw(QueryBuildError("Unsupported or unknown operation for inspection: $operation"))
   end
 end
 inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
@@ -672,143 +676,147 @@ function _render_select(q::SQLObjectHandler;
 
   @pormg_debug false
 
-  # Create a shared table alias counter for both CTEs and main query
-  table_alias === nothing && (table_alias = SQLTbAlias())
-  
-  settings, connection, conn_key = get_settings(q, connection=connection)
+  return _with_connection(q; connection = connection) do settings, connection, conn_key
+    # `table_alias` and `parameters` are rebound below: fresh bindings, so the closure never reassigns
+    # what it captures, which would box them (#1693).
+    let table_alias = table_alias, parameters = parameters
+      # Create a shared table alias counter for both CTEs and main query
+      table_alias === nothing && (table_alias = SQLTbAlias())
 
-  # Track if this is a subquery. A nested render passes the shared collector (PostgreSQL needs one
-  # sequential `$N` counter); its build still files values under its OWN clauses, and `build()`
-  # restores the ambient bucket on return (#936, #939), so the caller lifts them as one clause-ordered
-  # run (#432, `detach_nested_run!`). That restore used to be a save/restore here, beside an
-  # `own_contexts` opt-in; `with_bucket` made both structural.
-  is_subquery = parameters !== nothing
+      # Track if this is a subquery. A nested render passes the shared collector (PostgreSQL needs one
+      # sequential `$N` counter); its build still files values under its OWN clauses, and `build()`
+      # restores the ambient bucket on return (#936, #939), so the caller lifts them as one clause-ordered
+      # run (#432, `detach_nested_run!`). That restore used to be a save/restore here, beside an
+      # `own_contexts` opt-in; `with_bucket` made both structural.
+      is_subquery = parameters !== nothing
 
-  # IMPORTANT: Create the shared parameters object BEFORE building CTEs
-  # This ensures all CTEs and the main query use sequential parameter numbering
-  if parameters === nothing
-    parameters = get_parameter(connection)
-  end
-
-  # Build WITH clause - passes the SAME parameters object
-  # CTE context is set inside build_cte_clause
-  !is_subquery && set_context!(parameters, :cte)
-  with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias; correlated = outer !== nothing)
-
-  @pormg_debug false
-
-  # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
-  # Context switching for select/where/join happens inside build()
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
-                      semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated,
-                      cte_state=cte_state)
-  built === nothing || built(instruction)
-  
-  # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
-  # Only enforce during actual execution (:execute) — inspection/dry-run modes (:dict, :sql,
-  # :inspection, etc.) must be allowed to build joined queries without .values() so that
-  # inspect_query() and show_query=:dict work on un-projected joined queries.
-  if isempty(q.object.values) && !isempty(instruction.join) && show_query === :execute
-    throw(QueryBuildError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
-  end
-
-  # Quote table name and alias to prevent SQL injection
-  safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
-  safe_alias = quote_identifier(instruction.alias, instruction.connection)  
-  
-  io = IOBuffer()
-  print(io, with_clause)
-  print(io, "SELECT\n    ")
-  if q.object.distinct
-    print(io, "DISTINCT ")
-  end
-  _query_select(io, instruction.select, instruction.connection)
-  print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
-  
-  for j in instruction.join
-    print(io, j, "\n")
-  end
-
-  if !isempty(instruction._where)
-    print(io, "WHERE ")
-    for (i, w) in enumerate(instruction._where)
-      i > 1 && print(io, " AND \n   ")
-      print(io, w)
-    end
-    print(io, "\n")
-  end
-  
-  if instruction.aggregate && !isempty(instruction.group)
-    print(io, "GROUP BY ")
-    for (i, g) in enumerate(instruction.group)
-      i > 1 && print(io, ", ")
-      print(io, g)
-    end
-    print(io, " \n")
-  end
-  
-  if !isempty(instruction.having)
-    print(io, "HAVING ")
-    for (i, h) in enumerate(instruction.having)
-      i > 1 && print(io, " AND \n   ")
-      print(io, h)
-    end
-    print(io, "\n")
-  end
-  
-  if !isempty(instruction.order)
-    print(io, "ORDER BY ")
-    for (i, o) in enumerate(instruction.order)
-      i > 1 && print(io, ", \n  ")
-      print(io, o)
-    end
-    print(io, "\n")
-  end
-  
-  print(io, _limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))
-
-  # #26: row-level locking clause (FOR UPDATE …) must follow ORDER BY / LIMIT / OFFSET. No-op on
-  # SQLite (Dialect.for_update_clause renders "" there). PostgreSQL rejects FOR UPDATE with
-  # DISTINCT, so fail early with a friendly message rather than a raw DB error.
-  let fu = q.object.for_update
-    if fu !== nothing
-      # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
-      # exempt — there the lock renders "" (pure no-op), so DISTINCT does not raise (#26). An `of`
-      # target that does not resolve raises on both engines (#169): that is a bug in the call, not
-      # a lock the engine lacks — and so does a lock without `of` beside an outer join (#1106).
-      if q.object.distinct && _locks_rows(instruction.connection)
-        throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
+      # IMPORTANT: Create the shared parameters object BEFORE building CTEs
+      # This ensures all CTEs and the main query use sequential parameter numbering
+      if parameters === nothing
+        parameters = get_parameter(connection)
       end
-      isempty(fu.of) && _refuse_plain_lock_beside_outer_joins(instruction)
-      of_aliases = isempty(fu.of) ? String[] : _lock_target_aliases(instruction, fu.of)
-      print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, of_aliases, instruction.connection))
-    end
-  end
 
-  resposta = String(take!(io))
+      # Build WITH clause - passes the SAME parameters object
+      # CTE context is set inside build_cte_clause
+      !is_subquery && set_context!(parameters, :cte)
+      with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias; correlated = outer !== nothing)
 
-  # #44: warn once per CTE that is CROSS JOINed (no join_field) yet is never constrained by a
-  # WHERE/HAVING predicate — that is an unintended Cartesian product. The correlation is expected
-  # to come from a `filter("main_col" => F("<cte>__col"))` (which renders in WHERE). No false
-  # positive on the intended usage, where the alias appears in the WHERE fragment.
-  if any(rj -> rj isa CrossJoin, instruction.row_join)
-    predicate_text = string(
-      isempty(instruction._where) ? "" : join(instruction._where, " AND "),
-      isempty(instruction.having) ? "" : join(instruction.having, " AND "),
-    )
-    for rj in instruction.row_join
-      rj isa CrossJoin || continue
-      cte_alias = rj.alias_b
-      if !occursin(quote_identifier(cte_alias, instruction.connection), predicate_text)
-        @warn _emsg("PormG: CTE \e[31m$(rj.b)\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj.b)__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
+      @pormg_debug false
+
+      # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
+      # Context switching for select/where/join happens inside build()
+      instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
+                          semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated,
+                          cte_state=cte_state)
+      built === nothing || built(instruction)
+  
+      # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.
+      # Only enforce during actual execution (:execute) — inspection/dry-run modes (:dict, :sql,
+      # :inspection, etc.) must be allowed to build joined queries without .values() so that
+      # inspect_query() and show_query=:dict work on un-projected joined queries.
+      if isempty(q.object.values) && !isempty(instruction.join) && show_query === :execute
+        throw(QueryBuildError("PormG: Joined queries must explicitly select fields using .values(...) to prevent duplicate column names. Tip: Use .values(\"*\", \"joined_model__field_name\") to select all main table fields alongside specific joined fields."))
       end
+
+      # Quote table name and alias to prevent SQL injection
+      safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
+      safe_alias = quote_identifier(instruction.alias, instruction.connection)  
+  
+      io = IOBuffer()
+      print(io, with_clause)
+      print(io, "SELECT\n    ")
+      if q.object.distinct
+        print(io, "DISTINCT ")
+      end
+      _query_select(io, instruction.select, instruction.connection)
+      print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
+  
+      for j in instruction.join
+        print(io, j, "\n")
+      end
+
+      if !isempty(instruction._where)
+        print(io, "WHERE ")
+        for (i, w) in enumerate(instruction._where)
+          i > 1 && print(io, " AND \n   ")
+          print(io, w)
+        end
+        print(io, "\n")
+      end
+  
+      if instruction.aggregate && !isempty(instruction.group)
+        print(io, "GROUP BY ")
+        for (i, g) in enumerate(instruction.group)
+          i > 1 && print(io, ", ")
+          print(io, g)
+        end
+        print(io, " \n")
+      end
+  
+      if !isempty(instruction.having)
+        print(io, "HAVING ")
+        for (i, h) in enumerate(instruction.having)
+          i > 1 && print(io, " AND \n   ")
+          print(io, h)
+        end
+        print(io, "\n")
+      end
+  
+      if !isempty(instruction.order)
+        print(io, "ORDER BY ")
+        for (i, o) in enumerate(instruction.order)
+          i > 1 && print(io, ", \n  ")
+          print(io, o)
+        end
+        print(io, "\n")
+      end
+  
+      print(io, _limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))
+
+      # #26: row-level locking clause (FOR UPDATE …) must follow ORDER BY / LIMIT / OFFSET. No-op on
+      # SQLite (Dialect.for_update_clause renders "" there). PostgreSQL rejects FOR UPDATE with
+      # DISTINCT, so fail early with a friendly message rather than a raw DB error.
+      let fu = q.object.for_update
+        if fu !== nothing
+          # PostgreSQL rejects FOR UPDATE + DISTINCT; fail early with a friendly message. SQLite is
+          # exempt — there the lock renders "" (pure no-op), so DISTINCT does not raise (#26). An `of`
+          # target that does not resolve raises on both engines (#169): that is a bug in the call, not
+          # a lock the engine lacks — and so does a lock without `of` beside an outer join (#1106).
+          if q.object.distinct && _locks_rows(instruction.connection)
+            throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
+          end
+          isempty(fu.of) && _refuse_plain_lock_beside_outer_joins(instruction)
+          of_aliases = isempty(fu.of) ? String[] : _lock_target_aliases(instruction, fu.of)
+          print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, of_aliases, instruction.connection))
+        end
+      end
+
+      resposta = String(take!(io))
+
+      # #44: warn once per CTE that is CROSS JOINed (no join_field) yet is never constrained by a
+      # WHERE/HAVING predicate — that is an unintended Cartesian product. The correlation is expected
+      # to come from a `filter("main_col" => F("<cte>__col"))` (which renders in WHERE). No false
+      # positive on the intended usage, where the alias appears in the WHERE fragment.
+      if any(rj -> rj isa CrossJoin, instruction.row_join)
+        predicate_text = string(
+          isempty(instruction._where) ? "" : join(instruction._where, " AND "),
+          isempty(instruction.having) ? "" : join(instruction.having, " AND "),
+        )
+        for rj in instruction.row_join
+          rj isa CrossJoin || continue
+          cte_alias = rj.alias_b
+          if !occursin(quote_identifier(cte_alias, instruction.connection), predicate_text)
+            @warn _emsg("PormG: CTE \e[31m$(rj.b)\e[0m is CROSS JOINed with no correlating filter — this is a Cartesian product. Add a correlation such as \e[32mfilter(\"main_col\" => F(\"$(rj.b)__col\"))\e[0m, or pass \e[32mjoin_field=\e[0m to .with().")
+          end
+        end
+      end
+
+      # #1624: nothing is written back into `q`. The parameters and the projection kinds are the
+      # instruction's (`instruction.parameters`, `instruction.projection_kinds`), and the caller reads them
+      # there.
+      return (sql = resposta, instruction = instruction)
     end
   end
-
-  # #1624: nothing is written back into `q`. The parameters and the projection kinds are the
-  # instruction's (`instruction.parameters`, `instruction.projection_kinds`), and the caller reads them
-  # there.
-  return (sql = resposta, instruction = instruction)
 end
 """
     show_query(q::SQLObjectHandler, mode::Symbol = :sql)
@@ -1047,92 +1055,97 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
   end
 
   # Resolve settings
-  settings, connection, conn_key = get_settings(oq)
+  return _with_connection(oq) do settings, connection, conn_key
+    # `table_alias` is rebound below: fresh bindings, so the closure never
+    # reassigns what it captures, which would box it (#1693).
+    let table_alias = table_alias
   
-  q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
-  # #1066: the projection is kept when it decides which rows `list()` returns — see
-  # `_projection_shapes_rows`. Otherwise it is cleared, and a plain `values(...)` counts as before.
-  is_distinct = distinct || q.object.distinct
-  keep_values = _projection_shapes_rows(q.object; distinct = is_distinct, clear_degenerate = false)
-  _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
-  keep_values || (q.object.values = [])
+      q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
+      # #1066: the projection is kept when it decides which rows `list()` returns — see
+      # `_projection_shapes_rows`. Otherwise it is cleared, and a plain `values(...)` counts as before.
+      is_distinct = distinct || q.object.distinct
+      keep_values = _projection_shapes_rows(q.object; distinct = is_distinct, clear_degenerate = false)
+      _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
+      keep_values || (q.object.values = [])
 
-  # Create shared table alias and parameters BEFORE building CTEs
-  # so CTE parameters are numbered first (critical for positional backends).
-  table_alias === nothing && (table_alias = SQLTbAlias())
-  parameters = get_parameter(connection)
+      # Create shared table alias and parameters BEFORE building CTEs
+      # so CTE parameters are numbered first (critical for positional backends).
+      table_alias === nothing && (table_alias = SQLTbAlias())
+      parameters = get_parameter(connection)
 
-  # Build WITH clause first — CTE params land in :cte bucket before main params.
-  set_context!(parameters, :cte)
-  with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+      # Build WITH clause first — CTE params land in :cte bucket before main params.
+      set_context!(parameters, :cte)
+      with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
 
-  # Main query continues from where CTE numbering left off. #1002: `count()` counts the rows `list()`
-  # returns, so a projection cleared above still declares the joins it reaches.
-  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
-                      cte_state = cte_state, distinct_rows = is_distinct,
-                      declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
-  _refuse_constant_terminal(instruction, keep_values, "count()")
+      # Main query continues from where CTE numbering left off. #1002: `count()` counts the rows `list()`
+      # returns, so a projection cleared above still declares the joins it reaches.
+      instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
+                          cte_state = cte_state, distinct_rows = is_distinct,
+                          declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
+      _refuse_constant_terminal(instruction, keep_values, "count()")
   
-  # Quote table name and alias to prevent SQL injection
-  safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
-  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+      # Quote table name and alias to prevent SQL injection
+      safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
+      safe_alias = quote_identifier(instruction.alias, instruction.connection)
   
-  # Shared FROM / JOIN / WHERE / GROUP BY / HAVING body for every count form. GROUP BY and HAVING
-  # are only ever filled for a kept, aggregating projection (#1066); the guard matches `query()`'s, as
-  # a whole-table aggregate (`values("n" => Count("id"))`) groups by nothing.
-  body = """FROM $safe_table_name as $safe_alias
-    $(join(instruction.join, "\n"))
-    $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
-    $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")$(isempty(instruction.having) ? "" : "HAVING $(join(instruction.having, " AND \n   "))\n")$(isempty(instruction.order) ? "" : "ORDER BY $(join(instruction.order, ", "))\n")
-    """
-  if is_distinct || keep_values
-    # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite, and a grouped projection has one
-    # row per group, not per matching row. Either way the rows `list()` would return are counted from
-    # a derived table, so count() == length(list()). With no values() an unprojected `distinct()` counts
-    # the model's rows, as Django's does: `SELECT DISTINCT "Tb".*`, the base table's columns only. A bare
-    # `*` also took every joined table's columns, so across a to-many join no row was ever a duplicate and
-    # the count was one per (row, related row) pair; on MySQL two joined columns of the same name are
-    # error 1060 in a derived table. A kept projection's GROUP BY names projection positions, which is
-    # why that projection is printed rather than replaced by `1`.
-    # Any CTEs stay at the top level and remain in scope for the subquery; the projection's values bind
-    # under `:select`, ahead of the WHERE ones, which is where its text sits.
-    # #1074: a projection kept because a filter names its alias counts the same way, named for what it is.
-    # #1053: a slice applies after DISTINCT and GROUP BY, so its tail goes inside the subquery. Its
-    # markers are the last in the text and bind under `:limit`, the last bucket, so the order holds on
-    # both engines.
-    projection = keep_values ? _query_select(instruction.select, instruction.connection) : "$(safe_alias).*"
-    resposta = """$(with_clause)SELECT COUNT(*) FROM (
-    SELECT $(is_distinct ? "DISTINCT " : "")$(projection)
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier(is_distinct ? "__pormg_distinct_count" : instruction.aggregate ? "__pormg_grouped_count" : "__pormg_projected_count", instruction.connection))
-    """
-  elseif _is_sliced(q.object)
-    # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was
-    # cleared above, and that is safe: how many rows a slice holds does not depend on which they are.
-    resposta = """$(with_clause)SELECT COUNT(*) FROM (
-    SELECT 1
-    $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier("__pormg_sliced_count", instruction.connection))
-    """
-  else
-    resposta = """$(with_clause)SELECT
-      COUNT(*)
-    $body"""
-  end
-  # Inspection short-circuit: return SQL/metadata without hitting the database.
-  if show_query !== :execute
-    return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
-                            parameters=instruction.parameters)
-  end
-  query_result = fetch(settings, resposta, instruction.parameters)
-  # PostgreSQL returns a LibPQ.Result that supports scalar [row, col] indexing.
-  # SQLite returns a materialized rowtable (Vector{<:NamedTuple}); a Vector *also* has a
-  # (Int, Int) getindex method (trailing-singleton dimension), so exclude vectors explicitly
-  # and take the Tables path, which extracts the scalar from the single COUNT row.
-  if !(query_result isa AbstractVector) &&
-     (query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int}))
-    return query_result[1, 1]
-  else
-    row = Tables.rowtable(query_result) |> Base.first
-    return Base.first(values(row))
+      # Shared FROM / JOIN / WHERE / GROUP BY / HAVING body for every count form. GROUP BY and HAVING
+      # are only ever filled for a kept, aggregating projection (#1066); the guard matches `query()`'s, as
+      # a whole-table aggregate (`values("n" => Count("id"))`) groups by nothing.
+      body = """FROM $safe_table_name as $safe_alias
+        $(join(instruction.join, "\n"))
+        $(instruction._where |> length > 0 ? "WHERE" : "") $(join(instruction._where, " AND \n   "))
+        $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", ")) \n" : "")$(isempty(instruction.having) ? "" : "HAVING $(join(instruction.having, " AND \n   "))\n")$(isempty(instruction.order) ? "" : "ORDER BY $(join(instruction.order, ", "))\n")
+        """
+      if is_distinct || keep_values
+        # COUNT(DISTINCT *) is invalid SQL in both PostgreSQL and SQLite, and a grouped projection has one
+        # row per group, not per matching row. Either way the rows `list()` would return are counted from
+        # a derived table, so count() == length(list()). With no values() an unprojected `distinct()` counts
+        # the model's rows, as Django's does: `SELECT DISTINCT "Tb".*`, the base table's columns only. A bare
+        # `*` also took every joined table's columns, so across a to-many join no row was ever a duplicate and
+        # the count was one per (row, related row) pair; on MySQL two joined columns of the same name are
+        # error 1060 in a derived table. A kept projection's GROUP BY names projection positions, which is
+        # why that projection is printed rather than replaced by `1`.
+        # Any CTEs stay at the top level and remain in scope for the subquery; the projection's values bind
+        # under `:select`, ahead of the WHERE ones, which is where its text sits.
+        # #1074: a projection kept because a filter names its alias counts the same way, named for what it is.
+        # #1053: a slice applies after DISTINCT and GROUP BY, so its tail goes inside the subquery. Its
+        # markers are the last in the text and bind under `:limit`, the last bucket, so the order holds on
+        # both engines.
+        projection = keep_values ? _query_select(instruction.select, instruction.connection) : "$(safe_alias).*"
+        resposta = """$(with_clause)SELECT COUNT(*) FROM (
+        SELECT $(is_distinct ? "DISTINCT " : "")$(projection)
+        $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier(is_distinct ? "__pormg_distinct_count" : instruction.aggregate ? "__pormg_grouped_count" : "__pormg_projected_count", instruction.connection))
+        """
+      elseif _is_sliced(q.object)
+        # #1053: count the rows the slice returns, as Django's `qs[:5].count()` does. The ordering was
+        # cleared above, and that is safe: how many rows a slice holds does not depend on which they are.
+        resposta = """$(with_clause)SELECT COUNT(*) FROM (
+        SELECT 1
+        $body$(_limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))) as $(quote_identifier("__pormg_sliced_count", instruction.connection))
+        """
+      else
+        resposta = """$(with_clause)SELECT
+          COUNT(*)
+        $body"""
+      end
+      # Inspection short-circuit: return SQL/metadata without hitting the database.
+      if show_query !== :execute
+        return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
+                                parameters=instruction.parameters)
+      end
+      query_result = fetch(settings, resposta, instruction.parameters)
+      # PostgreSQL returns a LibPQ.Result that supports scalar [row, col] indexing.
+      # SQLite returns a materialized rowtable (Vector{<:NamedTuple}); a Vector *also* has a
+      # (Int, Int) getindex method (trailing-singleton dimension), so exclude vectors explicitly
+      # and take the Tables path, which extracts the scalar from the single COUNT row.
+      if !(query_result isa AbstractVector) &&
+         (query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int}))
+        return query_result[1, 1]
+      else
+        row = Tables.rowtable(query_result) |> Base.first
+        return Base.first(values(row))
+      end
+    end
   end
 end
 
@@ -1184,60 +1197,64 @@ end
 function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   try
     # Resolve settings
-    settings, connection, conn_key = get_settings(oq)
-    
-    q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
-    # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
-    keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
-    _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
-    keep_values || (q.object.values = [])
+    return _with_connection(oq) do settings, connection, conn_key
+      # `table_alias` is rebound below: a fresh binding, so the closure never reassigns what it
+      # captures, which would box it (#1693).
+      let table_alias = table_alias
+        q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
+        # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
+        keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
+        _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
+        keep_values || (q.object.values = [])
 
-    # Create shared table alias and parameters BEFORE building CTEs
-    # so CTE parameters are numbered first (critical for positional backends).
-    table_alias === nothing && (table_alias = SQLTbAlias())
-    parameters = get_parameter(connection)
+        # Create shared table alias and parameters BEFORE building CTEs
+        # so CTE parameters are numbered first (critical for positional backends).
+        table_alias === nothing && (table_alias = SQLTbAlias())
+        parameters = get_parameter(connection)
 
-    # Build WITH clause first — CTE params land in :cte bucket before main params.
-    set_context!(parameters, :cte)
-    with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+        # Build WITH clause first — CTE params land in :cte bucket before main params.
+        set_context!(parameters, :cte)
+        with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
 
-    # Main query continues from where CTE numbering left off. #1002: `exists()` is a semi-join unless an
-    # OFFSET counts the rows; then it answers for the rows `list()` returns, whose cleared projection
-    # still declares its joins.
-    instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
-                        cte_state = cte_state, semi_join = q.object.offset <= 0,
-                        declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
-    _refuse_constant_terminal(instruction, keep_values, "exists()")
-    # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
-    # caller set binds (#46). A non-positive offset was always dropped here, and still is.
-    # #1053: a caller's `limit(0)` makes it `LIMIT 0` — the probe is the smaller of the two, so it is
-    # one of two literals the code chooses, never the caller's value interpolated.
-    limit_clause = _probe_limit(q.object.limit, 1) == 0 ? "LIMIT 0" : "LIMIT 1"
-    offset_clause = q.object.offset > 0 ?
-      with_bucket(() -> "OFFSET " * add_parameter!(parameters, q.object.offset), parameters, :limit) : ""
+        # Main query continues from where CTE numbering left off. #1002: `exists()` is a semi-join unless an
+        # OFFSET counts the rows; then it answers for the rows `list()` returns, whose cleared projection
+        # still declares its joins.
+        instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
+                            cte_state = cte_state, semi_join = q.object.offset <= 0,
+                            declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
+        _refuse_constant_terminal(instruction, keep_values, "exists()")
+        # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
+        # caller set binds (#46). A non-positive offset was always dropped here, and still is.
+        # #1053: a caller's `limit(0)` makes it `LIMIT 0` — the probe is the smaller of the two, so it is
+        # one of two literals the code chooses, never the caller's value interpolated.
+        limit_clause = _probe_limit(q.object.limit, 1) == 0 ? "LIMIT 0" : "LIMIT 1"
+        offset_clause = q.object.offset > 0 ?
+          with_bucket(() -> "OFFSET " * add_parameter!(parameters, q.object.offset), parameters, :limit) : ""
     
-    # Quote table name and alias to prevent SQL injection
-    safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
-    safe_alias = quote_identifier(instruction.alias, instruction.connection)
+        # Quote table name and alias to prevent SQL injection
+        safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
+        safe_alias = quote_identifier(instruction.alias, instruction.connection)
     
-    sql = """
-    $(with_clause)SELECT $(_exists_projection(q.object, instruction, keep_values))
-    FROM $safe_table_name as $safe_alias
-    $(join(instruction.join, "\n"))
-    $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
-    $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")$(isempty(instruction.having) ? "" : "\nHAVING " * join(instruction.having, " AND \n   "))$(isempty(instruction.order) ? "" : "\nORDER BY " * join(instruction.order, ", "))
-    $limit_clause
-    $offset_clause
-    """
-    # Inspection short-circuit: return SQL/metadata without hitting the database.
-    if show_query !== :execute
-      return _show_query_result(show_query, sql, instruction.connection, q.object.model.name, :select;
-                              parameters=instruction.parameters)
+        sql = """
+        $(with_clause)SELECT $(_exists_projection(q.object, instruction, keep_values))
+        FROM $safe_table_name as $safe_alias
+        $(join(instruction.join, "\n"))
+        $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
+        $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")$(isempty(instruction.having) ? "" : "\nHAVING " * join(instruction.having, " AND \n   "))$(isempty(instruction.order) ? "" : "\nORDER BY " * join(instruction.order, ", "))
+        $limit_clause
+        $offset_clause
+        """
+        # Inspection short-circuit: return SQL/metadata without hitting the database.
+        if show_query !== :execute
+          return _show_query_result(show_query, sql, instruction.connection, q.object.model.name, :select;
+                                  parameters=instruction.parameters)
+        end
+        @pormg_debug false
+        result = fetch(settings, sql, instruction.parameters) |> Tables.rowtable
+        @pormg_debug false
+        return length(result) > 0
+      end
     end
-    @pormg_debug false
-    result = fetch(settings, sql, instruction.parameters) |> Tables.rowtable
-    @pormg_debug false
-    return length(result) > 0
   catch e
     @pormg_debug false
     # Rethrow unconditionally. Silently returning false would mask connection failures, SQL errors
@@ -1263,12 +1280,19 @@ end
 # writes into nothing (`_render_select`): it used to write back `parameters`, the projection kinds and
 # the CTE state, and this function deep-copied the handler for that reason. It returns the build's
 # instruction, which carries what the read needs afterwards (`_projection_parsers`).
-function _execute_select(q::SQLObjectHandler)
-  settings, connection, conn_key = get_settings(q)
-  rendered = _render_select(q, connection=connection, show_query=:execute)
-  _refuse_lock_outside_transaction(q, rendered.instruction)
-  return fetch(settings, rendered.sql, rendered.instruction.parameters), rendered.instruction, connection
+#
+# #1693: `f(result, instruction, connection)` runs inside `_with_connection`, so what the caller does
+# with the connection afterwards (`_projection_parsers`) sees the pool at its concrete type. Returning
+# the connection out of the closure made it abstract again at the caller. The one-argument form returns
+# the three as a tuple, for the tests and benchmarks that read them.
+function _execute_select(f::F, q::SQLObjectHandler) where {F}
+  return _with_connection(q) do settings, connection, conn_key
+    rendered = _render_select(q, connection=connection, show_query=:execute)
+    _refuse_lock_outside_transaction(q, rendered.instruction)
+    return f(fetch(settings, rendered.sql, rendered.instruction.parameters), rendered.instruction, connection)
+  end
 end
+_execute_select(q::SQLObjectHandler) = _execute_select(tuple, q)
 
 # #1624 — the copy a read terminal makes so its OWN changes (a limit, an ordering, inline filters, a
 # projection) never reach the caller's handler (#43, #199). Since the build writes nothing, it no longer
@@ -1302,13 +1326,14 @@ df = query |> DataFrame
 """
 function query_list(objct::SQLObjectHandler; show_query::Symbol = :execute)
   show_query !== :execute && return _show_select(objct, show_query)
-  return first(_execute_select(objct))
+  return _execute_select((result, _, _) -> result, objct)
 end
 
 # The inspection render (`show_query = :sql`, `:dict`, …). No copy since #1624: the build writes nothing.
 function _show_select(q::SQLObjectHandler, show_query::Symbol)
-  settings, connection, conn_key = get_settings(q)
-  return query(q, connection=connection, show_query=show_query)
+  return _with_connection(q) do settings, connection, conn_key
+    return query(q, connection=connection, show_query=show_query)
+  end
 end
 
 # #1344 — a query is a Tables.jl source. `DataFrame(query)` is DataFrames' own `DataFrame(table)`, and
@@ -1323,14 +1348,15 @@ Tables.istable(::Type{<:SQLObjectHandler}) = true
 Tables.columnaccess(::Type{<:SQLObjectHandler}) = true
 
 function Tables.columns(objct::SQLObjectHandler)
-  result, built, connection = _execute_select(objct)
-  columns = Tables.columns(result)
-  parsers = _projection_parsers(built, connection)
-  # Nothing to coerce (PostgreSQL unless an INTERVAL, an ARRAY or a computed float is projected): the
-  # driver's own columns, exactly what `DataFrame(result)` read before #1344, so that frame is unchanged
-  # by construction.
-  parsers === nothing && return columns
-  return _parsed_columns(columns, parsers)
+  return _execute_select(objct) do result, built, connection
+    columns = Tables.columns(result)
+    parsers = _projection_parsers(built, connection)
+    # Nothing to coerce (PostgreSQL unless an INTERVAL, an ARRAY or a computed float is projected): the
+    # driver's own columns, exactly what `DataFrame(result)` read before #1344, so that frame is unchanged
+    # by construction.
+    parsers === nothing && return columns
+    return _parsed_columns(columns, parsers)
+  end
 end
 
 # #564 / #582 — the driver's columns with each parsed one replaced by `map(parser, column)`; the others
@@ -1378,20 +1404,21 @@ function _projection_parsers(built::SQLInstruction, connection)::Union{Nothing,D
 end
 
 function _list_raw(q::SQLObjectHandler)
-  result, built, connection = _execute_select(q)
-  # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
-  # plain column.
-  #
-  # What this replaces (`_sqlite_datetime_aliases`) had four gates, ALL of which had to pass: the
-  # projection had to be an `SQLTypeField`, its `.field` had to be a plain `String`, that string had
-  # to contain no `__`, and the field had to be an `sDateTimeField`. So the coercion set was exactly
-  # "bare, unjoined, primary-model `DateTimeField` columns" — every expression alias, every joined
-  # column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
-  # text, while PostgreSQL's driver delivered typed values for all of them.
-  #
-  # The parser selection lives in `_projection_parsers` (above), shared with the Tables.jl source
-  # since #582 so the row and tabular terminals coerce the same columns.
-  return _rows_from_result(result, _projection_parsers(built, connection))
+  return _execute_select(q) do result, built, connection
+    # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
+    # plain column.
+    #
+    # What this replaces (`_sqlite_datetime_aliases`) had four gates, ALL of which had to pass: the
+    # projection had to be an `SQLTypeField`, its `.field` had to be a plain `String`, that string had
+    # to contain no `__`, and the field had to be an `sDateTimeField`. So the coercion set was exactly
+    # "bare, unjoined, primary-model `DateTimeField` columns" — every expression alias, every joined
+    # column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
+    # text, while PostgreSQL's driver delivered typed values for all of them.
+    #
+    # The parser selection lives in `_projection_parsers` (above), shared with the Tables.jl source
+    # since #582 so the row and tabular terminals coerce the same columns.
+    return _rows_from_result(result, _projection_parsers(built, connection))
+  end
 end
 
 # #1073 — a driver result as `Dict{Symbol,Any}` rows, read COLUMN-WISE, the way `DataFrame(query)`

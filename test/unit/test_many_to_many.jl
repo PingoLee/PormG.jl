@@ -414,7 +414,7 @@ end
   @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_extras) == true
 
   # All four mutators refuse, and they refuse BEFORE touching the connection: the guard is the first
-  # statement in each, ahead of `_m2m_target_ids`/`_m2m_settings`. That ordering is what makes the
+  # statement in each, ahead of `_m2m_target_ids`/`_with_m2m_connection`. That ordering is what makes the
   # refusal testable without a database, so it is asserted rather than assumed.
   @test_throws PormG.QueryBuildError PormG.QueryBuilder.add(mgr_extras)
   @test_throws PormG.QueryBuildError PormG.QueryBuilder.remove(mgr_extras)

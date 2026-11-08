@@ -654,7 +654,9 @@ call. The same shape as Nitro's `with_response` for response bodies (#1622).
 A pool is kept in an untyped place (`Settings.connections` holds any `_SQLEngine`, a test's own
 stand-in included), and every call on it dispatched at run time: one dynamic call per call under the
 JIT, and a call a `juliac --trim` image refuses, which raised a `MethodError` at run time (#1599,
-row 11). Reaching the pool through here is how a call resolves.
+row 11). Reaching the pool through here is how a call resolves. The query builder's terminals reach
+the pool once each, through `QueryBuilder._with_connection` and `_with_terminal_pool`, which holds
+this same closed set as a method of its own (#1693).
 
 Any other `_SQLEngine` (a unit test's stand-in pool) takes the one dynamic call it always took, in
 `_with_unlisted_pool`. A real pool never reaches it; in a trimmed build the verifier still lists that
@@ -680,6 +682,23 @@ _no_pool_error() = InvalidConfigurationError(
   pool isa _SQLEngine || throw(InvalidConfigurationError(
     "with_pool expects a connection pool or a Settings entry, got a $(nameof(typeof(pool)))."))
   return f(pool, args...)
+end
+
+# The query builder's terminal entry (#1693): `with_pool`'s closed set, as a method of its own, calling
+# `f(settings, pool, conn_key)`. Its own method, not a call into `with_pool`, because a terminal's body
+# runs its statements through `with_pool` (`fetch(settings, …)` → `with_pool(_fetch_on, …)`): a
+# `with_pool` frame inside another `with_pool` frame, with a different `f` and arity, is recursion to
+# inference, which limits it and does not cache the result. Under the JIT that is one more dynamic call;
+# in a `juliac --trim` image it is code that was never compiled (measured: 34 unresolved `with_pool`
+# invokes in the trimmed fixture with the terminals on `with_pool`, 0 before them, and `delete` aborted
+# in the runtime's type inference). A pool type added to `with_pool` is added here too;
+# `test_trim_shape_pins.jl` reads both bodies.
+function _with_terminal_pool(f::F, @nospecialize(pool), settings::Settings, conn_key::String) where {F}
+  pool isa SQLiteConnectionPool && return f(settings, pool, conn_key)
+  pool isa PostgresConnectionPool{:libpq} && return f(settings, pool, conn_key)
+  pool isa PostgresConnectionPool{:postgres} && return f(settings, pool, conn_key)
+  pool isa MySQLConnectionPool && return f(settings, pool, conn_key)
+  return _with_unlisted_pool((p, s, k) -> f(s, p, k), pool, settings, conn_key)
 end
 
 # ── The latest world, for a task that outlives its own (#1609) ──────────────

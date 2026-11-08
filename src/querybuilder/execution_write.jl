@@ -139,88 +139,89 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
   
   # Resolve settings
-  settings, connection, conn_key = get_settings(objct, connection=connection)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct; connection = connection) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
   
-  # Collect column names and parameter values
-  parameters = get_parameter(connection)
-  # For INSERT, all params go into :select bucket (VALUES clause is the only positioned section)
-  set_context!(parameters, :select)
+    # Collect column names and parameter values
+    parameters = get_parameter(connection)
+    # For INSERT, all params go into :select bucket (VALUES clause is the only positioned section)
+    set_context!(parameters, :select)
 
-  # check if is allowed to insert
-  !settings.change_data && throw(_write_not_allowed("insert", conn_key))
+    # check if is allowed to insert
+    !settings.change_data && throw(_write_not_allowed("insert", conn_key))
 
-  # Fill defaults/auto_now/auto_now_add/UUID, reserve SQLite ids, validate, and collect the quoted
-  # physical columns + bound VALUES params. Shared with _update_or_create (#30) so both build the
-  # identical INSERT body from one place.
-  quoted_field_columns, param_values, _, _ =
-    _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+    # Fill defaults/auto_now/auto_now_add/UUID, reserve SQLite ids, validate, and collect the quoted
+    # physical columns + bound VALUES params. Shared with _update_or_create (#30) so both build the
+    # identical INSERT body from one place.
+    quoted_field_columns, param_values, _, _ =
+      _prepare_row_insert!(real_obj, model, settings, connection, parameters)
 
-  # construct the SQL statement
-  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-  sql = """
-  INSERT INTO $(safe_table_name) (
-    $(join(quoted_field_columns, ", "))
-  ) VALUES (
-    $(join(param_values, ", "))
-  )
-  """
+    # construct the SQL statement
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+    sql = """
+    INSERT INTO $(safe_table_name) (
+      $(join(quoted_field_columns, ", "))
+    ) VALUES (
+      $(join(param_values, ", "))
+    )
+    """
 
-  # What executes, so inspection shows it (#48): PostgreSQL appends `RETURNING <declared columns>`
-  # (#1490), SQLite runs the plain INSERT and reads the row back out-of-band (see below).
-  # `_update_or_create` already showed its RETURNING; this terminal showed SQL it never sent.
-  exec_sql = _insert_returns_rows(connection) ? sql * " RETURNING $(_returned_columns(model, connection));" : sql
-  if show_query !== :execute
-    return _show_query_result(show_query, exec_sql, connection, model.name, :insert;
-                            parameters=parameters)
-  end
+    # What executes, so inspection shows it (#48): PostgreSQL appends `RETURNING <declared columns>`
+    # (#1490), SQLite runs the plain INSERT and reads the row back out-of-band (see below).
+    # `_update_or_create` already showed its RETURNING; this terminal showed SQL it never sent.
+    exec_sql = _insert_returns_rows(connection) ? sql * " RETURNING $(_returned_columns(model, connection));" : sql
+    if show_query !== :execute
+      return _show_query_result(show_query, exec_sql, connection, model.name, :insert;
+                              parameters=parameters)
+    end
 
-  # Execute safely. create()/insert() return a PormGRow (#166) — the same object get()/first()/
-  # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
-  # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. The RETURNING list and the
-  # read-back name every declared column (incl. the pk), so the row is .save()-able; `_dirty` starts unset (#1591).
-  if _insert_returns_rows(connection)
-    result = fetch(settings, exec_sql, parameters)
+    # Execute safely. create()/insert() return a PormGRow (#166) — the same object get()/first()/
+    # list()/update_or_create() return — so a created row supports dot-access and create → mutate →
+    # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. The RETURNING list and the
+    # read-back name every declared column (incl. the pk), so the row is .save()-able; `_dirty` starts unset (#1591).
+    if _insert_returns_rows(connection)
+      result = fetch(settings, exec_sql, parameters)
+      # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
+      # write supplied an explicit primary key.
+      return _owned_row(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
+    end
+    # SQLite and MySQL: a plain INSERT, then the inserted row read back with a SELECT on the SAME
+    # connection (`_inserted_row_query`). MySQL has no `RETURNING` (#1266). SQLite deliberately avoids
+    # `INSERT ... RETURNING *`: it can hang indefinitely inside SQLite/libsqlite3 for some table shapes
+    # (observed: an AUTOINCREMENT primary key that migrations left in a non-first column position). The
+    # previous broad `catch` masked that hang/error by re-running a plain INSERT, which then tripped a
+    # spurious UNIQUE violation because the first INSERT had already written the row. Reading every
+    # declared column keeps the returned row consistent with the PostgreSQL `RETURNING` path — every
+    # field present, including nullable ones the caller did not set.
+    #
+    # The empty-rows fallback (no key to read by, or the read-back returned nothing, which should not
+    # happen after a successful INSERT) builds the dict from real_obj.insert only, so it may omit an
+    # unreserved AUTOINCREMENT pk, and its values are the caller's inputs, not parsed reads (#800 types
+    # only a row the database handed back). The wrapped PormGRow is still returned; if that degenerate
+    # row is later mutated and .save()d, save() throws a clear "required key" error — no regression over
+    # the previous incomplete-Dict return.
+    do_insert = () -> begin
+      result = fetch(settings, sql, parameters)
+      read_back = _inserted_row_query(connection, model, real_obj.insert, result, safe_table_name)
+      rows = read_back === nothing ? () :
+        (read_back[2] === nothing ? fetch(settings, read_back[1]) : fetch(settings, read_back[1], read_back[2])) |>
+        Tables.rowtable
+      isempty(rows) ?
+        Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
+        _row_to_field_keyed_dict(rows[1], model, connection)
+    end
+
+    # INSERT and the row read-back must run on one connection (last_insert_rowid() and the OK packet's
+    # id are per statement on that connection). Reuse the active transaction if there is one; otherwise
+    # pin a connection for the pair.
+    result_dict = transaction_connection_for(settings) !== nothing ?
+      do_insert() : run_in_transaction(do_insert, settings)
+
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
     # write supplied an explicit primary key.
-    return _owned_row(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
+    return _owned_row(result_dict, model)
+
   end
-  # SQLite and MySQL: a plain INSERT, then the inserted row read back with a SELECT on the SAME
-  # connection (`_inserted_row_query`). MySQL has no `RETURNING` (#1266). SQLite deliberately avoids
-  # `INSERT ... RETURNING *`: it can hang indefinitely inside SQLite/libsqlite3 for some table shapes
-  # (observed: an AUTOINCREMENT primary key that migrations left in a non-first column position). The
-  # previous broad `catch` masked that hang/error by re-running a plain INSERT, which then tripped a
-  # spurious UNIQUE violation because the first INSERT had already written the row. Reading every
-  # declared column keeps the returned row consistent with the PostgreSQL `RETURNING` path — every
-  # field present, including nullable ones the caller did not set.
-  #
-  # The empty-rows fallback (no key to read by, or the read-back returned nothing, which should not
-  # happen after a successful INSERT) builds the dict from real_obj.insert only, so it may omit an
-  # unreserved AUTOINCREMENT pk, and its values are the caller's inputs, not parsed reads (#800 types
-  # only a row the database handed back). The wrapped PormGRow is still returned; if that degenerate
-  # row is later mutated and .save()d, save() throws a clear "required key" error — no regression over
-  # the previous incomplete-Dict return.
-  do_insert = () -> begin
-    result = fetch(settings, sql, parameters)
-    read_back = _inserted_row_query(connection, model, real_obj.insert, result, safe_table_name)
-    rows = read_back === nothing ? () :
-      (read_back[2] === nothing ? fetch(settings, read_back[1]) : fetch(settings, read_back[1], read_back[2])) |>
-      Tables.rowtable
-    isempty(rows) ?
-      Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-      _row_to_field_keyed_dict(rows[1], model, connection)
-  end
-
-  # INSERT and the row read-back must run on one connection (last_insert_rowid() and the OK packet's
-  # id are per statement on that connection). Reuse the active transaction if there is one; otherwise
-  # pin a connection for the pair.
-  result_dict = transaction_connection_for(settings) !== nothing ?
-    do_insert() : run_in_transaction(do_insert, settings)
-
-  # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
-  # write supplied an explicit primary key.
-  return _owned_row(result_dict, model)
-
 end
 
 # The unique keys a row of `model` can collide on (#1267): the primary key, each `unique` field
@@ -340,37 +341,38 @@ function _update_or_create(objct::SQLObject; target_fields::Vector{String},
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
 
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
 
-  parameters = get_parameter(connection)
-  set_context!(parameters, :select)
+    parameters = get_parameter(connection)
+    set_context!(parameters, :select)
 
-  !settings.change_data && throw(_write_not_allowed("update_or_create", conn_key))
+    !settings.change_data && throw(_write_not_allowed("update_or_create", conn_key))
 
-  given = Set{String}(keys(real_obj.insert))
-  quoted_field_columns, param_values, _, _ =
-    _prepare_row_insert!(real_obj, model, settings, connection, parameters)
-  _refuse_unnamed_upsert_target("update_or_create", model, target_fields, real_obj.insert, given, connection)
+    given = Set{String}(keys(real_obj.insert))
+    quoted_field_columns, param_values, _, _ =
+      _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+    _refuse_unnamed_upsert_target("update_or_create", model, target_fields, real_obj.insert, given, connection)
 
-  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
 
-  # Logical → quoted physical (db_column-aware), exactly as bulk_insert renders its clause.
-  qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
-  qset    = String[safe_column_identifier(Models.model_column(model, f), connection) for f in set_fields]
-  clause  = Dialect.on_conflict_clause(:update, qtarget, qset, connection)
+    # Logical → quoted physical (db_column-aware), exactly as bulk_insert renders its clause.
+    qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
+    qset    = String[safe_column_identifier(Models.model_column(model, f), connection) for f in set_fields]
+    clause  = Dialect.on_conflict_clause(:update, qtarget, qset, connection)
 
-  sql = """
-  INSERT INTO $(safe_table_name) (
-    $(join(quoted_field_columns, ", "))
-  ) VALUES (
-    $(join(param_values, ", "))
-  )
-  $(clause)
-  """
+    sql = """
+    INSERT INTO $(safe_table_name) (
+      $(join(quoted_field_columns, ", "))
+    ) VALUES (
+      $(join(param_values, ", "))
+    )
+    $(clause)
+    """
 
-  return _run_update_or_create(connection, settings, real_obj, model, sql, parameters, safe_table_name,
-                               target_fields, show_query)
+    return _run_update_or_create(connection, settings, real_obj, model, sql, parameters, safe_table_name,
+                                 target_fields, show_query)
+  end
 end
 
 # Run the upsert `sql` built above and return `(PormGRow, created)`, one method per engine.
@@ -581,93 +583,94 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
   real_obj = objct isa SQLObjectHandler ? objct.object : objct
   model = real_obj.model
 
-  settings, connection, conn_key = get_settings(objct)
-  ensure_transaction_scope(model, connection)
-  !settings.change_data && throw(_write_not_allowed("get_or_create", conn_key))
+  return _with_connection(objct) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
+    !settings.change_data && throw(_write_not_allowed("get_or_create", conn_key))
 
-  # Capture the raw lookup values BEFORE any INSERT marshalling mutates real_obj.insert.
-  target_values = Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)
+    # Capture the raw lookup values BEFORE any INSERT marshalling mutates real_obj.insert.
+    target_values = Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)
 
-  # A collection lookup value would be refused by the INSERT on a miss, but a hit never builds one:
-  # `fetch_by_target` hands it to `filter()`, which raises `FilterError` instead. Refuse it here, the
-  # same way on both paths (#712). A `JSONField` collection formats to one string, so it passes, and
-  # `_get_or_create_lookup` matches it by that string (#717). A non-collection value is left entirely
-  # to the paths below.
-  for f in target_fields
-    v = target_values[f]
-    v isa _CollectionValue || continue
-    validate_field_data(model, f, v, "get_or_create"; allow_primary_key = true)
-    _format_single(model.fields[f], f, v, "get_or_create")
+    # A collection lookup value would be refused by the INSERT on a miss, but a hit never builds one:
+    # `fetch_by_target` hands it to `filter()`, which raises `FilterError` instead. Refuse it here, the
+    # same way on both paths (#712). A `JSONField` collection formats to one string, so it passes, and
+    # `_get_or_create_lookup` matches it by that string (#717). A non-collection value is left entirely
+    # to the paths below.
+    for f in target_fields
+      v = target_values[f]
+      v isa _CollectionValue || continue
+      validate_field_data(model, f, v, "get_or_create"; allow_primary_key = true)
+      _format_single(model.fields[f], f, v, "get_or_create")
+    end
+
+    # `lock` makes it a locking read (`FOR SHARE`), which reads the latest committed row: MySQL's re-read
+    # after a duplicate inside a transaction, whose snapshot may predate the winner (#1267). The failed
+    # INSERT already holds that lock on the duplicate, so it waits on nothing; `FOR UPDATE` would ask for
+    # more, and two sessions that lost the same race deadlocked on it (measured, 1213).
+    # `readback` reads the row this call just inserted, as every write's read-back does: the declared
+    # columns (#1490), so a miss carries the same fields on every engine as PostgreSQL's `RETURNING`.
+    # A hit, and the winner of a lost race, is a row the call found, and reads as any read does: every
+    # column the table has, through the lookup, or through `SELECT *` where the re-read must lock.
+    fetch_by_target = (; lock::Bool = false, readback::Bool = false) -> begin
+      lock || readback || return _get_or_create_lookup(model, target_fields, target_values).first()
+      table = safe_table_identifier(Models.model_table_name(model), connection)
+      head = readback ? "SELECT $(_returned_columns(model, connection, table))" : _FOUND_ROW_HEAD
+      rows = fetch(settings, _select_by_target(head, real_obj, model, target_fields, table, connection;
+                                               lock = lock)...) |> Tables.rowtable
+      isempty(rows) ? nothing : _owned_row(_row_to_field_keyed_dict(rows[1], model, connection), model)
+    end
+
+    # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
+    # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only
+    # when we actually insert. MySQL has no targeted DO NOTHING (no `upsert_conflict_target` row): its
+    # miss is a plain INSERT, and the lookup must be a unique key of the model, checked here (#1267).
+    build_insert = (parameters) -> begin
+      set_context!(parameters, :select)
+      given = Set{String}(keys(real_obj.insert))
+      quoted_field_columns, param_values, _, _ =
+        _prepare_row_insert!(real_obj, model, settings, connection, parameters)
+      _refuse_unnamed_upsert_target("get_or_create", model, target_fields, real_obj.insert, given, connection)
+      safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+      qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
+      clause  = _supports(connection, :upsert_conflict_target) ?
+        Dialect.on_conflict_clause(:nothing, qtarget, String[], connection) : ""
+      """
+      INSERT INTO $(safe_table_name) (
+        $(join(quoted_field_columns, ", "))
+      ) VALUES (
+        $(join(param_values, ", "))
+      )
+      $(clause)"""
+    end
+
+    if show_query !== :execute
+      # Honest to what a miss executes: the INSERT + ON CONFLICT DO NOTHING (the get() + read-back are
+      # out-of-band SELECTs). Mirrors _update_or_create's inspect contract.
+      parameters = get_parameter(connection)
+      insert_sql = build_insert(parameters)
+      # #48: PostgreSQL sends it with `RETURNING <declared columns>` (below), so that is what inspection shows.
+      shown_sql = _insert_returns_rows(connection) ?
+        insert_sql * " RETURNING $(_returned_columns(model, connection));" : insert_sql
+      return _show_query_result(show_query, shown_sql, connection, model.name, :insert; parameters = parameters)
+    end
+
+    do_goc = () -> begin
+      # Hit → return the existing row WITHOUT building an INSERT (no NOT NULL columns needed).
+      existing = fetch_by_target()
+      existing !== nothing && return (existing, false)
+
+      # Miss → create, guarded against a concurrent insert of the same key (`_create_on_miss`).
+      parameters = get_parameter(connection)
+      insert_sql = build_insert(parameters)
+      return _create_on_miss(connection, settings, model, insert_sql, parameters, fetch_by_target, target_fields)
+    end
+
+    # SQLite: serialize get + insert + read-back so `created` is correct and the create race-guard
+    # holds. PostgreSQL's ON CONFLICT is atomic on its own; running inside an ambient tx is fine.
+    if _serializes_get_or_create(connection)
+      return transaction_connection_for(settings) !== nothing ? do_goc() : run_in_transaction(do_goc, settings)
+    end
+    return do_goc()
   end
-
-  # `lock` makes it a locking read (`FOR SHARE`), which reads the latest committed row: MySQL's re-read
-  # after a duplicate inside a transaction, whose snapshot may predate the winner (#1267). The failed
-  # INSERT already holds that lock on the duplicate, so it waits on nothing; `FOR UPDATE` would ask for
-  # more, and two sessions that lost the same race deadlocked on it (measured, 1213).
-  # `readback` reads the row this call just inserted, as every write's read-back does: the declared
-  # columns (#1490), so a miss carries the same fields on every engine as PostgreSQL's `RETURNING`.
-  # A hit, and the winner of a lost race, is a row the call found, and reads as any read does: every
-  # column the table has, through the lookup, or through `SELECT *` where the re-read must lock.
-  fetch_by_target = (; lock::Bool = false, readback::Bool = false) -> begin
-    lock || readback || return _get_or_create_lookup(model, target_fields, target_values).first()
-    table = safe_table_identifier(Models.model_table_name(model), connection)
-    head = readback ? "SELECT $(_returned_columns(model, connection, table))" : _FOUND_ROW_HEAD
-    rows = fetch(settings, _select_by_target(head, real_obj, model, target_fields, table, connection;
-                                             lock = lock)...) |> Tables.rowtable
-    isempty(rows) ? nothing : _owned_row(_row_to_field_keyed_dict(rows[1], model, connection), model)
-  end
-
-  # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
-  # validates/fills the row and requires every NOT NULL column — so this fires (create-time) only
-  # when we actually insert. MySQL has no targeted DO NOTHING (no `upsert_conflict_target` row): its
-  # miss is a plain INSERT, and the lookup must be a unique key of the model, checked here (#1267).
-  build_insert = (parameters) -> begin
-    set_context!(parameters, :select)
-    given = Set{String}(keys(real_obj.insert))
-    quoted_field_columns, param_values, _, _ =
-      _prepare_row_insert!(real_obj, model, settings, connection, parameters)
-    _refuse_unnamed_upsert_target("get_or_create", model, target_fields, real_obj.insert, given, connection)
-    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-    qtarget = String[safe_column_identifier(Models.model_column(model, f), connection) for f in target_fields]
-    clause  = _supports(connection, :upsert_conflict_target) ?
-      Dialect.on_conflict_clause(:nothing, qtarget, String[], connection) : ""
-    """
-    INSERT INTO $(safe_table_name) (
-      $(join(quoted_field_columns, ", "))
-    ) VALUES (
-      $(join(param_values, ", "))
-    )
-    $(clause)"""
-  end
-
-  if show_query !== :execute
-    # Honest to what a miss executes: the INSERT + ON CONFLICT DO NOTHING (the get() + read-back are
-    # out-of-band SELECTs). Mirrors _update_or_create's inspect contract.
-    parameters = get_parameter(connection)
-    insert_sql = build_insert(parameters)
-    # #48: PostgreSQL sends it with `RETURNING <declared columns>` (below), so that is what inspection shows.
-    shown_sql = _insert_returns_rows(connection) ?
-      insert_sql * " RETURNING $(_returned_columns(model, connection));" : insert_sql
-    return _show_query_result(show_query, shown_sql, connection, model.name, :insert; parameters = parameters)
-  end
-
-  do_goc = () -> begin
-    # Hit → return the existing row WITHOUT building an INSERT (no NOT NULL columns needed).
-    existing = fetch_by_target()
-    existing !== nothing && return (existing, false)
-
-    # Miss → create, guarded against a concurrent insert of the same key (`_create_on_miss`).
-    parameters = get_parameter(connection)
-    insert_sql = build_insert(parameters)
-    return _create_on_miss(connection, settings, model, insert_sql, parameters, fetch_by_target, target_fields)
-  end
-
-  # SQLite: serialize get + insert + read-back so `created` is correct and the create race-guard
-  # holds. PostgreSQL's ON CONFLICT is atomic on its own; running inside an ambient tx is fine.
-  if _serializes_get_or_create(connection)
-    return transaction_connection_for(settings) !== nothing ? do_goc() : run_in_transaction(do_goc, settings)
-  end
-  return do_goc()
 end
 
 # get_or_create's miss: run `insert_sql` and return `(PormGRow, created)`, one method per engine.
@@ -1517,221 +1520,222 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
   model = real_obj.model
 
   # Resolve settings
-  settings, connection, conn_key = get_settings(objct, connection=connection)
-  ensure_transaction_scope(model, connection)
+  return _with_connection(objct; connection = connection) do settings, connection, conn_key
+    ensure_transaction_scope(model, connection)
 
-  # Check if is allowed to update
-  !settings.change_data && throw(_write_not_allowed("update", conn_key))
+    # Check if is allowed to update
+    !settings.change_data && throw(_write_not_allowed("update", conn_key))
 
-  _reject_unsafe_mutation_shape(real_obj, "update()")
+    _reject_unsafe_mutation_shape(real_obj, "update()")
 
-  # #668: an UPDATE has no projection, so the statement is built from a private copy with `values()`
-  # emptied — the #665 shape `bulk_update` uses. Built as-is, a binding projection (`Value(5)`,
-  # `F("points") * 2`) filed its operands into the `:select` bucket, which flattens ahead of SET and
-  # WHERE: a positional misbind on SQLite (wrong value, wrong rows, no error), and bound-but-unused
-  # `$N` on PostgreSQL. Aggregates and alias filters were refused above, so emptying drops nothing.
-  work = deepcopy(real_obj)
-  empty!(work.values)
-  # `get_alias` is a counter: a second build on the SAME alias object would name its target "R1",
-  # not "Tb". A joined update builds twice (#765 — selection, then fence), so the fence gets an
-  # untouched copy of whatever the caller passed; `nothing` makes a fresh one either way.
-  fence_alias = deepcopy(table_alias)
-  # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
-  # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
-  # itself (`_get_join_condition_list`).
-  # #1431: the RIGHT/FULL capability rows are checked below, once the shape is known, against the
-  # statement that prints the join type (`_require_outer_join`).
-  instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true,
-                      defer_outer_join_check=true)
+    # #668: an UPDATE has no projection, so the statement is built from a private copy with `values()`
+    # emptied — the #665 shape `bulk_update` uses. Built as-is, a binding projection (`Value(5)`,
+    # `F("points") * 2`) filed its operands into the `:select` bucket, which flattens ahead of SET and
+    # WHERE: a positional misbind on SQLite (wrong value, wrong rows, no error), and bound-but-unused
+    # `$N` on PostgreSQL. Aggregates and alias filters were refused above, so emptying drops nothing.
+    work = deepcopy(real_obj)
+    empty!(work.values)
+    # `get_alias` is a counter: a second build on the SAME alias object would name its target "R1",
+    # not "Tb". A joined update builds twice (#765 — selection, then fence), so the fence gets an
+    # untouched copy of whatever the caller passed; `nothing` makes a fresh one either way.
+    fence_alias = deepcopy(table_alias)
+    # #1002: the rows are scoped by `pk IN (SELECT DISTINCT …) AND EXISTS (…)`, where a repeated row is
+    # invisible. A SET reading a joined column takes UPDATE … FROM instead, which refuses a to-many join
+    # itself (`_get_join_condition_list`).
+    # #1431: the RIGHT/FULL capability rows are checked below, once the shape is known, against the
+    # statement that prints the join type (`_require_outer_join`).
+    instruction = build(work, table_alias=table_alias, connection=connection, semi_join=true, mutation=true,
+                        defer_outer_join_check=true)
 
-  # Don't allow to update a field without filter
-  instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
+    # Don't allow to update a field without filter
+    instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
   
-  parameters = instruction.parameters
-  fields = model.field_names
+    parameters = instruction.parameters
+    fields = model.field_names
 
-  # Check if the fields need to be updated automatically
-  for field in fields
-    if !haskey(objct.insert, field)
-      if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
-      elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
-        objct.insert[field] = model.fields[field].formatter(today())
-      end
-    end
-  end
-
-  # Handle F expressions in SET clause
-  # Switch context to :update for SET clause params (SET appears before WHERE/JOIN in SQL)
-  set_context!(parameters, :update)
-  set_clause_parts = String[]
-  set_fields = String[]   # #1130: the field each SET item writes, item for item
-  # #1414: which of this statement's aliases the SET reads decides its shape below, so each column it
-  # renders records its alias (`RenderScope.set_reads`); a subquery's own columns are not this statement's.
-  set_reads = Set{String}()
-  rows_before_set = length(instruction.row_join)
-  with_scope(instruction; set_reads = set_reads) do
-    for field in keys(objct.insert)
-      # #1320: `Value(x)` wraps a literal (`Value`'s own refusal of a column says so, #444), so `update`
-      # writes `x`: the same checks, formatter and bind as `update(field => x)`. Rendered as SQL instead,
-      # a text, float or boolean literal would reach a number column past every check. A `Value` around
-      # an expression is refused rather than unwrapped: `update` would write it as SQL, which no other
-      # `Value` position does, and `_update!`'s path walk does not reach inside one.
-      # The field's own checks (an unknown name, a primary key) come first, as for any other value.
-      value = objct.insert[field]
-      if value isa SQLText
-        _validate_field_name(model, field, "update"; allow_primary_key = false)
-        value.field isa Union{SQLType,SQLObject} && _validation_error("update", model, field,
-          "Value(…) wraps a literal, and this one wraps an expression ($(nameof(typeof(value.field))))";
-          suggestion = "drop the Value(…): update(\"$(field)\" => expression), or Subquery(query) for a query",
-          kind = :type)
-        value = value.field
-      end
-      # Validation checks
-      validate_field_data(model, field, value, "update"; allow_primary_key = false)
-      Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
-    
-      quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
-
-      # #444: a `CTE(...)` handle joins this branch rather than the value branch below. It is
-      # unambiguously a COLUMN reference — never a literal — so binding it as a value was never right;
-      # it reached `field.formatter` and died with a bare `MethodError` (outside the #231 taxonomy).
-      # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
-      # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
-      # `F("<cte>__col")` spelling produced.
-      # #1021: a `SearchVector` fills a `SearchVectorField` — Django's
-      # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
-      # not a value" refusal every other value position keeps. Into any other column it is refused, as
-      # is a `SearchQuery` anywhere: neither is a value a column of another type could hold.
-      if _is_fts_operand(value)
-        (_is_fts_node(value, "SEARCH_VECTOR") && model.fields[field] isa Models.sSearchVectorField) ||
-          throw(QueryBuildError(
-            "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
-            "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
-            "operand (#1021)."))
-        _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
-        push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
-      # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
-      # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
-      # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
-      # #1320: a scalar `Subquery` renders `(SELECT …)`, its values bound in this clause's bucket.
-      elseif value isa _SetExpression
-        marks = (parameter_mark(instruction), nested_parameter_mark(instruction))
-        f_value = _set_update_query(value, instruction)
-        _refuse_update_non_number(model.fields[field], field, value, instruction)
-        _refuse_update_scale_departure(model.fields[field], field, value, instruction)
-        # #1330: on an engine that does not check a decimal's width on assignment, the value checks itself.
-        f_value = _decimal_assignment_guard(model.fields[field], field, f_value, marks, instruction)
-        push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
-      else
-        formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
-        placeholder = add_parameter!(parameters, formatted_value)
-        push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
-      end
-    end
-  end
-   
-  set_clause = join(set_clause_parts, ", ")   
-
-  # Build secure UPDATE SQL with JOIN support
-  safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
-  safe_alias = quote_identifier(instruction.alias, connection)
-
-  has_joins = !isempty(instruction.row_join)
-  multi_table = false   # #1130: MySQL's multi-table UPDATE, whose SET order is unspecified
-  sql = ""
-  
-  if has_joins
-    begin
-      # The SET-clause loop above can reach _build_row_join (e.g. update("x" => F("fk__col"))), so
-      # row_join may have grown AFTER build() rendered instruction.join — the same late-discovery
-      # hazard #404 fixed in build(). Exactly one UPDATE branch reads the stale instruction.join:
-      # `_target_predicate`, which prints it into the EXISTS. This check is what excludes it — a
-      # SET-discovered join returns true, so the UPDATE … FROM branch below rebuilds FROM/ON from
-      # instruction.row_join instead. Do NOT drop this guard on the theory that the UPDATE path
-      # ignores instruction.join — it does not. (#404's own trigger cannot reach here regardless:
-      # update() refuses a query carrying order_by() in `_reject_unsafe_mutation_shape`.)
-      set_uses_join_aliases = _set_clause_uses_join_aliases(set_reads, instruction.row_join, rows_before_set)
-
-      if !set_uses_join_aliases && isempty(real_obj.ctes)
-        # #765: `"Tb"."pk" IN (SELECT DISTINCT …) AND EXISTS (<fence>)`. The IN alone was the
-        # pre-#765 shape, and PostgreSQL never re-checks it when the UPDATE waits on a row lock, so a
-        # filter used as a fence was ignored; the correlated EXISTS is what it re-checks. The IN stays
-        # as the index-driven selection (`_target_pk_selection`). The top-level build above is its
-        # half — its `:join`/`:where` values flatten in the IN's text order — and the fence is a SECOND
-        # build, lifted as one run behind them. A keyless model has no pk to select through and takes
-        # the fence alone, bound through the top-level buckets directly (it used to take UPDATE …
-        # FROM, which flattened its LEFT JOINs to inner and dropped `.on()` conditions).
-        selection = _target_pk_selection(instruction)
-        predicate = if selection === nothing
-          # #1431: the fence alone rewrites RIGHT to INNER and FULL to LEFT, so this statement never
-          # prints an outer join a backend may lack: nothing to check.
-          _target_predicate(instruction)
-        else
-          # #1431: the key selection prints the joins verbatim, so their types are checked here.
-          _require_outer_joins(instruction)
-          fence_work = deepcopy(real_obj)
-          empty!(fence_work.values)
-          mark = nested_parameter_mark(parameters)
-          fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
-                        mutation=true, defer_outer_join_check=true)
-          fence_run = detach_nested_run!(parameters, mark)
-          set_context!(parameters, :where)
-          reattach_parameters!(parameters, fence_run)
-          selection * "\n  AND " * _target_predicate(fence)
+    # Check if the fields need to be updated automatically
+    for field in fields
+      if !haskey(objct.insert, field)
+        if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
+          objct.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
+        elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
+          objct.insert[field] = model.fields[field].formatter(today())
         end
-        sql = """
-        UPDATE $(safe_table_name) AS $(safe_alias)
-        SET $(set_clause)
-        WHERE $(predicate)
-        """
-      else
-        # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax; MySQL lists the tables after UPDATE
-        # (`_update_from_sql`). No capability check (#1431): the FROM list prints no join type, and
-        # `_get_join_condition_list` refuses a LEFT or FULL join on every engine (#1430), which is what an
-        # old SQLite must hear too; a RIGHT one updates exactly the rows INNER does.
-        from_clause = _build_from_tables(instruction.row_join, connection)
-        join_conditions = _build_join_conditions(instruction.row_join, connection;
-                                                 rendered_on = _rendered_on(instruction))
-
-        # Structural joins, then the filters: SET → ON → WHERE is the bucket order (#174). Not
-        # deduplicated: two anchors can never coincide (`_insert_join` dedups the rows, each with its
-        # own alias), and a fragment that carries a marker must print once per bound value — `unique`
-        # here dropped a repeated `"Tb"."c" = ?` on SQLite and left a value with no marker.
-        final_where = [join_conditions; instruction._where]
-        
-        sql = _update_from_sql(connection, safe_table_name, safe_alias, set_clause_parts, from_clause,
-                               join(final_where, " AND "))
-        multi_table = true
       end
     end
-  else
-    # No joins - simple UPDATE
-    sql = """
-    UPDATE $(safe_table_name) AS $(safe_alias)
-    SET $(set_clause)
-    WHERE $(join(instruction._where, " AND \n   "))
-    """
-  end
 
-  _assigns_set_in_order(connection) &&
-    _refuse_set_reading_assigned(set_fields, set_clause_parts, safe_alias, multi_table, connection)
+    # Handle F expressions in SET clause
+    # Switch context to :update for SET clause params (SET appears before WHERE/JOIN in SQL)
+    set_context!(parameters, :update)
+    set_clause_parts = String[]
+    set_fields = String[]   # #1130: the field each SET item writes, item for item
+    # #1414: which of this statement's aliases the SET reads decides its shape below, so each column it
+    # renders records its alias (`RenderScope.set_reads`); a subquery's own columns are not this statement's.
+    set_reads = Set{String}()
+    rows_before_set = length(instruction.row_join)
+    with_scope(instruction; set_reads = set_reads) do
+      for field in keys(objct.insert)
+        # #1320: `Value(x)` wraps a literal (`Value`'s own refusal of a column says so, #444), so `update`
+        # writes `x`: the same checks, formatter and bind as `update(field => x)`. Rendered as SQL instead,
+        # a text, float or boolean literal would reach a number column past every check. A `Value` around
+        # an expression is refused rather than unwrapped: `update` would write it as SQL, which no other
+        # `Value` position does, and `_update!`'s path walk does not reach inside one.
+        # The field's own checks (an unknown name, a primary key) come first, as for any other value.
+        value = objct.insert[field]
+        if value isa SQLText
+          _validate_field_name(model, field, "update"; allow_primary_key = false)
+          value.field isa Union{SQLType,SQLObject} && _validation_error("update", model, field,
+            "Value(…) wraps a literal, and this one wraps an expression ($(nameof(typeof(value.field))))";
+            suggestion = "drop the Value(…): update(\"$(field)\" => expression), or Subquery(query) for a query",
+            kind = :type)
+          value = value.field
+        end
+        # Validation checks
+        validate_field_data(model, field, value, "update"; allow_primary_key = false)
+        Models.is_many_to_many_field(model.fields[field]) && throw(QueryBuildError("ManyToManyField $(model.name).$(field) cannot be written in update(); use the many-to-many manager add, remove, clear, or set methods"))
+    
+        quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)  # db_column (#50)
 
-  if show_query !== :execute
-    return _show_query_result(show_query, sql, connection, model.name, :update; 
-                            parameters=parameters)
-  end
+        # #444: a `CTE(...)` handle joins this branch rather than the value branch below. It is
+        # unambiguously a COLUMN reference — never a literal — so binding it as a value was never right;
+        # it reached `field.formatter` and died with a bare `MethodError` (outside the #231 taxonomy).
+        # Routed here, it resolves as a column and `update()`'s own "this statement emits no WITH
+        # clause" refusal (#433) fires with the accurate message, which is exactly what the pre-#444
+        # `F("<cte>__col")` spelling produced.
+        # #1021: a `SearchVector` fills a `SearchVectorField` — Django's
+        # `update(search=SearchVector(…))` — and is rendered as the document it is, past the "operand,
+        # not a value" refusal every other value position keeps. Into any other column it is refused, as
+        # is a `SearchQuery` anywhere: neither is a value a column of another type could hold.
+        if _is_fts_operand(value)
+          (_is_fts_node(value, "SEARCH_VECTOR") && model.fields[field] isa Models.sSearchVectorField) ||
+            throw(QueryBuildError(
+              "update(\"$(field)\" => $(_is_fts_node(value, "SEARCH_VECTOR") ? "SearchVector" : "SearchQuery")(…)): " *
+              "a SearchVector fills a SearchVectorField column, and nothing else is written from a full-text " *
+              "operand (#1021)."))
+          _supports(connection, :full_text_search) || throw(Dialect.fts_capability_error(connection, "SearchVector"))
+          push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(_render_fts_operand(value, instruction))")
+        # #174: a `Joined(...)` handle is a column of a `cjoin_on` copy — never a literal, so it must not
+        # reach the field formatter (#481). It renders `"<alias>"."<col>"`, which sends the statement down
+        # the correlated UPDATE … FROM branch below, where the alias's rendered ON clause joins it.
+        # #1320: a scalar `Subquery` renders `(SELECT …)`, its values bound in this clause's bucket.
+        elseif value isa _SetExpression
+          marks = (parameter_mark(instruction), nested_parameter_mark(instruction))
+          f_value = _set_update_query(value, instruction)
+          _refuse_update_non_number(model.fields[field], field, value, instruction)
+          _refuse_update_scale_departure(model.fields[field], field, value, instruction)
+          # #1330: on an engine that does not check a decimal's width on assignment, the value checks itself.
+          f_value = _decimal_assignment_guard(model.fields[field], field, f_value, marks, instruction)
+          push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
+        else
+          formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
+          placeholder = add_parameter!(parameters, formatted_value)
+          push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
+        end
+      end
+    end
+   
+    set_clause = join(set_clause_parts, ", ")   
 
-  # @pormg_debug
+    # Build secure UPDATE SQL with JOIN support
+    safe_table_name = safe_table_identifier(Models.model_table_name(model), connection)
+    safe_alias = quote_identifier(instruction.alias, connection)
 
-  # return nothing
+    has_joins = !isempty(instruction.row_join)
+    multi_table = false   # #1130: MySQL's multi-table UPDATE, whose SET order is unspecified
+    sql = ""
+  
+    if has_joins
+      begin
+        # The SET-clause loop above can reach _build_row_join (e.g. update("x" => F("fk__col"))), so
+        # row_join may have grown AFTER build() rendered instruction.join — the same late-discovery
+        # hazard #404 fixed in build(). Exactly one UPDATE branch reads the stale instruction.join:
+        # `_target_predicate`, which prints it into the EXISTS. This check is what excludes it — a
+        # SET-discovered join returns true, so the UPDATE … FROM branch below rebuilds FROM/ON from
+        # instruction.row_join instead. Do NOT drop this guard on the theory that the UPDATE path
+        # ignores instruction.join — it does not. (#404's own trigger cannot reach here regardless:
+        # update() refuses a query carrying order_by() in `_reject_unsafe_mutation_shape`.)
+        set_uses_join_aliases = _set_clause_uses_join_aliases(set_reads, instruction.row_join, rows_before_set)
 
-  # Execute with parameters and return affected row count (Django matched-rows semantics).
-  try
-    return _update_row_count(connection, settings, sql, parameters)
-  catch e
-    @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql
-    rethrow(e)
+        if !set_uses_join_aliases && isempty(real_obj.ctes)
+          # #765: `"Tb"."pk" IN (SELECT DISTINCT …) AND EXISTS (<fence>)`. The IN alone was the
+          # pre-#765 shape, and PostgreSQL never re-checks it when the UPDATE waits on a row lock, so a
+          # filter used as a fence was ignored; the correlated EXISTS is what it re-checks. The IN stays
+          # as the index-driven selection (`_target_pk_selection`). The top-level build above is its
+          # half — its `:join`/`:where` values flatten in the IN's text order — and the fence is a SECOND
+          # build, lifted as one run behind them. A keyless model has no pk to select through and takes
+          # the fence alone, bound through the top-level buckets directly (it used to take UPDATE …
+          # FROM, which flattened its LEFT JOINs to inner and dropped `.on()` conditions).
+          selection = _target_pk_selection(instruction)
+          predicate = if selection === nothing
+            # #1431: the fence alone rewrites RIGHT to INNER and FULL to LEFT, so this statement never
+            # prints an outer join a backend may lack: nothing to check.
+            _target_predicate(instruction)
+          else
+            # #1431: the key selection prints the joins verbatim, so their types are checked here.
+            _require_outer_joins(instruction)
+            fence_work = deepcopy(real_obj)
+            empty!(fence_work.values)
+            mark = nested_parameter_mark(parameters)
+            fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
+                          mutation=true, defer_outer_join_check=true)
+            fence_run = detach_nested_run!(parameters, mark)
+            set_context!(parameters, :where)
+            reattach_parameters!(parameters, fence_run)
+            selection * "\n  AND " * _target_predicate(fence)
+          end
+          sql = """
+          UPDATE $(safe_table_name) AS $(safe_alias)
+          SET $(set_clause)
+          WHERE $(predicate)
+          """
+        else
+          # PostgreSQL & SQLite 3.33+ support UPDATE FROM syntax; MySQL lists the tables after UPDATE
+          # (`_update_from_sql`). No capability check (#1431): the FROM list prints no join type, and
+          # `_get_join_condition_list` refuses a LEFT or FULL join on every engine (#1430), which is what an
+          # old SQLite must hear too; a RIGHT one updates exactly the rows INNER does.
+          from_clause = _build_from_tables(instruction.row_join, connection)
+          join_conditions = _build_join_conditions(instruction.row_join, connection;
+                                                   rendered_on = _rendered_on(instruction))
+
+          # Structural joins, then the filters: SET → ON → WHERE is the bucket order (#174). Not
+          # deduplicated: two anchors can never coincide (`_insert_join` dedups the rows, each with its
+          # own alias), and a fragment that carries a marker must print once per bound value — `unique`
+          # here dropped a repeated `"Tb"."c" = ?` on SQLite and left a value with no marker.
+          final_where = [join_conditions; instruction._where]
+        
+          sql = _update_from_sql(connection, safe_table_name, safe_alias, set_clause_parts, from_clause,
+                                 join(final_where, " AND "))
+          multi_table = true
+        end
+      end
+    else
+      # No joins - simple UPDATE
+      sql = """
+      UPDATE $(safe_table_name) AS $(safe_alias)
+      SET $(set_clause)
+      WHERE $(join(instruction._where, " AND \n   "))
+      """
+    end
+
+    _assigns_set_in_order(connection) &&
+      _refuse_set_reading_assigned(set_fields, set_clause_parts, safe_alias, multi_table, connection)
+
+    if show_query !== :execute
+      return _show_query_result(show_query, sql, connection, model.name, :update; 
+                              parameters=parameters)
+    end
+
+    # @pormg_debug
+
+    # return nothing
+
+    # Execute with parameters and return affected row count (Django matched-rows semantics).
+    try
+      return _update_row_count(connection, settings, sql, parameters)
+    catch e
+      @error "Error executing UPDATE query" exception=(e, catch_backtrace()) sql=sql
+      rethrow(e)
+    end
   end
 end
 
@@ -1798,51 +1802,52 @@ function save(row::PormGRow; show_query::Symbol = :execute)
     "Cannot save() a row after mutating both FK field(s) $(collect(conflict)) and projected '__' fields under the same prefix. Save the FK change separately first."
   ))
 
-  settings, _, _ = get_settings(object(model))
+  return _with_connection(object(model)) do settings, _, _
 
-  function planned_updates(show_mode::Symbol)
-    inspections = Any[]
+    function planned_updates(show_mode::Symbol)
+      inspections = Any[]
 
-    if !isempty(own_updates)
-      pk_value = _row_require_data_key(data, pk_sym, "own-table updates for $(model.name)")
-      own_pairs = _row_update_pairs(own_updates)
-      push!(inspections, object(model).filter(String(pk_sym) => pk_value).update(own_pairs...; show_query=show_mode))
-    end
-
-    for fk_sym in sort(collect(keys(fk_updates)); by=String)
-      fk_meta = model.fields[String(fk_sym)]::Models.sRelationalColumn
-      if fk_meta.pk_field === nothing
-        throw(QueryBuildError(
-          "save() cannot update projected fields under '$(fk_sym)' because the FK's " *
-          "target primary key has not been resolved. Call set_models() to initialize " *
-          "the model before using save() with projected FK fields."
-        ))
+      if !isempty(own_updates)
+        pk_value = _row_require_data_key(data, pk_sym, "own-table updates for $(model.name)")
+        own_pairs = _row_update_pairs(own_updates)
+        push!(inspections, object(model).filter(String(pk_sym) => pk_value).update(own_pairs...; show_query=show_mode))
       end
-      fk_value = _row_require_data_key(data, fk_sym, "projected updates under '$(fk_sym)' for $(model.name)")
-      # #1601: registration resolved the target (or refused), so `to` is the model.
-      related_model = fk_meta.to
-      related_model isa PormGModel || throw(QueryBuildError(
-        "save() cannot update projected fields under '$(fk_sym)': the foreign key's target " *
-        "$(Models._target_label(fk_meta.to)) is not resolved. Register the models with set_models() first."))
-      fk_pairs = _row_update_pairs(fk_updates[fk_sym])
-      related_query = object(related_model)
-      related_query.filter(String(fk_meta.pk_field) => fk_value)
-      push!(inspections, related_query.update(fk_pairs...; show_query=show_mode))
+
+      for fk_sym in sort(collect(keys(fk_updates)); by=String)
+        fk_meta = model.fields[String(fk_sym)]::Models.sRelationalColumn
+        if fk_meta.pk_field === nothing
+          throw(QueryBuildError(
+            "save() cannot update projected fields under '$(fk_sym)' because the FK's " *
+            "target primary key has not been resolved. Call set_models() to initialize " *
+            "the model before using save() with projected FK fields."
+          ))
+        end
+        fk_value = _row_require_data_key(data, fk_sym, "projected updates under '$(fk_sym)' for $(model.name)")
+        # #1601: registration resolved the target (or refused), so `to` is the model.
+        related_model = fk_meta.to
+        related_model isa PormGModel || throw(QueryBuildError(
+          "save() cannot update projected fields under '$(fk_sym)': the foreign key's target " *
+          "$(Models._target_label(fk_meta.to)) is not resolved. Register the models with set_models() first."))
+        fk_pairs = _row_update_pairs(fk_updates[fk_sym])
+        related_query = object(related_model)
+        related_query.filter(String(fk_meta.pk_field) => fk_value)
+        push!(inspections, related_query.update(fk_pairs...; show_query=show_mode))
+      end
+
+      return inspections
     end
 
-    return inspections
-  end
+    if show_query !== :execute
+      return planned_updates(show_query)
+    end
 
-  if show_query !== :execute
-    return planned_updates(show_query)
-  end
+    run_in_transaction(settings) do
+      planned_updates(:execute)
+    end
 
-  run_in_transaction(settings) do
-    planned_updates(:execute)
+    empty!(dirty)
+    return row
   end
-
-  empty!(dirty)
-  return row
 end
 
 """

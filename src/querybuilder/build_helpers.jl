@@ -39,6 +39,59 @@ function get_settings(obj::Union{SQLObject,SQLObjectHandler}; connection::Union{
   return settings, final_connection, conn_key
 end
 
+# ── The pool through the terminals (#1693) ──────────────────────────────────
+#
+# `Settings.connections` is an open `Union{Nothing, _SQLEngine}` on purpose (#1685 kept it open for
+# the unit suite's stand-in pools), so a pool read from it is abstract. A terminal that handed it on
+# made every call below it a dispatch at run time, and a call a `juliac --trim` image had compiled
+# nothing for: `create` stopped at `_prepare_row_insert!`, `delete` at `build_cte_clause` (round 4 of
+# #1600). A terminal enters the closed dispatch here, once, and runs its body as
+# `f(settings, pool, conn_key)` with `pool` at its concrete type. The dispatch is
+# `ConnectionPool._with_terminal_pool`, `with_pool`'s closed set as a method of its own: the body runs
+# its statements through `with_pool`, and a `with_pool` frame nested in another is recursion inference
+# limits, which a trimmed image cannot compile (see the comment there).
+#
+# The resolution is `get_settings`', unchanged: the `connection` keyword wins when given, otherwise the
+# settings' pool, and a pool-less entry raises `get_settings`' own error before any dispatch. A
+# `connection` the caller passes goes to the body as it is, with no dispatch: it is how the internal
+# entries (`build`, `_render_select`, `query`) are re-entered, and a dispatch there would nest one more
+# frame per level. A terminal re-enters them with its concrete pool, so the body stays concrete. A
+# nested render re-enters them with `instruc.connection` instead, which is `InstructionObject`'s abstract
+# `ConnType` slot, so that body is compiled for the abstract pool, as every body was before #1693. That
+# slot is the query state's, #1599's I4 item. The dispatch hands `f` the same object at a narrower type,
+# and a transaction is found by the pool's identity (`_tx_context_for`), so no query changes connection.
+#
+# These two are the only places in src/querybuilder/ that call `get_settings` or read
+# `.connections` for a terminal (test/unit/test_terminal_pool_barrier.jl). A body passed here must
+# never reassign a variable it captures: that boxes it (`Core.Box`), the same file counts boxes, and
+# a box is an `Any` again. Pass what the body needs and return what it produces.
+function _with_connection(f::F, obj::Union{SQLObject,SQLObjectHandler};
+                          connection::Union{Nothing,_SQLEngine} = nothing) where {F}
+  settings, pool, conn_key = get_settings(obj; connection = connection)
+  connection === nothing || return f(settings, connection, conn_key)
+  return _with_terminal_pool(f, pool, settings, conn_key)
+end
+
+# The many-to-many manager's entry (`add`, `remove`, `clear`, `set`, the id read): its model is the
+# manager's owner, and its refusal names the manager. The transaction-scope check runs on the
+# settings' pool before the dispatch, as it did, so a pool-less entry fails as it did.
+function _with_m2m_connection(f::F, manager::ManyToManyManager) where {F}
+  conn_key = manager.owner_model.connect_key
+  if conn_key === nothing
+    if length(config) == 1
+      conn_key = first(keys(config))
+    else
+      throw(InvalidConfigurationError("Model '$(manager.owner_model.name)' is not bound to a database connection key. Call set_models() before using a many-to-many manager."))
+    end
+  end
+  settings = get_configuration_settings(conn_key)
+  # Every manager operation resolves its database here, so this is the one place the
+  # transaction-scope rule covers add/remove/clear/set and the id read (#838). They issue raw
+  # `fetch` calls, which would otherwise run in autocommit on a database with no open transaction.
+  ensure_transaction_scope(manager.owner_model, settings.connections)
+  return _with_terminal_pool(f, settings.connections, settings, conn_key)
+end
+
 # I may not need this function initially, but it can be useful when processing queries
 # function _check_function(f::OperObject)
 function _check_function(f::Vector{N} where N<:SQLObject)

@@ -74,6 +74,8 @@ struct NetClosingError <: Exception end
     (PormG.backend_copy_in!, (PostgresPool, PgConn, String, Any)),
     # Postgres.jl binds fewer parameters per statement than the protocol allows (#1447).
     (PormG.backend_postgres_parameter_limit, (PostgresPool,)),
+    # The handle type its pool holds, for the pool's handle barrier (#1683).
+    (PormG.backend_handle_type, (Type{PostgresPool},)),
     # Keyed on the exception alone (#987) — no pool to fall back on, but Postgres.jl's reader is
     # still the extension's own.
     (PormG.backend_error_fields, (Postgres.Error,)),

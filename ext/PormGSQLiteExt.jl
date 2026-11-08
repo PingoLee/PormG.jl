@@ -144,6 +144,10 @@ end
 
 # ── Backend interface methods ────────────────────────────────────────────────
 
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{<:PormG.ConnectionPool.SQLiteConnectionPool}) = SQLite.DB
+
 PormG.backend_connect(pool::PormGSQLite; read_only::Bool = false) =
   _create_sqlite_connection(pool.connection_string; read_only = read_only)
 

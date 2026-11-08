@@ -94,6 +94,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_insert_report(pool, result)                -> (records, duplicates) a multi-row INSERT reported, or nothing (MySQL; #1267)
 #   backend_is_duplicate_key(pool, e)                  -> Bool: is the IntegrityError `e` a duplicate on a unique key (MySQL; #1267)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
+#   backend_handle_type(P)                              -> the driver handle type a pool of type `P` holds (#1683; below, not in the loop)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
 #   backend_mysql_parameter_limit(pool)                 -> Int parameters one prepared statement binds (below, not in the loop)
@@ -188,6 +189,27 @@ backend_postgres_parameter_limit(::PormGPostgres)::Int = 65535
 # A verb, so it stays in `PormG` with the extensions' generics; `test/unit/test_statement_threadpool.jl`
 # fails on a `Threads.@spawn` written in `ext/`.
 _statement_task(f::F) where {F} = Threads.@spawn :samepool f()
+
+"""
+    backend_handle_type(P::Type) -> Type
+
+The driver's connection handle type that a pool of type `P` holds in its slots: `SQLite.DB`,
+`LibPQ.Connection`, `Postgres.Connection`, `MySQL.Connection`. `Any` until the extension that serves
+`P` says otherwise, so a pool whose driver is not loaded (an offline entry, a unit test's stand-in) is
+unaffected.
+
+A pool keeps its handles in `Vector{Any}` slots, because core never names a driver type. Every call that
+hands a slot's handle to the driver therefore passes an `Any`: one dispatch per call under the JIT, and
+in a `juliac --trim` image a call nothing was compiled for (#1683). `ConnectionPool._with_handle` tests
+the handle against this type once and makes the call at the concrete type. Called with a constant `P`,
+it folds to a constant, so the test is one type check.
+
+Not in the missing-driver loop above: the answer for a pool with no driver is a type, not a refusal.
+Each extension adds one method, keyed on the pool type it serves (`_Pool`, its alias for that type):
+
+    PormG.backend_handle_type(::Type{_Pool}) = MySQL.Connection
+"""
+backend_handle_type(@nospecialize(P::Type)) = Any
 
 """
     backend_classify_error(pool, e) -> Symbol

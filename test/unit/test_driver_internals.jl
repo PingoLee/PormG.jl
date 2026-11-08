@@ -41,10 +41,13 @@ const _NamePin = @NamedTuple{name::String, status::Symbol, reader::String}
 const _FieldPin = @NamedTuple{type::Type, fields::Vector{Symbol}, status::Symbol, reader::String}
 
 # ── Qualified names neither exported nor `public` in their driver ───────────────────────────────────
-# Postgres.jl declares `public` for every name its extension reads, so it has no row here: the scan
-# checks them through `Base.ispublic`. The five internals `_cancel_by_key` read (#1577) went with it
+# Postgres.jl declares `public` for the names its extension reads, which the scan checks through
+# `Base.ispublic`; its one row below is `Statement`, a type parameter of the connection (#1683). The five internals `_cancel_by_key` read (#1577) went with it
 # (#1647): Postgres.jl 2.6 cancels after an interrupt closed the socket itself.
 const PINNED_NAMES = _NamePin[
+  # Postgres.jl: `Connection{Statement{S}, S}` is what its constructor builds, so the extension names it to
+  # register the concrete handle type (#1683). `test_trim_shape_pins.jl` checks it against inference.
+  (name = "Postgres.Statement",                 status = :internal,   reader = "_Conn (PormG.backend_handle_type)"),
   # LibPQ.jl
   (name = "LibPQ.Connection",                   status = :documented, reader = "PormG.backend_execute, backend_is_alive, backend_cancel_query!, …"),
   (name = "LibPQ.Result",                       status = :documented, reader = "_raise_if_failed, _server_named_failure, _copy_completed"),

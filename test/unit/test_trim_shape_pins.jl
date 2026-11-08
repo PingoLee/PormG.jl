@@ -201,6 +201,36 @@ end
     end
   end
 
+  # What: `_with_terminal_pool`, the query builder terminals' entry (`QueryBuilder._with_connection`).
+  # Expected: it lists the same concrete pool types as `with_pool`, calls `f(settings, pool, conn_key)`
+  #   with the pool at its concrete type (the same object), hands a stand-in pool to `f` through the open
+  #   arm, and its `Any` instance makes no dynamic call.
+  # Why: it is `with_pool`'s closed set as a method of its own, because a terminal's body runs its
+  #   statements through `with_pool` and a `with_pool` frame nested in another is recursion that inference
+  #   limits and a trimmed image cannot compile (#1693: 34 unresolved `with_pool` invokes and an abort in
+  #   `delete` when the terminals entered `with_pool` itself). Two lists of one set drift apart unless a
+  #   test reads both.
+  @testset "_with_terminal_pool lists every concrete pool type (#1693)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    start = findfirst("function _with_terminal_pool(", src)[1]
+    body = src[start:findnext("\nend", src, start)[end]]
+    for name in ("SQLiteConnectionPool", "MySQLConnectionPool")
+      @test occursin("pool isa $(name) && return f(settings, pool, conn_key)", body)
+    end
+    for d in keys(PormG._PG_DRIVER_PACKAGES)
+      @test occursin("pool isa PostgresConnectionPool{$(repr(d))} && return f(settings, pool, conn_key)", body)
+    end
+    s = Configuration.Settings()
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    got = CP._with_terminal_pool((st, p, k) -> (st, p, typeof(p), k), sl, s, "key")
+    @test got[1] === s && got[2] === sl && got[3] === CP.SQLiteConnectionPool && got[4] == "key"
+    stand_in = _TspStandInPool()
+    @test CP._with_terminal_pool((st, p, k) -> p, stand_in, s, "key") === stand_in
+    body_f = (st, p, k) -> nothing
+    @test isempty(_dynamic_calls(CP._with_terminal_pool, (typeof(body_f), Any, Configuration.Settings, String)))
+  end
+
   # What: the pool-identity calls the query builder makes on the pool it holds, which it types as the
   #   abstract `_SQLEngine` or `Union{Nothing,_SQLEngine}` (`ensure_transaction_scope(model, connection)`,
   #   `transaction_connection_for(instruction.connection)`), and the two calls an app makes by key.

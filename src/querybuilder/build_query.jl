@@ -188,171 +188,175 @@ function build(object::SQLObject;
   # rendered this statement's WITH. `nothing` when no WITH is rendered (`update()`, `bulk_update`).
   cte_state::Union{Nothing,Dict{String,CTEState}}=nothing)
 
-  settings, connection, conn_key = get_settings(object, connection=connection)
-  ensure_transaction_scope(object.model, connection)
+  return _with_connection(object; connection = connection) do settings, connection, conn_key
+    ensure_transaction_scope(object.model, connection)
+    # `table_alias`, `parameters` and `object` are each bound ONCE here, in the order the build used to
+    # assign them, and never reassigned below. A closure that reassigns what it captures boxes it (#1693):
+    # `object` was, through the inner closures that read it, until this `let` assigned it in its header.
+    #
+    # #492: `object` is resolved here: `"<cte>__<col>"` string paths become `CTE(...)` handles, and an
+    # ambiguous name is refused. This runs before anything reads a projection or a predicate, because it
+    # is the first moment the CTE registry is final. Doing it at `.filter()` / `.values()` / `.on()` time
+    # instead makes the answer depend on whether `.with()` was called first, which is precisely the #434
+    # defect whose call-time check `_on` records removing.
+    #
+    # #1624: it returns a VIEW of `object` (the resolved `values`, `filter` and `order`, every other slot
+    # shared) and writes nothing into `object` itself, so the build never mutates the handler it renders.
+    # It needs only the CTE registry and the model, so it runs before the instruction exists, and the
+    # instruction holds the view. A query with no CTE gets `object` back.
+    let table_alias = table_alias === nothing ? SQLTbAlias() : table_alias,
+        parameters = parameters === nothing ? get_parameter(connection) : parameters,
+        object = _resolve_cte_string_paths(object)
+      @pormg_debug false
+      instruct = InstructionObject(text="",
+        object=object,
+        table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
+        alias=get_alias(table_alias),
+        connection=connection,
+        # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the
+        # absence of one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree
+        # about the same connection. With `django_prefix: ''` the old spelling produced `django == "_"`,
+        # so the reverse-join table fallback below prefixed every unpinned table with an underscore.
+        django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
+        parameters=parameters,
+        outer=outer,
+        cte_body=cte_body,
+        cte_body_correlated=cte_body_correlated,
+        mutation=mutation,
+        defer_outer_join_check=defer_outer_join_check,
+        cte_state=cte_state,
+      )
 
-  table_alias === nothing && (table_alias = SQLTbAlias())
-  parameters === nothing && (parameters = get_parameter(connection))
+      # #977: the moment the registry is final (above) — every relation and `cjoin` link the join conditions could name
+      # is declared now, so this is where they are bound onto their paths and checked (#962, #974).
+      _bind_join_conditions!(instruct)
 
-  # #492: resolve `"<cte>__<col>"` string paths into `CTE(...)` handles, and refuse a name that is
-  # ambiguous. This runs before anything reads a projection or a predicate, because it is the first
-  # moment the CTE registry is final. Doing it at `.filter()` / `.values()` / `.on()` time instead makes
-  # the answer depend on whether `.with()` was called first, which is precisely the #434 defect whose
-  # call-time check `_on` records removing.
-  #
-  # #1624: it returns a VIEW of `object` (the resolved `values`, `filter` and `order`, every other slot
-  # shared) and writes nothing into `object` itself, so the build never mutates the handler it renders.
-  # It needs only the CTE registry and the model, so it runs before the instruction exists, and the
-  # instruction holds the view. A query with no CTE gets `object` back.
-  object = _resolve_cte_string_paths(object)
-  @pormg_debug false
-  instruct = InstructionObject(text="",
-    object=object,
-    table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
-    alias=get_alias(table_alias),
-    connection=connection,
-    # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the
-    # absence of one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree
-    # about the same connection. With `django_prefix: ''` the old spelling produced `django == "_"`,
-    # so the reverse-join table fallback below prefixed every unpinned table with an underscore.
-    django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
-    parameters=parameters,
-    outer=outer,
-    cte_body=cte_body,
-    cte_body_correlated=cte_body_correlated,
-    mutation=mutation,
-    defer_outer_join_check=defer_outer_join_check,
-    cte_state=cte_state,
-  )
+      # Each SQL section binds under its own bucket, so positional-parameter backends (SQLite) file every
+      # value under the clause its `?` prints in. Every section is a `with_bucket` scope, so `build()`
+      # hands its caller back the bucket it was entered with (#936, #939). A NESTED build is no exception:
+      # it files its values under its own clauses too, which is what lets the nested render that called it
+      # lift them out as one clause-ordered run (#432, `detach_nested_run!`). That replaced the old
+      # `set_contexts=false` mode, in which a subquery inherited its parent's bucket and so lost the
+      # clause roles the run sorts by; nothing reached that mode after #432.
+      # #932 — the evaluation phase of each clause, for the #194 guard. Only clauses set it (see
+      # `RenderScope`): the SELECT list and ORDER BY are evaluated after GROUP BY, WHERE and ON before it.
+      # HAVING sets its own inside `get_filter_query`, and a grouping aggregate's argument in
+      # `_render_function_typed`.
+      with_bucket(instruct, :select) do
+        with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group, introducer = :projection)
+      end
+      _record_wildcard_projection_kinds!(instruct)
 
-  # #977: the moment the registry is final (above) — every relation and `cjoin` link the join conditions could name
-  # is declared now, so this is where they are bound onto their paths and checked (#962, #974).
-  _bind_join_conditions!(instruct)
+      with_bucket(instruct, :where) do
+        with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter", introducer = :filter)
+      end
 
-  # Each SQL section binds under its own bucket, so positional-parameter backends (SQLite) file every
-  # value under the clause its `?` prints in. Every section is a `with_bucket` scope, so `build()`
-  # hands its caller back the bucket it was entered with (#936, #939). A NESTED build is no exception:
-  # it files its values under its own clauses too, which is what lets the nested render that called it
-  # lift them out as one clause-ordered run (#432, `detach_nested_run!`). That replaced the old
-  # `set_contexts=false` mode, in which a subquery inherited its parent's bucket and so lost the
-  # clause roles the run sorts by; nothing reached that mode after #432.
-  # #932 — the evaluation phase of each clause, for the #194 guard. Only clauses set it (see
-  # `RenderScope`): the SELECT list and ORDER BY are evaluated after GROUP BY, WHERE and ON before it.
-  # HAVING sets its own inside `get_filter_query`, and a grouping aggregate's argument in
-  # `_render_function_typed`.
-  with_bucket(instruct, :select) do
-    with_scope(() -> get_select_query(object.values, instruct), instruct; phase = :group, introducer = :projection)
-  end
-  _record_wildcard_projection_kinds!(instruct)
+      # #404: ORDER BY resolves HERE, before build_row_join_sql_text renders row_join into SQL. A path
+      # named ONLY by order_by() is resolved through _get_select_query → _build_row_join, which APPENDS
+      # to row_join; running after the render left that entry un-emitted, so the ORDER BY referenced an
+      # alias the query never joined — a loud failure on both backends ("missing FROM-clause entry" /
+      # "no such column"). Ordering a path that is also projected or filtered was always fine: it takes
+      # the instruc.cache branch and discovers nothing.
+      #
+      # Only the position relative to the RENDER matters for CORRECTNESS. Whether this sits before or
+      # after the cjoin loops below is immaterial there: every row a join condition names is built before
+      # build_row_join_sql_text runs (#977, #982), whichever step appended it. It is
+      # placed before them so the three "resolve everything" steps (select, filter, order) read as one
+      # block. It is not free to move, though: the order joins are appended in decides ALIAS NUMBERING,
+      # and test/unit/test_order_by_joins.jl pins concrete Tb_1/Tb_2/Tb_3 names, so a reorder rewrites
+      # those expectations rather than passing silently.
+      #
+      # Context (#587): ORDER BY binds under its OWN bucket, `:order`, which `_BUCKET_ORDER`
+      # (parameters.jl) flattens last — where the clause prints. It used to render under `:join` because
+      # no bucket existed, and `:join` flattens BEFORE `:where`: an ordering expression that binds (the
+      # `@yyyy_q` / `@yyyy_quad` labels bind nine operands) shifted every WHERE value by that many
+      # positions, the counts still matched, and SQLite returned the wrong rows without an error.
+      # PostgreSQL numbers `$N` at render and was always right. In a nested build the `:order` values are
+      # lifted into text order by `detach_nested_run!` like any other clause's.
+      with_bucket(instruct, :order) do
+        with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term",
+                   introducer = :order_by)
+      end
+      _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
 
-  with_bucket(instruct, :where) do
-    with_scope(() -> get_filter_query(object, instruct), instruct; phase = :row, label = "a filter", introducer = :filter)
-  end
+      # PATH loop — materialize the `cjoin` and `on()` joins that traversal did not already discover. This
+      # ensures their conditions apply even in UPDATE/DELETE without explicit field paths. `row_path` is the
+      # membership test that avoids materializing one twice.
+      #
+      # #977: an `on()`-only entry is built too. It used to only decorate whatever join traversal built
+      # for the path, so with nothing else reaching it the predicate — and an explicit `join_type =
+      # "INNER"` — vanished from the statement with no error. `on(path, …)` names its join; it now
+      # declares it.
+      # #932: join conditions — a `cjoin` filter, an `on()`, a `cjoin_on` ON — are evaluated per row.
+      # The two loops below run under `:where`, the bucket they always ran under (ORDER BY used to reset to
+      # it). Materializing a row binds nothing itself (`build_joins.jl` has no `add_parameter!`; every ON
+      # value binds in `build_row_join_sql_text`, under `:join`), and the explicit scope keeps anything
+      # they ever do bind where it was, instead of in `build()`'s caller's bucket.
+      with_scope(instruct; phase = :row, label = "a join condition") do
+        with_bucket(instruct, :where) do
+          for (path, config) in object.custom_join
+            _refuse_many_to_many_join_path(object, path)
+            # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
+            # `on("status", …)` must recognise a join `values("status_id__name")` built.
+            key = _join_key(instruct, path)
+            # #1002: `on(path, …)` / `cjoin` declares the join whether this loop builds it or traversal did.
+            if any(p -> _join_key(instruct, p) == key, something(instruct.row_path, ()))
+              _declare_join_key!(instruct, key)
+              continue
+            end
+            with_scope(() -> _build_row_join(_join_path_columns(object, path, config), instruct), instruct;
+                       introducer = :join_path)
+          end
 
-  # #404: ORDER BY resolves HERE, before build_row_join_sql_text renders row_join into SQL. A path
-  # named ONLY by order_by() is resolved through _get_select_query → _build_row_join, which APPENDS
-  # to row_join; running after the render left that entry un-emitted, so the ORDER BY referenced an
-  # alias the query never joined — a loud failure on both backends ("missing FROM-clause entry" /
-  # "no such column"). Ordering a path that is also projected or filtered was always fine: it takes
-  # the instruc.cache branch and discovers nothing.
-  #
-  # Only the position relative to the RENDER matters for CORRECTNESS. Whether this sits before or
-  # after the cjoin loops below is immaterial there: every row a join condition names is built before
-  # build_row_join_sql_text runs (#977, #982), whichever step appended it. It is
-  # placed before them so the three "resolve everything" steps (select, filter, order) read as one
-  # block. It is not free to move, though: the order joins are appended in decides ALIAS NUMBERING,
-  # and test/unit/test_order_by_joins.jl pins concrete Tb_1/Tb_2/Tb_3 names, so a reorder rewrites
-  # those expectations rather than passing silently.
-  #
-  # Context (#587): ORDER BY binds under its OWN bucket, `:order`, which `_BUCKET_ORDER`
-  # (parameters.jl) flattens last — where the clause prints. It used to render under `:join` because
-  # no bucket existed, and `:join` flattens BEFORE `:where`: an ordering expression that binds (the
-  # `@yyyy_q` / `@yyyy_quad` labels bind nine operands) shifted every WHERE value by that many
-  # positions, the counts still matched, and SQLite returned the wrong rows without an error.
-  # PostgreSQL numbers `$N` at render and was always right. In a nested build the `:order` values are
-  # lifted into text order by `detach_nested_run!` like any other clause's.
-  with_bucket(instruct, :order) do
-    with_scope(() -> get_order_query(object, instruct), instruct; phase = :group, label = "an order_by term",
-               introducer = :order_by)
-  end
-  _group_window_terms!(instruct)   # #789: after ORDER BY, which also extends GROUP BY
-
-  # PATH loop — materialize the `cjoin` and `on()` joins that traversal did not already discover. This
-  # ensures their conditions apply even in UPDATE/DELETE without explicit field paths. `row_path` is the
-  # membership test that avoids materializing one twice.
-  #
-  # #977: an `on()`-only entry is built too. It used to only decorate whatever join traversal built
-  # for the path, so with nothing else reaching it the predicate — and an explicit `join_type =
-  # "INNER"` — vanished from the statement with no error. `on(path, …)` names its join; it now
-  # declares it.
-  # #932: join conditions — a `cjoin` filter, an `on()`, a `cjoin_on` ON — are evaluated per row.
-  # The two loops below run under `:where`, the bucket they always ran under (ORDER BY used to reset to
-  # it). Materializing a row binds nothing itself (`build_joins.jl` has no `add_parameter!`; every ON
-  # value binds in `build_row_join_sql_text`, under `:join`), and the explicit scope keeps anything
-  # they ever do bind where it was, instead of in `build()`'s caller's bucket.
-  with_scope(instruct; phase = :row, label = "a join condition") do
-    with_bucket(instruct, :where) do
-      for (path, config) in object.custom_join
-        _refuse_many_to_many_join_path(object, path)
-        # Membership by CANONICAL path (#977): `row_path` holds each traversal's own spelling, so
-        # `on("status", …)` must recognise a join `values("status_id__name")` built.
-        key = _join_key(instruct, path)
-        # #1002: `on(path, …)` / `cjoin` declares the join whether this loop builds it or traversal did.
-        if any(p -> _join_key(instruct, p) == key, something(instruct.row_path, ()))
-          _declare_join_key!(instruct, key)
-          continue
+          # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
+          # user-supplied ON.
+          #
+          # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
+          # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
+          # found there and the join was skipped entirely, leaving the statement naming a range variable it
+          # never declared. The path loop above still needs the test, because a `cjoin` path IS what
+          # traversal records. Two loops rather than one because the two namespaces materialize differently
+          # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
+          # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
+          # collide in either direction).
+          #
+          # #982: first the relation paths a `cjoin_on` ON clause names, so every row it can name precedes
+          # it; then the aliases in dependency order (`_bind_cjoin_on_conditions!`). Each path goes through
+          # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
+          # none.
+          for segments in something(instruct.cjoin_on_paths, ())
+            with_scope(() -> _build_row_join(segments, instruct, as = false), instruct; introducer = :cjoin_on)
+          end
+          for user_alias in something(instruct.cjoin_on_order, ())
+            _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
+          end
         end
-        with_scope(() -> _build_row_join(_join_path_columns(object, path, config), instruct), instruct;
-                   introducer = :join_path)
+
+        # #1002: every row exists now, and nothing has rendered (#977, #982) — the one cardinality check.
+        for p in declared_paths
+          rel = _relation_prefix(object, p)
+          isempty(rel) || _declare_join_key!(instruct, rel)
+        end
+        if instruct.aggregate && instruct.join_reaches !== nothing
+          for p in _projected_paths(object.order)
+            rel = _relation_prefix(object, lstrip(p, '-'))
+            isempty(rel) || _order_join_key!(instruct, rel)
+          end
+        end
+        _promote_outer_joins!(instruct)   # #1367: LEFT where an OR arm or `__@isnull => true` needs it
+        _check_join_cardinality(instruct; semi_join = semi_join, distinct_rows = distinct_rows)
+
+        build_row_join_sql_text(instruct)
       end
 
-      # ALIAS loop (#45) — materialize the anchor-less `cjoin_on` joins: no equi-anchor, explicit alias,
-      # user-supplied ON.
-      #
-      # It does NOT consult `row_path` (#484). `row_path` records JOIN PATHS, and an alias is not one —
-      # while both namespaces shared `custom_join`, an alias equal to a traversed ForeignKey path was
-      # found there and the join was skipped entirely, leaving the statement naming a range variable it
-      # never declared. The path loop above still needs the test, because a `cjoin` path IS what
-      # traversal records. Two loops rather than one because the two namespaces materialize differently
-      # — and the alias loop runs second, which is what keeps a `cjoin_on` join's generated-alias
-      # numbering behind the joins traversal built (#480 reserves the declared aliases so they cannot
-      # collide in either direction).
-      #
-      # #982: first the relation paths a `cjoin_on` ON clause names, so every row it can name precedes
-      # it; then the aliases in dependency order (`_bind_cjoin_on_conditions!`). Each path goes through
-      # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
-      # none.
-      for segments in something(instruct.cjoin_on_paths, ())
-        with_scope(() -> _build_row_join(segments, instruct, as = false), instruct; introducer = :cjoin_on)
-      end
-      for user_alias in something(instruct.cjoin_on_order, ())
-        _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)
-      end
-    end
+      _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
+      _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
+      _check_mixed_grouping(instruct)        # #798: refuse a mixed column+aggregate term on an ungrouped column
+      _refuse_late_shadowed_null_key(object, instruct)   # #1130: a NULL key alias a later join shadows
 
-    # #1002: every row exists now, and nothing has rendered (#977, #982) — the one cardinality check.
-    for p in declared_paths
-      rel = _relation_prefix(object, p)
-      isempty(rel) || _declare_join_key!(instruct, rel)
+      return instruct
     end
-    if instruct.aggregate && instruct.join_reaches !== nothing
-      for p in _projected_paths(object.order)
-        rel = _relation_prefix(object, lstrip(p, '-'))
-        isempty(rel) || _order_join_key!(instruct, rel)
-      end
-    end
-    _promote_outer_joins!(instruct)   # #1367: LEFT where an OR arm or `__@isnull => true` needs it
-    _check_join_cardinality(instruct; semi_join = semi_join, distinct_rows = distinct_rows)
-
-    build_row_join_sql_text(instruct)
   end
-
-  _check_aggregate_fanout(instruct)      # #74: refuse silently-inflated aggregates over to-many joins
-  _check_grouped_correlation(instruct)   # #194: refuse a correlated projection on an ungrouped column
-  _check_mixed_grouping(instruct)        # #798: refuse a mixed column+aggregate term on an ungrouped column
-  _refuse_late_shadowed_null_key(object, instruct)   # #1130: a NULL key alias a later join shadows
-
-  return instruct
 end
 
 # #1002 cardinality check -------------------------------------------------------------------------

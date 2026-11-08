@@ -32,22 +32,8 @@ function _m2m_items(values)
   return collect(values)
 end
 
-function _m2m_settings(manager::ManyToManyManager)
-  conn_key = manager.owner_model.connect_key
-  if conn_key === nothing
-    if length(config) == 1
-      conn_key = first(keys(config))
-    else
-      throw(InvalidConfigurationError("Model '$(manager.owner_model.name)' is not bound to a database connection key. Call set_models() before using a many-to-many manager."))
-    end
-  end
-  settings = get_configuration_settings(conn_key)
-  # Every manager operation resolves its database here, so this is the one place the
-  # transaction-scope rule covers add/remove/clear/set and the id read (#838). They issue raw
-  # `fetch` calls, which would otherwise run in autocommit on a database with no open transaction.
-  ensure_transaction_scope(manager.owner_model, settings.connections)
-  return settings, settings.connections, conn_key
-end
+# The manager resolves its database in `_with_m2m_connection` (build_helpers.jl, #1693): the pool
+# reaches every operation below at its concrete type.
 
 function _m2m_format_owner(manager::ManyToManyManager)
   return manager.owner_model.fields[manager.relation.owner_pk].formatter(manager.owner_id)
@@ -136,20 +122,21 @@ function add(manager::ManyToManyManager, targets...)
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
-  settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_write_not_allowed("many-to-many add", conn_key))
+  return _with_m2m_connection(manager) do settings, connection, conn_key
+    !settings.change_data && throw(_write_not_allowed("many-to-many add", conn_key))
 
-  table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
-  related_column = safe_column_identifier(manager.relation.related_column, connection)
-  owner_value = _m2m_format_owner(manager)
-  # The related key's field: PostgreSQL types the targets' array from it, and the dedupe below compares
-  # an integer key's text as its number (#1413).
-  related_pk_field = manager.related_model.fields[manager.relation.related_pk]
+    table_name = safe_table_identifier(manager.relation.through_table, connection)
+    owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+    related_column = safe_column_identifier(manager.relation.related_column, connection)
+    owner_value = _m2m_format_owner(manager)
+    # The related key's field: PostgreSQL types the targets' array from it, and the dedupe below compares
+    # an integer key's text as its number (#1413).
+    related_pk_field = manager.related_model.fields[manager.relation.related_pk]
 
-  _m2m_add!(connection, settings, table_name, owner_column, related_column, owner_value, target_ids,
-            related_pk_field)
-  return nothing
+    _m2m_add!(connection, settings, table_name, owner_column, related_column, owner_value, target_ids,
+              related_pk_field)
+    return nothing
+  end
 end
 
 # #1355: the target ids of one write in groups that each fit one statement under the connection's bind
@@ -283,71 +270,74 @@ function remove(manager::ManyToManyManager, targets...)
   target_ids = _m2m_target_ids(manager, targets)
   isempty(target_ids) && return nothing
 
-  settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_write_not_allowed("many-to-many remove", conn_key))
+  return _with_m2m_connection(manager) do settings, connection, conn_key
+    !settings.change_data && throw(_write_not_allowed("many-to-many remove", conn_key))
 
-  table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
-  related_column = safe_column_identifier(manager.relation.related_column, connection)
-  owner_value = _m2m_format_owner(manager)
+    table_name = safe_table_identifier(manager.relation.through_table, connection)
+    owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+    related_column = safe_column_identifier(manager.relation.related_column, connection)
+    owner_value = _m2m_format_owner(manager)
 
-  # #1355: one `DELETE … IN (…)` per group of targets, one parameter each plus the owner's.
-  chunks = _m2m_id_chunks(connection, target_ids, 1, 1, :many_to_many_remove)
-  _m2m_in_one_transaction(settings, length(chunks)) do
-    for chunk in chunks
-      parameters = get_parameter(connection)
-      set_context!(parameters, :where)
-      owner_placeholder = add_parameter!(parameters, owner_value)
-      target_placeholders = String[add_parameter!(parameters, target_id) for target_id in chunk]
-      sql = "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder AND " *
-            "$related_column IN ($(join(target_placeholders, ", ")));"
-      fetch(settings, sql, parameters)
+    # #1355: one `DELETE … IN (…)` per group of targets, one parameter each plus the owner's.
+    chunks = _m2m_id_chunks(connection, target_ids, 1, 1, :many_to_many_remove)
+    _m2m_in_one_transaction(settings, length(chunks)) do
+      for chunk in chunks
+        parameters = get_parameter(connection)
+        set_context!(parameters, :where)
+        owner_placeholder = add_parameter!(parameters, owner_value)
+        target_placeholders = String[add_parameter!(parameters, target_id) for target_id in chunk]
+        sql = "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder AND " *
+              "$related_column IN ($(join(target_placeholders, ", ")));"
+        fetch(settings, sql, parameters)
+      end
     end
+    return nothing
   end
-  return nothing
 end
 
 function clear(manager::ManyToManyManager)
   _m2m_has_extra_fields(manager) && throw(QueryBuildError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
-  settings, connection, conn_key = _m2m_settings(manager)
-  !settings.change_data && throw(_write_not_allowed("many-to-many clear", conn_key))
+  return _with_m2m_connection(manager) do settings, connection, conn_key
+    !settings.change_data && throw(_write_not_allowed("many-to-many clear", conn_key))
 
-  parameters = get_parameter(connection)
-  set_context!(parameters, :where)
-  owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
-  table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
-  fetch(settings, "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder;", parameters)
-  return nothing
+    parameters = get_parameter(connection)
+    set_context!(parameters, :where)
+    owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
+    table_name = safe_table_identifier(manager.relation.through_table, connection)
+    owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+    fetch(settings, "DELETE FROM $table_name WHERE $owner_column = $owner_placeholder;", parameters)
+    return nothing
+  end
 end
 
 function _m2m_current_ids(manager::ManyToManyManager)::Vector{Any}
-  settings, connection, _ = _m2m_settings(manager)
-  parameters = get_parameter(connection)
-  set_context!(parameters, :where)
-  owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
-  table_name = safe_table_identifier(manager.relation.through_table, connection)
-  owner_column = safe_column_identifier(manager.relation.owner_column, connection)
-  related_column = safe_column_identifier(manager.relation.related_column, connection)
-  sql = "SELECT $related_column FROM $table_name WHERE $owner_column = $owner_placeholder;"
-  rows = fetch(settings, sql, parameters) |> Tables.rowtable
-  isempty(rows) && return Any[]
-  return Any[row[Symbol(manager.relation.related_column)] for row in rows]
+  return _with_m2m_connection(manager) do settings, connection, _
+    parameters = get_parameter(connection)
+    set_context!(parameters, :where)
+    owner_placeholder = add_parameter!(parameters, _m2m_format_owner(manager))
+    table_name = safe_table_identifier(manager.relation.through_table, connection)
+    owner_column = safe_column_identifier(manager.relation.owner_column, connection)
+    related_column = safe_column_identifier(manager.relation.related_column, connection)
+    sql = "SELECT $related_column FROM $table_name WHERE $owner_column = $owner_placeholder;"
+    rows = fetch(settings, sql, parameters) |> Tables.rowtable
+    isempty(rows) && return Any[]
+    return Any[row[Symbol(manager.relation.related_column)] for row in rows]
+  end
 end
 
 function set(manager::ManyToManyManager, targets...)
   _m2m_has_extra_fields(manager) && throw(QueryBuildError("Cannot use direct many-to-many manager mutators (add, remove, clear, set) on relationship with a custom through model that has extra fields. Create/delete through model objects directly instead."))
   desired_ids = Set(_m2m_target_ids(manager, targets))
-  settings, _, _ = _m2m_settings(manager)
+  return _with_m2m_connection(manager) do settings, _, _
+    return run_in_transaction(settings) do
+      current_ids = Set(_m2m_current_ids(manager))
+      to_remove = collect(setdiff(current_ids, desired_ids))
+      to_add = collect(setdiff(desired_ids, current_ids))
 
-  return run_in_transaction(settings) do
-    current_ids = Set(_m2m_current_ids(manager))
-    to_remove = collect(setdiff(current_ids, desired_ids))
-    to_add = collect(setdiff(desired_ids, current_ids))
-
-    !isempty(to_remove) && remove(manager, to_remove)
-    !isempty(to_add) && add(manager, to_add)
-    return (added=length(to_add), removed=length(to_remove))
+      !isempty(to_remove) && remove(manager, to_remove)
+      !isempty(to_add) && add(manager, to_add)
+      return (added=length(to_add), removed=length(to_remove))
+    end
   end
 end
 

@@ -590,6 +590,42 @@ const TX_DEFERS_FKS = requires(:deferred_foreign_keys)
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
   end
 
+  @testset "A terminal's pool is the open transaction's, through _with_connection (#1693)" begin
+    # What: the pool `_with_connection` hands a terminal's body inside `atomic`, and the terminals that
+    #   run on it: a `create` and a `count()` inside the block, then a rollback.
+    # Expected: the pool handed is the settings' pool itself (`===`), the open transaction is found on
+    #   it (`transaction_connection_for(pool)` is the block's connection), the row the block wrote is
+    #   visible to a read inside the block, and gone after the rollback. SQL: an INSERT and a
+    #   SELECT COUNT(*) on the transaction's connection. (A `connection =` the caller passes is handed on
+    #   as it is: `test_terminal_pool_barrier.jl` checks that with a stand-in pool, which can tell it from
+    #   the settings' pool.)
+    # Why: since #1693 every terminal reaches its pool through `_with_terminal_pool`, and a transaction
+    #   is found by the pool's identity. A barrier that handed on anything but the same object would run
+    #   the terminal in autocommit on another connection: the read would not see the uncommitted row
+    #   (PostgreSQL, MySQL) or would wait on the writer (SQLite), and the rollback would leave the row.
+    QB = PormG.QueryBuilder
+    C = PormG.Configuration
+    M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
+    rolled_back = false
+    try
+      PormG.atomic(PORMG_DB_FOLDER) do
+        same, on_tx = QB._with_connection(M.Just_a_test_deletion.objects) do _, pool, _
+          (pool === settings.connections, C.transaction_connection_for(pool))
+        end
+        @test same
+        @test on_tx !== nothing && on_tx === C.get_tx_connection()
+        M.Just_a_test_deletion.objects.create("name" => "in_tx_1693", "test_result" => nothing)
+        @test M.Just_a_test_deletion.objects.filter("name" => "in_tx_1693").count() == 1
+        error("roll back the #1693 block")
+      end
+    catch e
+      e isa ErrorException && occursin("#1693 block", e.msg) || rethrow()
+      rolled_back = true
+    end
+    @test rolled_back
+    @test M.Just_a_test_deletion.objects.filter("name" => "in_tx_1693").count() == 0
+  end
+
   @testset "select_for_update row locking (#26)" begin
     M.Just_a_test_deletion.objects.delete(allow_delete_all = true)
     M.Just_a_test_deletion.objects.create("name" => "lockme", "test_result" => nothing)

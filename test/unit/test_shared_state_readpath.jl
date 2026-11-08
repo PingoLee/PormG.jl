@@ -43,6 +43,7 @@ Result = Models.Model("ss_results",
   points = Models.IntegerField(null=true),
 )
 
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "ss_mock")
 end
 

@@ -67,6 +67,7 @@ Ptc_pit = Models.Model("ptc_pit",
   duration = Models.DurationField(null = true),
 )
 
+Models.@models Ptc_race Ptc_pit
 PormG.Models.set_models(@__MODULE__, "ptc_mock")
 end
 

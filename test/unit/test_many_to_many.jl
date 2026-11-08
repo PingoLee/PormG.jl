@@ -28,6 +28,7 @@ Driver_championship = Models.Model("driver_championships",
   drivers = Models.ManyToManyField(Driver, related_name="championships"),
 )
 
+Models.@models Driver Driver_championship
 PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -86,6 +87,7 @@ module ManyToManyDbTableModels
     squad = Models.ForeignKey(Squad, on_delete = Models.CASCADE),
   )
 
+  Models.@models Team Driver Membership Squad Tester Enrolment
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -150,6 +152,7 @@ module ManyToManyDbColumnModels
     livery_id = Models.ForeignKey(Livery, db_column = "lvr", on_delete = Models.CASCADE),
   )
 
+  Models.@models Marque Pilot Contract Livery Scout Signing
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -452,12 +455,6 @@ end
   mgr_auto = PormG.QueryBuilder.ManyToManyManager(
     _m2m_detach_module(M2M.Driver_championship), M2M.Driver, rel_auto, 1)
   @test PormG.QueryBuilder._m2m_has_extra_fields(mgr_auto) == false
-
-  # ── `_m2m_model_from_binding` keeps exactly one caller (the descriptor) and still signals a miss
-  # with `QueryBuildError` (#231). It is no longer a SIGNAL anyone branches on — pinned here so the
-  # type does not drift now that the guard stopped catching it.
-  @test_throws PormG.QueryBuildError PormG.QueryBuilder._m2m_model_from_binding(
-    ManyToManyDbTableModels, "NoSuchBinding", "no_such_model")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -476,10 +473,11 @@ end
 # callback both swallow a `set_models` throw, so the symptom is "no models registered at all", not an
 # error anyone can read. That is why this is pinned by a test and not only by a comment.
 # ─────────────────────────────────────────────────────────────────────────────
-# #354: the `usings=true` miss-path in `_find_model_binding_name` and `_collect_models_and_bindings`
-# now finds `using`-scoped bindings directly. For `Xxxxx`-style bindings like `Uschampionship`, the
-# scan result is identical to the old `uppercasefirst` guess. The mixed-case fixture below
-# (`Dim_CNES`) is the case that discriminates — only the scan can spell it correctly.
+# #354 → #1602: a module's models are the ones it DECLARES (`Models.@models`); nothing scans its names.
+# A model the module reaches through `using` is registered by listing it in the declaration, which
+# also records its exact binding (`Dim_CNES`, the mixed-case spelling no guess can produce). The
+# fixtures below declare their `using`-scoped targets; the third module does not, and its target stays
+# unregistered.
 module UsingScopedSharedModels
   import PormG
   import PormG.Models
@@ -501,6 +499,7 @@ module UsingScopedAppModels
     surname = Models.CharField(),
     championships = Models.ManyToManyField(Uschampionship, related_name = "drivers"),
   )
+  Models.@models Usdriver Uschampionship
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -525,59 +524,79 @@ module UsingScopedMixedCaseAppModels
     name = Models.CharField(),
     cnes_units = Models.ManyToManyField(Dim_CNES, related_name = "users"),
   )
+  Models.@models UsUser Dim_CNES
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
-@testset "using-scoped M2M target resolved via usings=true scan (#343/#354)" begin
-  # Preconditions: `using`-scoped names are invisible to `imported=true` but reachable via
-  # the `usings=true` miss-path added in #354.
-  @test !(:Uschampionship in names(UsingScopedAppModels; all=true, imported=true))
-  @test isdefined(UsingScopedAppModels, :Uschampionship)
-
-  # The binding is found by the `usings=true` scan (not the `uppercasefirst` fallback).
-  # Before #354 this was a guess; now it is an exact match. The string is identical either way
-  # for `Xxxxx`-style bindings, but the code path is different.
-  rel = Models.get_many_to_many_relation(UsingScopedAppModels.Usdriver, "championships")
-  @test rel.related_binding == "Uschampionship"
-
-  # The binding resolves via `isdefined`, which sees `using`-scoped names.
-  @test isdefined(UsingScopedAppModels, Symbol(rel.related_binding))
-  @test PormG.QueryBuilder._resolve_m2m_side_model(
-      UsingScopedAppModels, rel.related_binding, "uschampionship", "championships"
-    ) === UsingScopedSharedModels.Uschampionship
+module UsingScopedUndeclaredSharedModels
+  import PormG
+  import PormG.Models
+  export Usconstructor
+  Usconstructor = Models.Model("usconstructor", id = Models.IDField())
 end
 
-@testset "using-scoped model with mixed-case binding is fully registered (#354)" begin
-  # Preconditions: Dim_CNES is brought in via using, so it is invisible to `imported=true`
+module UsingScopedUndeclaredAppModels
+  import PormG
+  import PormG.Models
+  using ..UsingScopedUndeclaredSharedModels
+  Usteam = Models.Model("usteam", id = Models.IDField())
+  Models.@models Usteam
+end
+
+@testset "a using-scoped model the module declares is registered there (#354, #1602)" begin
+  # `names(...; imported = true)` never lists it — the reason the scan needed a second pass.
+  @test !(:Uschampionship in names(UsingScopedAppModels; all=true, imported=true))
+  @test Models.get_all_models(UsingScopedAppModels; symbol = true) == [:Usdriver, :Uschampionship]
+  @test UsingScopedSharedModels.Uschampionship._module === UsingScopedAppModels
+  @test UsingScopedSharedModels.Uschampionship.connect_key == "m2m_mock"
+
+  rel = Models.get_many_to_many_relation(UsingScopedAppModels.Usdriver, "championships")
+  @test rel.related_binding == "Uschampionship"
+  @test rel.related_model_resolved === UsingScopedSharedModels.Uschampionship   # #1601
+end
+
+@testset "a declared using-scoped model with a mixed-case binding records it exactly (#354, #1602)" begin
   @test !(:Dim_CNES in names(UsingScopedMixedCaseAppModels; all=true, imported=true))
-  @test isdefined(UsingScopedMixedCaseAppModels, :Dim_CNES)
-
-  # get_all_models includes the using-scoped model
   all_models = Models.get_all_models(UsingScopedMixedCaseAppModels)
-  @test UsingScopedMixedCaseSharedModels.Dim_CNES in all_models
-
-  # Registration set _module and connect_key on the using-scoped model
+  @test any(m -> m === UsingScopedMixedCaseSharedModels.Dim_CNES, all_models)
   @test UsingScopedMixedCaseSharedModels.Dim_CNES._module === UsingScopedMixedCaseAppModels
   @test UsingScopedMixedCaseSharedModels.Dim_CNES.connect_key == "m2m_mock"
 
-  # M2M relation correctly recorded the exact binding, NOT the lossy "Dim_cnes" guess
+  # The exact binding, from the declaration — not the lossy "Dim_cnes" guess.
   rel = Models.get_many_to_many_relation(UsingScopedMixedCaseAppModels.UsUser, "cnes_units")
   @test rel.related_binding == "Dim_CNES"
-
-  # The exact binding resolves cleanly in _resolve_m2m_side_model
-  @test PormG.QueryBuilder._resolve_m2m_side_model(
-      UsingScopedMixedCaseAppModels, rel.related_binding, "dim_cnes", "cnes_units"
-    ) === UsingScopedMixedCaseSharedModels.Dim_CNES
+  @test rel.related_model_resolved === UsingScopedMixedCaseSharedModels.Dim_CNES   # #1601
 end
 
-@testset "_find_model_binding_name uppercasefirst fallback when both scans miss" begin
-  # The fallback is the last resort when a model object is not bound by name in the module.
-  # Construct a model that is not assigned to any binding in any module.
-  unbound_model = Models.Model("orphan_test",
-    id = Models.IDField(),
-  )
-  # Neither scan can find it — the fallback produces uppercasefirst("orphan_test") = "Orphan_test".
-  @test PormG.Models._find_model_binding_name(UsingScopedAppModels, unbound_model) == "Orphan_test"
+@testset "a using-scoped model the module does not declare is not its model (#1602)" begin
+  @test isdefined(UsingScopedUndeclaredAppModels, :Usconstructor)
+  @test Models.get_all_models(UsingScopedUndeclaredAppModels; symbol = true) == [:Usteam]
+end
+
+# What it tests: registration refuses a relation whose target model object no registered models module
+#   declares — here a `using`-scoped model the registering module does not list — naming the target and
+#   both fixes; and a `to` string that names no declared model, naming the declared bindings. No SQL.
+# Why it matters: #354's half-registered model (a reverse accessor and no connection) and the
+#   `uppercasefirst` binding guess are gone; the failure is at `set_models`, not at the first query.
+@testset "registration refuses a relation target no registered module declares (#354, #1601)" begin
+  mod = Module(:UsingScopedRefused)
+  Core.eval(mod, :(import PormG; import PormG.Models; using ..UsingScopedUndeclaredSharedModels))
+  Core.eval(mod, :(Ustrack = Models.Model("ustrack", id = Models.IDField(),
+    builder = Models.ForeignKey(Usconstructor, pk_field = "id", on_delete = "CASCADE"))))
+  Core.eval(mod, :(Models.@models Ustrack))
+  err = try Base.invokelatest(Models.set_models, mod, "m2m_mock"); nothing catch e; e end
+  @test err isa PormG.ModelDefinitionError
+  @test occursin("\"usconstructor\", which no registered models module declares", err.msg)
+  @test occursin("Models.@models", err.msg)
+
+  typo = Module(:M2MTypoTarget)
+  Core.eval(typo, :(import PormG; import PormG.Models))
+  Core.eval(typo, :(Usgrid = Models.Model("usgrid", id = Models.IDField(),
+    slots = Models.ManyToManyField("Nosuchmodel", related_name = "grids"))))
+  Core.eval(typo, :(Models.@models Usgrid))
+  err = try Base.invokelatest(Models.set_models, typo, "m2m_mock"); nothing catch e; e end
+  @test err isa PormG.ModelDefinitionError
+  @test occursin("Nosuchmodel", err.msg) && occursin("Usgrid", err.msg)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1090,6 +1109,7 @@ module ManyToManyUnderscoreThroughModels
   Visit = Models.Model(id = Models.IDField(),
     driver_id = Models.ForeignKey("Driver_", pk_field = "id", on_delete = Models.CASCADE, related_name = "visits"),
     circuit_id = Models.ForeignKey("Circuit", pk_field = "id", on_delete = Models.CASCADE, related_name = "visits"))
+  Models.@models Circuit Driver_ Visit
   # `set_models` runs inside the testset below, so a regression is a test error, not a file abort.
 end
 
@@ -1229,6 +1249,7 @@ Rival = Models.Model("rival",
   rivals = Models.ManyToManyField("Rival", related_name="rival_of"),
 )
 
+Models.@models Teammate Rival
 PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -1407,6 +1428,16 @@ end
 # shadowed, and the manager then traverses the join table backwards while reporting no error at all.
 # Same silent-collapse class as the column bug this issue is about, one dict over.
 # ─────────────────────────────────────────────────────────────────────────────
+# #1601: the registrar resolves a target against the declared set and reads each side's binding from
+# it, which `set_models` records; these testsets call the registrar directly, so they do both by hand.
+function _m2m_declare!(mod::Module, bindings::Symbol...)
+  Core.eval(mod, Models._model_set_declaration(collect(bindings)))
+  for b in bindings
+    Base.invokelatest(getglobal, mod, b)._module = mod
+  end
+  return mod
+end
+
 @testset "a self-referential ManyToMany refuses a reverse accessor that shadows a field (#364)" begin
   settings = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
 
@@ -1419,6 +1450,7 @@ end
     driverref = Models.CharField(),
     teammates = Models.ManyToManyField("Teammate", related_name="teammates"),
   )))
+  _m2m_declare!(shadow_module, :Teammate)
   shadow = Core.eval(shadow_module, :(Teammate))
   err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
     shadow_module, settings, shadow, "teammates", shadow.fields["teammates"])
@@ -1434,6 +1466,7 @@ end
     driverref = Models.CharField(),
     teammates = Models.ManyToManyField("Teammate", related_name="driverref"),
   )))
+  _m2m_declare!(other_module, :Teammate)
   other = Core.eval(other_module, :(Teammate))
   other_err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
     other_module, settings, other, "teammates", other.fields["teammates"])
@@ -1467,6 +1500,7 @@ end
     chassis = Models.CharField(),
     sponsors = Models.ManyToManyField(Sponsor, related_name="chassis"),
   )))
+  _m2m_declare!(cross_module, :Sponsor, :Racer)
   racer = Core.eval(cross_module, :(Racer))
   @test !haskey(sponsor.fields, "chassis")   # precondition: not a shadow on the target either
   @test Models._register_many_to_many_relation!(
@@ -1485,6 +1519,7 @@ end
     id = Models.IDField(),
     sponsors = Models.ManyToManyField(Sponsor, related_name="name"),
   )))
+  _m2m_declare!(target_module, :Sponsor, :Racer)
   target_racer = Core.eval(target_module, :(Racer))
   target_err = @test_throws PormG.ModelDefinitionError Models._register_many_to_many_relation!(
     target_module, settings, target_racer, "sponsors", target_racer.fields["sponsors"])
@@ -1598,9 +1633,10 @@ end
   m = Module(:M2MBaseNameResolve)
   Core.eval(m, :(import PormG; import PormG.Models))
   Core.eval(m, :(Pos = Models.Model("position", id = Models.IDField())))
+  Core.eval(m, :(Models.@models Pos))   # #1602: the model set
   pos = Core.eval(m, :(Pos))
-  @test Models._resolve_model_reference(m, "position") === pos
-  @test Models._try_resolve_model_reference(m, "position") === pos
+  # #1601: a `to` string names a DECLARED model, so the function the binding holds is never a candidate.
+  @test Models._resolve_target_model("position", m) === pos
 
   # The acceptance criterion: a `ManyToManyField("position")` registers through `set_models`, and the
   # relation points at the model rather than failing on the function the binding holds.
@@ -1611,19 +1647,21 @@ end
     id = Models.IDField(),
     positions = Models.ManyToManyField("position", related_name = "grid_slots"),
   )))
+  Core.eval(app, :(Models.@models Pos Grid))   # #1602: the model set
   Models.set_models(app, "m2m_mock")
   grid = Core.eval(app, :(Grid))
   rel = Models.get_many_to_many_relation(grid, "positions")
   @test rel.related_model_resolved === Core.eval(app, :(Pos))
   @test rel.related_model == "position"
 
-  # When nothing matches either, the refusal is the taxonomy's `ModelDefinitionError` — and the lenient
-  # twin turns exactly that into `nothing` — never the `MethodError` a non-model binding produced.
+  # When nothing matches either, the lenient lookup answers `nothing` and the strict one raises the
+  # taxonomy's `ModelDefinitionError` — never the `MethodError` a non-model binding produced.
   lone = Module(:M2MBaseNameMissing)
   Core.eval(lone, :(import PormG; import PormG.Models))
-  err = @test_throws PormG.ModelDefinitionError Models._resolve_model_reference(lone, "position")
+  Core.eval(lone, :(Models.@models))
+  @test Models._resolve_target_model("position", lone) === nothing
+  err = @test_throws PormG.ModelDefinitionError Models._declared_target(lone, "position", pos, "grids", "ManyToManyField")
   @test occursin("position", err.value.msg)
-  @test Models._try_resolve_model_reference(lone, "position") === nothing
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1711,6 +1749,7 @@ import PormG.Models
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+Models.@models Driver Season
 PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
 end
 
@@ -1786,6 +1825,7 @@ Grid = Models.Model("grids", slot = Models.CharField(primary_key = true, max_len
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   liveries = Models.ManyToManyField(Livery, related_name = "seasons"),
   grids = Models.ManyToManyField(Grid, related_name = "seasons"))
+Models.@models Livery Grid Season
 PormG.Models.set_models(@__MODULE__, "m2m_tx_mock_1399")
 end
 
@@ -1848,6 +1888,7 @@ import PormG.Models
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+Models.@models Driver Season
 PormG.Models.set_models(@__MODULE__, "m2m_my_mock_1413")
 end
 
@@ -1942,6 +1983,7 @@ import PormG.Models
 Driver = Models.Model("drivers", id = Models.IDField(), surname = Models.CharField())
 Season = Models.Model("seasons", id = Models.IDField(), year = Models.IntegerField(),
   drivers = Models.ManyToManyField(Driver, related_name = "seasons"))
+Models.@models Driver Season
 PormG.Models.set_models(@__MODULE__, "m2m_sl_mock_1473")
 end
 
@@ -1986,4 +2028,33 @@ end
   PormG.QueryBuilder.add(manager, vcat(collect(1:499), [5]))
   @test length(POOL_1473.executed) == 1 && rows(only(POOL_1473.executed)) == 499
   reset!()
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A ManyToManyField named by its target's table name resolves at registration and joins (#1601)
+# What it tests: `ManyToManyField("m2mt_circuit")` (the target's TABLE name, not its binding) resolves
+#   against the declared set at `set_models`, is written back onto the field as the model, and a
+#   projection through it renders a join to "m2mt_circuit" — no name is looked up at query time. No
+#   SQL is run (an offline key).
+# Why it matters: the target used to stay a string, which the join path looked up as a binding.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a ManyToManyField named by table resolves at registration and joins (#1601)" begin
+  key = "m2mt_offline"
+  PormG.Configuration.register_offline(key)
+  try
+    mod = Module(:M2MTableNameTarget)
+    Core.eval(mod, :(import PormG; import PormG.Models))
+    Core.eval(mod, :(Circuit = Models.Model("m2mt_circuit", circuitid = Models.IDField(), name = Models.CharField())))
+    Core.eval(mod, :(Driver = Models.Model("m2mt_driver", driverid = Models.IDField(),
+      circuits = Models.ManyToManyField("m2mt_circuit", related_name = "drivers"))))
+    Core.eval(mod, :(Models.@models Circuit Driver))
+    Base.invokelatest(Models.set_models, mod, key)
+    driver = Base.invokelatest(getglobal, mod, :Driver)
+    circuit = Base.invokelatest(getglobal, mod, :Circuit)
+    @test driver.fields["circuits"].to === circuit
+    sql = PormG.inspect_query(driver.objects.values("driverid", "circuits__name"))[:sql_text]
+    @test occursin("\"m2mt_circuit\"", sql)
+  finally
+    PormG.Configuration.unregister_connection(key)
+  end
 end

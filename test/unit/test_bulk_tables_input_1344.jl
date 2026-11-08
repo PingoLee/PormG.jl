@@ -60,6 +60,7 @@ for (modname, key) in ((:BtPGModels, "bt_pg"), (:BtSLModels, "bt_sl"), (:BtMyMod
     laps = Models.IntegerField(),
     updated_at = Models.DateTimeField(auto_now = true, null = true),
   )
+  Models.@models Driver Result
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end
@@ -89,6 +90,7 @@ PormG.ConnectionPool.fetch(::BtNoSequencePg, sql::String; kwargs...) =
 module BtNoSeqModels
 import PormG, PormG.Models
 Status = Models.Model(statusid = Models.IDField(), status = Models.CharField())
+Models.@models Status
 PormG.Models.set_models(@__MODULE__, "bt_noseq")
 end
 

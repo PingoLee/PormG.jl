@@ -96,6 +96,7 @@ Rs_tagged = Models.Model("rs_tagged",
   tags = Models.ManyToManyField("Rs_team", related_name = "rs_tagged_teams"),
 )
 
+Models.@models Rs_team Rs_driver Rs_tagged
 PormG.Models.set_models(@__MODULE__, "repl_show_no_connection")
 end
 

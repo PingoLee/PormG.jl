@@ -143,6 +143,7 @@ Stint773 = Models.Model("fu_stint773",
     id = Models.IDField(),
     payload = Models.JSONField(null = true),
 )
+Models.@models Stint773
 PormG.Models.set_models(@__MODULE__, "mock773")
 end
 

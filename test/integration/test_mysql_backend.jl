@@ -85,6 +85,7 @@ import PormG.Models
 Absent = Models.Model("pormg_my_phase1_absent",
   statusid = Models.IDField(),
   status = Models.CharField(max_length = 20))
+Models.@models Absent
 end
 
 @testset "MySQL backend, phase 1 (#1130)" begin

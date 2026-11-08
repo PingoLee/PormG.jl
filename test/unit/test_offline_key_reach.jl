@@ -40,6 +40,7 @@ function _okr_driver(key::String)
   Core.eval(mod, :(Driver = Models.Model("drivers",
                                          driverid = Models.IDField(),
                                          surname  = Models.CharField(max_length = 50))))
+  Core.eval(mod, PormG.Models._model_set_declaration([:Driver]))   # #1602
   Base.invokelatest(Models.set_models, mod, key)
   return Base.invokelatest(getfield, mod, :Driver)
 end

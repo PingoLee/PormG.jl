@@ -59,6 +59,7 @@ Clc_result = Models.Model("clc_result",
   du      = Models.DurationField(null = true),
   tm      = Models.TimeField(null = true),
 )
+Models.@models Clc_result
 PormG.Models.set_models(@__MODULE__, "cte_left_cmp_mock")
 end
 const CLC = CteLeftModels

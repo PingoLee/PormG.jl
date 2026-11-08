@@ -45,6 +45,8 @@ const _WER_MODEL_EXPR = quote
     payload      = Models.JSONField(null = true),
     finished     = Models.BooleanField(null = true),
     constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true))
+  # #1602: the model set; interpolated, since this block's macros expand before its `import` runs.
+  $(PormG.Models._model_set_declaration([:Constructor, :Result]))
 end
 module WerPg end
 module WerSl end

@@ -75,6 +75,7 @@ New_join_position = Models.Model(
   boolean_field = Models.BooleanField(null = true),
 )
 
+Models.@models Race Result Field_validation_scratch New_join_position
 PormG.Models.set_models(@__MODULE__, "mdt_mock")
 end
 

@@ -139,39 +139,26 @@ end
   end
 
   # ── _register_models! ───────────────────────────────────────────────────────
-  # The constants it writes into the user module (`__pormg_init_path__`, `__pormg_binding__`) are a
-  # restored image's fallback. Registration reads `__pormg_init_path__ != ""` inside the same `try`
-  # as the `Core.eval`s, which is where these stubs throw.
+  # It used to `Core.eval` two constants into the user module (`__pormg_init_path__`,
+  # `__pormg_binding__`) inside a `try` that swallowed `Core.eval`'s refusals. #1607 removed the write:
+  # the record lives in the module's own `ModelSet`, so there is nothing left to swallow.
 
-  # What: a module whose `__pormg_init_path__` compares to "" with a `MethodError`.
-  # Expected: `set_models` raises the `MethodError`.
-  # Why: on main the catch-all swallowed it and registration reported success.
-  @testset "a MethodError inside the module write propagates" begin
-    mod = Module(:SweMethodErrorModels)
+  # What: registration of a declared module.
+  # Expected: no `__pormg_init_path__` / `__pormg_binding__` is defined in the module; the record is in
+  #   its `ModelSet` (`folder`, `key`); the model is bound.
+  # Why: a trimmed binary cannot `Core.eval`, and the swallowing `try` hid that it failed (#1599).
+  @testset "registration evaluates nothing into the module; it records into its ModelSet (#1607)" begin
+    mod = Module(:SweRecordModels)
     Core.eval(mod, quote
       import PormG; import PormG.Models
-      struct Odd end
-      Base.:(==)(::Odd, ::AbstractString) = throw(MethodError(==, (Odd(), "")))
-      const __pormg_init_path__ = Odd()
       Circuit::Models.ModelType = Models.Model("swe_circuit", circuitid = Models.IDField(), name = Models.CharField())
-    end)
-    @test_throws MethodError Base.invokelatest(Models.set_models, mod, "swe_mock")
-  end
-
-  # What: a module that already declared `__pormg_init_path__` a typed global, with no value.
-  # Expected: `Core.eval` refuses the `const` with an `ErrorException`, `set_models` completes,
-  #   the model is bound, and no constant is written.
-  # Why: that refusal is one `Core.eval` legitimately raises; today's behaviour is kept.
-  @testset "Core.eval's own refusal (ErrorException) is still swallowed" begin
-    mod = Module(:SweErrorExceptionModels)
-    Core.eval(mod, quote
-      import PormG; import PormG.Models
-      global __pormg_init_path__::Int
-      Circuit::Models.ModelType = Models.Model("swe_circuit2", circuitid = Models.IDField(), name = Models.CharField())
+      $(PormG.Models._model_set_declaration([:Circuit]))
     end)
     @test Base.invokelatest(Models.set_models, mod, "swe_mock") === nothing
     @test !isdefined(mod, :__pormg_init_path__)
     @test !isdefined(mod, :__pormg_binding__)
+    record = Models._model_set(mod)
+    @test (record.folder, record.key) == ("swe_mock", "swe_mock")
     @test Models.connection_key(Base.invokelatest(getfield, mod, :Circuit)) == "swe_mock"
   end
 
@@ -186,7 +173,7 @@ end
   #   swallows on purpose says so, and a new one is reviewed when it is written.
   @testset "every bare catch in src/ says what it swallows" begin
     sites, missing_comment = _swe_scan(_swe_src_files())
-    @test length(sites) >= 40     # the scan found the sites; a broken pattern finds none
+    @test length(sites) >= 30     # the scan found the sites; a broken pattern finds none (#1602 removed the names scans' catches)
     @test isempty(missing_comment)
     isempty(missing_comment) ||
       @info "bare `catch` with no `# swallows …` comment (say what it swallows and why)" missing_comment

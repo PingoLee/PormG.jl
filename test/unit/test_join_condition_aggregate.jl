@@ -44,6 +44,7 @@ Result = Models.Model("result",
   grid = Models.IntegerField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "join_agg_pg")
 end
 
@@ -61,6 +62,7 @@ Result = Models.Model("result",
   grid = Models.IntegerField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "join_agg_sl")
 end
 

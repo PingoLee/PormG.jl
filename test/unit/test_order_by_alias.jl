@@ -89,6 +89,7 @@ Ao_child = Models.Model("ao_child",
   qty    = Models.IntegerField(null = true),
 )
 
+Models.@models Ao_parent Ao_child
 PormG.Models.set_models(@__MODULE__, "alias_order_mock")
 end
 

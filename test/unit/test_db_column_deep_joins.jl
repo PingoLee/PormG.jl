@@ -73,6 +73,7 @@ Dc2_leaf = Models.Model("dc2_leaf",
   tag = Models.CharField(null = true),
 )
 
+Models.@models Dc2_top Dc2_mid Dc2_leaf
 PormG.Models.set_models(@__MODULE__, "dc2_mock")
 end
 

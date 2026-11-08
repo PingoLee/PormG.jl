@@ -354,6 +354,7 @@ end
   Core.eval(mod, :(Driver_points = $standings))
   Core.eval(mod, :(Award = $(Models.Model(; id = Models.IDField(),
     standing = Models.ForeignKey(standings, pk_field = "id")))))
+  Core.eval(mod, :(Models.@models Driver_points Award))   # #1602: the model set
   err = try PormG.Models.set_models(mod, "mm_mock_pg741") catch e; e end
   @test err isa PormG.ModelDefinitionError
   @test occursin("unmanaged model 'driver_points_v'", sprint(showerror, err))

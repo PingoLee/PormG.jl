@@ -38,16 +38,17 @@ end
 # So the name is refused at declaration, against every physical table PormG can render from the
 # models it knows — the joined set is only known at render, and a statement that never joins the
 # table loses nothing by picking another CTE name. "Knows" is every module `set_models` registered
-# under the SAME path as the query's module (`Models.REGISTERED_MODULES`; a table in another
+# under the SAME connection key as the query's module (`Models.REGISTERED_MODULES` holds each
+# module's key, #1606, whether it was registered by folder or by key; a table in another
 # database cannot be in this statement's namespace, so its modules are not walked), plus the
 # modules of the two base models involved: a ForeignKey target may live in a module other than the
 # query's own, and a review probe rendered exactly the issue's collapse through such a target when
 # only `q.model._module` was walked. The same probe found the second hole: a many-to-many THROUGH
 # table has no model binding at all — it is a string on the `ManyToManyRelation` — yet
 # `_insert_many_to_many_joins` renders it unqualified like any other table, so those are collected
-# from each model's m2m relations too. Two model files registered under two paths against ONE
+# from each model's m2m relations too. Two model files registered under two keys against ONE
 # database (two apps in one process) with a ForeignKey across them is a legal shape, so the modules
-# of each base model's direct relation targets are walked as well, whatever path they registered
+# of each base model's direct relation targets are walked as well, whatever key they registered
 # under — one hop, which is exactly what the statement can join from either base. A target two
 # hops away in a third differently-registered module is not reached; a module never passed to
 # `set_models` (hand-built models) is reached only as a base model's own or a direct target's.
@@ -60,13 +61,13 @@ end
 # table, when `m2m_field` is a field name) the CTE name would shadow.
 function _cte_name_shadowed_model(name::String, q::SQLObject, query::SQLObjectHandler)::Union{Nothing,Tuple{PormGModel,Union{Nothing,String}}}
   modules = Module[]
-  own_path = get(Models.REGISTERED_MODULES, q.model._module, nothing)
-  same_db = own_path === nothing ? keys(Models.REGISTERED_MODULES) :
-    (mod for (mod, path) in Models.REGISTERED_MODULES if path == own_path)
+  own_key = get(Models.REGISTERED_MODULES, q.model._module, nothing)
+  same_db = own_key === nothing ? keys(Models.REGISTERED_MODULES) :
+    (mod for (mod, key) in Models.REGISTERED_MODULES if key == own_key)
   for mod in (q.model._module, query.object.model._module, same_db...)
     mod isa Module && !(mod in modules) && push!(modules, mod)
   end
-  # The direct ForeignKey / many-to-many targets of both base models, whichever path their module
+  # The direct ForeignKey / many-to-many targets of both base models, whichever key their module
   # registered under (or none). A String `to` is skipped ON PURPOSE — do not resolve it here: a
   # ForeignKey's String target is written back as a model by `resolve_fk_target!`, but a
   # ManyToManyField's stays a String, and by construction it resolves IN THE BASE MODULE (defined
@@ -1063,8 +1064,9 @@ function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
   values = instruct.object.values
   # Ordered to satisfy `ModelType.fields` (#544), and meaningfully so: the loop below walks
   # `instruct.object.values` in the order the caller selected them, so the synthetic CTE model now
-  # describes its columns in that same order instead of a hash of the aliases.
-  fields = OrderedCollections.OrderedDict{String,PormGField}()
+  # describes its columns in that same order instead of a hash of the aliases. Of `ModelType.fields`'
+  # own value type (#1604), so the model takes it as it is, with no conversion and copy per build.
+  fields = OrderedCollections.OrderedDict{String,Models.AnyField}()
   selected_field_names = String[]
   # #1147: every type the column's expression has (`_expression_kind`), which the body's read
   # kind does not carry: a `Rank`, an integer `Case` or a plain integer column read back with no kind

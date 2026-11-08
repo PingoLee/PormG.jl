@@ -68,6 +68,7 @@ CustomUser = Models.Model("customuser",
   cnes = Models.ForeignKey(Dim_CNES, pk_field = "id", on_delete = "CASCADE", related_name = "usuarios"),
 )
 
+Models.@models Dim_Unidade Dim_CNES CustomUser
 PormG.Models.set_models(@__MODULE__, "mixed_case_binding_mock")
 end
 

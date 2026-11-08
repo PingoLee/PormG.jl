@@ -1745,7 +1745,7 @@ function _resolve_relation_targets!(fields_dict::Dict{Symbol, Any},
     raw isa AbstractString || continue              # already a model object; nothing to rewrite
 
     # `through` is a model reference too, and an unresolvable one is fatal at `set_models`
-    # (`_resolve_model_reference` throws). Resolve it first so the M2M drops as a unit.
+    # (`Models._declared_target` throws, #1601). Resolve it first so the M2M drops as a unit.
     if is_m2m && field.through isa AbstractString
       through, _ = _resolve_one_target(field.through, owner, index, strict_relations, markers,
                                        String(key), "through model")

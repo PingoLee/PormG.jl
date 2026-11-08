@@ -2169,6 +2169,7 @@ end
         mod = Module(modname)
         Core.eval(mod, :(const Parent = $parent))
         Core.eval(mod, :(const Child = $child))
+        Core.eval(mod, PormG.Models._model_set_declaration([:Parent, :Child]))   # #1602: the model set
         return mod
     end
 
@@ -2245,6 +2246,7 @@ end
     Core.eval(mod, :(const Parent  = $parent))
     Core.eval(mod, :(const Child_a = $child_a))
     Core.eval(mod, :(const Child_b = $child_b))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Parent, :Child_a, :Child_b]))   # #1602
 
     err = _set_models_error(mod)
     # Registration must still FAIL, and with the same type — #303 changed the message, not the
@@ -2344,12 +2346,16 @@ end
     @test occursin("pk_code\" =", sql)      # main physical-table join key resolved (key_a)
 end
 
-@testset "_resolve_m2m_side_model: binding fallback + not-found error (#64)" begin
-    # When the binding isn't a defined module binding, the helper falls back to a name scan
-    # over get_all_models; a name that matches no model raises ModelDefinitionError.
-    resolved = PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "m2m_rpk_sponsor_scratch", "sponsors")
-    @test resolved === M.M2m_rpk_sponsor_scratch
-    @test_throws PormGError PormG.QueryBuilder._resolve_m2m_side_model(M, "NotABindingXyz", "no_such_model_zzz", "sponsors")
+# What it tests: every many-to-many relation registration builds records both sides as models
+#   (`owner_model_resolved` / `related_model_resolved`), so the join builder reads them and never looks
+#   a side up by binding or name (#1601). No SQL.
+# Why it matters: `_resolve_m2m_side_model` used to re-resolve each side at query time, by binding and
+#   then by a scan of the module's models; it is deleted, and these slots are what replaced it.
+@testset "a many-to-many relation records both sides as models at registration (#64, #1601)" begin
+    for m in PormG.Models.get_all_models(M), (accessor, rel) in get(m.cache, "many_to_many", Dict{String, Any}())
+        @test rel.owner_model_resolved isa PormG.PormGModel
+        @test rel.related_model_resolved isa PormG.PormGModel
+    end
 end
 
 @testset "Related Objects - Auto-generated related_name key format" begin
@@ -2403,6 +2409,7 @@ end
     dup_mod = Module(:dup_test_module)
     Core.eval(dup_mod, :(const DupParent = $DupParent))
     Core.eval(dup_mod, :(const DupChild = $DupChild))
+    Core.eval(dup_mod, PormG.Models._model_set_declaration([:DupParent, :DupChild]))   # #1602
 
     # set_models should reject the duplicate related_name
     dup_err = @test_throws PormG.ModelDefinitionError PormG.Models.set_models(dup_mod, "mock_sl_path")

@@ -70,6 +70,7 @@ Fi_child = Models.Model("fi_child",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Fi_parent Fi_child
 PormG.Models.set_models(@__MODULE__, "f_immut_mock")
 end
 

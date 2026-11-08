@@ -48,6 +48,7 @@ Mdc_results = Models.Model("mdc_results",
   points = Models.IntegerField(null = true),
 )
 
+Models.@models Mdc_driver Mdc_results
 PormG.Models.set_models(@__MODULE__, "mdc_mock")
 end
 

@@ -43,6 +43,7 @@ import PormG
 import PormG.Models
 Cast696_result = Models.Model("cast696_result", id = Models.IDField(),
   points = Models.FloatField(null = true), positionorder = Models.IntegerField(null = true))
+Models.@models Cast696_result
 PormG.Models.set_models(@__MODULE__, "cast696_mock")
 end
 

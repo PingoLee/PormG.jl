@@ -42,6 +42,7 @@ module DateFnModels
 import PormG
 import PormG.Models
 Datefn_race = Models.Model("datefn_race", id = Models.IDField(), date = Models.DateField(null = true))
+Models.@models Datefn_race
 PormG.Models.set_models(@__MODULE__, "datefn_mock")
 end
 

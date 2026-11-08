@@ -922,7 +922,9 @@ end
     @test occursin(r"default\s*=\s*1", src)     # …and so did the default that makes it valid
 
     mod_name = "PormGIt292Models"
-    generated = include_string(Main, """
+    # `_with_model_set`, as `@import_models` includes a file: `Model_to_str` writes the models, not the
+    # module's `Models.@models` line, and `set_models` reads that line (#1602).
+    generated = include_string(PormG.Models._with_model_set, Main, """
       module $(mod_name)
       import PormG.Models
       import PormG.Models: RESTRICT, CASCADE, SET_NULL, SET_DEFAULT, DO_NOTHING, PROTECT
@@ -2132,7 +2134,10 @@ end
     Core.eval(mod, :(import PormG, PormG.Models))
     Core.eval(mod, :(Driver = $driver741))
     Core.eval(mod, :(Points = $points741))
-    PormG.Models.set_models(mod, PORMG_DB_FOLDER)
+    Core.eval(mod, :(Models.@models Driver Points))   # #1602: the model set `set_models` reads
+    # `invokelatest`: the set is a global the `Core.eval` above made, newer than this block's world,
+    # and registration reads it directly (#1607).
+    Base.invokelatest(PormG.Models.set_models, mod, PORMG_DB_FOLDER)
 
     # Nothing to plan: not the view (absent from the live side), not `driver` (present, with columns
     # the unmanaged model does not declare).

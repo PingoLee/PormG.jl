@@ -50,6 +50,7 @@ Result = Models.Model("result",
   chassis = Models.CharField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "sq_filter_pg")
 end
 
@@ -68,6 +69,7 @@ Result = Models.Model("result",
   chassis = Models.CharField(),
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
 )
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "sq_filter_sl")
 end
 

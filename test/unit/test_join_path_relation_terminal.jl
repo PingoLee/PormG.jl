@@ -60,6 +60,7 @@ module RelTermModels
     milliseconds = Models.IntegerField(),
     circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE", related_name = "lap_times"),
   )
+  Models.@models Circuit Race Sponsor Constructor Result Lap_time
   PormG.Models.set_models(@__MODULE__, "reltermdb")
 end
 const RT = RelTermModels

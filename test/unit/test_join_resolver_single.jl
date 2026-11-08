@@ -135,6 +135,7 @@ Result = Models.Model("jrs_result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   status_id = Models.ForeignKey(Status, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Team Sponsor Driver Status Result
 PormG.Models.set_models(@__MODULE__, "jrs_sl")
 end
 

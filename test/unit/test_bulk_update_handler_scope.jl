@@ -49,6 +49,7 @@ Bh665_result = Models.Model("bh665_result",
     year   = Models.IntegerField(),
     points = Models.IntegerField(),
 )
+Models.@models Bh665_driver Bh665_result
 Models.set_models(@__MODULE__, "bh665_pg")
 end
 
@@ -61,6 +62,7 @@ Bh665_result = Models.Model("bh665_result",
     year   = Models.IntegerField(),
     points = Models.IntegerField(),
 )
+Models.@models Bh665_driver Bh665_result
 Models.set_models(@__MODULE__, "bh665_sl")
 end
 

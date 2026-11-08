@@ -94,7 +94,7 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   "src/Kernel.jl" => 2,                 # #1622: `Settings` moved here from Configuration.jl with its two
                                         # open fields, `connections` (any pool, test stand-ins included)
                                         # and the `before_connect` callable
-  "src/Models.jl" => 5,
+  "src/Models.jl" => 4,                 # #1604: `ModelType.name::String` (was `AbstractString`)
   "src/column_ir.jl" => 4,
   "src/exceptions.jl" => 3,
   "src/migrations/column_spec.jl" => 1,
@@ -240,17 +240,17 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 const _TR_GETFIELD = r"(?<!`)\bget(?:field|property|global)\b(?:\(|\s*,)\s*[@\w.]+\s*,\s*Symbol\("
 const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
-  # #1346 baseline (19 sites); 20 since #1333; 19 since #1332.
-  "src/Models.jl" => 2,                          # a relation's target model by binding name (#211)
+  # #1346 baseline (19 sites); 20 since #1333; 19 since #1332; 16 since #1601 (a relation's target
+  # is resolved at registration, never looked up by binding name).
   "src/migrations/importers.jl" => 3,            # a field constructor by its name, from introspection
   "src/models/fields.jl" => 2,                   # a field type's default instance by its name; a field
                                                  # type's accepted keywords by a name that arrives as a
                                                  # string (#1333: the importers, the refusal message)
   # #1611: the querybuilder's operator, function and transform lookups are branches generated at
   # definition time from their name lists, and a related model by its binding goes through
-  # `Models._resolve_target_model` (`_bound_model`, join_conditions.jl). execution_write.jl's one site is
-  # `_row_related_model`, which the model-graph work (#1601) removes.
-  "src/querybuilder/execution_write.jl" => 1,    # a foreign key's target model by binding name (#211)
+  # `Models._resolve_target_model` (`_bound_model`, join_conditions.jl). execution_write.jl's one site,
+  # `_row_related_model`, was removed by the model-graph work (#1601): the query path reads the model
+  # registration recorded.
 )
 
 @testset "#1346: getfield(<x>, Symbol(…)) sites match the reviewed counts" begin

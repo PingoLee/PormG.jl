@@ -1,0 +1,11 @@
+name = "TrimF1"
+uuid = "5b1c1a52-8f0e-4b0a-9d55-1600f1a0c0de"
+version = "0.0.1"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+PormG = "7d8d7541-4d3d-4580-80a2-17064efb0993"
+SQLite = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
+
+[sources]
+PormG = {path = "../.."}

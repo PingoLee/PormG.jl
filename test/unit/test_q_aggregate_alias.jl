@@ -490,6 +490,7 @@ Driver = Models.Model("q_agg_path_driver", driverid = Models.IDField(), forename
                       surname = Models.CharField())
 Result = Models.Model("q_agg_path_result", resultid = Models.IDField(), points = Models.FloatField(),
                       driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"))
+Models.@models Driver Result
 PormG.Models.set_models(@__MODULE__, "q_agg_path_sl")
 end
 
@@ -690,6 +691,7 @@ Race = Models.Model("q_agg_tx_race", raceid = Models.IDField(), year = Models.In
 Result = Models.Model("q_agg_tx_result", resultid = Models.IDField(), points = Models.FloatField(),
                       race_date = Models.DateField(),
                       raceid = Models.ForeignKey(Race, pk_field = "date", on_delete = "CASCADE"))
+Models.@models Race Result
 PormG.Models.set_models(@__MODULE__, "q_agg_tx_sl")
 end
 

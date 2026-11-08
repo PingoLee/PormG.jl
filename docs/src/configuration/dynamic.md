@@ -47,6 +47,24 @@ PormG.register_connection("tenant_01", "postgres://user:pass@localhost/db_01"; e
 PormG.register_connection("temp_cache", "cache.db"; adapter="SQLite", env = "prod")
 ```
 
+### Binding models to a dynamic connection
+
+`Models.set_models(models; key = "tenant_01")` binds a models module to a connection by its key, with
+no folder (#1606). It is the form for a connection built in code: `register_connection` entries have
+no folder for the folder form, `set_models(models, "db")`, to match.
+
+```julia
+PormG.register_connection("f1", "db/f1.sqlite"; adapter = "SQLite", env = "prod",
+                          change_data = true)          # writes are off unless asked for
+PormG.Models.set_models(models; key = "f1")            # `models` ends with `Models.@models …`
+```
+
+The key is recorded in the models module's model set, so a restored package image, the self-heal
+and the Revise reload bind the models again to the same key, and refuse while it is not registered,
+rather than look for a folder. Registering the key again (after `unregister_connection`, or in a new
+process) is enough for the next query to rebind. This is also the configuration a `juliac --trim`
+binary uses: it reads no `connection.yml`.
+
 A MySQL connection cannot be registered this way: `adapter = "MySQL"` raises `InvalidConfigurationError`, since MySQL is configured by its keys in `connection.yml`, through `load`.
 
 !!! note "The environment is stated, not guessed (#1256)"

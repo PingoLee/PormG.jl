@@ -90,6 +90,7 @@ Mf_tag = Models.Model("mf_tag",
   label = Models.CharField(null = true),
 )
 
+Models.@models Mf_org Mf_run_stats_v Mf_run Mf_task Mf_note Mf_tag
 PormG.Models.set_models(@__MODULE__, "mf_mock")
 end
 
@@ -528,6 +529,7 @@ Mf_tag = Models.Model("mf_tag",
   task  = Models.ForeignKey(Mf_task, on_delete = "DO_NOTHING", related_name = "tags", null = true),
   label = Models.CharField(null = true),
 )
+Models.@models Mf_run Mf_task Mf_tag
 PormG.Models.set_models(@__MODULE__, "mf765_sqlite")
 end
 

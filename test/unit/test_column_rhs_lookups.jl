@@ -64,6 +64,7 @@ Crl_result = Models.Model("crl_result",
   payload       = Models.JSONField(null = true),
 )
 
+Models.@models Crl_driver Crl_result
 PormG.Models.set_models(@__MODULE__, "crl_mock")
 end
 

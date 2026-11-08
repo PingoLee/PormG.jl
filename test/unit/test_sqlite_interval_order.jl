@@ -90,6 +90,7 @@ Io_stop = Models.Model("io_stop",
   dur   = Models.DurationField(null = true),
 )
 
+Models.@models Io_race Io_lap Io_stop
 PormG.Models.set_models(@__MODULE__, "io_mock")
 end
 

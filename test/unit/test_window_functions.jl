@@ -982,6 +982,7 @@ module Window685Pg
 import PormG, PormG.Models
 Result = Models.Model("window_results", resultid = Models.IDField(), raceid = Models.IntegerField(),
                       points = Models.FloatField(), surname = Models.CharField())
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "window_685_pg")
 end
 
@@ -989,6 +990,7 @@ module Window685Sl
 import PormG, PormG.Models
 Result = Models.Model("window_results", resultid = Models.IDField(), raceid = Models.IntegerField(),
                       points = Models.FloatField(), surname = Models.CharField())
+Models.@models Result
 PormG.Models.set_models(@__MODULE__, "window_685_sl")
 end
 
@@ -1355,6 +1357,7 @@ for (name, key) in ((:Window1116Pg, "window_1116_pg"), (:Window1116Sl, "window_1
     Result = Models.Model("w1116_result", resultid = Models.IDField(),
                           raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"),
                           points = Models.FloatField(), grid = Models.IntegerField(), surname = Models.CharField())
+    Models.@models Race Result
     PormG.Models.set_models(@__MODULE__, $key)
   end))
 end

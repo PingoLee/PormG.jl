@@ -22,6 +22,7 @@ function _reg1229_models(name::Symbol)
   Core.eval(mod, :(Driver = Models.Model("drivers",
                                          driverid = Models.IDField(),
                                          surname  = Models.CharField(max_length = 50))))
+  Core.eval(mod, :(Models.@models Driver))   # #1602: the model set `set_models` reads
   return mod, Base.invokelatest(getfield, mod, :Driver)
 end
 
@@ -220,6 +221,7 @@ struct Reg1453MockSQLite <: PormG.PormGSQLite end
       Core.eval(mod, :(Race = Models.Model("race", raceid = Models.IDField(), year = Models.IntegerField())))
       Core.eval(mod, :(Result = Models.Model("result", resultid = Models.IDField(), points = Models.FloatField(),
                                              raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "CASCADE"))))
+      Core.eval(mod, PormG.Models._model_set_declaration([:Race, :Result]))   # #1602
       Base.invokelatest(Models.set_models, mod, key)
       race = Base.invokelatest(getfield, mod, :Race)
 
@@ -238,6 +240,7 @@ struct Reg1453MockSQLite <: PormG.PormGSQLite end
 
       Core.eval(mod, :(Standing = Models.Model("standing", standingid = Models.IDField(),
                                                raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "PROTECT"))))
+      Core.eval(mod, PormG.Models._model_set_declaration([:Race, :Result, :Standing]))   # #1602
       Base.invokelatest(Models.set_models, mod, key)
       race = Base.invokelatest(getfield, mod, :Race)
       @test_throws PormG.ProtectedError race.objects.filter("year" => 1991).delete(show_query = :dict)
@@ -271,6 +274,7 @@ end
     mod = Module(Symbol("Reg1452_", key))
     Core.eval(mod, :(import PormG.Models))
     Core.eval(mod, :(Result = Models.Model("result", resultid = Models.IDField(), points = Models.FloatField(null = true))))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Result]))   # #1602
     Base.invokelatest(Models.set_models, mod, key)
     return Base.invokelatest(getfield, mod, :Result)
   end

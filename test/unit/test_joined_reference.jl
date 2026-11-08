@@ -75,6 +75,7 @@ Jn_entry = Models.Model("jn_entry",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Jn_driver Jn_result Jn_entry
 PormG.Models.set_models(@__MODULE__, "jn_mock")
 end
 

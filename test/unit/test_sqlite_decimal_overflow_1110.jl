@@ -42,6 +42,7 @@ for (modname, key) in ((:M1110SL, "mock1110_sl"), (:M1110PG, "mock1110_pg"))
     constructorresultsid = Models.IDField(),
     points = Models.DecimalField(max_digits = 10, decimal_places = 2),
   )
+  Models.@models Driver Constructor_results
   PormG.Models.set_models(@__MODULE__, $key)
   end
 end

@@ -56,6 +56,7 @@ Result = Models.Model("result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Driver Constructor Result
 PormG.Models.set_models(@__MODULE__, "join_rhs_f_pg")
 end
 
@@ -83,6 +84,7 @@ Result = Models.Model("result",
   driverid = Models.ForeignKey(Driver, on_delete = "CASCADE", related_name = "results"),
   constructorid = Models.ForeignKey(Constructor, on_delete = "CASCADE", null = true, related_name = "results"),
 )
+Models.@models Driver Constructor Result
 PormG.Models.set_models(@__MODULE__, "join_rhs_f_sl")
 end
 

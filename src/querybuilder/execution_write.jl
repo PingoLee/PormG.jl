@@ -1739,15 +1739,6 @@ function _row_update_pairs(updates::Dict{String,Any})
   return [field => updates[field] for field in sort(collect(keys(updates)))]
 end
 
-function _row_related_model(model::PormGModel, fk_meta::Models.sRelationalColumn)::PormGModel
-  fk_meta.to isa PormGModel && return fk_meta.to
-
-  model._module !== nothing || throw(QueryBuildError("Cannot resolve related model $(fk_meta.to) for $(model.name); model module is not initialized."))
-  related = Base.invokelatest(getfield, model._module, Symbol(fk_meta.to))
-  related isa PormGModel && return related
-  throw(QueryBuildError("Related model $(fk_meta.to) for $(model.name) is not a PormG model."))
-end
-
 function _row_require_data_key(data::Dict{Symbol,Any}, key::Symbol, context::String)
   haskey(data, key) && return data[key]
   throw(QueryBuildError("Cannot save() $(context): row data does not include required key '$(key)'. Select it before mutating and saving the row."))
@@ -1828,7 +1819,11 @@ function save(row::PormGRow; show_query::Symbol = :execute)
         ))
       end
       fk_value = _row_require_data_key(data, fk_sym, "projected updates under '$(fk_sym)' for $(model.name)")
-      related_model = _row_related_model(model, fk_meta)
+      # #1601: registration resolved the target (or refused), so `to` is the model.
+      related_model = fk_meta.to
+      related_model isa PormGModel || throw(QueryBuildError(
+        "save() cannot update projected fields under '$(fk_sym)': the foreign key's target " *
+        "$(Models._target_label(fk_meta.to)) is not resolved. Register the models with set_models() first."))
       fk_pairs = _row_update_pairs(fk_updates[fk_sym])
       related_query = object(related_model)
       related_query.filter(String(fk_meta.pk_field) => fk_value)

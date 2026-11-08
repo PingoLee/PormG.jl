@@ -111,6 +111,30 @@ $(driver_line)  config:
     nothing
 end
 
+# The bindings the rendered models assign, in file order — parsed back from the text the file is
+# written from, with the one parser registration uses (#1602). A commented-out model (#134) is a
+# comment and is not listed.
+_rendered_model_bindings(Instructions::Vector)::Vector{Symbol} =
+  PormG.Models._declared_model_bindings(Meta.parseall(join(string.(Instructions), "\n")))
+
+# `Models.@models A B C` on one line when it fits in 100 columns, else the parenthesized form, wrapped.
+function _model_set_line(bindings::Vector{Symbol})::String
+  one = rstrip("Models.@models " * join(bindings, " "))
+  length(one) <= 100 && return one
+  lines = String[]
+  cur = "  "
+  for b in bindings
+    piece = string(b, ",")
+    if length(cur) + length(piece) + 1 > 100 && cur != "  "
+      push!(lines, rstrip(cur))
+      cur = "  "
+    end
+    cur *= (cur == "  " ? "" : " ") * piece
+  end
+  push!(lines, rstrip(cur))
+  return "Models.@models(\n" * join(lines, "\n") * "\n)"
+end
+
 function generate_models_from_db(file::String, Instructions::Vector{Any}, settings::PormGSettings; path::String = MODEL_PATH) :: Nothing
 
   # #338: built from the same list Model_to_str's caller seeds its binding-collision `taken` set
@@ -125,8 +149,11 @@ function generate_models_from_db(file::String, Instructions::Vector{Any}, settin
 
     """)
     for table in Instructions
-      write(f, "$(table)\n\n")      
+      write(f, "$(table)\n\n")
     end
+    # #1602: the model set, read by `set_models` instead of a scan of the module's names, so the file
+    # registers the same way through `include` + `set_models` as through `@import_models`.
+    write(f, _model_set_line(_rendered_model_bindings(Instructions)), "\n")
     write(f, "end\n")
   end
 
@@ -350,6 +377,9 @@ import PormG.Models: $(reserved_import)
 #     forename  = Models.CharField(max_length=255),
 #     surname   = Models.CharField(max_length=255),
 # )
+
+# End the module with `Models.@models Driver …`, naming every model binding (#1602): `set_models`
+# reads that list. `@import_models` adds it when the file does not.
 
 end
 """)

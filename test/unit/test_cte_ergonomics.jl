@@ -60,6 +60,7 @@ Cte_result = Models.Model("cte_result",
   positionorder = Models.IntegerField(),
 )
 
+Models.@models Cte_race Cte_result
 PormG.Models.set_models(@__MODULE__, "cte_ergo_mock")
 end
 

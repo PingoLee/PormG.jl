@@ -39,6 +39,7 @@ Delete_protect_child_scratch = Models.Model("delete_protect_child_scratch",
     label     = Models.CharField(null = true)
 )
 
+Models.@models Delete_protect_parent_scratch Delete_protect_child_scratch
 end
 
 if !@isdefined(ProtectM)
@@ -55,6 +56,7 @@ Keyless_delete_scratch = Models.Model("keyless_delete_scratch",
     label  = Models.CharField(null = true)
 )
 
+Models.@models Keyless_delete_scratch
 end
 
 if !@isdefined(KeylessM)
@@ -81,6 +83,7 @@ Keyless_related_child_scratch = Models.Model("keyless_related_child_scratch",
     label     = Models.CharField()
 )
 
+Models.@models Keyless_related_parent_scratch Keyless_related_child_scratch
 end
 
 if !@isdefined(KeylessRelatedM)
@@ -108,6 +111,7 @@ Do_nothing_child_scratch = Models.Model("do_nothing_child_scratch",
     label     = Models.CharField(null = true)
 )
 
+Models.@models Do_nothing_parent_scratch Do_nothing_child_scratch
 end
 
 if !@isdefined(DoNothingM)
@@ -138,6 +142,7 @@ Set_null_guard_child_scratch = Models.Model("set_null_guard_child_scratch",
     label     = Models.CharField(null = true)
 )
 
+Models.@models Set_null_guard_parent_scratch Set_null_guard_child_scratch
 end
 
 if !@isdefined(SetNullGuardM)
@@ -172,6 +177,7 @@ Set_default_guard_child_scratch = Models.Model("set_default_guard_child_scratch"
     label     = Models.CharField(null = true)
 )
 
+Models.@models Set_default_guard_parent_scratch Set_default_guard_child_scratch
 end
 
 if !@isdefined(SetDefaultGuardM)
@@ -213,6 +219,7 @@ Mp_leaf_scratch = Models.Model("mp_leaf_scratch",
     label = Models.CharField()
 )
 
+Models.@models Mp_root_scratch Mp_mid_scratch Mp_leaf_scratch
 end
 
 if !@isdefined(MultipathSetNullM)
@@ -297,6 +304,7 @@ Ot_tree_driver_scratch = Models.Model("ot_tree_driver_scratch",
                   related_name = "ot_tree_drivers")
 )
 
+Models.@models Ot_team_scratch Ot_team_view_scratch Ot_driver_scratch Ot_lineage_scratch Ot_lineage_default_scratch Ot_rival_team_scratch Ot_rival_driver_scratch Ot_tree_scratch Ot_tree_driver_scratch
 end
 
 if !@isdefined(OwnTableM)

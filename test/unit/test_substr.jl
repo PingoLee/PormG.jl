@@ -82,6 +82,7 @@ Sub_result = Models.Model("sub_result",
   driver = Models.ForeignKey(Sub_driver, on_delete = "CASCADE", null = true),
   note   = Models.CharField(null = true),
 )
+Models.@models Sub_team Sub_code Sub_driver Sub_result
 PormG.Models.set_models(@__MODULE__, "sub_mock_sl")
 end
 
@@ -110,6 +111,7 @@ Sub_result = Models.Model("sub_result",
   driver = Models.ForeignKey(Sub_driver, on_delete = "CASCADE", null = true),
   note   = Models.CharField(null = true),
 )
+Models.@models Sub_team Sub_code Sub_driver Sub_result
 PormG.Models.set_models(@__MODULE__, "sub_mock_pg")
 end
 

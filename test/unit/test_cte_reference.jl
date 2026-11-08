@@ -69,6 +69,7 @@ Cj_child = Models.Model("cj_child",
   note   = Models.CharField(null = true),
 )
 
+Models.@models Cj_grand Cj_parent Cj_child
 PormG.Models.set_models(@__MODULE__, "cte_ref_mock")
 end
 

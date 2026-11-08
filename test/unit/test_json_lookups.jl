@@ -42,6 +42,7 @@ Json_scratch = Models.Model("json_scratch",
   name = Models.CharField(),
   payload = Models.JSONField(null = true),
 )
+Models.@models Json_scratch
 PormG.Models.set_models(@__MODULE__, "json_lookup_mock")
 end
 
@@ -60,6 +61,7 @@ Lap_scratch = Models.Model("lap_scratch",
   day = Models.DateField(null = true),
   laps = Models.IntegerField(null = true),
 )
+Models.@models Lap_scratch
 PormG.Models.set_models(@__MODULE__, "json_lookup_when_mock")
 end
 const JW = JsonWhenModels
@@ -74,6 +76,7 @@ import PormG.Models
 Json_team = Models.Model("json_team", id = Models.IDField(), payload = Models.JSONField(null = true))
 Json_entry = Models.Model("json_entry", id = Models.IDField(),
   team = Models.ForeignKey(Json_team, on_delete = "CASCADE", related_name = "entries"))
+Models.@models Json_team Json_entry
 PormG.Models.set_models(@__MODULE__, "json_lookup_join_mock")
 end
 const JJ = JsonJoinModels

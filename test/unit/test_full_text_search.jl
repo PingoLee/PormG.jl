@@ -77,6 +77,7 @@ Story = Models.Model("story",
   body     = Models.TextField(null = true),
   search   = Models.SearchVectorField(generated_from = ("title", "body"), config = "english", weights = ("A", "B")),
 )
+Models.@models Driver Race Result Report Story
 PormG.Models.set_models(@__MODULE__, "fts31")
 end
 const _F = FtsModels31

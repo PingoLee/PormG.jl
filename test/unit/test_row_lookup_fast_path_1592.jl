@@ -42,6 +42,7 @@ Driver = Models.Model("rl1592_driver",
   points        = Models.IntegerField(),
   constructorid = Models.ForeignKey(Constructor, pk_field = "constructorid", related_name = "drivers_fk"),
   teams         = Models.ManyToManyField(Constructor, related_name = "drivers"))
+Models.@models Constructor Driver
 PormG.Models.set_models(@__MODULE__, "row_lookup_1592")
 end
 const RL = RowLookup1592Models

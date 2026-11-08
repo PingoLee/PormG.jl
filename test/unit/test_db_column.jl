@@ -372,10 +372,14 @@ end
   # _resolve_target_model: name string → model object; model passthrough; unknown
   # name → nothing (caller decides strictness).
   # ─────────────────────────────────────────────────────────────────────────────
+  # #1601: a `to` string names a model the lookup module DECLARES (`Models.@models`).
+  DBC_REF_MOD = Module(:DbcRefModels)
+  Core.eval(DBC_REF_MOD, :(DriverRef = $DriverRef))
+  Core.eval(DBC_REF_MOD, PormG.Models._model_set_declaration([:DriverRef]))
   @testset "_resolve_target_model" begin
-    @test PormG.Models._resolve_target_model("DriverRef", @__MODULE__) === DriverRef
-    @test PormG.Models._resolve_target_model(DriverRef, @__MODULE__)   === DriverRef   # passthrough
-    @test PormG.Models._resolve_target_model("NoSuchModelXYZ", @__MODULE__) === nothing
+    @test PormG.Models._resolve_target_model("DriverRef", DBC_REF_MOD) === DriverRef
+    @test PormG.Models._resolve_target_model(DriverRef, DBC_REF_MOD)   === DriverRef   # passthrough
+    @test PormG.Models._resolve_target_model("NoSuchModelXYZ", DBC_REF_MOD) === nothing
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -388,7 +392,7 @@ end
   @testset "resolved string target → parent db_column (fk_target_column)" begin
     fk = ForeignKey("DriverRef", pk_field="code", db_column="drv")
     @test fk_target_column(fk) == "code"                       # before: verbatim pk name (the gap)
-    fk.to = PormG.Models._resolve_target_model(fk.to, @__MODULE__)
+    fk.to = PormG.Models._resolve_target_model(fk.to, DBC_REF_MOD)
     @test fk_target_column(fk) == "driver_code"                # after: parent's db_column
     @test fk_target_column(fk) == fk_target_column(ForeignKey(DriverRef, pk_field="code"))  # == model-instance
 
@@ -396,7 +400,7 @@ end
     # `sForeignKey || sOneToOneField`) — a string-target O2O resolves identically.
     o2o = OneToOneField("DriverRef", pk_field="code", db_column="prof")
     @test fk_target_column(o2o) == "code"
-    o2o.to = PormG.Models._resolve_target_model(o2o.to, @__MODULE__)
+    o2o.to = PormG.Models._resolve_target_model(o2o.to, DBC_REF_MOD)
     @test fk_target_column(o2o) == "driver_code"
   end
 
@@ -410,7 +414,7 @@ end
       id     = IDField(),
       driver = ForeignKey("DriverRef", pk_field="code", db_column="drv"),
     )
-    entry_str.fields["driver"].to = PormG.Models._resolve_target_model(entry_str.fields["driver"].to, @__MODULE__)
+    entry_str.fields["driver"].to = PormG.Models._resolve_target_model(entry_str.fields["driver"].to, DBC_REF_MOD)
     ddl = PormG.Dialect.create_table(MockSQLiteDbColumn(), entry_str)
     @test occursin("FOREIGN KEY (\"drv\")", ddl)       # local FK column = db_column
     @test occursin("(\"driver_code\")", ddl)           # referenced parent column resolved (the #62 fix)
@@ -435,6 +439,7 @@ end
     Core.eval(mod, :(const Db62PreludeParent = $prelude_parent))   # the FK string target must be a binding in `mod`
     Core.eval(mod, :(const Db62PreludeChild  = $prelude_child))
     Core.eval(mod, :(const Db62PreludeOrphan = $prelude_orphan))
+    Core.eval(mod, PormG.Models._model_set_declaration([:Db62PreludeParent, :Db62PreludeChild, :Db62PreludeOrphan]))
 
     # Pre-conditions (fresh fixtures): unresolved string target, no pk_field.
     @test prelude_child.fields["parent"].to == "Db62PreludeParent"
@@ -477,6 +482,7 @@ end
     r65_orphan_b = Model("r65_orphan_b", id = IDField(), ref = ForeignKey("R65NoSuch", db_column="rfk", null=true))
     mod = Module(:r65_resolver_module)
     Core.eval(mod, :(const R65Parent = $r65_parent))   # the only resolvable binding in `mod`
+    Core.eval(mod, PormG.Models._model_set_declaration([:R65Parent]))   # #1601: the declared set
 
     # (A) Anti-drift: strict=true (runtime) and strict=false (migration) agree on a resolvable target.
     gs = rfk(r65_child_s.fields["parent"], "parent", "r65_child_s", mod; strict=true)

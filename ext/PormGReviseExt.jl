@@ -3,14 +3,6 @@ module PormGReviseExt
 using PormG
 import Revise
 
-function _revise_includet(mod, path)
-    try
-        return Revise.includet(mod, path)
-    catch
-        return Base.include(mod, path)
-    end
-end
-
 # Reached through `Models.set_models(…; source = path)` (#1487). Revise alone does not reload a model:
 # in an `includet` file it re-evaluates only methods, and where it re-evaluates an assignment (a
 # package's own files) the new `Model` stays unbound. So the callback re-evaluates the module body into
@@ -33,7 +25,9 @@ function _revise_add_revise_callback(path::String, mod_obj::Module, dir::String)
                     return nothing
                 end
                 # A reload is not a direct registration: it never loads a folder, even in a REPL (#1248).
-                Base.invokelatest(PormG.Models.set_models, mod_obj, dir; implicit = false)
+                # `dir` is the folder, or the key for a module registered with `set_models(mod; key)`
+                # (#1606); `_register_again!` binds by whichever the registration recorded.
+                Base.invokelatest(PormG.Models._register_again!, mod_obj, dir)
             catch e
                 @warn "PormG: reloading the edited models file failed" file = path exception = e
             end
@@ -45,10 +39,7 @@ function _revise_add_revise_callback(path::String, mod_obj::Module, dir::String)
 end
 
 function __init__()
-    PormG.Utils.set_revise_hooks!(;
-        includet=_revise_includet,
-        add_revise_callback=_revise_add_revise_callback,
-    )
+    PormG.Utils.set_revise_hooks!(; add_revise_callback=_revise_add_revise_callback)
 end
 
 end # module

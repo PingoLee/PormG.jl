@@ -63,6 +63,7 @@ Cjc_results = Models.Model("cjc_results",
   points = Models.IntegerField(null = true),
 )
 
+Models.@models Cjc_driver Cjc_results
 PormG.Models.set_models(@__MODULE__, "cjc_mock")
 end
 

@@ -113,7 +113,8 @@ PormG.Configuration.register_connection("f1", "postgresql://f1:…@db.internal/f
     Nitro guards a call to `PormG.register_field_hook(:PasswordField, :auto_hash, …)` with
     `isdefined(PormG, :register_field_hook)`. That field-normalization seam is **not yet
     implemented** in PormG — the guard makes Nitro's extension a forward-compatible no-op until
-    it lands. Don't rely on `register_field_hook` until this note is removed.
+    it lands. Don't rely on `register_field_hook` until this note is removed. Field types themselves
+    are a closed set (#1604): a `PormGField` subtype of your own is refused when a model is built.
 
 ## The package-extension pattern
 

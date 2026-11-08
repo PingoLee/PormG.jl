@@ -1995,7 +1995,7 @@ read from `cache`. `convertSQLToModel` and `convert_schema_to_models` are this f
 what the readers return.
 """
 function model_from_live(table::LiveTable, conn::_SQLEngine)::PormGModel
-  fields = OrderedDict{String, PormGField}()
+  fields = OrderedDict{String, Models.AnyField}()   # #1604: the closed field set
   for (col, spec) in table.columns
     fields[col] = field_from_spec(spec, table, conn)
   end

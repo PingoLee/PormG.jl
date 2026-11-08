@@ -844,12 +844,75 @@ function _waiter_wake(deadline::Float64, retry_pass::Int)::Tuple{Symbol, Float64
   return backoff < remaining ? (_POOL_WAIT_RETRY, backoff) : (_POOL_WAIT_TIMEOUT, remaining)
 end
 
-# Waiter FIFO queues live OUTSIDE the pool structs so mock pools that declare their own
-# `<: PormGPostgres/PormGSQLite` struct (with no `waiters` field) are unaffected (#124). Each
-# pool's Vector is only ever mutated while holding that pool's own `lock`; the WeakKeyDict itself
-# is guarded by `_POOL_WAITERS_LOCK`. Lock order is always pool.lock → _POOL_WAITERS_LOCK, never
-# the reverse. WeakKeyDict so a GC'd pool's queue is collected.
-const _POOL_WAITERS = WeakKeyDict{Any, Vector{PoolWaiter}}()
+# ── Pool-keyed registries, by identity (#1706) ──────────────────────────────
+#
+# Per-pool state that lives OUTSIDE the pool structs, so the unit suite's stand-in pools need no extra
+# fields: the waiter queues (#124) and the monitor state (#125/#127/#1548). Each was a
+# `WeakKeyDict{Any,…}`, and a `WeakKeyDict` hashes its key through `hash(::WeakRef)`, which is
+# `hash(w.value::Any)`: a dynamic call on every lookup, whatever the pool's type, and a `setindex!` that
+# registers a finalizer on a key the verifier cannot type. `release_connection` reads the waiter queue
+# on every return, so in a `juliac --trim` image every lease ended in a `MethodError` on `hash`.
+#
+# `_PoolRegistry` keys on the pool's identity instead: `objectid(pool)` maps to `(WeakRef(pool), value)`.
+# `objectid` and `===` are builtins, so a lookup dispatches on nothing, and a `WeakRef` keeps the
+# registry from holding a pool alive, as the `WeakKeyDict` did. An entry whose pool was collected is
+# found by its `WeakRef` reading `nothing` (or, under a reused id, a different object) and is dropped
+# then, or by the purge each insert runs; it registers no finalizer. It has no lock of its own: every
+# caller holds the registry's lock (`_POOL_WAITERS_LOCK`, `_POOL_MONITOR_LOCK`), as the code above
+# always did. The `Dict`-shaped methods are the ones the pool and its tests use. A key must be a mutable
+# object or a singleton, as every pool is: an immutable value's `objectid` is a hash of its content, not
+# an identity (the `WeakKeyDict` refused such a key too, at its finalizer).
+struct _PoolRegistry{V}
+  entries::Dict{UInt, Tuple{WeakRef, V}}
+end
+_PoolRegistry{V}() where {V} = _PoolRegistry{V}(Dict{UInt, Tuple{WeakRef, V}}())
+
+# The live entry for `pool`, or `nothing`; drops a stale entry found under its id.
+function _registry_entry(r::_PoolRegistry, @nospecialize(pool))
+  id = objectid(pool)
+  e = get(r.entries, id, nothing)
+  e === nothing && return nothing
+  e[1].value === pool && return e
+  delete!(r.entries, id)
+  return nothing
+end
+_registry_purge!(r::_PoolRegistry) = filter!(kv -> kv.second[1].value !== nothing, r.entries)
+
+Base.get(r::_PoolRegistry, @nospecialize(pool), default) =
+  (e = _registry_entry(r, pool); e === nothing ? default : e[2])
+function Base.getindex(r::_PoolRegistry, @nospecialize(pool))
+  e = _registry_entry(r, pool)
+  e === nothing && throw(KeyError(pool))
+  return e[2]
+end
+Base.haskey(r::_PoolRegistry, @nospecialize(pool)) = _registry_entry(r, pool) !== nothing
+function Base.setindex!(r::_PoolRegistry{V}, value, @nospecialize(pool)) where {V}
+  _registry_purge!(r)
+  r.entries[objectid(pool)] = (WeakRef(pool), convert(V, value))
+  return r
+end
+# `F<:Base.Callable`: an unconstrained `f` is ambiguous with Base's `get!(::AbstractDict, key, default)`.
+function Base.get!(f::F, r::_PoolRegistry{V}, @nospecialize(pool)) where {F<:Base.Callable, V}
+  e = _registry_entry(r, pool)
+  e === nothing || return e[2]
+  value = convert(V, f())
+  r[pool] = value
+  return value
+end
+function Base.delete!(r::_PoolRegistry, @nospecialize(pool))
+  _registry_entry(r, pool) === nothing || delete!(r.entries, objectid(pool))
+  return r
+end
+Base.empty!(r::_PoolRegistry) = (empty!(r.entries); r)
+Base.length(r::_PoolRegistry) = count(e -> e[1].value !== nothing, values(r.entries))
+Base.isempty(r::_PoolRegistry) = length(r) == 0
+# The pools that still hold an entry, for the sweeper.
+_registry_pools(r::_PoolRegistry) = Any[e[1].value for e in values(r.entries) if e[1].value !== nothing]
+
+# Waiter FIFO queues (#124). Each pool's Vector is only ever mutated while holding that pool's own
+# `lock`; the registry itself is guarded by `_POOL_WAITERS_LOCK`. Lock order is always
+# pool.lock → _POOL_WAITERS_LOCK, never the reverse. Weak, so a collected pool's queue goes with it.
+const _POOL_WAITERS = _PoolRegistry{Vector{PoolWaiter}}()
 const _POOL_WAITERS_LOCK = ReentrantLock()
 
 _waiters_for(pool)::Vector{PoolWaiter} =
@@ -1014,7 +1077,7 @@ mutable struct PoolMonitorState
   stamp_lock::ReentrantLock
 end
 
-const _POOL_MONITOR = WeakKeyDict{Any, PoolMonitorState}()   # populated ONLY by the enable_*! functions
+const _POOL_MONITOR = _PoolRegistry{PoolMonitorState}()   # populated ONLY by the enable_*! functions (#1706: by identity)
 const _POOL_MONITOR_LOCK = ReentrantLock()
 # Fast path: false (no pool opted in) → every hook returns immediately. Monotonic: set true by the first
 # enable_reaping!/enable_leak_detection!/enable_idle_validation! above 0, never cleared. Lock order: pool.lock → _POOL_MONITOR_LOCK.
@@ -1417,10 +1480,10 @@ end
 
 # Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool.
 function _reap_all_pools!()
-  pools = Base.lock(() -> collect(keys(_POOL_MONITOR)), _POOL_MONITOR_LOCK)
-  for pool in pools                       # a GC'd pool is absent from the WeakKeyDict → _monitor_state nothing
+  pools = Base.lock(() -> _registry_pools(_POOL_MONITOR), _POOL_MONITOR_LOCK)
+  for pool in pools                       # a collected pool has no entry left (its WeakRef reads nothing)
     try
-      _reap_pool!(pool)
+      with_pool(_reap_pool!, pool)        # at the pool's concrete type (#1622); a stand-in takes the open arm
     catch e
       @debug "Connection-pool reap failed" exception=e
     end

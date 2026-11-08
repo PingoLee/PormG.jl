@@ -42,7 +42,7 @@ referenced it.
 | `src/Models.jl`, `src/models/` | Models and fields |
 | `src/Utils.jl`, `ext/PormGReviseExt.jl` | Model loader macros (`@import_models`, `@models_module`) and the world-age loading machinery behind the Julia floor (#211); the Revise weakdep extension wires hot reload back into `Utils.reload_module_contents!` / `Models.set_models` |
 | `src/Dialect.jl` | Backend SQL rendering |
-| `src/value_repr.jl` | Layer 2.5: the **value-representation** table (#564) — `(CanonicalType, backend)` → the Julia formatter, the SQL canonicalizer, the read parser, and the Julia type the read delivers (`julia_type`, #1632, which `show_query = :struct` writes into a struct). Between `Dialect` and `QueryBuilder` because it names `Models` and `Dialect` at definition time and both the render and read paths consult it. A `PormG`-level file rather than a submodule for `Backend.jl`'s reason: its three inputs live in three submodules, so `PormG` is the only module that sees all of them. Multiple dispatch **is** the table — there is no `ValueRepr` noun beside `CanonicalType` to keep aligned |
+| `src/value_repr.jl` | Layer 2.5: the **value-representation** table (#564) — `(CanonicalType, backend)` → the Julia formatter, the SQL canonicalizer, the read parser, and the Julia type the read delivers (`julia_type`, #1632, which `show_query = :struct` writes into a struct). Between `Dialect` and `QueryBuilder` because it names `Models` and `Dialect` at definition time and both the render and read paths consult it. A `PormG`-level file rather than a submodule for `Backend.jl`'s reason: its three inputs live in three submodules, so `PormG` is the only module that sees all of them. Multiple dispatch **is** the table — there is no `ValueRepr` noun beside `CanonicalType` to keep aligned. Slot 3, the read parser, is the exception (#1605): `read_parser(kind, backend, label)` returns one concrete `ReadParser`, one method per backend that walks the kinds with `isa`, because the typed read holds a parser per field in a tuple of one type and a trimmed build cannot dispatch on a run-time kind; `value_parser` is derived from it |
 | `src/AdvisoryLock.jl` | `with_advisory_lock` — cross-process advisory locking (migrations serialize on it) |
 | `src/QueryBuilder.jl`, `src/querybuilder/` | Query builder (incl. `many_to_many.jl`) |
 | `src/querybuilder/memos.jl` | The sole accessor for the three per-build memos — `memo_key` plus the typed verbs. Build a key with `memo_key`, never inline: restating the keying rule at a call site is the #474 defect, and it type-checks. `test/unit/test_memo_interface.jl` scans `src/`/`ext/` for both (a direct field access and an inline `(:base, …)` tuple), and a bare-`String` lookup is a `MethodError` by dispatch (#478) |
@@ -188,9 +188,10 @@ julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.in
   - A change made for typing that slows the JIT path more than noise needs a measurement that
     justifies it.
 
-  `test/unit/test_type_ratchet.jl` holds the reviewed count, per file, of the three patterns that
-  remain: struct fields typed `Any` or left abstract, `getfield(<x>, Symbol(…))` lookups and
-  `format::Dict{String,Any}` parameters. A rise fails. A fall fails too, until the count is lowered
+  `test/unit/test_type_ratchet.jl` holds the reviewed count, per file, of three patterns: struct
+  fields typed `Any` or left abstract, `getfield(<x>, Symbol(…))` lookups and
+  `format::Dict{String,Any}` parameters (zero since #1610: a `Dialect` renderer takes
+  `Dialect.FnOptions`). A rise fails. A fall fails too, until the count is lowered
   in the same change, so each improvement is recorded. A change to the query build or row read
   compares against `test/performance/alloc_baseline.jl` (allocations and warm build time; not a CI
   gate, since the numbers move between Julia versions).

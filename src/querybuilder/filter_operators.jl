@@ -2,6 +2,23 @@
 # operators, array operators, and the sargable rewrite of a date-bucket filter (`@yyyy_mm`,
 # `@year`, …) into a range on the column.
 
+# #1611 — a `Dialect` operator chosen by the name a filter carries (`@jcontains`, `@net_contains`,
+# `@acontains`, `@icontains`, …), as one branch per name, generated at definition time from the
+# operator's family list in `constants.jl`. It was `getfield(Dialect, Symbol(op))(…)`: a binding looked
+# up by a name at run time, which a static compiler cannot follow (`juliac --trim`, #1599). Each branch
+# is a direct call, and the family list stays the one place a name is admitted. A name outside the list
+# never reaches here: each caller routes by membership first.
+for (fname, ops) in ((:_json_operator_sql, JSON_CONTAINMENT_OPERATORS),
+                     (:_network_operator_sql, NETWORK_LOOKUP_OPERATORS),
+                     (:_array_operator_sql, ARRAY_CONTAINMENT_OPERATORS),
+                     (:_pattern_operator_sql, PATTERN_LOOKUP_OPERATORS))
+  arms = [:(op == $(String(o)) && return Dialect.$(Symbol(o))(conn, column, ph)) for o in ops]
+  @eval function $fname(op::AbstractString, conn, column, ph)
+    $(arms...)
+    throw(FilterError("Invalid filter operator: $(op) is not a supported operator."))
+  end
+end
+
 # Coerce a JSON numeric-comparison RHS to an actual Julia number, so BOTH dialects compare
 # numerically (PostgreSQL casts the extracted text `::numeric`; SQLite's json_extract returns a
 # native number). Binding a string here would make SQLite compare number-vs-text and silently
@@ -119,7 +136,7 @@ function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstr
       throw(FilterError("The \e[31m@$(op)\e[0m operator requires an array of keys, e.g. filter(\"col__@$(op)\" => [\"a\", \"b\"]); got a single value."))
     add_parameter!(instruc, String.(v.values); sql_type="text[]")
   end
-  return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
+  return _json_operator_sql(op, instruc.connection, column, ph)
 end
 
 # #904: render a PostgreSQL network operator (`<<`, `<<=`, `>>`, `>>=`, `&&`, `family()`,
@@ -175,7 +192,7 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
                           op = "filter", field = label, field_type = _opt_label(operand_field.type)))
     add_parameter!(instruc, Int(v.values))
   end
-  return getfield(Dialect, Symbol(op))(instruc.connection, column, ph)
+  return _network_operator_sql(op, instruc.connection, column, ph)
 end
 
 # Resolve the base PormGField a JSON operator targets: a bare column name lives on the model;
@@ -219,7 +236,7 @@ function _render_array_operator(v::SQLTypeOper, column::String, instruc::SQLInst
   unbounded = Models.ArrayFormatter(formatter.base, formatter.kind, nothing)
   literal = _guarded_format(unbounded, v.values, v.operator, _array_lookup_label(v), field.type)
   placeholder = add_parameter!(instruc, literal)
-  return getfield(Dialect, Symbol(v.operator))(instruc.connection, column, placeholder)
+  return _array_operator_sql(v.operator, instruc.connection, column, placeholder)
 end
 
 # #31: render the `@search` lookup — `to_tsvector(<config>, col) @@ <tsquery>` — on a text column: a

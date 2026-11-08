@@ -853,9 +853,9 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "MySQL Concat: CONCAT_WS('', …), never ||" begin
   my = MrMockMySQL()
-  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], Dict{String,Any}(), my) == "CONCAT_WS('',\n`a`,\n`b`)"
-  @test PormG.Dialect.CONCAT(Any["`a`"], Dict{String,Any}(), my) == "CONCAT_WS('',\n`a`)"
-  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], Dict{String,Any}("propagate_null" => true), my) == "CONCAT(`a`,\n`b`)"
+  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], PormG.Dialect.FnOptions(), my) == "CONCAT_WS('',\n`a`,\n`b`)"
+  @test PormG.Dialect.CONCAT(Any["`a`"], PormG.Dialect.FnOptions(), my) == "CONCAT_WS('',\n`a`)"
+  @test PormG.Dialect.CONCAT(Any["`a`", "`b`"], PormG.Dialect.FnOptions("propagate_null" => true), my) == "CONCAT(`a`,\n`b`)"
   # Through the public `Concat`, over two text paths.
   sql = _mr_inspect(_MR_MY.Result.objects.values("c" => PormG.QueryBuilder.Concat("driverid__forename", "driverid__surname")))[:sql_text]
   @test occursin("CONCAT_WS('',", sql) && !occursin("||", sql)

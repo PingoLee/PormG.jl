@@ -100,9 +100,9 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   "src/migrations/column_spec.jl" => 1,
   "src/migrations/importers.jl" => 2,
   "src/models/fields.jl" => 68,
-  "src/querybuilder/many_to_many.jl" => 4,
+  "src/querybuilder/many_to_many.jl" => 2,   # #1615: ManyToManyManager.owner_model/related_model
   "src/querybuilder/parameters.jl" => 1,
-  "src/querybuilder/types.jl" => 35,    # #1593: SQLTbAlias.count::Int
+  "src/querybuilder/types.jl" => 30,    # #1593: SQLTbAlias.count::Int; #1615: ObjectHandler.object, SQLObjectQuery.model/limit/offset, PormGRow._model
 )
 
 # :ok, :any or :abstract for one declared field type.
@@ -246,12 +246,11 @@ const _TR_GETFIELD_REVIEWED = Dict{String,Int}(
   "src/models/fields.jl" => 2,                   # a field type's default instance by its name; a field
                                                  # type's accepted keywords by a name that arrives as a
                                                  # string (#1333: the importers, the refusal message)
-  "src/querybuilder/build_helpers.jl" => 1,      # a lookup transform by name
-  "src/querybuilder/filter_nodes.jl" => 1,       # Dialect operator by name
-  "src/querybuilder/filter_operators.jl" => 3,   # Dialect operators by name
-  "src/querybuilder/join_conditions.jl" => 5,    # a related model by binding name (#211)
-  "src/querybuilder/select_nodes.jl" => 1,       # Dialect function by name; the two call sites share
-                                                 # `_function_sql` since #1332
+  # #1611: the querybuilder's operator, function and transform lookups are branches generated at
+  # definition time from their name lists, and a related model by its binding goes through
+  # `Models._resolve_target_model` (`_bound_model`, join_conditions.jl). execution_write.jl's one site,
+  # `_row_related_model`, was removed by the model-graph work (#1601): the query path reads the model
+  # registration recorded.
 )
 
 @testset "#1346: getfield(<x>, Symbol(…)) sites match the reviewed counts" begin
@@ -275,9 +274,9 @@ end
 # struct field or a type assertion of that type, so the rule covers those in review, not here.
 # ─────────────────────────────────────────────────────────────────────────────
 const _TR_FORMAT_DICT = r"\bformat::Dict\{String,\s*Any\}"
-const _TR_FORMAT_DICT_REVIEWED = Dict{String,Int}(
-  "src/Dialect.jl" => 119,   # #1346 baseline
-)
+# #1610: zero. Every Dialect function takes its options as `Dialect.FnOptions`, one typed slot per key,
+# built once from the query builder's resolved bag (`QueryBuilder._function_sql`). Any new one fails.
+const _TR_FORMAT_DICT_REVIEWED = Dict{String,Int}()
 
 @testset "#1346: format::Dict{String,Any} parameters match the reviewed counts" begin
   _tr_check("format::Dict{String,Any} parameters", _tr_scan(_TR_FORMAT_DICT), _TR_FORMAT_DICT_REVIEWED)

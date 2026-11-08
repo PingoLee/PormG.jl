@@ -12,6 +12,7 @@ using PormG
 import PormG: PormGSQLite, PormGSQLiteParam
 import SQLite
 import Tables
+const QB = PormG.QueryBuilder   # #1605: the typed read's cell rules
 
 # Busy/locked retry policy (was in src/ConnectionPool.jl before SQLite became a weakdep).
 const _SQLITE_LOCK_RETRY_MAX_ATTEMPTS = 20
@@ -168,6 +169,98 @@ function PormG.backend_execute(pool::PormGSQLite, conn::SQLite.DB, sql::String, 
     _release_leaked_db_lock!(conn)
     rethrow()
   end
+end
+
+# #1605: the typed read, on the same worker and with the same statement lifecycle, retry and lock
+# release as `backend_execute`, but stepped straight into `T`. `_sqlite_execute_materialized` builds a
+# `Tables.rowtable`, whose `NamedTuple` types are decided by each row's cells at run time: a typed read
+# that went through it paid for that row and then made a dynamic call on it per row, and a trimmed build
+# (`juliac --trim`) has no compiled target for either. Here each cell is read by its storage class
+# (INTEGER, FLOAT, TEXT, BLOB, NULL), the read `SQLite.getvalue` makes for that class, and goes through
+# the field's parser and the typed read's cell rules (`_typed_value`) with every call static.
+function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::String, params,
+                                    decode::PormG.QueryBuilder._RowDecoder{T}) where T
+  resolved = params isa PormGSQLiteParam ? params.parameters : params
+  try
+    return _sqlite_with_retry(() -> _sqlite_decode_rows(conn, sql, resolved, decode))::Vector{T}
+  catch
+    _release_leaked_db_lock!(conn)
+    rethrow()
+  end
+end
+
+function _sqlite_decode_rows(conn::SQLite.DB, sql::String, params,
+                             decode::PormG.QueryBuilder._RowDecoder{T})::Vector{T} where T
+  stmt = SQLite.Stmt(conn, sql; register = false)
+  try
+    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, params)
+    return _sqlite_rows_into(T, q, decode)
+  finally
+    SQLite.DBInterface.close!(stmt)
+  end
+end
+
+# The rows, stepped with `iterate` (the first row is already stepped by `execute`; each further one is
+# one step, under the lock each SQLite.jl version takes for it, and an error status raises there as it
+# did through `Tables.rowtable`). An error raised while BUILDING a row (a cell rule's refusal, a parser's,
+# or the row type's own constructor) is recorded on the decoder and the walk stops: thrown here, on the
+# worker, it would reach the caller wrapped as the statement's `StatementError`; `fetch` raises the
+# recorded error as it was raised (`decoded_on_worker`), as when the decode ran after `fetch` returned.
+function _sqlite_rows_into(::Type{T}, q, decode::PormG.QueryBuilder._RowDecoder{T})::Vector{T} where T
+  handle = SQLite._get_stmt_handle(q.stmt)
+  # `q.names` (a `Vector{Symbol}` on every SQLite.jl from 1.6.1 on, pinned in test_driver_internals.jl):
+  # the field `Tables.columnnames(::SQLite.Query)` returns, read directly.
+  cols = _sqlite_field_columns(T, q.names)
+  parsers, site = decode.parsers, decode.site
+  out = T[]
+  i = 0
+  next = iterate(q)
+  while next !== nothing
+    i += 1
+    row = try
+      _sqlite_typed_row(T, handle, cols, parsers, i, site)
+    catch e
+      (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement, as anywhere else
+      PormG.QueryBuilder._decode_failed!(decode, e)
+      return out
+    end
+    push!(out, row)
+    next = iterate(q, next[2])
+  end
+  return out
+end
+
+# The result column of each field of `T`, by name: the typed projection names every field (and nothing
+# else), but a `values(...)` projection may list them in another order.
+function _sqlite_field_columns(::Type{T}, names::AbstractVector{Symbol}) where T
+  return ntuple(Val(fieldcount(T))) do k
+    col = something(findfirst(==(fieldname(T, k)), names), 0)
+    col == 0 && throw(PormG.QueryBuildError(
+      "The typed read's result has no column for field $(fieldname(T, k)); the projection and the row type disagree."))
+    col
+  end
+end
+
+@generated function _sqlite_typed_row(::Type{T}, handle, cols::Tuple, parsers::Tuple, i::Int, site) where T
+  cells = [:(_sqlite_cell($(fieldtype(T, k)), handle, cols[$k], parsers[$k], $(QuoteNode(fieldname(T, k))), i, site))
+           for k in 1:fieldcount(T)]
+  return T <: NamedTuple ? :(T(($(cells...),))) : :(T($(cells...)))
+end
+
+# One cell, by its storage class. Each branch hands a concrete value to the parser and the cell rules.
+# A BLOB is read as `SQLite.getvalue` reads it (SQLite.jl's deserialization), the one dynamic branch:
+# the typed read has no binary rule to apply to it.
+@inline function _sqlite_cell(::Type{FT}, handle, col::Int, parser, name::Symbol, i::Int, site)::FT where FT
+  t = SQLite.C.sqlite3_column_type(handle, col - 1)
+  t == SQLite.C.SQLITE_NULL &&
+    return QB._typed_value(FT, QB._typed_parse(parser, missing), name, i, site)
+  t == SQLite.C.SQLITE_INTEGER &&
+    return QB._typed_value(FT, QB._typed_parse(parser, SQLite.C.sqlite3_column_int64(handle, col - 1)), name, i, site)
+  t == SQLite.C.SQLITE_FLOAT &&
+    return QB._typed_value(FT, QB._typed_parse(parser, SQLite.C.sqlite3_column_double(handle, col - 1)), name, i, site)
+  t == SQLite.C.SQLITE_TEXT &&
+    return QB._typed_value(FT, QB._typed_parse(parser, SQLite.sqlitevalue(String, handle, col)), name, i, site)
+  return QB._typed_value(FT, QB._typed_parse(parser, SQLite.sqlitevalue(Any, handle, col)), name, i, site)
 end
 
 # Give back every hold this task still has on `conn`'s own lock after a statement failed (#1521).
@@ -375,7 +468,8 @@ end
 @setup_workload begin
   Models = PormG.Models
   CP = PormG.ConnectionPool
-  QB = PormG.QueryBuilder
+  # `QB` is the module's constant (top of file). PrecompileTools 1.2 runs this block at module top level,
+  # where assigning it again is "invalid assignment to constant".
 
   @compile_workload begin
     mktempdir() do dir

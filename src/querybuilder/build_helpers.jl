@@ -164,7 +164,7 @@ function _check_function(x::Vector{String})
     return x[1]
   else
     if haskey(PormGtransform, x[end])
-      resp = getfield(@__MODULE__, Symbol(PormGtransform[x[end]]))(x[1:end-1])
+      resp = _transform_call(PormGtransform[x[end]], x[1:end-1])
       return _check_function(resp)
     else
       # Sorted, as `_raise_invalid_filter_operator` already sorts its own copy of this list (#604):
@@ -361,4 +361,15 @@ function _retag_joined_field!(field::SQLField, alias::String)
   field.memo_as === nothing || (field.memo_as = _joined_as(alias, field.memo_as))   # #1004, as above
   field.root = :joined
   return field
+end
+
+# #1611 — a `__@` transform's constructor (`DATE`, `YEAR`, `ARRAY_LEN`, …) by the name `PormGtransform`
+# maps the lookup to, as one branch per name generated at definition time. It was
+# `getfield(@__MODULE__, Symbol(name))(…)`: a binding looked up by a name at run time, which a static
+# compiler cannot follow (`juliac --trim`, #1599). The map stays the one place a transform is admitted.
+let arms = [:(name == $s && return $(Symbol(s))(arg)) for s in unique(String[v for v in values(PormGtransform) if v isa String])]
+  @eval function _transform_call(name::AbstractString, arg)
+    $(arms...)
+    throw(QueryBuildError("No transform constructor is named $(name)."))
+  end
 end

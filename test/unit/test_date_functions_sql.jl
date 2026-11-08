@@ -30,7 +30,7 @@ struct _SlDateFnConn <: PormG.PormGSQLite end
 const _PG    = _PgDateFnConn()
 const _SL    = _SlDateFnConn()
 const _COL   = "\"t\".\"d\""            # a pre-quoted column reference
-const _EMPTY = Dict{String, Any}()
+const _EMPTY = Dialect.FnOptions()
 
 # #684 — one mock model, so the case-blind part is also pinned through the fluent `Extract` path the
 # docs teach, not only at the renderer. Own config key: `runtests.jl` shares one `Main`.
@@ -71,7 +71,7 @@ end
         ("YEAR",   "%Y"), ("MONTH",  "%m"), ("DAY",    "%d"), ("HOUR",   "%H"),
         ("MINUTE", "%M"), ("SECOND", "%S"), ("DOW",    "%w"), ("DOY",    "%j"),
       ]
-      fmt = Dict{String, Any}("part" => part)
+      fmt = Dialect.FnOptions("part" => part)
       # #571: every part SQLite can render is integer-valued there, so the PG arm casts to match.
       # `SECOND` is the one fractional part in the whitelist: `numeric::integer` ROUNDS, SQLite's
       # `%S` truncates, so PG truncates first.
@@ -84,45 +84,45 @@ end
     # the week's Thursday — numbered as PostgreSQL's `WEEK` / `ISOYEAR` / `ISODOW`. Their values are
     # executed against Julia's calendar in `test_transform_ladder_parity.jl`.
     thursday = "date($(_COL), '-3 days', 'weekday 4')"
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL) ==
+    @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "WEEK"), _SL) ==
           "((CAST(strftime('%j', $(thursday)) AS INTEGER) - 1) / 7 + 1)"
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ISOYEAR"), _SL) ==
+    @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "ISOYEAR"), _SL) ==
           "CAST(strftime('%Y', $(thursday)) AS INTEGER)"
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ISODOW"), _SL) ==
+    @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "ISODOW"), _SL) ==
           "((CAST(strftime('%w', $(_COL)) AS INTEGER) + 6) % 7 + 1)"
     # The SQLite whitelist is fail-closed: an unsupported part must throw, not emit garbage.
-    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "CENTURY"), _SL)
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "CENTURY"), _SL)
     # #571: PG-only parts that are fractional by definition are not cast to an integer — that would be
     # lossy and there is no SQLite twin to keep parity with. Any other PG-only part (WEEK, ISOYEAR, …)
     # casts. #1457: `EPOCH` is cast to `numeric`, the decimal PormG states for it on every server
     # (`extract` is a `double precision` below PostgreSQL 14). #1552: so are `JULIAN`, `MILLISECONDS` and
     # `MICROSECONDS`, the other parts PormG states a decimal (`_decimal_extract_kind`).
     for part in ("EPOCH", "JULIAN", "MILLISECONDS", "MICROSECONDS")
-      @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => part), _PG) == "EXTRACT($part FROM $(_COL))::numeric"
+      @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => part), _PG) == "EXTRACT($part FROM $(_COL))::numeric"
     end
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _PG) == "EXTRACT(WEEK FROM $(_COL))::integer"
+    @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "WEEK"), _PG) == "EXTRACT(WEEK FROM $(_COL))::integer"
     # Lower-case is what the docs spell (`Extract("date", "year")`); the cast rule is case-blind,
     # and since #691 the rendered field is the table's canonical spelling, not the caller's.
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "year"), _PG) == "EXTRACT(YEAR FROM $(_COL))::integer"
+    @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "year"), _PG) == "EXTRACT(YEAR FROM $(_COL))::integer"
   end
 
   # #684: PostgreSQL takes the part in any case, so SQLite must too — otherwise the docs' own
   # `Extract("date", "year")` ran on one engine only. The whitelist stays fail-closed in every case.
   @testset "EXTRACT part is case-blind on SQLite (#684)" begin
     for (spelling, canon) in [("year", "YEAR"), ("Year", "YEAR"), ("dow", "DOW"), ("second", "SECOND")]
-      @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => spelling), _SL) ==
-            Dialect.EXTRACT(_COL, Dict{String, Any}("part" => canon), _SL)
+      @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => spelling), _SL) ==
+            Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => canon), _SL)
     end
     # A real field SQLite cannot spell is still a capability gap. (`week` was the control here until
     # #636 gave SQLite the ISO week; `century` has no SQLite arm.)
-    err = try Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "century"), _SL); nothing catch e; e end
+    err = try Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "century"), _SL); nothing catch e; e end
     @test err isa PormG.BackendCapabilityError
     @test occursin("century", PormG.error_message(err))   # the caller's own spelling, not ours
-    @test Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "week"), _SL) ==
-          Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "WEEK"), _SL)
+    @test Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "week"), _SL) ==
+          Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "WEEK"), _SL)
     # The fold is ASCII-only: Julia's `uppercase("ſecond") == "SECOND"`, and PostgreSQL rejects it.
     # Since #691 that is `InvalidValueError` — it is no field at all, not a SQLite capability gap.
-    @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "ſecond"), _SL)
+    @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "ſecond"), _SL)
 
     q = DateFnModels.Datefn_race.objects
     q.values("y" => Extract("date", "year"), "w" => Extract("date", "dow"))
@@ -141,14 +141,14 @@ end
     @test length(Dialect.PG_EXTRACT_FIELDS) == 22
     for field in Dialect.PG_EXTRACT_FIELDS, spelling in (field, lowercase(field))
       @test occursin("EXTRACT($(field) FROM $(_COL))",
-                     Dialect.EXTRACT(_COL, Dict{String, Any}("part" => spelling), _PG))
+                     Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => spelling), _PG))
       @test Extract("date", spelling) isa PormG.SQLTypeFunction
     end
 
     # PostgreSQL's own synonyms (`years`, `hr`) are refused too: the docs name the canonical list.
     hostile = ["year FROM now()) --", "week; DROP TABLE race", "", "fortnight", "ſecond", "years", "hr"]
     for part in hostile
-      fmt = Dict{String, Any}("part" => part)
+      fmt = Dialect.FnOptions("part" => part)
       @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, fmt, _PG)
       # Junk is not a capability gap: SQLite gives the same type, not `BackendCapabilityError`.
       @test_throws PormG.InvalidValueError Dialect.EXTRACT(_COL, fmt, _SL)
@@ -164,7 +164,7 @@ end
     @test !occursin('\e', PormG.error_message(err)) && !occursin('\n', PormG.error_message(err))
 
     # A real field SQLite cannot spell keeps the capability error.
-    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, Dict{String, Any}("part" => "century"), _SL)
+    @test_throws PormG.BackendCapabilityError Dialect.EXTRACT(_COL, PormG.Dialect.FnOptions("part" => "century"), _SL)
 
     # The 3-arg raw cast suffix is retired; `Cast` is the one way to retype the result.
     @test_throws MethodError Extract("date", "epoch", "::bigint")
@@ -179,7 +179,7 @@ end
   # date_format_map. "YYYY-MM" must resolve to "%Y-%m" (byte-identical logical mask).
   # ===========================================================================
   @testset "EXTRACT_DATE Y_M mask" begin
-    fmt = Dict{String, Any}("format" => "YYYY-MM")
+    fmt = Dialect.FnOptions("format" => "YYYY-MM")
     @test occursin("to_char($(_COL), 'YYYY-MM')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
     @test occursin("strftime('%Y-%m', $(_COL))",  Dialect.EXTRACT_DATE(_COL, fmt, _SL))
   end
@@ -195,7 +195,7 @@ end
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "EXTRACT_DATE renders each engine's own template (#569)" begin
     for (key, entry) in PormG.date_format_map
-      fmt = Dict{String, Any}("format" => key)
+      fmt = Dialect.FnOptions("format" => key)
       # The PostgreSQL arm renders the `postgres` half — never the key.
       @test occursin("to_char($(_COL), '$(entry.postgres)')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
       # The SQLite arm renders the `sqlite` half.
@@ -211,7 +211,7 @@ end
       @test !occursin(r"(?<!\")T(?!\")", entry.postgres)
     end
     # The row the canonical timestamp mask derives from, spelled out so a regression is readable.
-    fmt = Dict{String, Any}("format" => "YYYY-MM-DDTHH:MI:SS.SSS")
+    fmt = Dialect.FnOptions("format" => "YYYY-MM-DDTHH:MI:SS.SSS")
     @test occursin("to_char($(_COL), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
     @test occursin("strftime('%Y-%m-%dT%H:%M:%f', $(_COL))", Dialect.EXTRACT_DATE(_COL, fmt, _SL))
     # One canonical spelling: the mask date arithmetic canonicalizes through IS that row plus the
@@ -230,7 +230,7 @@ end
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "EXTRACT_DATE unmapped format: PG passes through escaped, SQLite refuses (#569)" begin
     # A native template the map does not carry — the 12-hour clock PostgreSQL users may want.
-    fmt = Dict{String, Any}("format" => "HH12:MI AM")
+    fmt = Dialect.FnOptions("format" => "HH12:MI AM")
     @test occursin("to_char($(_COL), 'HH12:MI AM')", Dialect.EXTRACT_DATE(_COL, fmt, _PG))
     @test_throws PormG.BackendCapabilityError Dialect.EXTRACT_DATE(_COL, fmt, _SL)
     # The refusal names the supported formats, so the user can pick a portable one.
@@ -242,7 +242,7 @@ end
     @test occursin("HH12:MI AM", PormG.error_message(err))
     @test occursin("YYYY-MM-DD", PormG.error_message(err))
     # A quote inside the pass-through is doubled, not written raw into the literal.
-    quoted = Dict{String, Any}("format" => "YYYY'MM")
+    quoted = Dialect.FnOptions("format" => "YYYY'MM")
     @test occursin("to_char($(_COL), 'YYYY''MM')", Dialect.EXTRACT_DATE(_COL, quoted, _PG))
     @test !occursin("'YYYY'MM'", Dialect.EXTRACT_DATE(_COL, quoted, _PG))
   end

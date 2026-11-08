@@ -774,7 +774,7 @@ function _render_predicate(column::AbstractString, operator::AbstractString, pla
     # caller's `contains=`; the two halves are useless apart. The SQLite-refusing arms
     # (`*unaccent*`, and the regex four since #635) raise `BackendCapabilityError` from here, so an
     # alias filter reports the same capability error a WHERE filter does.
-    return getfield(Dialect, Symbol(operator))(instruc.connection, column, placeholders)
+    return _pattern_operator_sql(operator, instruc.connection, column, placeholders)
   else
     throw(FilterError("Invalid filter operator: $(operator) is not a supported operator."))
   end

@@ -5,8 +5,8 @@ struct ManyToManyDescriptor
 end
 
 struct ManyToManyManager
-  owner_model::PormGModel
-  related_model::PormGModel
+  owner_model::Models.ModelType     # #1615: the concrete model type, as `SQLObjectQuery.model`
+  related_model::Models.ModelType
   relation::Models.ManyToManyRelation
   owner_id::Any
 end

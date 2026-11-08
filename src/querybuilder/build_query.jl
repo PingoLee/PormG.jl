@@ -213,11 +213,6 @@ function build(object::SQLObject;
         table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
         alias=get_alias(table_alias),
         connection=connection,
-        # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the
-        # absence of one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree
-        # about the same connection. With `django_prefix: ''` the old spelling produced `django == "_"`,
-        # so the reverse-join table fallback below prefixed every unpinned table with an underscore.
-        django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
         parameters=parameters,
         outer=outer,
         cte_body=cte_body,
@@ -226,6 +221,15 @@ function build(object::SQLObject;
         defer_outer_join_check=defer_outer_join_check,
         cte_state=cte_state,
       )
+      # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the absence of
+      # one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree about the same
+      # connection. With `django_prefix: ''` the old spelling produced `django == "_"`, so the reverse-join
+      # table fallback prefixed every unpinned table with an underscore.
+      # #1698: set after construction, not as a keyword. A `Union{Nothing,String}` value made the keyword
+      # `NamedTuple` abstract, so the `@kwdef` constructor call was a dynamic `kwcall`: the trimmed
+      # fixture's `list(T)` stopped there once the slots before it were closed.
+      app_label = Models._django_app_label(settings)
+      instruct.django = app_label === nothing ? nothing : app_label * "_"   # TODO, remover
 
       # #977: the moment the registry is final (above) — every relation and `cjoin` link the join conditions could name
       # is declared now, so this is where they are bound onto their paths and checked (#962, #974).

@@ -148,7 +148,7 @@ function _push_model_struct_fields!(fields::Vector{_StructField}, model::PormGMo
   return fields
 end
 
-function _projection_struct_field(v::Union{SQLTypeText,SQLTypeField}, rendered, instruction::SQLInstruction,
+function _projection_struct_field(v::ProjectionNode, rendered, instruction::SQLInstruction,
                                   conn, outer::Bool, usings::Set{Symbol})::_StructField
   name = String(something(_projection_output_name(v), ""))
   node = v isa SQLTypeText ? v : v.field
@@ -614,7 +614,7 @@ end
 function query(q::SQLObjectHandler;
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, _SQLEngine} = nothing,
-  parameters::Union{Nothing, AbstractPormGParam} = nothing,
+  parameters::Union{Nothing,ParamCollector} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,
   show_query::Symbol = :execute,
   built::Union{Nothing,Function} = nothing,
@@ -659,7 +659,7 @@ end
 function _render_select(q::SQLObjectHandler;
   table_alias::Union{Nothing, SQLTableAlias} = nothing,
   connection::Union{Nothing, _SQLEngine} = nothing,
-  parameters::Union{Nothing, AbstractPormGParam} = nothing,
+  parameters::Union{Nothing,ParamCollector} = nothing,
   outer::Union{Nothing, SQLInstruction} = nothing,
   show_query::Symbol = :execute,
   # #929: called with the inner build's instruction right after `build()`, while its memos still hold
@@ -910,22 +910,25 @@ _projection_shapes_rows(object::SQLObject; distinct::Bool, clear_degenerate::Boo
 #   That guard reads the projection list, so a cleared projection let the key silently mean the
 #   column; kept, the build refuses it as `list()` does (review of #1082).
 # `Exists(...)` in a filter is its own query.
-function _filters_name_alias(object::SQLObject)::Bool
+function _filters_name_alias(object::SQLObjectQuery)::Bool
   instruc = _declaration_instruction(object)
-  hit = false
+  # #1698: a box the visitor writes through and never reassigns (a reassigned capture is a `Core.Box`,
+  # #1693), and each entry at its concrete type through the slot's walk.
+  hit = Base.RefValue{Bool}(false)
   for f in object.filter
     f isa ExistsObject && continue
-    _each_condition_leaf(f) do leaf
-      hit && return nothing
+    visit = leaf -> begin
+      hit[] && return nothing
       key = _plain_filter_key(leaf.column)
       if key !== nothing && !(key in object.model.field_names)
-        hit = true
+        hit[] = true
       elseif (mkey = _model_filter_key(leaf.column, instruc)) !== nothing
-        hit = any(p -> _projection_output_name(p) == mkey && !_projects_column(p, mkey), object.values)
+        hit[] = any(p -> _projection_output_name(p) == mkey && !_projects_column(p, mkey), object.values)
       end
       return nothing
     end
-    hit && return true
+    with_filter_node(_each_condition_leaf_of, f, visit)
+    hit[] && return true
   end
   return false
 end
@@ -1066,7 +1069,7 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
       is_distinct = distinct || q.object.distinct
       keep_values = _projection_shapes_rows(q.object; distinct = is_distinct, clear_degenerate = false)
       _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
-      keep_values || (q.object.values = [])
+      keep_values || (q.object.values = ProjectionNode[])
 
       # Create shared table alias and parameters BEFORE building CTEs
       # so CTE parameters are numbered first (critical for positional backends).
@@ -1205,7 +1208,7 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
         # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
         keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
         _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
-        keep_values || (q.object.values = [])
+        keep_values || (q.object.values = ProjectionNode[])
 
         # Create shared table alias and parameters BEFORE building CTEs
         # so CTE parameters are numbered first (critical for positional backends).
@@ -1826,7 +1829,7 @@ end
 
 # The filters a `DoesNotExist` / `MultipleObjectsReturned` message names.
 _filters_repr(q::SQLObjectHandler)::String =
-  isempty(q.object.filter) ? "(none)" : join(_get_filter_repr.(q.object.filter), ", ")
+  isempty(q.object.filter) ? "(none)" : join(String[with_filter_node(_get_filter_repr, f) for f in q.object.filter], ", ")
 
 function _get_filter_repr(filter::SQLTypeOper)::String
   column = filter.column isa SQLTypeField ? filter.column.field : filter.column

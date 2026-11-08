@@ -161,7 +161,7 @@ end
 function build(object::SQLObject;
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
   connection::Union{Nothing,_SQLEngine}=nothing,
-  parameters::Union{Nothing,AbstractPormGParam}=nothing,
+  parameters::Union{Nothing,ParamCollector}=nothing,   # #1698: the closed collector set
   outer::Union{Nothing,SQLInstruction}=nothing,
   # #1002: the statement only asks whether a row matches — an `EXISTS`, an `IN (…)`, a mutation scoped by
   # `pk IN (…)` — so a repeated base row cannot be observed and the cardinality check does not apply.

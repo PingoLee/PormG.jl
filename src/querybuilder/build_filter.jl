@@ -11,118 +11,125 @@
   - This internal function is called by the `build` function.
 
   #### Arguments
-  - `object::SQLObject`: The object containing the filter to be selected.
+  - `object::SQLObjectQuery`: The object containing the filter to be selected.
   - `instruc::SQLInstruction`: The SQLInstruction object to which the WHERE query will be added.
 """
-function get_filter_query(object::SQLObject, instruc::SQLInstruction)::Nothing
-  # [isa(v, Union{SQLTypeQor, SQLTypeQ, SQLTypeOper}) ? push!(instruc._where, _get_filter_query(v, instruc)) : throw("Error in values, $(v) is not a SQLTypeQor, SQLTypeQ or SQLTypeOper") for v in object.filter]
+function get_filter_query(object::SQLObjectQuery, instruc::SQLInstruction)::Nothing
   @pormg_debug false
+  # #1698: each entry at its concrete type, through the slot's walk. `FilterNode` has six members, past
+  # inference's union-splitting limit, so the guards below dispatched at run time on every entry.
   for v in object.filter
-    _guard_no_aggregate_predicate(v, instruc)   # #537
-    _guard_field_alias_collision(v, instruc)   # #703
-    if isa(v, ExistsObject)
-      push!(instruc._where, _get_filter_query(v, instruc))
-    elseif isa(v, SQLTypeOper)
-      @pormg_debug false
-      if _alias_filter_key(v.column, instruc) !== nothing
-        # #446. This branch is reached by a PLAIN filter key — no `__` — that is not a field on the
-        # model, which means it is either a projection alias (the documented HAVING spelling) or a
-        # name that does not exist. The `try`/`catch` here only rethrew: it was a debug hook, not a
-        # guard, so an unknown name escaped as a bare `KeyError` naming an internal dict. That made
-        # the simplest possible mistake — `filter("nope" => 1)` — the one PormG reported worst, and
-        # it shadowed the `UnknownFieldError` further down this same function, which could never be
-        # reached for a plain String column.
-        #
-        # Guard immediately above the raw index and leave the index plain, the shape #433 settled:
-        # the membership test is what makes it total.
-        # #474: `memo_key` here is uniform-with-its-neighbours, not CTE support. This branch is gated
-        # on `v.column.field isa String && !contains(field, "__")`, and `_retag_cte_field!` always
-        # replaces `field` with a `CTEReference` or an `SQLTypeFunction`, so `root` is always `:base`
-        # on this path. It is read through the key helper anyway so that a CTE arriving here later is
-        # namespaced like everywhere else rather than silently sharing a base-model entry.
-        having_key = memo_key(v.column)
-        having_cached = memo_projection(instruc, having_key)
-        # #1134: not an alias, and a relation rather than a typo — the message `_solve_field` gives a
-        # relation as a path's last segment. After the alias lookup, so a declared alias still wins.
-        if having_cached === nothing
-          relation = _relation_terminal(instruc.object.model, v.column.field)
-          relation === nothing || throw(relation)
-        end
-        having_cached === nothing &&
-          # #474: report the aliases the CALLER could have written, never an internal memo key.
-          # #1004: read off the declaration, not the memo — a path projection is memoized under its
-          # path, so the memo listed `race_date__year` for `values("yr" => "race_date__@year")`.
-          throw(_unknown_field(instruc.object.model, v.column.field;
-                               aliases = _declared_alias_names(instruc),
-                               hint = _path_alias_hint(v.column.field, instruc)))
-        # #701: only an AGGREGATE alias filters groups. A row alias — `F("raceid") + 1`, a bare
-        # `F("code")` — has one value per row, so its predicate belongs in WHERE; sending every
-        # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
-        # #692's `_aggregate_alias_leaf` draws the same line for `Q`, on the same test: #702 made the
-        # flag true for a wrapped aggregate, and #722 resolves it through an alias the projection's
-        # conditions read (`Case([When("total__@gte" => 100, …)])` over `"total" => Sum(…)`), which
-        # no flag set at construction can see. No projection source keeps the HAVING route it always
-        # had; since #707 a `Value(...)` alias has one, so a literal filters in WHERE (`? = ?`, both
-        # values bound) instead of printing `HAVING ? = ?`.
-        #
-        # Only the CLAUSE moves. The predicate still renders through `_render_alias_predicate`, not
-        # through the WHERE path the `Q` spelling takes, because that is where the alias's value is
-        # typed from the projection (#576): a `Date` on a date alias formats as the column does, and
-        # `"not-a-date"` raises `FilterError` naming the alias. The untyped path binds the value as
-        # given — which went unnoticed while this statement could not execute, and would not once it
-        # can. `test_operators.jl` pins it.
-        source = _projected_source(having_key, instruc)
-        clause = (source === nothing || _resolved_agg(source.field, instruc)) ? :having : :where
-        # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`, `Max("grid")`) has no
-        # value to type — it is a comparison between two expressions, which the WHERE path renders:
-        # `_get_filter_query(::SQLTypeField)` resolves the alias through `_alias_lhs` (re-rendering
-        # a binding aggregate in the current clause) and the right-hand side renders as SQL. The
-        # typed renderer would hand the node to a value formatter and die with a `MethodError`, as
-        # this spelling always did, over a row alias (WHERE) and an aggregate one (HAVING) alike.
-        # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
-        if _compared_operand(v)
-          _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
-          clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
-          with_bucket(instruc, clause) do
-            push!(clause === :having ? instruc.having : instruc._where,
-                  _in_clause_phase(() -> _get_filter_query(v, instruc), instruc, clause, having_key[2]))
-          end
-          continue
-        end
-        # Switch to the clause's context for positional parameters. #595 moved this ABOVE the
-        # left-hand side: resolving it can now RENDER, and a render binds — those values belong in
-        # the clause's bucket with the comparison value, ahead of it, exactly as they print.
-        # `with_bucket` restores on throw too, and the render can throw from several places — the
-        # guards, the fresh render in `_alias_lhs` (#595), `_render_predicate`'s unknown-operator
-        # `FilterError` and the SQLite-refusing `Dialect` arms' `BackendCapabilityError` (#618). It
-        # RESTORES the ambient bucket rather than resetting to `:where` (#936, #939): the two agree
-        # only while this runs under `build()`'s `:where`, and nothing enforced that.
+    with_filter_node(_where_node!, v, instruc)
+  end
+  return nothing
+end
+
+# One `filter()` entry rendered into WHERE or HAVING (`get_filter_query`'s loop body, #1698).
+function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
+  _guard_no_aggregate_predicate(v, instruc)   # #537
+  _guard_field_alias_collision(v, instruc)   # #703
+  if isa(v, ExistsObject)
+    push!(instruc._where, _get_filter_query(v, instruc))
+  elseif isa(v, SQLTypeOper)
+    @pormg_debug false
+    if _alias_filter_key(v.column, instruc) !== nothing
+      # #446. This branch is reached by a PLAIN filter key — no `__` — that is not a field on the
+      # model, which means it is either a projection alias (the documented HAVING spelling) or a
+      # name that does not exist. The `try`/`catch` here only rethrew: it was a debug hook, not a
+      # guard, so an unknown name escaped as a bare `KeyError` naming an internal dict. That made
+      # the simplest possible mistake — `filter("nope" => 1)` — the one PormG reported worst, and
+      # it shadowed the `UnknownFieldError` further down this same function, which could never be
+      # reached for a plain String column.
+      #
+      # Guard immediately above the raw index and leave the index plain, the shape #433 settled:
+      # the membership test is what makes it total.
+      # #474: `memo_key` here is uniform-with-its-neighbours, not CTE support. This branch is gated
+      # on `v.column.field isa String && !contains(field, "__")`, and `_retag_cte_field!` always
+      # replaces `field` with a `CTEReference` or an `SQLTypeFunction`, so `root` is always `:base`
+      # on this path. It is read through the key helper anyway so that a CTE arriving here later is
+      # namespaced like everywhere else rather than silently sharing a base-model entry.
+      having_key = memo_key(v.column)
+      having_cached = memo_projection(instruc, having_key)
+      # #1134: not an alias, and a relation rather than a typo — the message `_solve_field` gives a
+      # relation as a path's last segment. After the alias lookup, so a declared alias still wins.
+      if having_cached === nothing
+        relation = _relation_terminal(instruc.object.model, v.column.field)
+        relation === nothing || throw(relation)
+      end
+      having_cached === nothing &&
+        # #474: report the aliases the CALLER could have written, never an internal memo key.
+        # #1004: read off the declaration, not the memo — a path projection is memoized under its
+        # path, so the memo listed `race_date__year` for `values("yr" => "race_date__@year")`.
+        throw(_unknown_field(instruc.object.model, v.column.field;
+                             aliases = _declared_alias_names(instruc),
+                             hint = _path_alias_hint(v.column.field, instruc)))
+      # #701: only an AGGREGATE alias filters groups. A row alias — `F("raceid") + 1`, a bare
+      # `F("code")` — has one value per row, so its predicate belongs in WHERE; sending every
+      # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
+      # #692's `_aggregate_alias_leaf` draws the same line for `Q`, on the same test: #702 made the
+      # flag true for a wrapped aggregate, and #722 resolves it through an alias the projection's
+      # conditions read (`Case([When("total__@gte" => 100, …)])` over `"total" => Sum(…)`), which
+      # no flag set at construction can see. No projection source keeps the HAVING route it always
+      # had; since #707 a `Value(...)` alias has one, so a literal filters in WHERE (`? = ?`, both
+      # values bound) instead of printing `HAVING ? = ?`.
+      #
+      # Only the CLAUSE moves. The predicate still renders through `_render_alias_predicate`, not
+      # through the WHERE path the `Q` spelling takes, because that is where the alias's value is
+      # typed from the projection (#576): a `Date` on a date alias formats as the column does, and
+      # `"not-a-date"` raises `FilterError` naming the alias. The untyped path binds the value as
+      # given — which went unnoticed while this statement could not execute, and would not once it
+      # can. `test_operators.jl` pins it.
+      source = _projected_source(having_key, instruc)
+      clause = (source === nothing || _resolved_agg(source.field, instruc)) ? :having : :where
+      # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`, `Max("grid")`) has no
+      # value to type — it is a comparison between two expressions, which the WHERE path renders:
+      # `_get_filter_query(::SQLTypeField)` resolves the alias through `_alias_lhs` (re-rendering
+      # a binding aggregate in the current clause) and the right-hand side renders as SQL. The
+      # typed renderer would hand the node to a value formatter and die with a `MethodError`, as
+      # this spelling always did, over a row alias (WHERE) and an aggregate one (HAVING) alike.
+      # Same rule as `_row_alias_leaf` and `_get_having_query`, so both spellings agree.
+      if _compared_operand(v)
+        _guard_window_alias_predicate(source, having_key[2], instruc)   # #685, as the typed path does
+        clause === :where && _guard_where_operand(v, instruc)   # #895: a row alias against an aggregate
         with_bucket(instruc, clause) do
           push!(clause === :having ? instruc.having : instruc._where,
-                _in_clause_phase(() -> _render_alias_predicate(v, having_key, having_cached, instruc),
-                                 instruc, clause, having_key[2]))
+                _in_clause_phase(() -> _get_filter_query(v, instruc), instruc, clause, having_key[2]))
         end
-        continue
+        return nothing
       end
-      _guard_where_operand(v, instruc)   # #895
-      push!(instruc._where, _get_filter_query(v, instruc))
-    elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
-      _guard_window_alias_in_q(v, instruc)   # #685
-      # #692: an aggregate alias inside `Q`/`Qor` belongs in HAVING, as it does unwrapped. The split
-      # hands back the original object on whichever side takes all of it, so a filter with no
-      # aggregate-alias term renders exactly as it did before.
-      where_part, having_part = _split_having(v, instruc)
-      where_part === nothing || push!(instruc._where, _get_where_query(where_part, instruc))
-      if having_part !== nothing
-        with_bucket(instruc, :having) do
-          push!(instruc.having, with_scope(() -> _get_having_query(having_part, instruc), instruc;
-                                           phase = :group, having = true,   # #1367: promotes nothing
-                                           label = _having_subquery_label(string(_having_leaf_label(having_part)))))
-        end
+      # Switch to the clause's context for positional parameters. #595 moved this ABOVE the
+      # left-hand side: resolving it can now RENDER, and a render binds — those values belong in
+      # the clause's bucket with the comparison value, ahead of it, exactly as they print.
+      # `with_bucket` restores on throw too, and the render can throw from several places — the
+      # guards, the fresh render in `_alias_lhs` (#595), `_render_predicate`'s unknown-operator
+      # `FilterError` and the SQLite-refusing `Dialect` arms' `BackendCapabilityError` (#618). It
+      # RESTORES the ambient bucket rather than resetting to `:where` (#936, #939): the two agree
+      # only while this runs under `build()`'s `:where`, and nothing enforced that.
+      with_bucket(instruc, clause) do
+        push!(clause === :having ? instruc.having : instruc._where,
+              _in_clause_phase(() -> _render_alias_predicate(v, having_key, having_cached, instruc),
+                               instruc, clause, having_key[2]))
       end
-    else
-      throw(FilterError("Invalid filter entry: a $(typeof(v)) is not a Q, Qor, or operator expression."))
+      return nothing
     end
+    _guard_where_operand(v, instruc)   # #895
+    push!(instruc._where, _get_filter_query(v, instruc))
+  elseif isa(v, Union{SQLTypeQor,SQLTypeQ,SQLTypeF})
+    _guard_window_alias_in_q(v, instruc)   # #685
+    # #692: an aggregate alias inside `Q`/`Qor` belongs in HAVING, as it does unwrapped. The split
+    # hands back the original object on whichever side takes all of it, so a filter with no
+    # aggregate-alias term renders exactly as it did before.
+    where_part, having_part = _split_having(v, instruc)
+    where_part === nothing || push!(instruc._where, _get_where_query(where_part, instruc))
+    if having_part !== nothing
+      with_bucket(instruc, :having) do
+        push!(instruc.having, with_scope(() -> _get_having_query(having_part, instruc), instruc;
+                                         phase = :group, having = true,   # #1367: promotes nothing
+                                         label = _having_subquery_label(string(_having_leaf_label(having_part)))))
+      end
+    end
+  else
+    throw(FilterError("Invalid filter entry: a $(typeof(v)) is not a Q, Qor, or operator expression."))
   end
   return nothing
 end
@@ -268,6 +275,8 @@ end
 # in a window's `partition_by`/`order_by`, or inside an explicit `SQLField(…)` wrap.
 # A subquery or `Exists` is its own instruction with its own projection list, so it is not entered.
 # Depth cap as in `_guard_no_aggregate_predicate`.
+# `_each_condition_leaf` with the node first, the argument order the slot walks call in (#1698).
+_each_condition_leaf_of(node, f::F) where {F<:Function} = _each_condition_leaf(f, node)
 function _each_condition_leaf(f::Function, node, depth::Int = 0)
   depth > 32 && return nothing
   if node isa SQLTypeOper

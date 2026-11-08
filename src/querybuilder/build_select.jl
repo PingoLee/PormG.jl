@@ -76,7 +76,7 @@ end
 # - `:group` — anything else: a column, a path, a handle, a row expression. It adds a positional term.
 # Whether the STATEMENT aggregates is a separate question (#776): a window over an aggregate does,
 # and `get_select_query` reads `_contains_agg` beside this for it.
-function _group_role(v::Union{SQLTypeText,SQLTypeField}, instruc::SQLInstruction)::Symbol
+function _group_role(v::ProjectionNode, instruc::SQLInstruction)::Symbol
   v isa SQLTypeText && return :none
   node = v.field
   node isa Union{SubqueryObject,ExistsObject} && return :none
@@ -93,7 +93,7 @@ end
 # vector's abstract element type was a dynamic call with a run-time walk behind it, which a trimmed build
 # has no compiled target for (`juliac --trim`, the verifier reached it from `list(T)`). An `SQLText` (a
 # `Value(x)` literal) is immutable and is only read, so it is its own copy.
-function _projection_copy(v::Union{SQLTypeText,SQLTypeField})
+function _projection_copy(v::ProjectionNode)
   v isa SQLText && return v
   v isa SQLTypeField && return _field_copy(v)
   return deepcopy(v)   # an `SQLTypeText` other than `SQLText` (none in src/): the generic copy, JIT-only
@@ -107,7 +107,7 @@ function _field_copy(v::SQLTypeField)
 end
 
 """
-  get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
+  get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstruction)
 
   Iterates over the values of the object and generates the SELECT query for the given SQLInstruction object.
 
@@ -118,7 +118,7 @@ end
   - `object::SQLObject`: The object containing the values to be selected.
   - `instruc::SQLInstruction`: The SQLInstruction object to which the SELECT query will be added.
 """
-function get_select_query(values::Vector{Union{SQLTypeText,SQLTypeField}}, instruc::SQLInstruction)
+function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstruction)
   _guard_select_condition_collision(values, instruc)   # #706
   # #1335: one slot per projection, so `select[i]` is `values[i]`'s. It was a fixed 60-slot buffer and
   # the 61st projection threw `BoundsError`. Slots past `i` stay `undef` until the loop reaches them,

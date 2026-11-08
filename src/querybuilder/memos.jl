@@ -104,14 +104,19 @@ memo_key(ns::Symbol, name::AbstractString)::MemoKey = (ns, String(name))
 # allocates it, unsized. The `sizehint!(…, 12)` the two dicts had allocated a 32-slot table up front
 # (976 bytes on Julia 1.13, against 80 for an empty `Dict`, which allocates its table on first insert),
 # and most builds hold a handful of keys.
-memo_projection(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,SQLTypeField} =
+#
+# #1698: `SQLField`, the memo's element type since `InstructionObject.cache` is a `Dict{MemoKey,SQLField}`.
+# The container built here must be of exactly that type: assigning a `Dict{MemoKey,SQLTypeField}` into
+# the slot CONVERTS it, so the dict this accessor returned would be a copy and the first write into it
+# would be lost (measured on this branch before the fix: `test_projection_names.jl`'s #706 case).
+memo_projection(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,SQLField} =
   (memo = instruc.cache; memo === nothing ? nothing : get(memo, key, nothing))
 memo_projection(::SQLInstruction, ::Nothing)::Nothing = nothing
 
-memo_projection!(instruc::SQLInstruction, key::MemoKey, v::SQLTypeField)::SQLTypeField =
+memo_projection!(instruc::SQLInstruction, key::MemoKey, v::SQLField)::SQLField =
   _projection_memo!(instruc)[key] = v
-_projection_memo!(instruc::SQLInstruction)::Dict{MemoKey,SQLTypeField} =
-  (memo = instruc.cache; memo === nothing ? (instruc.cache = Dict{MemoKey,SQLTypeField}()) : memo)
+_projection_memo!(instruc::SQLInstruction)::Dict{MemoKey,SQLField} =
+  (memo = instruc.cache; memo === nothing ? (instruc.cache = Dict{MemoKey,SQLField}()) : memo)
 
 # (`memo_projection_names` used to sit here, listing the NAME half of every key for the unknown-field
 # message. #1004 removed it: a memo name is not a declared name — a path projection is keyed by its

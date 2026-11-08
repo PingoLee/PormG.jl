@@ -544,7 +544,7 @@ function _is_wildcard_projection(value)
   return false
 end
 
-function _is_wildcard_projection(value::Union{SQLTypeText,SQLTypeField})
+function _is_wildcard_projection(value::ProjectionNode)
   value isa SQLTypeText && return false
   if value.custom_as == "*" || value._as == "*"
     return true

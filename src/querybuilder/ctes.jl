@@ -592,14 +592,15 @@ function _bind_cte_order(o::SQLTypeOrder, q::SQLObject)::SQLTypeOrder
   return SQLOrder(_bind_cte_string!(_field_copy(f), q), o.order, o.orientation, o._as, o.nulls)
 end
 
-function _resolve_cte_string_paths(q::SQLObject)::SQLObject
+function _resolve_cte_string_paths(q::SQLObjectQuery)::SQLObjectQuery
   # A query with no CTE cannot have a CTE-rooted path, so it pays one `isempty` and nothing else.
   # That is most of the neutrality argument for this pass, for free.
   isempty(q.ctes) && return q
 
   # #1612: `_field_copy`, the one-level copy `deepcopy(::SQLTypeField)` makes, named per concrete type.
-  values = Union{SQLTypeText,SQLTypeField}[v isa SQLField ? _bind_cte_string!(_field_copy(v), q) : v for v in q.values]
-  filter = FilterType[_bind_cte_filter(f, q) for f in q.filter]
+  values = ProjectionNode[v isa SQLField ? _bind_cte_string!(_field_copy(v), q) : v for v in q.values]
+  # #1698: each element at its concrete type, through the slot's walk.
+  filter = FilterNode[with_filter_node(_bind_cte_filter, f, q) for f in q.filter]
   order = SQLTypeOrder[_bind_cte_order(o, q) for o in q.order]
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
@@ -619,7 +620,7 @@ end
 # The pre-#1624 name, kept only because `test/unit/test_cte_reference.jl` (a copy-rule test kept
 # unchanged by #1624) calls it and reads the RETURNED object. Despite the `!`, it mutates nothing: it
 # is `_resolve_cte_string_paths`, which returns the view.
-_resolve_cte_string_paths!(q::SQLObject) = _resolve_cte_string_paths(q)
+_resolve_cte_string_paths!(q::SQLObjectQuery) = _resolve_cte_string_paths(q)
 
 # Filter elements are containers, not `SQLField`s, so they get their own shallow walk down to the
 # fields that carry a column. A handle on the RHS (`filter("x" => CTE("ev","sku"))`) is already legal
@@ -659,7 +660,7 @@ Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
 # Returns
 - String containing the WITH clause SQL, or empty string if no CTEs
 """
-function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, connection, parameters::Union{Nothing,AbstractPormGParam}, table_alias::Union{Nothing,SQLTableAlias};
+function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, connection, parameters::Union{Nothing,ParamCollector}, table_alias::Union{Nothing,SQLTableAlias};
                           correlated::Bool = false)::Tuple{String,Union{Nothing,Dict{String,CTEState}}}
   # #1624: the second value is what each body's build derived (`CTEState`), for the caller to hand to
   # the declaring query's `build(...; cte_state)`. It used to be written into each `CTEDict`.

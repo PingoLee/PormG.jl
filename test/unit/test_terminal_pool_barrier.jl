@@ -159,7 +159,8 @@ const _TPB_REVIEWED_BOXES = Dict(
   "deletion.jl" => 4,          # delete's body (2); topological_sort; _collector_predicate
   "execution_bulk.jl" => 7,    # bulk_insert (4: keyword body, body, its insert loop); _bulk_update (3)
   "execution_read.jl" => 2,    # _filters_name_alias and a closure in it
-  "execution_write.jl" => 6,   # insert's body; _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
+  "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
+                               # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed)
   "expression_render.jl" => 1, # _refuse_unnamed_temporal
   "filter_nodes.jl" => 1,      # _format_filter_value
   "join_conditions.jl" => 2,   # _bind_cjoin_on_conditions!; _join_scope
@@ -167,56 +168,21 @@ const _TPB_REVIEWED_BOXES = Dict(
   "sql_format.jl" => 2,        # _format_sql
 )
 
-_tpb_isbox(x) = x === Core.Box || (x isa GlobalRef && x.mod === Core && x.name === :Box)
-function _tpb_boxes(ci::Core.CodeInfo)
-  n = 0
-  for st in ci.code
-    st isa Expr || continue
-    rhs = st.head === :(=) ? st.args[2] : st
-    rhs isa Expr && rhs.head === :call && _tpb_isbox(rhs.args[1]) && (n += 1)
-  end
-  return n
-end
+# The detector is shared with test_type_ratchet.jl (#1697), which counts the rest of src/ and ext/.
+include(joinpath(@__DIR__, "helper_core_box.jl"))
 
-# Every method defined in a src/querybuilder/ file, found by walking the whole method table: the query
-# builder's functions and closures, and the methods it adds to functions it does not own
-# (`Tables.columns`, a `Base` method, a keyword sorter), where a terminal's own box would also be built.
-function _tpb_box_counts()
-  counts = Dict{String,Int}()
-  Base.visit(Core.methodtable) do m
-    m isa Method || return
-    startswith(string(m.file), _TPB_QB_DIR) || return
-    isdefined(m, :generator) && return   # an `@generated` method has no source to lower here
-    n = _tpb_boxes(Base.uncompressed_ast(m))
-    n == 0 && return
-    rel = _tpb_rel(string(m.file))
-    counts[rel] = get(counts, rel, 0) + n
-    return
-  end
-  return counts
-end
-
-# A closure that reassigns what it captures, and one that does not: the detector's own check.
-function _tpb_boxing()
-  x = 1
-  bump = () -> (x += 1)
-  bump()
-  return x
-end
-function _tpb_not_boxing()
-  x = 1
-  read_x = () -> x + 1
-  return read_x()
-end
+# Every method defined in a src/querybuilder/ file, keyed by its path from that folder.
+_tpb_box_sites() = core_box_sites(f -> startswith(f, _TPB_QB_DIR), _tpb_rel)
 
 @testset "#1693: no new Core.Box in src/querybuilder/, closures included" begin
-  counts = _tpb_box_counts()
+  sites = _tpb_box_sites()
+  counts = Dict(k => length(v) for (k, v) in sites)
   @test counts == _TPB_REVIEWED_BOXES
-  counts == _TPB_REVIEWED_BOXES || @info "Core.Box per file (reviewed → now)" _TPB_REVIEWED_BOXES counts
+  counts == _TPB_REVIEWED_BOXES || @info "Core.Box per file (reviewed → now)" _TPB_REVIEWED_BOXES counts sites
 
   # The detector finds a box, and only where there is one, so the table cannot pass by finding nothing.
-  @test _tpb_boxes(Base.uncompressed_ast(only(methods(_tpb_boxing)))) == 1
-  @test _tpb_boxes(Base.uncompressed_ast(only(methods(_tpb_not_boxing)))) == 0
+  @test core_boxes(Base.uncompressed_ast(only(methods(_core_box_boxing)))) == 1
+  @test core_boxes(Base.uncompressed_ast(only(methods(_core_box_not_boxing)))) == 0
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

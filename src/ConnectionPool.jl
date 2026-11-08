@@ -1504,17 +1504,21 @@ function _close_pool_slots!(pool::_SQLEngine; drain_seconds::Real)
   #    re-opened for lease like one. That is safe because the handoff carried the handle's identity
   #    (#584): when the waiter wakes it finds the slot no longer holds what it was handed — or no
   #    longer leased — and retries through the scan instead of sharing a re-materialized handle.
-  handles = Any[]
-  in_use = 0
-  Base.lock(pool.lock) do
+  #    Both results live inside the closure and come back as its value: a captured variable the
+  #    closure reassigned (`in_use += 1`) would be a `Core.Box`, an `Any` to every later use, and in a
+  #    trimmed image a run-time compile that fails (#1697).
+  handles, in_use = Base.lock(pool.lock) do
+    taken = Any[]
+    leased = 0
     for i in 1:length(pool.connections)
-      pool.available[i] || (in_use += 1)
+      pool.available[i] || (leased += 1)
       conn = pool.connections[i]
       conn === nothing && continue
-      push!(handles, conn)
+      push!(taken, conn)
       pool.connections[i] = nothing
       pool.available[i] = true
     end
+    return taken, leased
   end
 
   # 3. Close through the #327 seam: immediate for PostgreSQL and for a SQLite handle the global
@@ -1910,9 +1914,9 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
-      w = PoolWaiter(:any, connect_failed)
-      push!(_waiters_for(pool), w)
-      return (connect_failed ? :wait_retry : :wait, w)
+      waiter = PoolWaiter(:any, connect_failed)
+      push!(_waiters_for(pool), waiter)
+      return (connect_failed ? :wait_retry : :wait, waiter)
     end
 
     # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
@@ -2107,9 +2111,9 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
       if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
-      w = PoolWaiter(mode, connect_failed)
-      push!(_waiters_for(pool), w)
-      return (connect_failed ? :wait_retry : :wait, w)
+      waiter = PoolWaiter(mode, connect_failed)
+      push!(_waiters_for(pool), waiter)
+      return (connect_failed ? :wait_retry : :wait, waiter)
     end
 
     # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
@@ -2198,26 +2202,28 @@ reused (#125).
 See also [`acquire_connection`](@ref).
 """
 function release_connection(pool::Union{PormGPostgres, PormGMySQL}, conn)
-  retired = nothing
-  # (found, reported slot or 0, its hold, the threshold): a slot the leak scan reported is carried out
-  # of the lock as values, so it logs outside it (#1643).
-  found, reported_slot, reported_held, reported_threshold = Base.lock(pool.lock) do
+  # (found, reported slot or 0, its hold, the threshold, the retired handle or `nothing`): a slot the
+  # leak scan reported is carried out of the lock as values, so it logs outside it (#1643). The retired
+  # handle comes out the same way, never through a variable the closure reassigns: that would be a
+  # `Core.Box` (#1697).
+  found, reported_slot, reported_held, reported_threshold, retired = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
         st = _monitor_state(pool)
         held = _reported_hold(st, i)       # before the touch clears the flag (#1643)
         threshold = held >= 0.0 ? (st::PoolMonitorState).leak_threshold : 0.0
+        out = nothing
         if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
-          retired = pool.connections[i]
+          out = pool.connections[i]
           pool.connections[i] = nothing
         else
           _monitor_note_touch!(st, i)         # last_used = now (#125)
         end
         _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
-        return (true, held >= 0.0 ? i : 0, held, threshold)
+        return (true, held >= 0.0 ? i : 0, held, threshold, out)
       end
     end
-    return (false, 0, 0.0, 0.0)
+    return (false, 0, 0.0, 0.0, nothing)
   end
   # A retired slot was returned too: its caller released it, so it logs like any other return.
   reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
@@ -2230,26 +2236,26 @@ function release_connection(pool::Union{PormGPostgres, PormGMySQL}, conn)
 end
 
 function release_connection(pool::PormGSQLite, conn)
-  retired = nothing
-  # (found, reported slot or 0, its hold, the threshold): a slot the leak scan reported is carried out
-  # of the lock as values, so it logs outside it (#1643).
-  found, reported_slot, reported_held, reported_threshold = Base.lock(pool.lock) do
+  # (found, reported slot or 0, its hold, the threshold, the retired handle or `nothing`), out of the
+  # lock as values: see the PostgreSQL/MySQL method above (#1643, #1697).
+  found, reported_slot, reported_held, reported_threshold, retired = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
         st = _monitor_state(pool)
         held = _reported_hold(st, i)       # before the touch clears the flag (#1643)
         threshold = held >= 0.0 ? (st::PoolMonitorState).leak_threshold : 0.0
+        out = nothing
         if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
-          retired = pool.connections[i]
+          out = pool.connections[i]
           pool.connections[i] = nothing
         else
           _monitor_note_touch!(st, i)         # last_used = now (#125)
         end
         _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
-        return (true, held >= 0.0 ? i : 0, held, threshold)
+        return (true, held >= 0.0 ? i : 0, held, threshold, out)
       end
     end
-    return (false, 0, 0.0, 0.0)
+    return (false, 0, 0.0, 0.0, nothing)
   end
   # A retired slot was returned too: its caller released it, so it logs like any other return.
   reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)

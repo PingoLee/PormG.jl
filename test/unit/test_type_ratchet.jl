@@ -11,11 +11,12 @@
 # count that FALLS fails too, so the improvement is recorded: lower the number in the same change.
 # Either way the failure prints the sites of each file whose count moved.
 #
-# Three patterns:
+# Four patterns:
 #   1. struct fields typed `Any` or left abstract — read by reflection, since a text scan cannot tell
 #      whether `x::PormGField` or an alias is abstract;
 #   2. `getfield(<x>, Symbol(…))` — a binding looked up by a name at run time (line scan);
-#   3. `format::Dict{String,Any}` parameters — the Dialect functions' untyped option bag (line scan).
+#   3. `format::Dict{String,Any}` parameters — the Dialect functions' untyped option bag (line scan);
+#   4. `Core.Box` — a captured variable a closure reassigns (lowered code, #1697).
 # A line scan skips whole-line comments only; a site in a trailing comment or a docstring code block
 # counts, and is reworded rather than reviewed.
 #
@@ -283,4 +284,56 @@ const _TR_FORMAT_DICT_REVIEWED = Dict{String,Int}()
   @test occursin(_TR_FORMAT_DICT, "function SUM(x::String, format::Dict{String,Any}, conn::PormGSQLite)")
   @test occursin(_TR_FORMAT_DICT, "AVG(x, format::Dict{String, Any}, conn)")
   @test !occursin(_TR_FORMAT_DICT, "kwargs::Dict{String,Any}")
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. `Core.Box`: a captured variable that is reassigned (#1697)
+# A closure that captures a local and reassigns it (`n = 0; lock(l) do … n += 1 end`), or a local
+# reassigned after a closure captured it, makes the variable a `Core.Box`: an `Any` to every use, a
+# dynamic call under the JIT, and in a `juliac --trim` image a verifier row or a run-time compile that
+# fails (round 4 of #1600: `_close_pool_slots!`'s `in_use` aborted the Nitro pools probe's
+# `close_pool!`). The variable a closure updates lives inside the closure and comes back as its value
+# (`a, b = lock(l) do … return a, b end`), or the closure's own local gets its own name. Read from the
+# lowered code of every method defined in a file, closures and keyword bodies included, with the
+# detector test_terminal_pool_barrier.jl uses (helper_core_box.jl). src/querybuilder/ is counted
+# there, per file, so it is left out here. A file whose methods are not loaded is not seen:
+# ext/PormGReviseExt.jl (the suite does not load Revise) is reviewed by hand.
+# ─────────────────────────────────────────────────────────────────────────────
+include(joinpath(@__DIR__, "helper_core_box.jl"))
+
+const _TR_BOX_REVIEWED = Dict{String,Int}(
+  # #1697: src/ConnectionPool.jl 5 → 0 (`_close_pool_slots!`'s `in_use`, both `release_connection`s'
+  # `retired`, both `_acquire_connection!`s' waiter `w`) and src/models/fields.jl 1 → 0 (`_int_kwarg`'s
+  # `value`). The rest are older and counted, not fixed.
+  "src/Dialect.jl" => 1,                       # alter_field's keyword body
+  "src/Generator.jl" => 1,                     # create_db_folder_and_yml
+  "src/migrations/column_spec.jl" => 1,        # field_from_spec
+  "src/migrations/importers.jl" => 16,
+  "src/migrations/introspection.jl" => 2,
+  "src/migrations/planner.jl" => 2,
+  "src/migrations/runner.jl" => 3,
+  "src/models/pg_array.jl" => 1,               # parse_pg_array_literal
+)
+
+# src/ and ext/, except src/querybuilder/ (test_terminal_pool_barrier.jl counts it per file).
+function _tr_in_scope(file::String)
+  startswith(file, _TR_ROOT) || return false   # most of the method table: Base, stdlibs, packages
+  key = _tr_key(file)
+  return (startswith(key, "src/") || startswith(key, "ext/")) && !startswith(key, "src/querybuilder/")
+end
+_tr_key(file) = replace(relpath(file, _TR_ROOT), '\\' => '/')
+
+@testset "#1697: Core.Box constructions match the reviewed counts" begin
+  sites = core_box_sites(_tr_in_scope, _tr_key)
+  _tr_check("Core.Box constructions (captured variables reassigned)", sites, _TR_BOX_REVIEWED)
+  # The files #1697 cleared: named, so a new box there reads as what it is.
+  @test get(sites, "src/ConnectionPool.jl", String[]) == String[]
+  @test get(sites, "src/models/fields.jl", String[]) == String[]
+  # The detector finds a box, and only where there is one, so a clean count proves something.
+  @test core_boxes(Base.uncompressed_ast(only(methods(_core_box_boxing)))) == 1
+  @test core_boxes(Base.uncompressed_ast(only(methods(_core_box_not_boxing)))) == 0
+  # The extensions are loaded, or their files would read as clean.
+  for e in _TR_EXTENSIONS
+    @test Base.get_extension(PormG, e) !== nothing
+  end
 end

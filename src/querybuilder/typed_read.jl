@@ -73,7 +73,7 @@ function _typed_projection!(q::SQLObjectHandler, ::Type{T}) where T
   obj = q.object
   wanted = fieldnames(T)
   if isempty(obj.values)
-    _values!(obj, Any[String(name) for name in wanted])
+    _values!(obj, String[String(name) for name in wanted])   # a `String` list: #1695
     return q
   end
   projected = String[]

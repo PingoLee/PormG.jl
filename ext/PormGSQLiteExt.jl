@@ -144,6 +144,10 @@ end
 
 # ── Backend interface methods ────────────────────────────────────────────────
 
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{<:PormG.ConnectionPool.SQLiteConnectionPool}) = SQLite.DB
+
 PormG.backend_connect(pool::PormGSQLite; read_only::Bool = false) =
   _create_sqlite_connection(pool.connection_string; read_only = read_only)
 
@@ -308,7 +312,7 @@ end
 # No `backend_is_cancellation` method either (#1277): SQLite has no statement timeout, and its one
 # cancel, PormG's own `sqlite3_interrupt` below, classifies as `:unknown` → `StatementError`, never
 # as the `OperationalError` a retry would consider.
-function PormG.backend_is_connection_error(pool::PormGSQLite, e)
+function PormG.backend_is_connection_error(pool::PormGSQLite, @nospecialize(e))
   msg = lowercase(string(e))
   # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("database is closed", msg) ||
@@ -321,7 +325,7 @@ end
 # SQLITE_CANTOPEN, "unable to open database file"). Everything else stays ambiguous (return false),
 # degrading to the normal wait-to-deadline path. Message-substring based — SQLite.jl exposes one
 # `SQLiteException` type for every open failure, so type-matching can't separate causes (#72).
-function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, e)
+function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, @nospecialize(e))
   msg = lowercase(string(e))
   # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("unable to open database file", msg)
@@ -369,7 +373,9 @@ PormG.backend_drain_connection!(pool::PormGSQLite, conn::SQLite.DB) = true
 # Dispatch pins `SQLite.SQLiteException` rather than the abstract `PormGSQLite` marker alone, so
 # this never shadows core's default for the unit suite's mock pools (see `backend_classify_error`
 # in src/Backend.jl for why that matters).
-function PormG.backend_classify_error(pool::PormGSQLite, e::SQLite.SQLiteException)
+function PormG.backend_classify_error(pool::PormGSQLite, @nospecialize(e))
+  # One method, the exception `@nospecialize` and tested here (#1696): see `backend_classify_error`.
+  e isa SQLite.SQLiteException || return PormG._default_classify_error(pool, e)
   PormG.backend_is_connection_error(pool, e) && return :operational
   msg = lowercase(string(e.msg))
   # SQLite spells every constraint failure "<KIND> constraint failed[: table.column]".
@@ -391,6 +397,10 @@ end
 # bound value never enters SQLite's text — so the whole message is the safe primary.
 # #1356: SQLite's "integer overflow" (an integer cast's range guard, `abs()` of the smallest integer, a
 # `sum()` past 64 bits) is the overflow PostgreSQL reports as SQLSTATE 22003, so it carries that code.
+# On the concrete pool, not the `PormGSQLite` marker: a stand-in pool keeps the default, the
+# one-argument form, which reads whichever driver's exception it is handed (#1696).
+PormG.backend_error_fields(pool::PormG.ConnectionPool.SQLiteConnectionPool, @nospecialize(e)) =
+  e isa SQLite.SQLiteException ? PormG.backend_error_fields(e) : PormG._NO_ERROR_FIELDS
 PormG.backend_error_fields(e::SQLite.SQLiteException) =
   (sqlstate = occursin("integer overflow", lowercase(e.msg)) ? "22003" : nothing,  # server-text-match-ok: SQLite's own literal
    constraint = nothing, table = nothing, column = nothing,

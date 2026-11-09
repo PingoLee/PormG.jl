@@ -2499,7 +2499,8 @@ function _ping_pool(pool::_SQLEngine, key::String, settings::Settings)::Bool
   conn = nothing
   try
     conn = CP._acquire_in_mode(pool, :read; timeout_seconds=5, max_retries=1)
-    return backend_is_alive(pool, conn)
+    # The handle comes out of an untyped slot: the liveness probe runs at its concrete type (#1683).
+    return CP._with_handle(backend_is_alive, pool, conn)
   catch e
     @warn "Database ping failed" key=key db_def_folder=settings.db_def_folder adapter=get(settings.db_config_settings, "adapter", nothing) exception=(e, catch_backtrace())
     return false

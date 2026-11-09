@@ -22,6 +22,8 @@ using Test
 using PormG
 using PormG: Configuration
 using InteractiveUtils: InteractiveUtils
+# The #1683 pins read the handle type each driver extension registers; the suite loads all four.
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The type of the callee of `stmt` (an `Expr(:call, …)`) in the optimized `ci`.
 function _tsp_callee_type(ci::Core.CodeInfo, callee)::Type
@@ -64,6 +66,30 @@ function _dynamic_calls_kw(f, argtypes::Tuple)::Vector{String}
     end
   end
   walk(Base.signature_type(f, argtypes), 1)
+  return found
+end
+
+# The same, following every `:invoke` `depth` levels down (#1706): a dynamic call inside a callee —
+# `WeakKeyDict`'s `isequal(pool, ::WeakRef)` under a registry lookup — is invisible to the one-level
+# scans above, which see only the resolved call into it.
+function _dynamic_calls_deep(f, argtypes::Tuple; depth::Int = 6)::Vector{String}
+  found = String[]
+  seen = Set{Any}()
+  walk(tt, d) = begin
+    tt in seen && return
+    push!(seen, tt)
+    for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
+      stmt isa Expr || continue
+      if stmt.head === :call
+        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        push!(found, "$(tt): $(stmt)")
+      elseif stmt.head === :invoke && d > 0
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        mi isa Core.MethodInstance && walk(mi.specTypes, d - 1)
+      end
+    end
+  end
+  walk(Base.signature_type(f, argtypes), depth)
   return found
 end
 
@@ -150,6 +176,13 @@ _tsp_old_reader(v::Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}) 
 struct _TspOtherSettings <: PormG.PormGSettings end
 # A test's own stand-in pool, which `with_pool` hands on through its open arm.
 struct _TspStandInPool <: PormG.PormGSQLite end
+# A stand-in under the PostgreSQL marker, and a test's own error with a one-argument reader (#1696).
+struct _TspStandInPGPool <: PormG.PormGPostgres end
+struct _TspFakeError <: Exception end
+# A pool nothing but the registry refers to, for the weak-key check (#1706).
+@noinline _tsp_insert_unreferenced!(r) = (r[PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)] = [5]; nothing)
+PormG.backend_error_fields(::_TspFakeError) =
+  (sqlstate = "XX000", constraint = "fake_c", table = "fake_t", column = nothing, message = "fake")
 # A typed-read row type, for the projection pin (#1695).
 struct _TspRaceRow
   raceid::Int64
@@ -221,6 +254,35 @@ end
       @test CP.PostgresConnectionPool{d} <: rt
     end
     @test_throws PormG.InvalidConfigurationError build(:nodriver)
+  end
+
+  # What: the refusal for a PostgreSQL driver no arm lists, and `_symbol_text`, which spells its names.
+  # Expected: the same text as before #1613's change, word for word (`unknown PostgreSQL driver :pgx;
+  #   expected one of :libpq, :postgres`); `_symbol_text(s) == repr(s)` for an identifier, a keyword, an
+  #   operator, a symbol Base parenthesizes, and symbols only `Symbol("…")` can spell (escapes included);
+  #   and no `repr(` left in the refusal's source.
+  # Why: Base shows a `Symbol` through `show_unquoted(::Any)`, which a trimmed build cannot resolve: one
+  #   `repr(driver::Symbol)` was 290 of the fixture's 1,132 verifier rows in round 4 of #1600. The
+  #   message is user-facing, so the spelling changes and the text does not.
+  @testset "the unknown-driver refusal spells Symbols without repr (#1613)" begin
+    CP = PormG.ConnectionPool
+    err = try
+      CP._unknown_postgres_driver(:pgx)
+    catch e
+      e
+    end
+    @test err isa PormG.InvalidConfigurationError
+    @test err.msg == "unknown PostgreSQL driver :pgx; expected one of :libpq, :postgres"
+    @test_throws PormG.InvalidConfigurationError CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :pgx)
+    for s in (:libpq, :postgres, :pgx, :x!, :α, :end, :var, :+, :*, :(==), :(:), :(=>), :(::), :(===),
+              Symbol(""), Symbol("lib pq"), Symbol("lib-pq"), Symbol("1x"), Symbol("a\"b"),
+              Symbol("a\$b"), Symbol("a\nb"), Symbol("'"), Symbol("'ᵀ"), Symbol("'²"), :.+, :∘, :≤)
+      @test (s, CP._symbol_text(s)) == (s, repr(s))
+    end
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    start = findfirst("_unknown_postgres_driver(driver::Symbol) =", src)[1]
+    body = src[start:findnext("\n\n", src, start)[1]]   # the definition, up to its blank line
+    @test !occursin("repr(", body)
   end
 
   # What: `with_pool`, the closed dispatch over the pools PormG builds.
@@ -562,6 +624,328 @@ end
     end
     # The detector, on the shape it looks for: a call taking an element at the old abstract type.
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
+  end
+
+  # What: the calls that hand a driver handle, read from a pool's untyped `Vector{Any}` slot, to the
+  #   driver: release (and its retire-on-return close), the liveness probe, renewal, close, the
+  #   transaction's finalize, and the statement dispatch, on each pool type PormG builds.
+  # Expected: every driver extension registers a CONCRETE handle type (`backend_handle_type`); with the
+  #   handle typed `Any`, as it comes out of a slot, none of those functions makes a dynamic call; a
+  #   handle of the registered type reaches the callee at that type, and a stand-in handle (the unit
+  #   suite's mocks) takes the open arm and reaches it unchanged.
+  # Why: the slots are `Vector{Any}` because core never names a driver type, so each of these calls
+  #   dispatched at run time, and in a trimmed image found nothing compiled: the Nitro pools probe's
+  #   `lease` missed `release_connection(pool, conn::Any)` (#1683, round 4 of #1600). A registered type
+  #   that is not concrete (`Postgres.Connection` is a `UnionAll`) would leave the call dynamic again.
+  @testset "a handle from an untyped slot reaches the driver at its concrete type (#1683)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    for P in pools
+      H = PormG.backend_handle_type(P)
+      @test (P, isconcretetype(H)) == (P, true)
+      for (name, f, args) in (("release_connection", CP.release_connection, (P, Any)),
+                              ("_renew_or_discard_connection!", CP._renew_or_discard_connection!, (P, Any)),
+                              ("_with_handle(backend_is_alive)", CP._with_handle, (typeof(PormG.backend_is_alive), P, Any)),
+                              ("_with_handle(_handle_close)", CP._with_handle, (typeof(CP._handle_close), P, Any)),
+                              ("_with_handle(_handle_close_latest)", CP._with_handle, (typeof(CP._handle_close_latest), P, Any)),
+                              ("_cancel_abandoned_statement!", CP._cancel_abandoned_statement!, (P, Any)),
+                              # both arities: on PostgreSQL and MySQL the 5-argument method forwards to
+                              # the 4-argument one, whose body the detector does not follow
+                              ("_execute_async/4", CP._execute_async, (P, Any, String, Nothing)),
+                              ("_execute_async/5", CP._execute_async, (P, Any, String, Nothing, Nothing)))
+        dyn = _dynamic_calls(f, args)
+        @test (P, name, dyn) == (P, name, String[])
+      end
+      for (name, f) in (("_close_driver_handle!", CP._close_driver_handle!),
+                        ("finalize_transaction_connection!", CP.finalize_transaction_connection!),
+                        ("_discard_connection!", CP._discard_connection!))
+        dyn = _dynamic_calls_kw(f, (P, Any))
+        @test (P, name, dyn) == (P, name, String[])
+      end
+    end
+    # The caller's side, which is where the probe's row was: a call with the handle typed `Any` (what
+    # `acquire_connection` returns) resolves only because the callee takes it `@nospecialize`.
+    rel(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.release_connection(p, r[])
+    cls(p, r::Base.RefValue{Any}) = PormG.ConnectionPool._close_driver_handle!(p, r[])
+    fin(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.finalize_transaction_connection!(p, r[]; renew = true)
+    ren(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.reconnect_db(p, r[])
+    for P in pools, (name, caller) in (("release_connection", rel), ("_close_driver_handle!", cls),
+                                       ("finalize_transaction_connection!", fin), ("reconnect_db", ren))
+      dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}))
+      @test (P, name, dyn) == (P, name, String[])
+    end
+    # The barrier hands the callee the handle at the registered type, or a stand-in as it is.
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    db = SQLite.DB()
+    boxed = Any[db]
+    @test CP._with_handle((p, c) -> (p, typeof(c)), sl, boxed[1]) === (sl, SQLite.DB)
+    stand_in = Ref(:stand_in_handle)
+    @test CP._with_handle((p, c, x) -> (c, x), sl, stand_in, 7) === (stand_in, 7)
+    close(db)
+    # A driver that is not loaded registers nothing: the default is `Any`, and every handle passes.
+    @test PormG.backend_handle_type(_TspStandInPool) === Any
+    # Postgres.jl's `Connection` is a `UnionAll`; the type the extension registers must be the one its
+    # connect builds, or every handle takes the open arm (a `MethodError` in a trimmed image). No server:
+    # the type inference gives the connect call the extension makes.
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    built = Base.return_types(Core.kwcall, (NamedTuple{(:style,), Tuple{pgx._PormGStyle}},
+                                            typeof(Postgres.DBInterface.connect), Type{Postgres.Connection},
+                                            Postgres.ConnectionParams))
+    @test built == Any[PormG.backend_handle_type(CP.PostgresConnectionPool{:postgres})]
+
+    # The sites the reflection above cannot reach (inside a `lock` closure, an `invoke`d callee, a
+    # spawned task): by source, every driver call on a handle in ConnectionPool.jl and Configuration.jl
+    # goes through `_with_handle`, and `close` on a handle only through its named helpers. The SQLite
+    # worker's two statement calls are the reviewed exception: they run through `_call_latest`, the
+    # world-age helper #1609 owns, and are not a #1683 site.
+    # Driver generics that take a handle, called directly or handed on as a value (`_call_latest(f, …)`,
+    # `invokelatest(f, …)`), and `close` on a handle, called or broadcast.
+    generic = raw"backend_(?:is_alive|renew_connection|execute_async|execute_rows|execute|cancel_query!|drain_connection!|copy_in!|ping)"
+    driver_call = Regex(raw"\b(" * generic * raw")\(|(?:_call_latest|invokelatest)\((" * generic * raw"|close),")
+    close_call = r"(?<!\w)close\.?\((?:conn|retired|dead|new_conn|handle|handles|h|old|pool\.connections)\b"
+    # The named helpers the barrier calls, by their exact definitions, and the SQLite worker's two
+    # statement calls (#1609's `_call_latest`), each expected exactly once.
+    helpers = ("_handle_close(pool, conn) = close(conn)", "_handle_close_latest(pool, conn) = _call_latest(close, conn)",
+               "_handle_renew(pool, conn) = backend_renew_connection(pool, conn)",
+               "_handle_renew(pool, conn, read_only::Bool) = backend_renew_connection(pool, conn; read_only = read_only)")
+    # Backend.jl's default `backend_execute_rows` (a driver without a typed read) is reached only from that
+    # worker, so it is the same exception.
+    reviewed = ("_call_latest(backend_execute_rows, item.pool, item.conn", "_call_latest(backend_execute, item.pool, item.conn",
+                "backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
+                "decode_on_worker(decode, backend_execute(pool, conn, sql, params))")
+    # Every file in src/ except AdvisoryLock.jl, whose handle calls are #1708.
+    files = sort!([joinpath(root, f) for (root, _, fs) in walkdir(joinpath(pkgdir(PormG), "src")) for f in fs
+                   if endswith(f, ".jl") && f != "AdvisoryLock.jl"])
+    seen = Dict{String,Int}()
+    bare = String[]
+    for path in files
+      file = relpath(path, pkgdir(PormG))
+      in_doc = false
+      for (i, line) in enumerate(split(replace(read(path, String), "\r\n" => "\n"), '\n'))
+        s = strip(line)
+        startswith(s, "#") && continue
+        isodd(count("\"\"\"", line)) && (in_doc = !in_doc; continue)
+        in_doc && continue
+        h = findfirst(x -> startswith(s, x), helpers)
+        h === nothing || (seen[helpers[h]] = get(seen, helpers[h], 0) + 1; continue)
+        r = findfirst(x -> occursin(x, line), reviewed)
+        r === nothing || (seen[reviewed[r]] = get(seen, reviewed[r], 0) + 1; continue)
+        for m in eachmatch(driver_call, line)
+          # handed to the barrier: `_with_handle(` right before the callee
+          m.offset > 13 && line[prevind(line, m.offset, 13):prevind(line, m.offset)] == "_with_handle(" && continue
+          push!(bare, "$(file):$(i): $(s)")
+        end
+        occursin(close_call, line) && push!(bare, "$(file):$(i): $(s)")
+      end
+    end
+    @test bare == String[]
+    for x in (helpers..., reviewed...)
+      @test (x, get(seen, x, 0)) == (x, 1)
+    end
+  end
+
+  # What: the pool's error path, which receives the failure from a `catch e` (typed `Any`) and classifies
+  #   it: `_as_database_error` and the helpers it and `fetch`'s retry decision call, and the extension
+  #   classifiers they reach (`backend_classify_error`, `backend_is_connection_error`,
+  #   `backend_is_retry_safe`, `backend_is_permanent_connect_error`, `backend_error_fields(pool, e)`).
+  # Expected: a caller holding the exception as `Any` makes no dynamic call into any of them, on each
+  #   pool type PormG builds; and for a driver-shaped exception on each pool type, the error built is the
+  #   one built before #1696 — type, the five fields and the `showerror` text, recorded on the parent
+  #   commit — including an exception the extension does not know, the async envelope, the fields LibPQ
+  #   hands in itself (`SubString`s, stored as `String`), and a PormG error passed through.
+  # Why: each of these dispatched on the exception's run-time type, and a trimmed image had compiled
+  #   nothing for a driver's exception type, so a failing statement raised a `MethodError` in place of
+  #   the `IntegrityError` (#1696; 208 verifier rows at `fetch_async`'s and `fetch`'s catch sites on the
+  #   fixture). The classification itself must not move: apps `catch IntegrityError`.
+  @testset "a caught exception is classified without dispatching on its type (#1696)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    callers = (
+      ("_as_database_error", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._as_database_error(p, r[])),
+      ("_driver_cause", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._driver_cause(r[])),
+      ("_unwrap_async_exception", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._unwrap_async_exception(r[])),
+      ("_await_abandoned", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._await_abandoned(r[])),
+      ("_is_benign_rollback_error", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._is_benign_rollback_error(p, r[])),
+      ("_lost_connection_error", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._lost_connection_error(p, r[])),
+      ("backend_classify_error", (p, r::Base.RefValue{Any}) -> PormG.backend_classify_error(p, r[])),
+      ("backend_is_connection_error", (p, r::Base.RefValue{Any}) -> PormG.backend_is_connection_error(p, r[])),
+      ("backend_is_retry_safe", (p, r::Base.RefValue{Any}) -> PormG.backend_is_retry_safe(p, r[])),
+      ("backend_is_permanent_connect_error", (p, r::Base.RefValue{Any}) -> PormG.backend_is_permanent_connect_error(p, r[])),
+      ("backend_error_fields", (p, r::Base.RefValue{Any}) -> PormG.backend_error_fields(p, r[])))
+    for P in pools, (name, caller) in callers
+      dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}))
+      @test (P, name, dyn) == (P, name, String[])
+    end
+
+    # The error built, before and after #1696 (recorded on the parent commit with the same inputs).
+    E = LibPQ.Errors
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    lp = CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :libpq)
+    pj = CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :postgres)
+    my = CP.MySQLConnectionPool("host='x'"; pool_size = 1)
+    pgjl(code, msg; constraint = nothing, table = nothing, column = nothing) = Postgres.Error("ERROR", code, msg,
+      "Key (code)=(x) already exists.", nothing, nothing, nothing, nothing, nothing, "public", table, column,
+      nothing, constraint, nothing, nothing, nothing)
+    task_failed(e) = try; fetch(Threads.@spawn throw(e)); catch t; t; end
+    tail = " (the driver's full text is in `.cause`)"
+    N = nothing
+    cases = (
+      (sl, SQLite.SQLiteException("UNIQUE constraint failed: driver.code"), PormG.IntegrityError,
+       (N, N, N, N, "UNIQUE constraint failed: driver.code"),
+       "IntegrityError: SQLite rejected the statement — a constraint was violated: UNIQUE constraint failed: driver.code" * tail),
+      (sl, SQLite.SQLiteException("no such table: circuit"), PormG.StatementError, (N, N, N, N, "no such table: circuit"),
+       "StatementError: the SQLite statement could not be executed: no such table: circuit" * tail),
+      (sl, SQLite.SQLiteException("database is locked"), PormG.OperationalError, (N, N, N, N, "database is locked"),
+       "OperationalError: the SQLite operation could not complete and may succeed on retry: database is locked" * tail),
+      (sl, SQLite.SQLiteException("integer overflow"), PormG.StatementError, ("22003", N, N, N, "integer overflow"),
+       "StatementError: the SQLite statement could not be executed (SQLSTATE 22003): integer overflow" * tail),
+      (sl, ErrorException("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the SQLite statement could not be executed: ErrorException" * tail),
+      (sl, task_failed(SQLite.SQLiteException("UNIQUE constraint failed: driver.code")), PormG.IntegrityError,
+       (N, N, N, N, "UNIQUE constraint failed: driver.code"),
+       "IntegrityError: SQLite rejected the statement — a constraint was violated: UNIQUE constraint failed: driver.code" * tail),
+      (lp, E.PQResultError{E.C23, E.E23505}("ERROR:  duplicate key value violates unique constraint \"driver_code_key\"\nDETAIL:  Key (code)=(x) already exists.\n"),
+       PormG.IntegrityError, ("23505", N, N, N, "duplicate key value violates unique constraint \"driver_code_key\""),
+       "IntegrityError: PostgreSQL rejected the statement — a constraint was violated (SQLSTATE 23505): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (lp, E.PQResultError{E.C42, E.E42703}("ERROR:  column \"nickname\" does not exist\nLINE 1: SELECT nickname\n"),
+       PormG.StatementError, ("42703", N, N, N, "column \"nickname\" does not exist"),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE 42703): column \"nickname\" does not exist" * tail),
+      (lp, E.PQResultError{E.CUN, E.EUNOWN}("server closed the connection unexpectedly"), PormG.OperationalError,
+       (N, N, N, N, N), "OperationalError: the PostgreSQL operation could not complete and may succeed on retry: PQResultError" * tail),
+      (lp, E.PQConnectionError("no connection to the server"), PormG.OperationalError, (N, N, N, N, N),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry: PQConnectionError" * tail),
+      (lp, ErrorException("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the PostgreSQL statement could not be executed: ErrorException" * tail),
+      (pj, pgjl("23505", "duplicate key value violates unique constraint \"driver_code_key\""; constraint = "driver_code_key",
+                table = "driver", column = "code"), PormG.IntegrityError,
+       ("23505", "driver_code_key", "driver", "code", "duplicate key value violates unique constraint \"driver_code_key\""),
+       "IntegrityError: PostgreSQL rejected the statement — a constraint was violated (SQLSTATE 23505, constraint \"driver_code_key\", table \"driver\", column \"code\"): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (pj, pgjl("40P01", "deadlock detected"), PormG.OperationalError, ("40P01", N, N, N, "deadlock detected"),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry (SQLSTATE 40P01): deadlock detected" * tail),
+      (pj, EOFError(), PormG.OperationalError, (N, N, N, N, N),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry: EOFError" * tail),
+      (pj, ArgumentError("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the PostgreSQL statement could not be executed: ArgumentError" * tail),
+      (my, EOFError(), PormG.OperationalError, (N, N, N, N, N),
+       "OperationalError: the MySQL operation could not complete and may succeed on retry: EOFError" * tail),
+      (my, ErrorException("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the MySQL statement could not be executed: ErrorException" * tail),
+      (my, ArgumentError("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the MySQL statement could not be executed: ArgumentError" * tail))
+    # Stand-in pools under the PostgreSQL and SQLite markers keep reading any driver's exception, and a
+    # test's own reader, through the one-argument form; MySQL's server errors; Postgres.jl's coded drop.
+    mockpg, mocksl = _TspStandInPGPool(), _TspStandInPool()
+    my_dup = MySQL.Protocol.Error(UInt32(1062), "Duplicate entry 'monaco' for key 'circuit.circuitref'", "23000")
+    my_syntax = MySQL.Protocol.Error(UInt32(1064), "You have an error in your SQL syntax near 'x'", "42000")
+    pgjl_shutdown = pgjl("57P01", "terminating connection due to administrator command")
+    more = (
+      (mockpg, cases[12][2], PormG.StatementError,
+       ("23505", "driver_code_key", "driver", "code", "duplicate key value violates unique constraint \"driver_code_key\""),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE 23505, constraint \"driver_code_key\", table \"driver\", column \"code\"): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (mockpg, SQLite.SQLiteException("integer overflow"), PormG.StatementError, ("22003", N, N, N, "integer overflow"),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE 22003): integer overflow" * tail),
+      (mockpg, _TspFakeError(), PormG.StatementError, ("XX000", "fake_c", "fake_t", N, "fake"),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE XX000, constraint \"fake_c\", table \"fake_t\"): fake" * tail),
+      (mocksl, cases[12][2], PormG.StatementError,
+       ("23505", "driver_code_key", "driver", "code", "duplicate key value violates unique constraint \"driver_code_key\""),
+       "StatementError: the SQLite statement could not be executed (SQLSTATE 23505, constraint \"driver_code_key\", table \"driver\", column \"code\"): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (mocksl, _TspFakeError(), PormG.StatementError, ("XX000", "fake_c", "fake_t", N, "fake"),
+       "StatementError: the SQLite statement could not be executed (SQLSTATE XX000, constraint \"fake_c\", table \"fake_t\"): fake" * tail),
+      (my, my_dup, PormG.IntegrityError, ("23000", "circuitref", "circuit", N, N),
+       "IntegrityError: MySQL rejected the statement — a constraint was violated (SQLSTATE 23000, constraint \"circuitref\", table \"circuit\"): Error" * tail),
+      (my, my_syntax, PormG.StatementError, ("42000", N, N, N, N),
+       "StatementError: the MySQL statement could not be executed (SQLSTATE 42000): Error" * tail),
+      (pj, pgjl_shutdown, PormG.OperationalError, ("57P01", N, N, N, "terminating connection due to administrator command"),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry (SQLSTATE 57P01): terminating connection due to administrator command" * tail))
+    for (pool, cause, T, fields, text) in (cases..., more...)
+      err = CP._as_database_error(pool, cause)
+      @test typeof(err) === T
+      @test (err.sqlstate, err.constraint, err.table, err.column, err.message) == fields
+      @test sprint(showerror, err) == text
+    end
+    refused = PormG.InvalidValueError("refused")
+    @test CP._as_database_error(sl, refused) === refused
+    # LibPQ reads the fields off the failed result itself and hands them in (#1000), as `SubString`s.
+    given = (sqlstate = SubString("23505x", 1, 5), constraint = "driver_code_key", table = "driver", column = nothing,
+             message = SubString("duplicate key!", 1, 13))
+    err = CP._as_database_error(lp, cases[7][2]; fields = given)
+    @test err isa PormG.IntegrityError
+    @test (err.sqlstate, err.constraint, err.table, err.column, err.message) == ("23505", "driver_code_key", "driver", N, "duplicate key")
+    @test err.sqlstate isa String && err.message isa String
+    # The retry gate keeps its answers: a codeless drop is not retried; a coded one in a composite is.
+    @test !PormG.backend_is_retry_safe(lp, cases[9][2])
+    @test !PormG.backend_is_retry_safe(lp, ErrorException("x"))
+    @test PormG.backend_is_retry_safe(lp, CompositeException([E.PQConnectionError("no connection to the server")]))
+    @test !PormG.backend_is_retry_safe(pj, EOFError())
+    @test !PormG.backend_is_retry_safe(sl, ErrorException("x"))
+    @test PormG.backend_is_retry_safe(pj, pgjl_shutdown)          # the server said the statement never ran
+    @test !PormG.backend_is_retry_safe(my, my_dup)
+    @test !PormG.backend_is_retry_safe(my, ErrorException("x"))
+    # A fields record that leaves a key out reads `nothing` for it, as the keyword constructors did.
+    short = CP._as_database_error(lp, cases[7][2]; fields = (sqlstate = "23505", message = "duplicate key"))
+    @test (short.sqlstate, short.constraint, short.table, short.column, short.message) == ("23505", N, N, N, "duplicate key")
+  end
+
+  # What: the pool-keyed registries, the waiter queues (`_POOL_WAITERS`, #124) and the monitor state
+  #   (`_POOL_MONITOR`, #125/#127/#1548), which hold per-pool state outside the pool structs.
+  # Expected: a lookup, a `get!` and `release_connection` (which reads the waiter queue on every
+  #   return) make no dynamic call on each pool type PormG builds; the registry is keyed by identity (two
+  #   pools with the same settings are two entries) and weak (a collected pool's entry goes, and it holds
+  #   no pool alive); `getindex` of a missing pool is a `KeyError`; `get!`, `haskey`, `delete!`, `empty!`
+  #   behave as a `Dict`'s; a stand-in pool is a key like any other.
+  # Why: both were `WeakKeyDict{Any,…}`, which hashes its key through `hash(::WeakRef)`, a dynamic
+  #   `hash(::Any)`: with the handle calls resolved (#1683), every trimmed lease ended in a `MethodError`
+  #   on `hash` in `release_connection` (#1706). The tests and the sweeper use the `Dict`-shaped methods.
+  @testset "the pool-keyed registries key on identity, without hashing (#1706)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    waiters(p) = PormG.ConnectionPool._waiters_for(p)
+    monitor(p) = PormG.ConnectionPool._monitor_state(p)
+    peek(p) = get(PormG.ConnectionPool._POOL_WAITERS, p, PormG.ConnectionPool.PoolWaiter[])
+    rel(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.release_connection(p, r[])
+    for P in pools
+      @test (P, "release_connection", _dynamic_calls(rel, (P, Base.RefValue{Any}))) == (P, "release_connection", String[])
+      # The lookups themselves, all the way down: the `WeakKeyDict` they replace resolved at this level and
+      # dispatched inside, on `WeakRef` (`hash`/`isequal` in `rehash!` under `get!` every session; in some
+      # sessions `isequal(pool, ::WeakRef)` on every lookup too), which only the deep walk sees.
+      for (name, f) in (("_waiters_for", waiters), ("_monitor_state", monitor), ("get(_POOL_WAITERS, …)", peek))
+        # depth 12: the `WeakKeyDict`'s `hash`/`isequal` on `WeakRef` sit under `lock` → closure → `get!`
+        # → `lock` → closure → `rehash!`; how much of that inference folds varies by session, and at 6
+        # one run of the parent's registry showed nothing.
+        dyn = _dynamic_calls_deep(f, (P,); depth = 12)
+        @test (P, name, dyn) == (P, name, String[])
+      end
+    end
+    @test CP._POOL_WAITERS isa CP._PoolRegistry && CP._POOL_MONITOR isa CP._PoolRegistry
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    @test !occursin(r"^const .*WeakKeyDict"m, src)
+
+    R = CP._PoolRegistry{Vector{Int}}()
+    a = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    b = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)   # the same settings: another pool, another key
+    @test !haskey(R, a) && get(R, a, :none) === :none && isempty(R)
+    @test_throws KeyError R[a]
+    R[a] = [1]
+    @test R[a] == [1] && haskey(R, a) && !haskey(R, b) && length(R) == 1
+    @test get!(() -> [2], R, b) == [2] && get!(() -> [3], R, b) == [2]   # created once, then found
+    @test length(R) == 2 && Set(map(objectid, CP._registry_pools(R))) == Set(objectid.((a, b)))
+    delete!(R, a)
+    @test !haskey(R, a) && haskey(R, b)
+    stand_in = _TspStandInPool()
+    R[stand_in] = [4]
+    @test R[stand_in] == [4]
+    empty!(R)
+    @test isempty(R) && !haskey(R, b)
+    # Weak: an entry does not keep its pool alive, and a collected pool's entry is gone.
+    weak = CP._PoolRegistry{Vector{Int}}()
+    _tsp_insert_unreferenced!(weak)
+    GC.gc(true); GC.gc(true)
+    @test isempty(CP._registry_pools(weak))
+    weak[b] = [6]                                       # an insert purges what was collected
+    @test length(weak.entries) == 1
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

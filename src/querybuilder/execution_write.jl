@@ -200,9 +200,11 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # only a row the database handed back). The wrapped PormGRow is still returned; if that degenerate
     # row is later mutated and .save()d, save() throws a clear "required key" error — no regression over
     # the previous incomplete-Dict return.
+    # `inserted`, not `result`: a thunk local named like the RETURNING branch's `result` above is that
+    # captured variable, reassigned, so it was a `Core.Box` (#1697).
     do_insert = () -> begin
-      result = fetch(settings, sql, parameters)
-      read_back = _inserted_row_query(connection, model, real_obj.insert, result, safe_table_name)
+      inserted = fetch(settings, sql, parameters)
+      read_back = _inserted_row_query(connection, model, real_obj.insert, inserted, safe_table_name)
       rows = read_back === nothing ? () :
         (read_back[2] === nothing ? fetch(settings, read_back[1]) : fetch(settings, read_back[1], read_back[2])) |>
         Tables.rowtable

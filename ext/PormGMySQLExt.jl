@@ -188,6 +188,10 @@ function _open_connection(pool::_Pool)::MySQL.Connection
   return conn
 end
 
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{_Pool}) = MySQL.Connection
+
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 
 # MySQL.jl has no reset primitive, so a renewal is a new connection; the pool closes the old handle.
@@ -543,7 +547,7 @@ function _is_lost_connection(e, depth::Int = 4)::Bool
   return false
 end
 
-PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
+PormG.backend_is_connection_error(pool::_Pool, @nospecialize(e)) = _is_lost_connection(e)
 
 # Did the statement provably never run (#1042)? Only for two numbers.
 #   * 2006 (#1502), which MySQL.jl 2.2 raises from two places, both before the server could have the
@@ -562,8 +566,8 @@ PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
 # at MySQL.jl 2.2.0, the `[compat]` floor (`test/unit/test_compat_guards.jl`).
 const _NEVER_SENT_ERRNOS = (2006, 4031)
 
-PormG.backend_is_retry_safe(pool::_Pool, e::MySQL.Protocol.ServerError) =
-  Int(e.errno) in _NEVER_SENT_ERRNOS
+PormG.backend_is_retry_safe(pool::_Pool, @nospecialize(e)) =
+  e isa MySQL.Protocol.ServerError ? Int(e.errno) in _NEVER_SENT_ERRNOS : PormG._default_retry_safe(pool, e)   # #1696
 
 # Permanent: the same configuration fails the same way on every retry. 1045 access denied, 1044 access
 # denied to the database, 1049 unknown database, 1130 host not allowed, 3159 an insecure transport the
@@ -571,7 +575,7 @@ PormG.backend_is_retry_safe(pool::_Pool, e::MySQL.Protocol.ServerError) =
 # (#1264) and a bad option are too.
 const _PERMANENT_CONNECT_ERRNOS = (1044, 1045, 1049, 1130, 3159, 1251, 1524)
 
-function PormG.backend_is_permanent_connect_error(pool::_Pool, e)
+function PormG.backend_is_permanent_connect_error(pool::_Pool, @nospecialize(e))
   e isa InvalidConfigurationError && return true
   e isa PormG.BackendCapabilityError && return true
   e isa ArgumentError && return true   # MySQL.jl's refusal of an option value (`ssl_mode`, `tls_version`, …)
@@ -600,8 +604,9 @@ const _CANCELLED_ERRNOS = (1317, 3024)
 
 PormG.backend_is_cancellation(e::MySQL.Protocol.ServerError) = Int(e.errno) in _CANCELLED_ERRNOS
 
-function PormG.backend_classify_error(pool::_Pool,
-                                      e::Union{MySQL.MySQLError, ErrorException, EOFError, Base.IOError, SystemError})
+function PormG.backend_classify_error(pool::_Pool, @nospecialize(e))
+  e isa Union{MySQL.MySQLError, ErrorException, EOFError, Base.IOError, SystemError} ||
+    return PormG._default_classify_error(pool, e)   # #1696
   _is_lost_connection(e) && return :operational
   e isa SystemError && return :operational
   (e isa MySQL.Protocol.AuthError || e isa MySQL.Protocol.UnsupportedAuthError ||
@@ -619,6 +624,8 @@ end
 const _SAFE_MESSAGE_ERRNOS = (1044, 1046, 1048, 1049, 1050, 1051, 1054, 1091, 1146, 1205, 1213, 1317,
                               1364, 1406, 1451, 1452, 2006, 2013, 3024, 3572, 3819, 4031)
 
+PormG.backend_error_fields(pool::_Pool, @nospecialize(e)) =
+  e isa MySQL.Protocol.ServerError ? PormG.backend_error_fields(e) : PormG._NO_ERROR_FIELDS
 function PormG.backend_error_fields(e::MySQL.Protocol.ServerError)
   sqlstate = isempty(e.sqlstate) ? nothing : e.sqlstate
   message = Int(e.errno) in _SAFE_MESSAGE_ERRNOS && !isempty(e.msg) ? e.msg : nothing

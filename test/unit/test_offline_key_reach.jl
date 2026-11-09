@@ -192,6 +192,15 @@ const _OKR_REVIEWED = Dict(
   ("ext/PormGPostgresExt.jl", "_Pool") => 1,
   # MySQL. `register_offline` accepts `:postgres` and `:sqlite` only.
   ("ext/PormGMySQLExt.jl", "_Pool") => 1,
+  # `backend_handle_type` (#1683): the handle type the pool's slots hold, a type and nothing else. It
+  # decides how `ConnectionPool._with_handle` calls the driver on a handle the pool already holds, and an
+  # offline pool holds none: acquiring one is refused in `ensure_before_connect!` before a slot opens.
+  ("ext/PormGSQLiteExt.jl", "backend_handle_type") => 1,
+  ("ext/PormGLibPQExt.jl", "backend_handle_type") => 1,
+  # `backend_error_fields(pool, e)` (#1696): reads the reason off an exception the pool already raised,
+  # and an offline pool runs no statement (refused before a driver sees it), so it raises none.
+  ("ext/PormGSQLiteExt.jl", "backend_error_fields") => 1,
+  ("ext/PormGLibPQExt.jl", "backend_error_fields") => 1,
 )
 
 # Every non-comment mention of a concrete pool type, per file, constructor calls aside: the backstop
@@ -210,6 +219,8 @@ const _OKR_MENTIONS = Dict(
   "src/querybuilder/deletion.jl" => 3,   # `_is_live_pool` (reviewed)
   "ext/PormGMySQLExt.jl" => 1,           # `_Pool` (reviewed)
   "ext/PormGPostgresExt.jl" => 1,        # `_Pool` (reviewed)
+  "ext/PormGSQLiteExt.jl" => 2,          # `backend_handle_type` (#1683), `backend_error_fields` (#1696), reviewed
+  "ext/PormGLibPQExt.jl" => 2,           # `backend_handle_type` (#1683), `backend_error_fields` (#1696), reviewed
 )
 
 function _okr_mentions(root::String)

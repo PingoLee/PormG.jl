@@ -47,6 +47,15 @@ _session_options(user::Union{Nothing, AbstractString}) =
 # migrations issue `DROP … IF EXISTS` and friends on purpose, so a warning per notice is noise that
 # also breaks `@test_logs`. Notices stay available at debug level.
 struct _PormGStyle <: Postgres.AbstractPostgresStyle end
+# The concrete type of a connection `_open_connection` opens: `Postgres.Connection` is a `UnionAll` over
+# its statement type and style, and the pool's handle barrier needs the concrete type (#1683). It is
+# what Postgres.jl's constructor builds (`new{Statement{typeof(style)}, typeof(style)}`, 2.2 to 2.6).
+# `test_trim_shape_pins.jl` checks that it is concrete and that it is the type inference gives
+# `DBInterface.connect(Postgres.Connection, params; style = _PormGStyle())`, so a Postgres.jl that builds
+# another type fails that pin. Without the pin, every handle would take the barrier's open arm: under the
+# JIT the dynamic call of before #1683, in a trimmed image the `MethodError` #1683 removed. A connect
+# that asserted it instead would refuse every connection, so `_open_connection` does not.
+const _Conn = Postgres.Connection{Postgres.Statement{_PormGStyle}, _PormGStyle}
 
 function Postgres.notice_callback(::_PormGStyle, notice)
   msg = get(notice, "M", "")
@@ -623,6 +632,10 @@ function _open_connection(pool::_Pool)::Postgres.Connection
   return conn
 end
 
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{_Pool}) = _Conn
+
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 
 # Postgres.jl has no reset primitive, so a renewal is a new connection. The pool closes the old
@@ -823,7 +836,7 @@ function _is_lost_connection(e, depth::Int = 4)::Bool
   return false
 end
 
-PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
+PormG.backend_is_connection_error(pool::_Pool, @nospecialize(e)) = _is_lost_connection(e)
 
 # Did the statement provably NEVER RUN? The gate on `fetch`'s retry (#1042), with the same rule as the
 # LibPQ extension's method. Two cases meet it:
@@ -837,7 +850,8 @@ PormG.backend_is_connection_error(pool::_Pool, e) = _is_lost_connection(e)
 # renewed and swept. It can come after the server received the statement, though, so it is not retried.
 # Typed on the driver's own exception types, which never overlap LibPQ's `LibPQException` method (see the
 # header). Any other type falls to core's default, `false`.
-function PormG.backend_is_retry_safe(pool::_Pool, e::Union{Postgres.Error, Postgres.PostgresInterfaceError})
+function PormG.backend_is_retry_safe(pool::_Pool, @nospecialize(e))
+  e isa Union{Postgres.Error, Postgres.PostgresInterfaceError} || return PormG._default_retry_safe(pool, e)   # #1696
   e isa Postgres.Error && return e.code in _LOST_CONNECTION_CODES
   # server-text-match-ok: Postgres.jl's own client-side text, not a server message
   return startswith(e.msg, _CLOSED_CONNECTION_PREFIX)
@@ -850,7 +864,7 @@ PormG.backend_is_cancellation(e::Postgres.Error) = e.code == "57014"
 # Permanent: the same configuration fails the same way on every retry.
 const _PERMANENT_CONNECT_CODES = ("28P01", "28000", "3D000")  # bad password, no such role, no such database
 
-function PormG.backend_is_permanent_connect_error(pool::_Pool, e)
+function PormG.backend_is_permanent_connect_error(pool::_Pool, @nospecialize(e))
   e isa InvalidConfigurationError && return true
   return e isa Postgres.Error && e.code in _PERMANENT_CONNECT_CODES
 end
@@ -859,8 +873,9 @@ const _OPERATIONAL_CLASSES = ("08", "40", "53", "55", "57")
 
 # Typed on the driver's exception types — never on `Exception`, which would overlap the LibPQ
 # extension's `LibPQException` method and be ambiguous with both loaded.
-function PormG.backend_classify_error(pool::_Pool,
-                                      e::Union{Postgres.Error, Postgres.PostgresInterfaceError, EOFError, Base.IOError, SystemError})
+function PormG.backend_classify_error(pool::_Pool, @nospecialize(e))
+  e isa Union{Postgres.Error, Postgres.PostgresInterfaceError, EOFError, Base.IOError, SystemError} ||
+    return PormG._default_classify_error(pool, e)   # #1696
   _is_lost_connection(e) && return :operational
   e isa SystemError && return :operational   # any other errno: the socket, not the statement
   e isa Postgres.Error || return :unknown
@@ -875,6 +890,8 @@ end
 # `detail`, `hint`, `where` and `internal_query` are never copied — they quote the row or the
 # statement. An empty `code` is the driver's own protocol error, which has no SQLSTATE.
 # `PostgresInterfaceError` gets the default (no fields): its text can quote the SQL.
+PormG.backend_error_fields(pool::_Pool, @nospecialize(e)) =
+  e isa Postgres.Error ? PormG.backend_error_fields(e) : PormG._NO_ERROR_FIELDS
 function PormG.backend_error_fields(e::Postgres.Error)
   sqlstate = isempty(e.code) ? nothing : e.code
   return (sqlstate = sqlstate, constraint = e.constraint, table = e.table, column = e.column,

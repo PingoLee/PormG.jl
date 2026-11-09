@@ -35,7 +35,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
-              backend_is_cancellation,
+              backend_is_cancellation, backend_handle_type,
               _NO_ERROR_FIELDS
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
@@ -190,7 +190,7 @@ end
 # string it was handed — Julia's C-string conversion echoes the whole DSN on an embedded NUL — so the
 # text goes through `redact_secret`. The LibPQ extension refuses such strings before the driver sees
 # them; this is the backstop for any path or driver that does not.
-_redacted_cause(cause) = redact_secret(cause isa Exception ? sprint(showerror, cause) : string(cause))
+_redacted_cause(@nospecialize(cause)) = redact_secret(cause isa Exception ? sprint(showerror, cause) : string(cause))
 
 # The 2-arg `show` too, not only `showerror`: `"$e"`, `string(e)` and `repr(e)` go through it, and the
 # default method prints every field — the raw `cause` included. `@error "…: $e"` is an ordinary line to
@@ -217,7 +217,7 @@ function _run_before_connect!(pool::_SQLEngine)
   return nothing
 end
 
-function _unwrap_async_exception(exception)
+function _unwrap_async_exception(@nospecialize(exception))
   current = exception
   while true
     if current isa TaskFailedException
@@ -254,7 +254,7 @@ Deliberately **not** built on [`_unwrap_async_exception`](@ref). That helper sto
 recursion below finds it anywhere in the tree. It sees through a [`DatabaseError`](@ref) too, so a
 caller that already crossed the taxonomy seam can ask the same question.
 """
-function _await_abandoned(e, depth::Int = 0)::Bool
+function _await_abandoned(@nospecialize(e), depth::Int = 0)::Bool
   depth > 8 && return false                       # cheap guard against pathological nesting
   e isa InterruptException && return true
   if e isa TaskFailedException
@@ -311,12 +311,14 @@ That is not theoretical: LibPQ reports a connection dropped mid-query as `PQResu
 with an *empty* message, which `backend_is_connection_error` recognizes by exact type-and-string
 match. Wrapped, that branch never fires and `fetch`'s reconnect-retry (#138) dies silently.
 """
-_driver_cause(e::DatabaseError) = e.cause
-_driver_cause(e) = e
+_driver_cause(@nospecialize(e)) = e isa DatabaseError ? e.cause : e
+# One method with an `isa`, not two dispatched on the type, and `@nospecialize`: the exception arrives
+# from a `catch`, typed `Any`, and a call that dispatches on it has nothing compiled for the driver's
+# exception type in a `juliac --trim` image (#1696). The same holds for every helper below that takes
+# a caught exception.
 
 # The SQLSTATE of a wrapped failure, for a log line; a PormG error passed through has none.
-_err_sqlstate(e::DatabaseError) = e.sqlstate
-_err_sqlstate(e) = nothing
+_err_sqlstate(@nospecialize(e)) = e isa DatabaseError ? e.sqlstate : nothing
 
 """
     _as_database_error(pool, e; fields = nothing) -> Exception
@@ -351,7 +353,11 @@ of its text. Build the error in the `catch`, let the block end, then throw:
 `test/unit/test_error_text_no_value.jl` pins the pool's sites through a spawned task
 (`AdvisoryLock._await_lock_handle` follows the same rule).
 """
-function _as_database_error(pool, e; fields = nothing)
+function _as_database_error(pool, @nospecialize(e); fields = nothing)
+  # `@nospecialize(e)`: every caller hands it a `catch e`, typed `Any`. Specialized on it, the call
+  # dispatched on the exception's run-time type, and a trimmed image had compiled nothing for the
+  # driver's exception type: the failing statement raised a `MethodError` from inside the code that
+  # reports it (#1696). Compiled once, for `Any`, the classifiers below decide by `isa`.
   root = _unwrap_async_exception(e)
   root isa PormGError && return root
   adapter = _backend_name(pool)
@@ -359,19 +365,40 @@ function _as_database_error(pool, e; fields = nothing)
   # The reason as data (#987). The error renders from these fields alone, so the driver's text —
   # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
   # the failure being reported: a throw there degrades to no fields, a cancellation still propagates.
-  if fields === nothing
-    fields = try
-      backend_error_fields(root)
-    catch read_failure
-      read_failure isa InterruptException && rethrow()
-      _NO_ERROR_FIELDS
-    end
-  end
-  kind === :integrity   && return IntegrityError(adapter, root; fields...)
-  kind === :operational && return OperationalError(adapter, root; fields...)
+  read = fields === nothing ? _read_error_fields(pool, root) : fields
+  # One record type for every driver's reader, so the constructors below are static calls: each reader
+  # returns a `NamedTuple` of its own types (LibPQ's are `SubString`s).
+  f = _error_fields(read)
+  kind === :integrity   && return IntegrityError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
+  kind === :operational && return OperationalError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
   # `:statement` and anything unrecognized land here, so `catch DatabaseError` has no hole.
-  return StatementError(adapter, root; fields...)
+  return StatementError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
 end
+
+# The driver's fields for `root`, or none when the reader throws (see `_as_database_error`).
+function _read_error_fields(pool, @nospecialize(root))
+  try
+    return backend_error_fields(pool, root)
+  catch read_failure
+    read_failure isa InterruptException && rethrow()
+    return _NO_ERROR_FIELDS
+  end
+end
+
+# The fields a `DatabaseError` stores, `Union{Nothing,String}` each, from a reader's `NamedTuple`. The
+# conversion is the one the error types' constructors made before (`convert(Union{String,Nothing}, x)`),
+# done here once so they are called with their own field types.
+const _ErrorFields = NamedTuple{(:sqlstate, :constraint, :table, :column, :message), NTuple{5, Union{Nothing, String}}}
+# A key a reader leaves out reads `nothing`, the keyword constructors' default.
+_error_fields(f)::_ErrorFields = (sqlstate = _field_text(get(f, :sqlstate, nothing)),
+                                  constraint = _field_text(get(f, :constraint, nothing)),
+                                  table = _field_text(get(f, :table, nothing)),
+                                  column = _field_text(get(f, :column, nothing)),
+                                  message = _field_text(get(f, :message, nothing)))
+_field_text(::Nothing) = nothing
+_field_text(s::String) = s
+_field_text(s::SubString{String}) = String(s)
+_field_text(@nospecialize(x)) = convert(Union{Nothing, String}, x)
 
 """
     _await_tx_statement(pool, task)
@@ -506,10 +533,25 @@ function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, p
   return _unknown_postgres_driver(driver)
 end
 
-# The inner constructor's refusal, for a driver no arm above lists.
+# The inner constructor's refusal, for a driver no arm above lists. The names are spelled by
+# `_symbol_text`, not `repr`: Base shows a `Symbol` through `show_unquoted(::Any)`, which a
+# `juliac --trim` build cannot resolve; it was 290 of the trimmed fixture's verifier rows (#1613).
 @noinline _unknown_postgres_driver(driver::Symbol) = throw(InvalidConfigurationError(
-  "unknown PostgreSQL driver $(repr(driver)); expected one of " *
-  join((repr(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
+  "unknown PostgreSQL driver $(_symbol_text(driver)); expected one of " *
+  join((_symbol_text(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
+
+# `repr(s)` for a `Symbol`, written out: Base's three cases (`show(::IO, ::Symbol)` in base/show.jl),
+# so a message reads the same. A symbol Julia's parser must parenthesize (`:(==)`), an identifier or
+# an operator (`:libpq`, `:+`), and anything else as its constructor call (`Symbol("lib pq")`).
+# `test_trim_shape_pins.jl` compares it with `repr` over each case.
+function _symbol_text(s::Symbol)::String
+  str = String(s)
+  s in (:(:), :(::), :(:=), :(=), :(==), :(===), :(=>)) && return ":(" * str * ")"
+  # Base's test is `_isoperator`, which leaves out the postfix operators (`'`, `'ᵀ`): `isoperator` minus
+  # those is the same set, through public names.
+  (Base.isidentifier(s) || (Base.isoperator(s) && !Base.Meta.ispostfixoperator(s))) && return ":" * str
+  return "Symbol(\"" * escape_string(str, ('"', '$')) * "\")"
+end
 
 function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
   connections = Vector{Any}(nothing, pool_size)
@@ -566,7 +608,7 @@ _fail_fast_on_connect(pool) = true
 # classified permanent (auth / cantopen — see `backend_is_permanent_connect_error`) AND fast-fail is
 # enabled for the pool. `last_ref` persists the cause across acquire passes so the terminal branch can
 # raise a truthful `PoolConnectError`. Shared by both acquire twins so the PG/SQLite policy can't drift (#72).
-function _on_connect_failure!(pool, e, last_ref::Base.RefValue{Any})
+function _on_connect_failure!(pool, @nospecialize(e), last_ref::Base.RefValue{Any})
   last_ref[] = e
   return _fail_fast_on_connect(pool) && backend_is_permanent_connect_error(pool, e)
 end
@@ -713,6 +755,36 @@ end
 # direct call changes it here, in one place. `Vararg{Any,N}` so the tail is specialized.
 @inline _call_latest(f::F, args::Vararg{Any,N}) where {F,N} = Base.invokelatest(f, args...)
 
+# ── The handle at its concrete type (#1683) ──────────────────────────────────
+#
+# A pool keeps its driver handles in `Vector{Any}` slots, because core never names a driver type
+# (`SQLite.DB`, `LibPQ.Connection`). So every handle read from a slot is an `Any`, and every call that
+# passed one to the driver (`backend_is_alive`, `backend_renew_connection`, `close`, …) dispatched at run
+# time: one dispatch per call under the JIT, and in a `juliac --trim` image a call nothing was compiled
+# for, a `MethodError` at run time (the Nitro pools probe's `lease` missed `release_connection`).
+#
+# `_with_handle(f, pool, conn, args...)` is `f(pool, conn, args...)` with `conn` at the type the pool's
+# extension registered (`backend_handle_type`, which folds to a constant for a concrete pool type): one
+# type check, then a static call. Any other handle (a unit test's stand-in, or a pool built before its
+# extension loaded) takes the one dynamic call it always took, in `_with_unlisted_handle`, the same open
+# arm `with_pool` keeps for stand-in pools. The functions that receive a handle from a slot take it
+# `@nospecialize`, so a call with an `Any` handle has one compiled target instead of one per handle type.
+# `Vararg{Any,N}`, as in `with_pool`, so the tail is specialized.
+@inline function _with_handle(f::F, pool::P, @nospecialize(conn), args::Vararg{Any,N}) where {F,P,N}
+  H = backend_handle_type(P)
+  conn isa H && return f(pool, conn::H, args...)
+  return _with_unlisted_handle(f, pool, conn, args...)
+end
+@noinline _with_unlisted_handle(f::F, pool, @nospecialize(conn), args::Vararg{Any,N}) where {F,N} =
+  f(pool, conn, args...)
+
+# The driver calls made through `_with_handle` that take more than `(pool, conn)`, as named functions:
+# a closure per site would be a new type, and a new compile, at every call.
+_handle_close(pool, conn) = close(conn)
+_handle_close_latest(pool, conn) = _call_latest(close, conn)   # a deferred or reaped close (#1609)
+_handle_renew(pool, conn) = backend_renew_connection(pool, conn)
+_handle_renew(pool, conn, read_only::Bool) = backend_renew_connection(pool, conn; read_only = read_only)
+
 # ── Direct-handoff wait (#124) ───────────────────────────────────────────────
 # Replaces acquire_connection's busy-poll. Instead of sleeping 100ms and rescanning, a task with
 # no available slot parks as a PoolWaiter; the next capacity-freeing op (release / discard) hands
@@ -772,12 +844,75 @@ function _waiter_wake(deadline::Float64, retry_pass::Int)::Tuple{Symbol, Float64
   return backoff < remaining ? (_POOL_WAIT_RETRY, backoff) : (_POOL_WAIT_TIMEOUT, remaining)
 end
 
-# Waiter FIFO queues live OUTSIDE the pool structs so mock pools that declare their own
-# `<: PormGPostgres/PormGSQLite` struct (with no `waiters` field) are unaffected (#124). Each
-# pool's Vector is only ever mutated while holding that pool's own `lock`; the WeakKeyDict itself
-# is guarded by `_POOL_WAITERS_LOCK`. Lock order is always pool.lock → _POOL_WAITERS_LOCK, never
-# the reverse. WeakKeyDict so a GC'd pool's queue is collected.
-const _POOL_WAITERS = WeakKeyDict{Any, Vector{PoolWaiter}}()
+# ── Pool-keyed registries, by identity (#1706) ──────────────────────────────
+#
+# Per-pool state that lives OUTSIDE the pool structs, so the unit suite's stand-in pools need no extra
+# fields: the waiter queues (#124) and the monitor state (#125/#127/#1548). Each was a
+# `WeakKeyDict{Any,…}`, and a `WeakKeyDict` hashes its key through `hash(::WeakRef)`, which is
+# `hash(w.value::Any)`: a dynamic call on every lookup, whatever the pool's type, and a `setindex!` that
+# registers a finalizer on a key the verifier cannot type. `release_connection` reads the waiter queue
+# on every return, so in a `juliac --trim` image every lease ended in a `MethodError` on `hash`.
+#
+# `_PoolRegistry` keys on the pool's identity instead: `objectid(pool)` maps to `(WeakRef(pool), value)`.
+# `objectid` and `===` are builtins, so a lookup dispatches on nothing, and a `WeakRef` keeps the
+# registry from holding a pool alive, as the `WeakKeyDict` did. An entry whose pool was collected is
+# found by its `WeakRef` reading `nothing` (or, under a reused id, a different object) and is dropped
+# then, or by the purge each insert runs; it registers no finalizer. It has no lock of its own: every
+# caller holds the registry's lock (`_POOL_WAITERS_LOCK`, `_POOL_MONITOR_LOCK`), as the code above
+# always did. The `Dict`-shaped methods are the ones the pool and its tests use. A key must be a mutable
+# object or a singleton, as every pool is: an immutable value's `objectid` is a hash of its content, not
+# an identity (the `WeakKeyDict` refused such a key too, at its finalizer).
+struct _PoolRegistry{V}
+  entries::Dict{UInt, Tuple{WeakRef, V}}
+end
+_PoolRegistry{V}() where {V} = _PoolRegistry{V}(Dict{UInt, Tuple{WeakRef, V}}())
+
+# The live entry for `pool`, or `nothing`; drops a stale entry found under its id.
+function _registry_entry(r::_PoolRegistry, @nospecialize(pool))
+  id = objectid(pool)
+  e = get(r.entries, id, nothing)
+  e === nothing && return nothing
+  e[1].value === pool && return e
+  delete!(r.entries, id)
+  return nothing
+end
+_registry_purge!(r::_PoolRegistry) = filter!(kv -> kv.second[1].value !== nothing, r.entries)
+
+Base.get(r::_PoolRegistry, @nospecialize(pool), default) =
+  (e = _registry_entry(r, pool); e === nothing ? default : e[2])
+function Base.getindex(r::_PoolRegistry, @nospecialize(pool))
+  e = _registry_entry(r, pool)
+  e === nothing && throw(KeyError(pool))
+  return e[2]
+end
+Base.haskey(r::_PoolRegistry, @nospecialize(pool)) = _registry_entry(r, pool) !== nothing
+function Base.setindex!(r::_PoolRegistry{V}, value, @nospecialize(pool)) where {V}
+  _registry_purge!(r)
+  r.entries[objectid(pool)] = (WeakRef(pool), convert(V, value))
+  return r
+end
+# `F<:Base.Callable`: an unconstrained `f` is ambiguous with Base's `get!(::AbstractDict, key, default)`.
+function Base.get!(f::F, r::_PoolRegistry{V}, @nospecialize(pool)) where {F<:Base.Callable, V}
+  e = _registry_entry(r, pool)
+  e === nothing || return e[2]
+  value = convert(V, f())
+  r[pool] = value
+  return value
+end
+function Base.delete!(r::_PoolRegistry, @nospecialize(pool))
+  _registry_entry(r, pool) === nothing || delete!(r.entries, objectid(pool))
+  return r
+end
+Base.empty!(r::_PoolRegistry) = (empty!(r.entries); r)
+Base.length(r::_PoolRegistry) = count(e -> e[1].value !== nothing, values(r.entries))
+Base.isempty(r::_PoolRegistry) = length(r) == 0
+# The pools that still hold an entry, for the sweeper.
+_registry_pools(r::_PoolRegistry) = Any[e[1].value for e in values(r.entries) if e[1].value !== nothing]
+
+# Waiter FIFO queues (#124). Each pool's Vector is only ever mutated while holding that pool's own
+# `lock`; the registry itself is guarded by `_POOL_WAITERS_LOCK`. Lock order is always
+# pool.lock → _POOL_WAITERS_LOCK, never the reverse. Weak, so a collected pool's queue goes with it.
+const _POOL_WAITERS = _PoolRegistry{Vector{PoolWaiter}}()
 const _POOL_WAITERS_LOCK = ReentrantLock()
 
 _waiters_for(pool)::Vector{PoolWaiter} =
@@ -942,7 +1077,7 @@ mutable struct PoolMonitorState
   stamp_lock::ReentrantLock
 end
 
-const _POOL_MONITOR = WeakKeyDict{Any, PoolMonitorState}()   # populated ONLY by the enable_*! functions
+const _POOL_MONITOR = _PoolRegistry{PoolMonitorState}()   # populated ONLY by the enable_*! functions (#1706: by identity)
 const _POOL_MONITOR_LOCK = ReentrantLock()
 # Fast path: false (no pool opted in) → every hook returns immediately. Monotonic: set true by the first
 # enable_reaping!/enable_leak_detection!/enable_idle_validation! above 0, never cleared. Lock order: pool.lock → _POOL_MONITOR_LOCK.
@@ -1070,7 +1205,7 @@ Only while the pool has leak detection on. While no pool in the process has it, 
 check (one atomic load per statement). A pool that has it pays a registry lookup, a `pool.lock` to find
 the slot, and the leaf `stamp_lock` once at the start and once at the end.
 """
-function _note_statement_start!(pool, conn)::_StatementMark
+function _note_statement_start!(pool, @nospecialize(conn))::_StatementMark
   _LEAK_ANY[] || return _NO_STATEMENT_MARK
   st = _monitor_state(pool)
   (st === nothing || st.leak_threshold <= 0) && return _NO_STATEMENT_MARK
@@ -1345,10 +1480,10 @@ end
 
 # Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool.
 function _reap_all_pools!()
-  pools = Base.lock(() -> collect(keys(_POOL_MONITOR)), _POOL_MONITOR_LOCK)
-  for pool in pools                       # a GC'd pool is absent from the WeakKeyDict → _monitor_state nothing
+  pools = Base.lock(() -> _registry_pools(_POOL_MONITOR), _POOL_MONITOR_LOCK)
+  for pool in pools                       # a collected pool has no entry left (its WeakRef reads nothing)
     try
-      _reap_pool!(pool)
+      with_pool(_reap_pool!, pool)        # at the pool's concrete type (#1622); a stand-in takes the open arm
     catch e
       @debug "Connection-pool reap failed" exception=e
     end
@@ -1379,7 +1514,7 @@ function _reap_pool!(pool)
   # Close OUTSIDE the pool lock (a driver close can block on I/O), like `_discard_connection!`.
   for conn in to_close
     try
-      _call_latest(close, conn)
+      _with_handle(_handle_close_latest, pool, conn)
     catch e
       @debug "Error closing reaped connection" exception=e
     end
@@ -1504,17 +1639,21 @@ function _close_pool_slots!(pool::_SQLEngine; drain_seconds::Real)
   #    re-opened for lease like one. That is safe because the handoff carried the handle's identity
   #    (#584): when the waiter wakes it finds the slot no longer holds what it was handed — or no
   #    longer leased — and retries through the scan instead of sharing a re-materialized handle.
-  handles = Any[]
-  in_use = 0
-  Base.lock(pool.lock) do
+  #    Both results live inside the closure and come back as its value: a captured variable the
+  #    closure reassigned (`in_use += 1`) would be a `Core.Box`, an `Any` to every later use, and in a
+  #    trimmed image a run-time compile that fails (#1697).
+  handles, in_use = Base.lock(pool.lock) do
+    taken = Any[]
+    leased = 0
     for i in 1:length(pool.connections)
-      pool.available[i] || (in_use += 1)
+      pool.available[i] || (leased += 1)
       conn = pool.connections[i]
       conn === nothing && continue
-      push!(handles, conn)
+      push!(taken, conn)
       pool.connections[i] = nothing
       pool.available[i] = true
     end
+    return taken, leased
   end
 
   # 3. Close through the #327 seam: immediate for PostgreSQL and for a SQLite handle the global
@@ -1648,13 +1787,13 @@ slot is renewed as for any failed ping. The bound is the driver's own read deadl
 (`backend_ping`), because a close from another task cannot cut the ping: MySQL.jl's `close` waits for
 the connection lock the ping holds.
 """
-function _validate_idle!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, conn, timeout_seconds::Float64)
+function _validate_idle!(pool::_SQLEngine, owned::_OwnedSlot, i::Int, @nospecialize(conn), timeout_seconds::Float64)
   # Set in the same locked step that puts the handle back, so no interrupt can fall between the two
   # and have the `finally` close a handle the slot already holds.
   installed = Base.RefValue{Bool}(false)
   try
     try
-      backend_ping(pool, conn, timeout_seconds)
+      _with_handle(backend_ping, pool, conn, timeout_seconds)
     catch e
       _await_abandoned(e) && rethrow()
       @debug "An idle $(_backend_name(pool)) connection failed its ping; renewing it before use" slot=i cause=_redacted_cause(e)
@@ -1814,7 +1953,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
           owned[] = nothing                                # not ours any more (#1535)
           return (:retry, nothing)
         end
-        if conn !== nothing && backend_is_alive(pool, conn)
+        if conn !== nothing && _with_handle(backend_is_alive, pool, conn)
           # Idle past `validate_after_idle`: ping it off the lock before the caller has it (#1548).
           # The touch first, as for every lease: the leak scan (#127) must not read the idle time as
           # a held connection while the ping runs.
@@ -1849,7 +1988,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       # (B) Normal scan for an available slot.
       for i in 1:length(pool.connections)
         if pool.available[i]
-          if pool.connections[i] !== nothing && backend_is_alive(pool, pool.connections[i])
+          if pool.connections[i] !== nothing && _with_handle(backend_is_alive, pool, pool.connections[i])
             pool.available[i] = false
             st = _monitor_state(pool)                      # one registry lookup for both reads
             idle = _idle_past_threshold(st, i)             # read before the touch resets the clock
@@ -1910,9 +2049,9 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
-      w = PoolWaiter(:any, connect_failed)
-      push!(_waiters_for(pool), w)
-      return (connect_failed ? :wait_retry : :wait, w)
+      waiter = PoolWaiter(:any, connect_failed)
+      push!(_waiters_for(pool), waiter)
+      return (connect_failed ? :wait_retry : :wait, waiter)
     end
 
     # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
@@ -2048,7 +2187,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
           owned[] = nothing                                # not ours any more (#1535)
           return (:retry, nothing)
         end
-        if conn !== nothing && backend_is_alive(pool, conn)
+        if conn !== nothing && _with_handle(backend_is_alive, pool, conn)
           _monitor_note_touch!(pool, i)                   # checkout timestamp (#125)
           owned[] = nothing                                # the caller has it now (#1535)
           return (:got, conn)
@@ -2066,7 +2205,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
       # (B) Normal mode-aware scan.
       for i in _sqlite_candidate_slots!(pool, mode)
         if pool.available[i]
-          if pool.connections[i] !== nothing && backend_is_alive(pool, pool.connections[i])
+          if pool.connections[i] !== nothing && _with_handle(backend_is_alive, pool, pool.connections[i])
             pool.available[i] = false
             _monitor_note_touch!(pool, i)                  # checkout timestamp (#125)
             return (:got, pool.connections[i])
@@ -2107,9 +2246,9 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
       if scan_budget_spent || time() >= deadline
         return (:timeout, nothing)
       end
-      w = PoolWaiter(mode, connect_failed)
-      push!(_waiters_for(pool), w)
-      return (connect_failed ? :wait_retry : :wait, w)
+      waiter = PoolWaiter(mode, connect_failed)
+      push!(_waiters_for(pool), waiter)
+      return (connect_failed ? :wait_retry : :wait, waiter)
     end
 
     # Retire the probe-rejected handles OUTSIDE the pool lock (#442).
@@ -2197,64 +2336,66 @@ reused (#125).
 
 See also [`acquire_connection`](@ref).
 """
-function release_connection(pool::Union{PormGPostgres, PormGMySQL}, conn)
-  retired = nothing
-  # (found, reported slot or 0, its hold, the threshold): a slot the leak scan reported is carried out
-  # of the lock as values, so it logs outside it (#1643).
-  found, reported_slot, reported_held, reported_threshold = Base.lock(pool.lock) do
+function release_connection(pool::Union{PormGPostgres, PormGMySQL}, @nospecialize(conn))
+  # (found, reported slot or 0, its hold, the threshold, the retired handle or `nothing`): a slot the
+  # leak scan reported is carried out of the lock as values, so it logs outside it (#1643). The retired
+  # handle comes out the same way, never through a variable the closure reassigns: that would be a
+  # `Core.Box` (#1697).
+  found, reported_slot, reported_held, reported_threshold, retired = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
         st = _monitor_state(pool)
         held = _reported_hold(st, i)       # before the touch clears the flag (#1643)
         threshold = held >= 0.0 ? (st::PoolMonitorState).leak_threshold : 0.0
+        out = nothing
         if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
-          retired = pool.connections[i]
+          out = pool.connections[i]
           pool.connections[i] = nothing
         else
           _monitor_note_touch!(st, i)         # last_used = now (#125)
         end
         _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
-        return (true, held >= 0.0 ? i : 0, held, threshold)
+        return (true, held >= 0.0 ? i : 0, held, threshold, out)
       end
     end
-    return (false, 0, 0.0, 0.0)
+    return (false, 0, 0.0, 0.0, nothing)
   end
   # A retired slot was returned too: its caller released it, so it logs like any other return.
   reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
   if retired !== nothing
-    try; _call_latest(close, retired); catch e; @debug "Error closing retired $(_backend_name(pool)) connection" exception=e; end
+    try; _with_handle(_handle_close_latest, pool, retired); catch e; @debug "Error closing retired $(_backend_name(pool)) connection" exception=e; end
   end
   found && return true
   @warn "$(_backend_name(pool)) connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
   return false
 end
 
-function release_connection(pool::PormGSQLite, conn)
-  retired = nothing
-  # (found, reported slot or 0, its hold, the threshold): a slot the leak scan reported is carried out
-  # of the lock as values, so it logs outside it (#1643).
-  found, reported_slot, reported_held, reported_threshold = Base.lock(pool.lock) do
+function release_connection(pool::PormGSQLite, @nospecialize(conn))
+  # (found, reported slot or 0, its hold, the threshold, the retired handle or `nothing`), out of the
+  # lock as values: see the PostgreSQL/MySQL method above (#1643, #1697).
+  found, reported_slot, reported_held, reported_threshold, retired = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
         st = _monitor_state(pool)
         held = _reported_hold(st, i)       # before the touch clears the flag (#1643)
         threshold = held >= 0.0 ? (st::PoolMonitorState).leak_threshold : 0.0
+        out = nothing
         if _reap_should_retire(pool, i)    # over max_lifetime (overflow only) → retire on return (#125)
-          retired = pool.connections[i]
+          out = pool.connections[i]
           pool.connections[i] = nothing
         else
           _monitor_note_touch!(st, i)         # last_used = now (#125)
         end
         _handoff_or_free!(pool, i)         # hand the slot to a waiter (leased) or mark it available (#124)
-        return (true, held >= 0.0 ? i : 0, held, threshold)
+        return (true, held >= 0.0 ? i : 0, held, threshold, out)
       end
     end
-    return (false, 0, 0.0, 0.0)
+    return (false, 0, 0.0, 0.0, nothing)
   end
   # A retired slot was returned too: its caller released it, so it logs like any other return.
   reported_slot > 0 && _log_reported_return(pool, reported_slot, reported_held, reported_threshold)
   if retired !== nothing
-    try; _call_latest(close, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
+    try; _with_handle(_handle_close_latest, pool, retired); catch e; @debug "Error closing retired SQLite connection" exception=e; end
   end
   found && return true
   @warn "SQLite Connection not found in the pool - it was replaced after a failure or the pool was closed; after a renewal, release the renewed handle (see release_connection)"
@@ -2266,7 +2407,7 @@ end
 
 Index of the slot currently holding `conn`, matched by identity, read under `pool.lock`.
 """
-_slot_index_of(pool, conn) = Base.lock(pool.lock) do
+_slot_index_of(pool, @nospecialize(conn)) = Base.lock(pool.lock) do
   findfirst(c -> c === conn, pool.connections)
 end
 
@@ -2281,7 +2422,7 @@ renew and re-taking it to install the result, a concurrent recovery — `_discar
 abandoned await, or another renewal — may have emptied or replaced the slot. Installing blindly
 would clobber a slot that is no longer ours and strand whatever now occupies it.
 """
-_swap_slot!(pool, i::Int, conn, new_conn)::Bool = Base.lock(pool.lock) do
+_swap_slot!(pool, i::Int, @nospecialize(conn), @nospecialize(new_conn))::Bool = Base.lock(pool.lock) do
   pool.connections[i] === conn || return false
   pool.connections[i] = new_conn
   # The renewed handle runs nothing yet. A statement still stuck on the old handle no longer stands
@@ -2311,7 +2452,7 @@ end
 #
 # So the re-check makes the SLOT safe for both, and both callers hold the lease for the window;
 # leasing is what makes the HANDLE safe for the one caller that frees it.
-function reconnect_db(pool::Union{PormGPostgres, PormGMySQL}, conn)
+function reconnect_db(pool::Union{PormGPostgres, PormGMySQL}, @nospecialize(conn))
   _run_before_connect!(pool)
 
   i = _slot_index_of(pool, conn)
@@ -2322,7 +2463,7 @@ function reconnect_db(pool::Union{PormGPostgres, PormGMySQL}, conn)
 
   new_conn = try
     # Reset in place, or recreate if the reset fails (handled in the extension).
-    backend_renew_connection(pool, conn)
+    _with_handle(_handle_renew, pool, conn)
   catch e
     @error "Failed to renew $(_backend_name(pool)) connection" slot=i cause=_redacted_cause(e)
     nothing
@@ -2345,7 +2486,7 @@ end
 # extension's renewal does NOT touch the old handle — it is `_create_sqlite_connection(...)` — so
 # renewal was never the unsafe step here; the close that follows it in
 # `_renew_or_discard_connection!` was, and that now goes through `_close_driver_handle!` (#327).
-function reconnect_db(pool::PormGSQLite, conn)
+function reconnect_db(pool::PormGSQLite, @nospecialize(conn))
   _run_before_connect!(pool)
 
   i = _slot_index_of(pool, conn)
@@ -2358,7 +2499,7 @@ function reconnect_db(pool::PormGSQLite, conn)
 
   new_conn = try
     # SQLite has no in-place reset; the extension opens a fresh DB handle.
-    backend_renew_connection(pool, conn; read_only = is_reader_slot)
+    _with_handle(_handle_renew, pool, conn, is_reader_slot)
   catch e
     @error "Failed to recreate SQLite connection" slot=i cause=_redacted_cause(e)
     nothing
@@ -2400,7 +2541,7 @@ ordinary failed-`ROLLBACK` case (#71), and it does.
 budget is deliberately long (see `_ABANDON_CLOSE_SECONDS`), because the cost of waiting is one
 parked task and the cost of closing early is a use-after-free.
 """
-function _close_driver_handle!(pool::_SQLEngine, conn;
+function _close_driver_handle!(pool::_SQLEngine, @nospecialize(conn);
                                close_seconds::Real = _ABANDON_CLOSE_SECONDS)
   if pool isa PormGSQLite && _sqlite_outstanding(conn) > 0
     Threads.@spawn begin
@@ -2409,7 +2550,7 @@ function _close_driver_handle!(pool::_SQLEngine, conn;
       _wait_settled(() -> _sqlite_outstanding(conn) == 0, close_seconds)
       # A deferred task: the latest world, see `_call_latest`.
       try
-        _call_latest(close, conn)
+        _with_handle(_handle_close_latest, pool, conn)
       catch close_error
         @debug "Error closing a deferred SQLite handle" exception=close_error
       end
@@ -2418,7 +2559,7 @@ function _close_driver_handle!(pool::_SQLEngine, conn;
   end
 
   try
-    close(conn)
+    _with_handle(_handle_close, pool, conn)
   catch close_error
     @debug "Error closing connection" exception=close_error
   end
@@ -2456,7 +2597,7 @@ driver is still on the connection — and closing there would free a SQLite hand
 may be inside `sqlite3_step` on. That caller takes the slot out of circulation now and closes the
 doomed handle later, once the driver has let go — again only if this discard found the slot.
 """
-function _discard_connection!(pool::_SQLEngine, conn; close_handle::Bool = true)::Bool
+function _discard_connection!(pool::_SQLEngine, @nospecialize(conn); close_handle::Bool = true)::Bool
   found = Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
@@ -2505,7 +2646,7 @@ handed the slot to (#124) — holds the lease, which shields the handle from bot
 as a claim would. The caller then leaves the slot entirely alone: renewing under a waiter would
 install a handle the waiter's identity re-check (#584) refuses, stranding the slot leased.
 """
-function _claim_idle_slot!(pool::_SQLEngine, conn)::Bool
+function _claim_idle_slot!(pool::_SQLEngine, @nospecialize(conn))::Bool
   Base.lock(pool.lock) do
     for i in 1:length(pool.connections)
       if pool.connections[i] === conn
@@ -2576,7 +2717,7 @@ a throw — the slot is discarded instead so the next borrower opens a fresh con
 Never throws: the transaction's original error must keep propagating through the caller's
 `finally`.
 """
-function _renew_or_discard_connection!(pool::_SQLEngine, conn)
+function _renew_or_discard_connection!(pool::_SQLEngine, @nospecialize(conn))
   new_conn = try
     reconnect_db(pool, conn)  # replaces the slot in place; does NOT flip `available`
   catch renew_error
@@ -2619,7 +2760,7 @@ have to see through a [`DatabaseError`](@ref) wrapper though: `finalize_transact
 is handed `rollback_error` values that already crossed a seam (`migrations/runner.jl`,
 `querybuilder/deletion.jl`), so `_driver_cause` is load-bearing here (#268).
 """
-_is_benign_rollback_error(pool::_SQLEngine, e) =
+_is_benign_rollback_error(pool::_SQLEngine, @nospecialize(e)) =
   pool isa PormGSQLite &&   # server-text-match-ok: SQLite only; it attaches no code here and never localizes
   occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
 
@@ -2645,7 +2786,7 @@ Ordered by severity, and the order is load-bearing:
 branch. Never throws — every branch is itself guarded, and callers run this while an original error
 is propagating.
 """
-function _finish_statement_connection!(pool::_SQLEngine, conn, handle;
+function _finish_statement_connection!(pool::_SQLEngine, @nospecialize(conn), handle;
                                        abandoned::Bool = false, rollback_failed::Bool = false)
   if abandoned
     # Detached: cancel, wait for the driver to let go, then renew — never touching the connection
@@ -2663,7 +2804,7 @@ end
 # Is `e` (already crossed a seam, so possibly a `DatabaseError` around an async envelope) a lost
 # connection? The same probe `fetch`'s retry makes inline. Never throws: a pool without a driver hits Backend.jl's
 # throwing fallback, and the caller is a transaction's cleanup.
-function _lost_connection_error(pool::_SQLEngine, e)::Bool
+function _lost_connection_error(pool::_SQLEngine, @nospecialize(e))::Bool
   try
     return backend_is_connection_error(pool, _driver_cause(_unwrap_async_exception(e))) === true
   catch
@@ -2707,9 +2848,9 @@ arrives after the statement ended does no harm: MySQL discards one that reaches 
 the cleanup statement after it runs (checked live on MySQL 8.4.11, #1651). Never throws: the
 lifecycle's original error is propagating.
 """
-function _cancel_abandoned_statement!(pool::_SQLEngine, conn)
+function _cancel_abandoned_statement!(pool::_SQLEngine, @nospecialize(conn))
   try
-    backend_cancel_query!(pool, conn)
+    _with_handle(backend_cancel_query!, pool, conn)
   catch cancel_failure
     @debug "Cancel of an abandoned statement failed" exception=cancel_failure
   end
@@ -2748,7 +2889,7 @@ interrupted statement, with its locks held. When `body_error` is an interrupted 
 error that reached you is another one (`run_in_transaction` does, for a body that caught the
 interrupt). Both are optional: without them the connection is returned exactly as before.
 """
-function finalize_transaction_connection!(pool::_SQLEngine, conn;
+function finalize_transaction_connection!(pool::_SQLEngine, @nospecialize(conn);
                                           rollback_error = nothing, renew::Bool = false,
                                           body_error = nothing, abandoned_await::Bool = false)
   # The one gate for the cancel (#1588, #1638), shared by `run_in_transaction` and every hand-rolled
@@ -2775,7 +2916,7 @@ end
 finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = nothing, renew::Bool = false,
                                  body_error = nothing, abandoned_await::Bool = false) =
   with_pool(_finalize_on, pool.connections, conn, rollback_error, renew, body_error, abandoned_await)
-_finalize_on(pool::_SQLEngine, conn, rollback_error, renew::Bool, body_error, abandoned_await::Bool) =
+_finalize_on(pool::_SQLEngine, @nospecialize(conn), rollback_error, renew::Bool, body_error, abandoned_await::Bool) =
   finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = renew,
                                    body_error = body_error, abandoned_await = abandoned_await)
 
@@ -2844,11 +2985,11 @@ const _sqlite_async_work_queue = Channel{SQLiteAsyncWorkItem}(2048)
 const _sqlite_pending = IdDict{Any, Int}()
 const _sqlite_pending_lock = ReentrantLock()
 
-_sqlite_pending_inc!(conn) = Base.@lock _sqlite_pending_lock begin
+_sqlite_pending_inc!(@nospecialize(conn)) = Base.@lock _sqlite_pending_lock begin
   _sqlite_pending[conn] = get(_sqlite_pending, conn, 0) + 1
 end
 
-function _sqlite_pending_dec!(conn)
+function _sqlite_pending_dec!(@nospecialize(conn))
   Base.@lock _sqlite_pending_lock begin
     n = get(_sqlite_pending, conn, 0) - 1
     n > 0 ? (_sqlite_pending[conn] = n) : delete!(_sqlite_pending, conn)
@@ -2862,7 +3003,7 @@ end
 How many statements the global SQLite worker still has for `conn` — queued or executing (#327).
 Zero means the worker is provably off this connection and the handle can be closed.
 """
-_sqlite_outstanding(conn)::Int = Base.@lock _sqlite_pending_lock get(_sqlite_pending, conn, 0)
+_sqlite_outstanding(@nospecialize(conn))::Int = Base.@lock _sqlite_pending_lock get(_sqlite_pending, conn, 0)
 
 function _ensure_sqlite_async_worker!()
   _sqlite_async_worker_started[] && return
@@ -2915,7 +3056,7 @@ Internal helper that funnels a SQLite query through the single global worker so 
 statements run serialized on one thread, then returns a `Task` the caller awaits. This
 keeps the main event loop responsive while waiting for the database.
 """
-function sqlite_execute_async(pool::PormGSQLite, conn, sql::String, params; decode = nothing)
+function sqlite_execute_async(pool::PormGSQLite, @nospecialize(conn), sql::String, params; decode = nothing)
   _ensure_sqlite_async_worker!()
 
   response = Channel{Any}(1)
@@ -3063,16 +3204,16 @@ _wait_settled(probe, seconds::Real)::Bool =
 # caller sends it inline. PostgreSQL and MySQL: no. `PQcancel` opens its own socket and MySQL's
 # `KILL QUERY` its own connection, either of which can block for seconds, and the caller has to give
 # the REPL back at once; their cancel stays on the detached task. Never throws, as step 1 never does.
-function _cancel_at_abandon!(pool::PormGSQLite, conn)::Bool
+function _cancel_at_abandon!(pool::PormGSQLite, @nospecialize(conn))::Bool
   try
-    backend_cancel_query!(pool, conn)
+    _with_handle(backend_cancel_query!, pool, conn)
     return true
   catch cancel_failure
     @debug "Cancel of an abandoned SQLite query failed" exception=cancel_failure
     return false
   end
 end
-_cancel_at_abandon!(::Union{PormGPostgres, PormGMySQL}, conn)::Bool = false
+_cancel_at_abandon!(::Union{PormGPostgres, PormGMySQL}, @nospecialize(conn))::Bool = false
 
 """
     _recover_abandoned_connection!(pool, conn, handle; settle_seconds, close_seconds, force_renew) -> Nothing
@@ -3122,7 +3263,7 @@ This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection
 not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
 a broken connection is discarded and replaced).
 """
-function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
+function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), handle;
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
                                         close_seconds::Real = _ABANDON_CLOSE_SECONDS,
                                         force_renew::Bool = false)
@@ -3136,7 +3277,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
       #    when the caller already sent it (`_cancel_at_abandon!`, SQLite, #1534).
       if !cancel_sent
         try
-          backend_cancel_query!(pool, conn)
+          _with_handle(backend_cancel_query!, pool, conn)
         catch cancel_failure
           @debug "Cancel of an abandoned query failed" exception=cancel_failure
         end
@@ -3155,7 +3296,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
           _renew_or_discard_connection!(pool, conn)
         else
           clean = try
-            backend_drain_connection!(pool, conn)
+            _with_handle(backend_drain_connection!, pool, conn)
           catch drain_failure
             @debug "Drain of an abandoned connection failed" exception=drain_failure
             false
@@ -3179,7 +3320,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, conn, handle;
         if _discard_connection!(pool, conn; close_handle = false)
           _wait_settled(probe, close_seconds)
           try
-            _call_latest(close, conn)
+            _with_handle(_handle_close_latest, pool, conn)
           catch close_failure
             @debug "Error closing an abandoned connection" exception=close_failure
           end
@@ -3549,7 +3690,7 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
     # Reuse the transaction connection — COPY is part of the open transaction.
     mark = _note_statement_start!(connection, tx_conn)   # the leak scan's stamp (#1637)
     err = try
-      return backend_copy_in!(connection, tx_conn, sql, data_itr)
+      return _with_handle(backend_copy_in!, connection, tx_conn, sql, data_itr)
     catch e
       _as_database_error(connection, e)
     finally
@@ -3562,7 +3703,7 @@ function fetch_copy(connection::PormGPostgres, sql::String, data_itr)
     conn = acquire_connection(connection)
     mark = _note_statement_start!(connection, conn)   # the leak scan's stamp (#1637)
     err = try
-      return backend_copy_in!(connection, conn, sql, data_itr)
+      return _with_handle(backend_copy_in!, connection, conn, sql, data_itr)
     catch e
       _as_database_error(connection, e)
     finally
@@ -3810,15 +3951,15 @@ _after_begin_sql(::PormGMySQL) = String[]
 # #1129 item 2 — which driver path a statement executes through, and how a connection is leased for
 # it, per engine and with no fallback. SQLite's pool keeps separate read and write slots
 # (`_slot_fits_mode`), so a lease says which it needs; PostgreSQL's slots are all alike.
-_execute_async(pool::PormGPostgres, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
-_execute_async(pool::PormGSQLite, conn, sql, params) = sqlite_execute_async(pool, conn, String(sql), params)
-_execute_async(pool::PormGMySQL, conn, sql, params) = backend_execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGPostgres, @nospecialize(conn), sql, params) = _with_handle(backend_execute_async, pool, conn, sql, params)
+_execute_async(pool::PormGSQLite, @nospecialize(conn), sql, params) = sqlite_execute_async(pool, conn, String(sql), params)
+_execute_async(pool::PormGMySQL, @nospecialize(conn), sql, params) = _with_handle(backend_execute_async, pool, conn, sql, params)
 # #1605: with the typed read's decoder. SQLite decodes on its worker; the others decode the result their
 # handle delivers, in `fetch` (`_decoded`), so the decoder is not passed to their driver call.
-_execute_async(pool::PormGSQLite, conn, sql, params, ::Nothing) = _execute_async(pool, conn, sql, params)
-_execute_async(pool::PormGSQLite, conn, sql, params, decode) = sqlite_execute_async(pool, conn, String(sql), params; decode = decode)
-_execute_async(pool::PormGPostgres, conn, sql, params, decode) = _execute_async(pool, conn, sql, params)
-_execute_async(pool::PormGMySQL, conn, sql, params, decode) = _execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGSQLite, @nospecialize(conn), sql, params, ::Nothing) = _execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGSQLite, @nospecialize(conn), sql, params, decode) = sqlite_execute_async(pool, conn, String(sql), params; decode = decode)
+_execute_async(pool::PormGPostgres, @nospecialize(conn), sql, params, decode) = _execute_async(pool, conn, sql, params)
+_execute_async(pool::PormGMySQL, @nospecialize(conn), sql, params, decode) = _execute_async(pool, conn, sql, params)
 _acquire_in_mode(pool::PormGPostgres, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)
 _acquire_in_mode(pool::PormGSQLite, mode::Symbol; kwargs...) = acquire_connection(pool; mode = mode, kwargs...)
 _acquire_in_mode(pool::PormGMySQL, ::Symbol; kwargs...) = acquire_connection(pool; kwargs...)

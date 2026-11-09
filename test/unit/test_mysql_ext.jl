@@ -71,9 +71,13 @@ end
   for (f, types) in rows
     @test which(f, Tuple{types...}).module === _MyExt
   end
-  # Deliberately NOT the extension's: a failure that is not the driver's error type keeps core's
-  # "not retry-safe" (#1042), so a mock pool or a socket error is never retried.
-  @test which(PormG.backend_is_retry_safe, Tuple{_MyPool, ErrorException}).module === PormG
+  # A failure that is not the driver's error type keeps core's "not retry-safe" (#1042), so a socket
+  # error is never retried. Since #1696 the extension's one `@nospecialize` method receives every
+  # exception and hands any other type to core's `_default_retry_safe`, so this asks the answer and the
+  # hand-off, where it used to ask which module's method dispatch picked.
+  @test PormG.backend_is_retry_safe(PormG.ConnectionPool.MySQLConnectionPool("host='x'"; pool_size = 1),
+                                    ErrorException("boom")) === false
+  @test which(PormG._default_retry_safe, Tuple{_MyPool, ErrorException}).module === PormG
   ext_modules = Tuple(m for m in (Base.get_extension(PormG, n) for n in
                      (:PormGMySQLExt, :PormGLibPQExt, :PormGPostgresExt, :PormGSQLiteExt)) if m !== nothing)
   ambiguous = filter(Test.detect_ambiguities(PormG, ext_modules...; recursive = true)) do (a, b)

@@ -290,6 +290,10 @@ const _CONNECTION_CONVERSIONS = Dict((:interval, Dates.CompoundPeriod) => _inter
 
 # ── Backend interface methods ────────────────────────────────────────────────
 
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{<:PormG.ConnectionPool.PostgresConnectionPool{:libpq}}) = LibPQ.Connection
+
 PormG.backend_connect(pool::PormGPostgres; read_only::Bool = false) = _open_connection(pool)
 
 function PormG.backend_renew_connection(pool::PormGPostgres, conn::LibPQ.Connection; read_only::Bool = false)
@@ -522,7 +526,7 @@ const _PG_LOST_CONNECTION_ERRORS = Union{
 #
 # which is why `fetch`'s retry never fired and the error propagated to the caller — the mechanism
 # the #442 production report actually hit.
-function PormG.backend_is_connection_error(pool::PormGPostgres, e)
+function PormG.backend_is_connection_error(pool::PormGPostgres, @nospecialize(e))
   # (0) LibPQ raises `CompositeException` when several results in one execute errored, and
   #     `_unwrap_async_exception` only unwraps the single-error case. Recurse, or a multi-result
   #     failure would skip the SQLSTATE gate below and be judged on concatenated message text. This
@@ -630,7 +634,8 @@ end
 # above). The code was there, but the codeless line is what arrives, so it is not retried. That is
 # the safe direction. An IDLE backend terminated the same way never reaches a statement: the
 # checkout probe (`backend_is_alive`, #442) retires it first.
-function PormG.backend_is_retry_safe(pool::PormGPostgres, e::LibPQ.Errors.LibPQException)
+function PormG.backend_is_retry_safe(pool::PormGPostgres, @nospecialize(e))
+  e isa LibPQ.Errors.LibPQException || return PormG._default_retry_safe(pool, e)   # #1696
   e isa _PG_LOST_CONNECTION_ERRORS && return true
   # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a refusal to send carries no SQLSTATE (#1010)
   return e isa LibPQ.Errors.PQConnectionError && startswith(lowercase(e.msg), "no connection to the server")
@@ -655,7 +660,7 @@ PormG.backend_is_cancellation(e::LibPQ.Errors.QueryCanceled) = true
 # public call returns it, and at the default verbosity it is not in the text either), and LibPQ.jl
 # offers no hook to raise the verbosity before connecting. The Postgres.jl driver reads the code
 # (`_PERMANENT_CONNECT_CODES` in `PormGPostgresExt`) and is unaffected.
-function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, e)
+function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, @nospecialize(e))
   # A connection string `_preflight_conninfo` refused (NUL, unparseable) is the most permanent
   # failure there is: the same string fails the same way on every retry (#657).
   e isa PormG.InvalidConfigurationError && return true
@@ -691,7 +696,8 @@ const _PG_OPERATIONAL_CLASSES = (
   LibPQ.Errors.C57,   # operator_intervention — query_canceled, admin_shutdown
 )
 
-function PormG.backend_classify_error(pool::PormGPostgres, e::LibPQ.Errors.LibPQException)
+function PormG.backend_classify_error(pool::PormGPostgres, @nospecialize(e))
+  e isa LibPQ.Errors.LibPQException || return PormG._default_classify_error(pool, e)   # #1696
   PormG.backend_is_connection_error(pool, e) && return :operational
   # Connection-level failures are a SIBLING of PQResultError, not a subtype, so they carry no
   # SQLSTATE to map. The realistic source is the COPY drain in `_drain_postgres_connection!` below,
@@ -715,7 +721,13 @@ end
 # parameter, and the primary message, which is the message's first line after its severity
 # (`ERROR:  `, or a localized `ERRO:  `; libpq separates the two with a colon and two spaces in every
 # locale). DETAIL, HINT and `LINE n:` sit on the lines after it and are never read.
-function PormG.backend_error_fields(e::LibPQ.Errors.PQResultError)
+# On LibPQ's own pool, not the `PormGPostgres` marker: a stand-in pool keeps the default, the
+# one-argument form, which reads whichever driver's exception it is handed (#1696).
+PormG.backend_error_fields(pool::PormG.ConnectionPool.PostgresConnectionPool{:libpq}, @nospecialize(e)) =
+  e isa LibPQ.Errors.PQResultError ? _pq_error_fields(e) : PormG._NO_ERROR_FIELDS
+PormG.backend_error_fields(e::LibPQ.Errors.PQResultError) = _pq_error_fields(e)
+# `@nospecialize`: `PQResultError` is parameterized on the SQLSTATE, one type per code (#1696).
+function _pq_error_fields(@nospecialize(e::LibPQ.Errors.PQResultError))
   # `CUN` / `EUNOWN` is LibPQ's synthetic "the server sent no code" — not a SQLSTATE to report.
   e isa LibPQ.Errors.PQResultError{LibPQ.Errors.CUN} && return PormG._NO_ERROR_FIELDS
   sqlstate = chopprefix(string(LibPQ.Errors.error_code(e)), "E")

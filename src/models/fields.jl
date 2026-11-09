@@ -144,9 +144,10 @@ end
 # replace them with "Expected type: Int64", which is the wording this fix exists to stop producing.
 function _int_kwarg(field_type::AbstractString, name::AbstractString, value; strings::Bool = false)
   # The bound is `Int`'s, which is word-size dependent, so the message names both ends rather than
-  # asserting a width (#646).
-  throw_out_of_range() = throw(_fielderr("$(field_type): '$(name)' is out of range, got $(value) " *
-                                         "(it must fit in an Int, $(typemin(Int)) to $(typemax(Int)))."))
+  # asserting a width (#646). The value is an argument, not captured: `value` is reassigned below, and
+  # a closure capturing a reassigned variable boxes it (`Core.Box`, an `Any` to every use, #1697).
+  throw_out_of_range(v) = throw(_fielderr("$(field_type): '$(name)' is out of range, got $(v) " *
+                                          "(it must fit in an Int, $(typemin(Int)) to $(typemax(Int)))."))
   if strings && value isa AbstractString
     # Base 10 only (#780), on #773's grammar: a `0x`/`0b`/`0o` prefix is refused by name, and a
     # spelling outside `is_base10_number` (`"+ 8"`, which `parse(Int, …; base = 10)` still reads) is
@@ -160,7 +161,7 @@ function _int_kwarg(field_type::AbstractString, name::AbstractString, value; str
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
       # `OverflowError` is a well-formed number too wide for `Int`; anything else is not a number.
-      e isa OverflowError && throw_out_of_range()
+      e isa OverflowError && throw_out_of_range(value)
       throw(_fielderr("$(field_type): '$(name)' must be an Integer or a numeric String, got $(repr(value))."))
     end
   end
@@ -175,7 +176,7 @@ function _int_kwarg(field_type::AbstractString, name::AbstractString, value; str
     # return-type re-check does not cover it; the sibling hole that comment describes is closed,
     # this one is still guarded here.)
     (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
-    throw_out_of_range()
+    throw_out_of_range(value)
   end
 end
 

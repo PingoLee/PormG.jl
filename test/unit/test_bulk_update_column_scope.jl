@@ -26,7 +26,7 @@ using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update
 import DataFrames
 
 # ------------------------------------------------------------------
-# Reproduce the exact production model shape:
+# The model shape this file exercises:
 #   - two requested update targets:  weight (IntegerField), score (DecimalField)
 #   - three fields carrying a static default that must NOT leak: denominator, numerator, result_value
 #   - city_id used as a static filter (Pair{String,<:Any})
@@ -53,17 +53,17 @@ PormG.config["default"] = PormG.Configuration.Settings(
     change_data = true
 )
 
-# 1-row DataFrame that mirrors the production case.
+# A one-row DataFrame.
 # The DataFrame intentionally contains all columns of the model so we can
 # verify the ORM selects only what was listed in columns=.
 df_upd = DataFrames.DataFrame(
-    id           = [4606],
-    city_id      = [141341324],
+    id           = [1001],
+    city_id      = [2009],
     weight       = [1],
     score        = ["0.75"],
-    denominator  = [570],    # present in DF but must NOT be in SET
-    numerator    = [30675],  # present in DF but must NOT be in SET
-    result_value = ["53.8"], # present in DF but must NOT be in SET
+    denominator  = [57],    # present in DF but must NOT be in SET
+    numerator    = [3067],  # present in DF but must NOT be in SET
+    result_value = ["18.6"], # present in DF but must NOT be in SET
 )
 
 @testset "bulk_update: explicit columns scope enforcement" begin
@@ -80,7 +80,7 @@ df_upd = DataFrames.DataFrame(
             Metric.objects, df_upd,
             columns    = ["weight", "score"],
             match_on   = ["id"],
-            filters    = ["city_id" => 141341324],
+            filters    = ["city_id" => 2009],
             show_query = :dict
         )
         sql = res[:sql_text]
@@ -90,7 +90,7 @@ df_upd = DataFrames.DataFrame(
         @test set_match !== nothing  # sanity: SQL has expected shape
         set_text = set_match.captures[1]
 
-        # The static filter passed as `"city_id" => 141341324` must remain in the
+        # The static filter passed as `"city_id" => 2009` must remain in the
         # WHERE clause and be combined with the dynamic `id` filter.
         @test occursin(r"AND\s+\"Tb\"\.\"city_id\"\s*=\s*\$1", sql)
 
@@ -116,7 +116,7 @@ df_upd = DataFrames.DataFrame(
             Metric.objects, df_upd,
             columns    = ["weight", "score"],
             match_on   = ["id"],
-            filters    = ["city_id" => 141341324],
+            filters    = ["city_id" => 2009],
             show_query = :dict
         )
         sql = res[:sql_text]
@@ -141,13 +141,13 @@ df_upd = DataFrames.DataFrame(
     # Sub-test 3: Parameter count must match the restricted column set.
     #
     # BUG produced 7 parameters; the correct count is 4:
-    #   $1  → city_id static filter value (141341324)
+    #   $1  → city_id static filter value (2009)
     #   $2  → weight  (row value, lands in VALUES)
     #   $3  → score   (row value, lands in VALUES)
     #   $4  → id      (row value, lands in VALUES as WHERE key)  ← wait, not $4?
     #
     # Actually for PostgreSQL the static filter pre-pends:
-    #   $1 = 141341324 (static WHERE from objct.filter)
+    #   $1 = 2009 (static WHERE from objct.filter)
     # Then the VALUES row:
     #   $2 = weight, $3 = score, $4 = id (dynamic filter col in source)
     # Total = 4, not 7.
@@ -157,7 +157,7 @@ df_upd = DataFrames.DataFrame(
             Metric.objects, df_upd,
             columns    = ["weight", "score"],
             match_on   = ["id"],
-            filters    = ["city_id" => 141341324],
+            filters    = ["city_id" => 2009],
             show_query = :dict
         )
         # The exact parameter order matters:
@@ -170,7 +170,7 @@ df_upd = DataFrames.DataFrame(
 
         params = res[:parameters]
 
-        @test params == Any[141341324, [1], ["0.75"], [4606]]
+        @test params == Any[2009, [1], ["0.75"], [1001]]
     end
 
     # ------------------------------------------------------------------
@@ -184,8 +184,8 @@ df_upd = DataFrames.DataFrame(
     # ------------------------------------------------------------------
     @testset "Requested default-bearing field is not synthesized for explicit update" begin
         df_missing_requested = DataFrames.DataFrame(
-            id      = [4606],
-            city_id = [141341324],
+            id      = [1001],
+            city_id = [2009],
             weight  = [1],
         )
 
@@ -193,7 +193,7 @@ df_upd = DataFrames.DataFrame(
             Metric.objects, df_missing_requested,
             columns    = ["weight", "result_value"],
             match_on   = ["id"],
-            filters    = ["city_id" => 141341324],
+            filters    = ["city_id" => 2009],
             show_query = :dict
         )
         sql_missing_requested = res_missing_requested[:sql_text]
@@ -211,7 +211,7 @@ df_upd = DataFrames.DataFrame(
         @test occursin("\"weight\"", source_cols_missing)
         @test !occursin("result_value", source_cols_missing)
         @test res_missing_requested[:parameter_count] == 3
-        @test res_missing_requested[:parameters] == Any[141341324, [1], [4606]]
+        @test res_missing_requested[:parameters] == Any[2009, [1], [1001]]
     end
 
 end
@@ -287,7 +287,7 @@ end
 
         # The parameter vector should follow the same order as the VALUES source.
         @test res_auto[:parameter_count] == 7
-        @test res_auto[:parameters] == Any[[4606], [141341324], [1], ["0.75"], [570], [30675], ["53.8"]]
+        @test res_auto[:parameters] == Any[[1001], [2009], [1], ["0.75"], [57], [3067], ["18.6"]]
     end
 
 end
@@ -367,7 +367,7 @@ end
     # df "record_id") appears in the source list and WHERE, but never in SET.
     @testset "columns= carries the mapping; bare match_on selects the merge key" begin
         custom_df = DataFrames.DataFrame(
-            record_id = [4606],
+            record_id = [1001],
             new_w     = [9],
         )
         res = bulk_update(
@@ -384,13 +384,13 @@ end
         @test occursin("\"weight\"", set_text)
         @test !occursin("\"id\" =", set_text)   # match key is not SET
         # Source order: update column first, then the match key.
-        @test res[:parameters] == Any[[9], [4606]]
+        @test res[:parameters] == Any[[9], [1001]]
     end
 
     # The pre-#107 pair grammar must fail loudly with the rewrite, not silently
     # remap — the migration error is the deprecation shim's whole point.
     @testset "match_on pair form raises the migration error" begin
-        custom_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+        custom_df = DataFrames.DataFrame(record_id = [1001], new_w = [9])
         err = try
             bulk_update(
                 Metric.objects, custom_df,
@@ -416,7 +416,7 @@ end
     # same-named column is ignored — loudly (@warn), so the ambiguity is visible.
     @testset "columns= mapping wins over a same-named df column (with @warn)" begin
         conflict_df = DataFrames.DataFrame(
-            record_id = [4606],   # the declared source for field id
+            record_id = [1001],   # the declared source for field id
             id        = [999],    # same-named column that must be IGNORED
             new_w     = [9],
         )
@@ -426,8 +426,8 @@ end
             match_on   = ["id"],
             show_query = :dict
         )
-        # Params prove the mapping won: 4606 (df.record_id), not 999 (df.id).
-        @test res[:parameters] == Any[[9], [4606]]
+        # Params prove the mapping won: 1001 (df.record_id), not 999 (df.id).
+        @test res[:parameters] == Any[[9], [1001]]
     end
 
     # When match_on is given, filters are ALWAYS static — no content heuristic.
@@ -436,7 +436,7 @@ end
             Metric.objects, df_upd,
             columns    = ["weight"],
             match_on   = ["id"],
-            filters    = ["city_id" => 141341324],
+            filters    = ["city_id" => 2009],
             show_query = :dict
         )
         @test occursin(r"AND\s+\"Tb\"\.\"city_id\"\s*=\s*\$1", res[:sql_text])
@@ -476,7 +476,7 @@ end
     # bare field → match_on=) — recommending `match_on = [pair]` would send the
     # caller straight into the match_on pair error.
     @testset "legacy df_col => field filter raises migration error" begin
-        custom_df = DataFrames.DataFrame(record_id = [4606], weight = [1])
+        custom_df = DataFrames.DataFrame(record_id = [1001], weight = [1])
         err = try
             bulk_update(
                 Metric.objects, custom_df,
@@ -498,7 +498,7 @@ end
     # A match key with no source — no columns= mapping for the field and no df column
     # with the field's own name — is a hard error, never a silent fall-through.
     @testset "match_on field without any source column raises" begin
-        custom_df = DataFrames.DataFrame(record_id = [4606], new_w = [9])
+        custom_df = DataFrames.DataFrame(record_id = [1001], new_w = [9])
         err = try
             bulk_update(
                 Metric.objects, custom_df,
@@ -550,7 +550,7 @@ end
         @test occursin("\"id\"", source_cols)
         @test occursin("\"city_id\"", source_cols)
         # Params follow the source order: weight, id, city_id.
-        @test res[:parameters] == Any[[1], [4606], [141341324]]
+        @test res[:parameters] == Any[[1], [1001], [2009]]
     end
 
     # Duplicate detection must consider the full composite key tuple, not just one.
@@ -600,7 +600,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "bare match_on with case-only source mismatch raises" begin
         # field "id" is unmapped; the df only carries "ID" — same name, wrong case.
-        ci_df = DataFrames.DataFrame(ID = [4606], new_w = [9])
+        ci_df = DataFrames.DataFrame(ID = [1001], new_w = [9])
         err = try
             bulk_update(
                 Metric.objects, ci_df,
@@ -629,7 +629,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "explicit columns= string with case-only mismatch raises" begin
         # field "weight" requested; DataFrame only has "Weight".
-        df_case = DataFrames.DataFrame(id = [4606], Weight = [9])
+        df_case = DataFrames.DataFrame(id = [1001], Weight = [9])
         err = try
             bulk_update(
                 Metric.objects, df_case,
@@ -655,7 +655,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "auto-detect rejects a column differing only in case" begin
         # "id" matches exactly; "Weight" differs only in case from field "weight".
-        df_auto_case = DataFrames.DataFrame(id = [4606], Weight = [9])
+        df_auto_case = DataFrames.DataFrame(id = [1001], Weight = [9])
         err = try
             bulk_update(
                 Metric.objects, df_auto_case,
@@ -683,7 +683,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "bare match_on resolves through an explicit columns= mapping across case" begin
         # "ID" => "id" explicitly maps the mixed-case DataFrame column to field id.
-        df_reuse = DataFrames.DataFrame(ID = [4606], weight = [9])
+        df_reuse = DataFrames.DataFrame(ID = [1001], weight = [9])
         res = bulk_update(
             Metric.objects, df_reuse,
             columns    = ["weight", "ID" => "id"],
@@ -691,7 +691,7 @@ end
             show_query = :dict
         )
         @test occursin("\"Tb\".\"id\" = source.\"id\"", res[:sql_text])
-        @test res[:parameters] == Any[[9], [4606]]
+        @test res[:parameters] == Any[[9], [1001]]
     end
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -702,7 +702,7 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "explicit columns= pair with case-only mismatch raises" begin
         # df has "weight"; the mapping names "Weight" — same name, wrong case.
-        df_pair_case = DataFrames.DataFrame(id = [4606], weight = [9])
+        df_pair_case = DataFrames.DataFrame(id = [1001], weight = [9])
         err = try
             bulk_update(
                 Metric.objects, df_pair_case,
@@ -726,7 +726,7 @@ end
     # clean ArgumentError, not merely log and bind a bad mapping that crashes later.
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "explicit columns= pair naming an absent column raises" begin
-        df_pair_missing = DataFrames.DataFrame(id = [4606], weight = [9])
+        df_pair_missing = DataFrames.DataFrame(id = [1001], weight = [9])
         err = try
             bulk_update(
                 Metric.objects, df_pair_missing,
@@ -747,13 +747,13 @@ end
         res = bulk_update(
             Metric.objects, df_upd,
             columns    = ["weight"],
-            filters    = ["city_id" => 141341324],
+            filters    = ["city_id" => 2009],
             show_query = :dict
         )
         sql = res[:sql_text]
         @test occursin("\"Tb\".\"id\" = source.\"id\"", sql)            # PK merge
         @test occursin(r"AND\s+\"Tb\"\.\"city_id\"\s*=\s*\$1", sql)     # static guard
-        @test res[:parameters] == Any[141341324, [1], [4606]]
+        @test res[:parameters] == Any[2009, [1], [1001]]
     end
 
     # A model with no primary key and no match_on cannot identify rows: hard error.
@@ -791,7 +791,7 @@ end
     @testset "explicit columns= duplicate target field collision (#380)" begin
         # 1. Pair + Pair from different source columns: MUST raise QueryBuildError
         @testset "Pair + Pair mapping different source columns to same field raises" begin
-            df_conflict = DataFrames.DataFrame(id = [4606], c1 = [10], c2 = [20])
+            df_conflict = DataFrames.DataFrame(id = [1001], c1 = [10], c2 = [20])
             for (op_name, bulk_op) in [("bulk_update", (obj, df; kw...) -> bulk_update(obj, df; match_on = ["id"], kw...)),
                                        ("bulk_insert", (obj, df; kw...) -> bulk_insert(obj, df; kw...)),
                                        ("bulk_copy",   (obj, df; kw...) -> bulk_copy(obj, df; kw...))]
@@ -840,7 +840,7 @@ end
 
         # 2. Pair + Pair from same source column: unambiguous repeat MUST succeed
         @testset "Pair + Pair mapping same source column to same field is allowed" begin
-            df_repeat = DataFrames.DataFrame(id = [4606], c1 = [10])
+            df_repeat = DataFrames.DataFrame(id = [1001], c1 = [10])
             res = bulk_update(
                 Metric.objects, df_repeat,
                 columns    = ["c1" => "weight", "c1" => "weight"],
@@ -853,12 +853,12 @@ end
             # with "multiple assignments to same column". Pin the exact SET clause and the bound
             # values (10 from c1, then the match key) — an occursin alone passes either way.
             @test occursin("SET \"weight\" = source.\"weight\"\n", res[:sql_text])
-            @test res[:parameters] == Any[[10], [4606]]
+            @test res[:parameters] == Any[[10], [1001]]
         end
 
         # 3. Bare string + Pair from different source column when field ∈ names(df): MUST raise
         @testset "bare string + Pair targeting same field when field is in df raises" begin
-            df_str_conflict = DataFrames.DataFrame(id = [4606], weight = [10], c2 = [20])
+            df_str_conflict = DataFrames.DataFrame(id = [1001], weight = [10], c2 = [20])
 
             # Order: [bare_string, Pair]
             err1 = try
@@ -899,7 +899,7 @@ end
 
         # 4. Bare string + Bare string when field ∈ names(df): unambiguous repeat MUST succeed
         @testset "bare string repeat when field is in df is allowed" begin
-            df_str_repeat = DataFrames.DataFrame(id = [4606], weight = [10])
+            df_str_repeat = DataFrames.DataFrame(id = [1001], weight = [10])
             res = bulk_update(
                 Metric.objects, df_str_repeat,
                 columns    = ["weight", "weight"],
@@ -909,7 +909,7 @@ end
             @test occursin("\"weight\"", res[:sql_text])
             # Same de-duplication contract as the Pair repeat above, via the bare-string branch.
             @test occursin("SET \"weight\" = source.\"weight\"\n", res[:sql_text])
-            @test res[:parameters] == Any[[10], [4606]]
+            @test res[:parameters] == Any[[10], [1001]]
         end
 
         # 5. Bare string + Pair when bare string ∉ names(df): MUST succeed

@@ -1,5 +1,4 @@
-# Se for rodar este arquivo isoladamente durante o dev, 
-# você pode colocar um check no topo:
+# To run this file on its own during development, the check at the top loads the shared setup:
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end

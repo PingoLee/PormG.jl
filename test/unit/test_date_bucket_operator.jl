@@ -19,8 +19,7 @@ Why a dedicated file?
   - `test_operators.jl` covers the comparison / string / null suffixes but not the
     date-bucket transforms.
   - This operator carries a *custom value normaliser* (`format_yyyy_mm`) with its own
-    accept/reject contract, and it is heavily used by downstream consumers
-    (e.g. "competencia"/"periodo" month filters). A silent change to the value
+    accept/reject contract, and month-bucket filters are a common use of it. A silent change to the value
     normalisation, or to the rendered range boundaries, would break those queries with
     no other failing test — so the contract is pinned here, with no live DB required
     (`show_query=:dict`).

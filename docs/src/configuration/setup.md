@@ -13,11 +13,11 @@ using PormG
 PormG.setup()
 
 # Custom folder
-PormG.setup("db_bs")
+PormG.setup("db_other")
 ```
 
 ### What Setup Does
-- Creates the configuration folder (e.g., `db/` or `db_bs/`).
+- Creates the configuration folder (e.g., `db/` or `db_other/`).
 - Generates a template `connection.yml` with `dev`, `test`, and `prod` sections.
 - For a PostgreSQL adapter, asks which driver opens the connections: LibPQ (the default) or
   Postgres (Postgres.jl). The driver you type is written as `postgres_driver:` into each section.

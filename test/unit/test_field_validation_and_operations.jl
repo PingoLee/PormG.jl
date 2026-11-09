@@ -288,15 +288,15 @@ canon_utc(zdt) = Dates.format(astimezone(zdt, TimeZone("UTC")), Models.DATETIME_
         # In Julia, slicing can yield `SubString{String}` instead of `String`, unlike Python/Django
         # where the sliced value remains the same string type. The ORM should normalize that input
         # at the formatter boundary instead of forcing application code to pre-convert it.
-        raw_cbo = "123456"
-        sliced_cbo = SubString(raw_cbo, 2, 4)
+        raw_ref = "123456"
+        sliced_ref = SubString(raw_ref, 2, 4)
 
-        @test Models.format_number_sql(sliced_cbo) == "234"
+        @test Models.format_number_sql(sliced_ref) == "234"
 
         # The array case is the important regression: an `IN` filter may pass a vector of string
         # fragments collected from CSV parsing or slicing, and the formatter must not throw when
         # storing those normalized numeric strings in its internal vector.
-        sliced_codes = [SubString(raw_cbo, 1, 2), SubString(raw_cbo, 5, 6)]
+        sliced_codes = [SubString(raw_ref, 1, 2), SubString(raw_ref, 5, 6)]
         formatted_codes = Models.format_number_sql(sliced_codes)
 
         @test formatted_codes == ["12", "56"]
@@ -2087,40 +2087,40 @@ end
         PormG.config["django_cfg_test"] = django_cfg
 
         # Mimics what PormG Generator creates when it reads a Django DB:
-        # Django model `Dim_municipio` and `Dim_feriados` with prefix `prefix`
-        Dim_municipio = Models.Model("prefix_dim_municipio", 
+        # Django model `Circuit_venue` and `Race_weekend` with prefix `prefix`
+        Circuit_venue = Models.Model("prefix_circuit_venue", 
             id = Models.IDField()
         )
-        Dim_feriados = Models.Model("prefix_dim_feriados",
-            ibge_id = Models.ForeignKey(Dim_municipio, pk_field="id", on_delete="RESTRICT"),
-            nome    = Models.CharField(),
-            ativo   = Models.BooleanField(default=true)
+        Race_weekend = Models.Model("prefix_race_weekend",
+            venue_id = Models.ForeignKey(Circuit_venue, pk_field="id", on_delete="RESTRICT"),
+            full_name    = Models.CharField(),
+            enabled   = Models.BooleanField(default=true)
         )
-        Dim_municipio.connect_key = "django_cfg_test"
-        Dim_feriados.connect_key  = "django_cfg_test"
-        Dim_municipio._module = @__MODULE__
-        Dim_feriados._module  = @__MODULE__
+        Circuit_venue.connect_key = "django_cfg_test"
+        Race_weekend.connect_key  = "django_cfg_test"
+        Circuit_venue._module = @__MODULE__
+        Race_weekend._module  = @__MODULE__
 
         # 1. Prove the underlying table name used in SQL remains EXACTLY the explicit string
-        @test Dim_feriados.name == "prefix_dim_feriados"
+        @test Race_weekend.name == "prefix_race_weekend"
 
-        q = Dim_feriados.objects
+        q = Race_weekend.objects
         # PormG mirrors Django's relationship querying syntax:
-        # even though the literal field is `ibge_id`, you must drop the `_id`
-        # when traversing the join (using `ibge__`).
-        q.filter("ibge__id" => 1)
+        # even though the literal field is `venue_id`, you must drop the `_id`
+        # when traversing the join (using `venue__`).
+        q.filter("venue__id" => 1)
         insp = inspect_query(q)
-        @test contains(insp[:sql_text], "prefix_dim_feriados")
-        @test !contains(insp[:sql_text], "prefix_prefix_dim_feriados")
+        @test contains(insp[:sql_text], "prefix_race_weekend")
+        @test !contains(insp[:sql_text], "prefix_prefix_race_weekend")
         
-        # Ensures that in the actual generated SQL, `ibge_id` is used because
+        # Ensures that in the actual generated SQL, `venue_id` is used because
         # that is the literal definition of the physical column.
-        @test contains(insp[:sql_text], "\"ibge_id\"")
+        @test contains(insp[:sql_text], "\"venue_id\"")
 
         # 2. Prove the Configuration parameter strips the prefix for internal relationship naming
         # This is where the `django_prefix` setting is actually used by PormG internally
-        feriado_logical_name = Models.get_model_name(Dim_feriados, django_cfg, false)
-        @test feriado_logical_name == "dim_feriados"  # "prefix_" was stripped!
+        weekend_logical_name = Models.get_model_name(Race_weekend, django_cfg, false)
+        @test weekend_logical_name == "race_weekend"  # "prefix_" was stripped!
 
     end
 

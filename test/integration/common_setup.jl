@@ -483,7 +483,7 @@ end
 import .models as M
 
 
-# Identificar o adapter carregado para o log
+# Identify the loaded adapter for the log
 adapter_name = haskey(PormG.config, PORMG_DB_FOLDER) ?
                PormG.config[PORMG_DB_FOLDER].db_config_settings["adapter"] :
                "Unknown"

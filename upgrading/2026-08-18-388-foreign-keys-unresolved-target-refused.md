@@ -54,21 +54,21 @@ parent out of the import — not a typo.
 
 ```julia
 # before — the parent was filtered out of the import, and the key still "worked" by coincidence
-#          (lowercase("Tb_dia_semana") happens to be the real table `tb_dia_semana`)
+#          (lowercase("Race_status") happens to be the real table `race_status`)
 PormG.Migrations.import_models_from_postgres("db_legacy",
-  include_table = ["tb_agendado", "tb_cfg_agenda"])      # tb_dia_semana omitted
-# -> Tb_agendado = Models.Model("tb_agendado",
-#      co_dia_semana = Models.ForeignKey("Tb_dia_semana", pk_field="co_dia_semana"))
-#    makemigrations emitted REFERENCES "tb_dia_semana"
+  include_table = ["race_entry", "race_entry_config"])      # race_status omitted
+# -> Race_entry = Models.Model("race_entry",
+#      statusid = Models.ForeignKey("Race_status", pk_field="statusid"))
+#    makemigrations emitted REFERENCES "race_status"
 
 # after — add the parent's table to the filter so the key has a model to point at
 PormG.Migrations.import_models_from_postgres("db_legacy",
-  include_table = ["tb_agendado", "tb_cfg_agenda", "tb_dia_semana"])
+  include_table = ["race_entry", "race_entry_config", "race_status"])
 ```
 
 If the parent genuinely lives outside the file, declare a stub for it instead — with `db_table` when
 its table name differs from the model name:
 
 ```julia
-Tb_dia_semana = Models.Model("tb_dia_semana", co_dia_semana = Models.IDField())
+Race_status = Models.Model("race_status", statusid = Models.IDField())
 ```

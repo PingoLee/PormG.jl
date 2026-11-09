@@ -92,15 +92,15 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   # PG extracts via `#>>` (text[] path), SQLite via `json_extract` (JSONPath); the RHS binds as a
   # single plain-text parameter (NOT through the JSON formatter, which would reject "hamilton").
   # ─────────────────────────────────────────────────────────────────────────────
-  @testset "equality: payload__nome => value (both dialects)" begin
-    mkq() = (q = JL.Json_scratch.objects; q.filter("payload__nome" => "hamilton"); q.values("id"); q)
+  @testset "equality: payload__full_name => value (both dialects)" begin
+    mkq() = (q = JL.Json_scratch.objects; q.filter("payload__full_name" => "hamilton"); q.values("id"); q)
 
     sl = _sql(mkq())
-    @test occursin("json_extract(\"Tb\".\"payload\", '\$.nome') = ?", sl[:sql_text])
+    @test occursin("json_extract(\"Tb\".\"payload\", '\$.full_name') = ?", sl[:sql_text])
     @test sl[:parameters] == ["hamilton"]
 
     pg = _sql(mkq(); conn = _JL_PG)
-    @test occursin("\"Tb\".\"payload\" #>> '{\"nome\"}' = \$1", pg[:sql_text])   # keys quoted in the path
+    @test occursin("\"Tb\".\"payload\" #>> '{\"full_name\"}' = \$1", pg[:sql_text])   # keys quoted in the path
     @test pg[:parameters] == ["hamilton"]
   end
 
@@ -157,8 +157,8 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   @testset "MySQL: the value at the path as text, a JSON null as NULL" begin
     mk(f) = (q = JL.Json_scratch.objects; f(q); q.values("id"); q)
     x(path) = "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`Tb`.`payload`, '$(path)'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
-    r = _sql(mk(q -> q.filter("payload__nome" => "hamilton")); conn = _JL_MY)
-    @test occursin("WHERE $(x("\$.\"nome\"")) = ?", r[:sql_text]) && r[:parameters] == ["hamilton"]
+    r = _sql(mk(q -> q.filter("payload__full_name" => "hamilton")); conn = _JL_MY)
+    @test occursin("WHERE $(x("\$.\"full_name\"")) = ?", r[:sql_text]) && r[:parameters] == ["hamilton"]
     @test _sql(mk(q -> q.filter("payload__count" => 5)); conn = _JL_MY)[:parameters] == ["5"]
     @test occursin(x("\$.\"standings\"[0].\"name\""),
                    _sql(mk(q -> q.filter("payload__standings__0__name" => "Max")); conn = _JL_MY)[:sql_text])
@@ -169,9 +169,9 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
     @test PormG.Dialect._json_extract_expr(_JL_MY, "`c`", ["a", "0", "b"]) ==
           "(JSON_UNQUOTE(NULLIF(JSON_EXTRACT(`c`, '\$.\"a\"[0].\"b\"'), CAST('null' AS JSON))) COLLATE utf8mb4_0900_bin)"
     # The projection reads the key's text. (An ordering over the uncast key is refused, #1497.)
-    q = JL.Json_scratch.objects; q.values("id", "payload__nome")
+    q = JL.Json_scratch.objects; q.values("id", "payload__full_name")
     sql = _sql(q; conn = _JL_MY)[:sql_text]
-    @test occursin("$(x("\$.\"nome\"")) as `payload__nome`", sql)
+    @test occursin("$(x("\$.\"full_name\"")) as `payload__full_name`", sql)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -213,16 +213,16 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   # ─────────────────────────────────────────────────────────────────────────────
   @testset ".values() projection alias on a JSON path (SQLite)" begin
     q = JL.Json_scratch.objects
-    q.values("id", "payload__nome")
-    @test occursin("json_extract(\"Tb\".\"payload\", '\$.nome') as \"payload__nome\"", _sql(q)[:sql_text])
+    q.values("id", "payload__full_name")
+    @test occursin("json_extract(\"Tb\".\"payload\", '\$.full_name') as \"payload__full_name\"", _sql(q)[:sql_text])
   end
 
   # An ordering over a key states its type (#1497); the cast resolves the extraction inside ORDER BY.
   @testset "order_by over a cast JSON path resolves the extraction (PG)" begin
     q = JL.Json_scratch.objects
     q.values("id")
-    q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(PormG.Functions.Cast("payload__nome", "text"), "o")))
-    @test occursin(r"ORDER BY\s+\(?\"Tb\".\"payload\" #>> '\{\"nome\"\}'", _sql(q; conn = _JL_PG)[:sql_text])
+    q.order_by(PormG.QueryBuilder.SQLOrder(PormG.QueryBuilder.SQLField(PormG.Functions.Cast("payload__full_name", "text"), "o")))
+    @test occursin(r"ORDER BY\s+\(?\"Tb\".\"payload\" #>> '\{\"full_name\"\}'", _sql(q; conn = _JL_PG)[:sql_text])
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -262,11 +262,11 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
 
     # A string/LIKE operator on a JSON path is not a supported comparison → clear error, naming the
     # lookup as written (#1499: `@startswith`, not the internal `startswith`).
-    q = JL.Json_scratch.objects; q.filter("payload__nome__@startswith" => "ham"); q.values("id")
+    q = JL.Json_scratch.objects; q.filter("payload__full_name__@startswith" => "ham"); q.values("id")
     e = try inspect_query(q); nothing catch err; err end
     @test e isa PormG.FilterError
     # CI renders with color, so the message is read without its ANSI codes.
-    e isa PormG.FilterError && @test occursin("The @startswith lookup is not supported on payload__nome, a JSON key's value",
+    e isa PormG.FilterError && @test occursin("The @startswith lookup is not supported on payload__full_name, a JSON key's value",
       PormG._emsg(sprint(showerror, e); color = false))
   end
 
@@ -275,8 +275,8 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "PG .values() projection alias on a JSON path" begin
     q = JL.Json_scratch.objects
-    q.values("id", "payload__nome")
-    @test occursin("\"Tb\".\"payload\" #>> '{\"nome\"}' as \"payload__nome\"", _sql(q; conn = _JL_PG)[:sql_text])
+    q.values("id", "payload__full_name")
+    @test occursin("\"Tb\".\"payload\" #>> '{\"full_name\"}' as \"payload__full_name\"", _sql(q; conn = _JL_PG)[:sql_text])
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -364,8 +364,8 @@ _sql(q; conn = nothing) = (conn === nothing ? inspect_query(q) : inspect_query(q
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "same JSON path in values() + filter(): SQLite bucket alignment" begin
     q = JL.Json_scratch.objects
-    q.values("id", "payload__nome")           # :select
-    q.filter("payload__nome" => "hamilton")   # :where
+    q.values("id", "payload__full_name")           # :select
+    q.filter("payload__full_name" => "hamilton")   # :where
     insp = _sql(q)                            # SQLite (positional ?)
     @test count(==('?'), insp[:sql_text]) == length(insp[:parameters])   # placeholders == params
     @test insp[:parameters] == ["hamilton"]
@@ -1402,7 +1402,7 @@ end
   plain(e) = PormG._emsg(sprint(showerror, e); color = false)
   refused = (
     ("an order_by path", () -> ordered(("name",), "-payload__n"), "`order_by`"),
-    ("a projected path", () -> ordered(("id", "payload__nome"), "payload__nome"), "`order_by`"),
+    ("a projected path", () -> ordered(("id", "payload__full_name"), "payload__full_name"), "`order_by`"),
     ("an F alias", () -> ordered(("name", "w" => F("payload__n")), "-w"), "`order_by`"),
     ("a Coalesce alias", () -> ordered(("name", "w" => FN.Coalesce("payload__n", 0)), "-w"), "`order_by`"),
     ("a CTE column", () -> cte("-g__k"), "`order_by`"),

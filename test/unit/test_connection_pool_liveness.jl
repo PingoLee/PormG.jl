@@ -395,7 +395,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # (11) SQLSTATE beats message text. `string(::PQResultError)` renders the full
 # `PQresultErrorMessage`, DETAIL and the `LINE n:` query excerpt included — i.e. USER DATA. An app
-# that stores captured PostgreSQL log text (this repo's downstream consumer is an ETL) hits a unique
+# that stores captured PostgreSQL log text (an ETL job, for example) hits a unique
 # violation whose DETAIL quotes the very phrase the classifier matches on. Classifying THAT as a
 # dropped connection would hand the caller an `OperationalError` where the contract says
 # `IntegrityError`, and make `fetch` renew a healthy connection and flush every idle slot each time.

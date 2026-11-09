@@ -44,9 +44,9 @@ First, let's set up some test data. The `New_join_position` model has a `result`
 # Clear and populate test data
 delete(M.New_join_position.objects, allow_delete_all = true)
 
-M.New_join_position.objects.create("result" => 1, "description" => "teste 1")
-M.New_join_position.objects.create("result" => 2, "description" => "teste 2")
-M.New_join_position.objects.create("result" => 3, "description" => "teste 3")
+M.New_join_position.objects.create("result" => 1, "description" => "test 1")
+M.New_join_position.objects.create("result" => 2, "description" => "test 2")
+M.New_join_position.objects.create("result" => 3, "description" => "test 3")
 ```
 
 ### Simple Join
@@ -64,9 +64,9 @@ df = M.New_join_position.objects.
 #  Row | result__statusid__status  description  result 
 #      | String?                   String?      Int32?
 # -----+------------------------------------------------
-#    1 | Finished                  teste 1           1
-#    2 | Finished                  teste 2           2
-#    3 | Finished                  teste 3           3
+#    1 | Finished                  test 1            1
+#    2 | Finished                  test 2            2
+#    3 | Finished                  test 3            3
 ```
 
 The `.cjoin()` call creates a LEFT JOIN from `new_join_position.result` to `Result.resultid`, allowing you to traverse the relationship chain `result__statusid__status`.
@@ -86,9 +86,9 @@ df = M.New_join_position.objects.
 #  Row | result__statusid__status    description  result 
 #      | Union{Missing, String}      String?      Int32?
 # -----+--------------------------------------------------
-#    1 | Finished                    teste 1           1
-#    2 | missing                     teste 2           2
-#    3 | missing                     teste 3           3
+#    1 | Finished                    test 1            1
+#    2 | missing                     test 2            2
+#    3 | missing                     test 3            3
 
 Notice that only the row whose joined `Result.resultid` is `1` has the status because the filter is applied in the ON clause, not WHERE. This returns all 3 rows, but only one row matches the join condition.
 
@@ -109,7 +109,7 @@ df = M.New_join_position.objects.
 #  Row | result__statusid__status  description  result 
 #      | String?                   String?      Int32?
 # -----+------------------------------------------------
-#    1 | Finished                  teste 1           1
+#    1 | Finished                  test 1            1
 ```
 
 Only the row joined to `Result.resultid = 1` is returned because the INNER JOIN excludes non-matching rows.
@@ -338,7 +338,7 @@ restrict the base table itself, use `.filter(...)`:
 ```julia
 query = M.New_join_position.objects.
     cjoin("result" => "Result", filters = ["resultid" => 1], warn = false).
-    filter("description" => "teste 1").
+    filter("description" => "test 1").
     values("result__statusid__status", "description", "result")
 ```
 
@@ -833,7 +833,7 @@ If a field belongs to the base model instead, keep it in `.filter(...)` rather t
 ```julia
 query = M.New_join_position.objects.
     cjoin("result" => "Result", filters=["resultid" => 1]).
-    filter("description" => "teste 1")
+    filter("description" => "test 1")
 ```
 
 ### ForeignKey Target Validation

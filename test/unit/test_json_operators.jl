@@ -49,28 +49,28 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "PostgreSQL renders @>, ?, ?|, ?& with the right bound value" begin
     # @> (jcontains) with a Dict → serialized jsonb document, cast ::jsonb
-    q = JO.Json_op_scratch.objects; q.filter("payload__@jcontains" => Dict("nome" => "hamilton")); q.values("id")
+    q = JO.Json_op_scratch.objects; q.filter("payload__@jcontains" => Dict("full_name" => "hamilton")); q.values("id")
     r = _pg(q)
     @test occursin("\"Tb\".\"payload\" @> \$1::jsonb", r[:sql_text])
-    @test r[:parameters] == ["{\"nome\":\"hamilton\"}"]
+    @test r[:parameters] == ["{\"full_name\":\"hamilton\"}"]
 
     # ? (has_key) with a single key → text
-    q = JO.Json_op_scratch.objects; q.filter("payload__@has_key" => "nome"); q.values("id")
+    q = JO.Json_op_scratch.objects; q.filter("payload__@has_key" => "full_name"); q.values("id")
     r = _pg(q)
     @test occursin("\"Tb\".\"payload\" ? \$1", r[:sql_text])
-    @test r[:parameters] == ["nome"]
+    @test r[:parameters] == ["full_name"]
 
     # ?| (has_any_keys) with a key array → text[]
-    q = JO.Json_op_scratch.objects; q.filter("payload__@has_any_keys" => ["nome", "team"]); q.values("id")
+    q = JO.Json_op_scratch.objects; q.filter("payload__@has_any_keys" => ["full_name", "team"]); q.values("id")
     r = _pg(q)
     @test occursin("\"Tb\".\"payload\" ?| \$1::text[]", r[:sql_text])
-    @test r[:parameters] == [["nome", "team"]]
+    @test r[:parameters] == [["full_name", "team"]]
 
     # ?& (has_keys) with a key array → text[]
-    q = JO.Json_op_scratch.objects; q.filter("payload__@has_keys" => ["nome", "team"]); q.values("id")
+    q = JO.Json_op_scratch.objects; q.filter("payload__@has_keys" => ["full_name", "team"]); q.values("id")
     r = _pg(q)
     @test occursin("\"Tb\".\"payload\" ?& \$1::text[]", r[:sql_text])
-    @test r[:parameters] == [["nome", "team"]]
+    @test r[:parameters] == [["full_name", "team"]]
   end
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ _pg(q) = inspect_query(q; connection = _JO_PG)
   # PostgreSQL-only: every operator throws a friendly error on SQLite
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "SQLite rejects all four operators" begin
-    for (suffix, val) in [("has_key", "nome"), ("jcontains", Dict("a" => 1)),
+    for (suffix, val) in [("has_key", "full_name"), ("jcontains", Dict("a" => 1)),
                           ("has_any_keys", ["a", "b"]), ("has_keys", ["a", "b"])]
       q = JO.Json_op_scratch.objects
       q.filter("payload__@$(suffix)" => val)

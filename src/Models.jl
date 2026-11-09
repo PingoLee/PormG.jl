@@ -210,10 +210,9 @@ end
 # It replaces a bare 4-tuple (#343). The tuple's third slot was the child's LOGICAL name, written
 # through `get_model_name`, which lowercases unconditionally — so every consumer had to guess the
 # Julia binding back with `uppercasefirst`, and that spelling can only ever be `Xxxxx`. A binding
-# with an internal capital (`Dim_CNES`, `CustomUser`, `Cust_adminHOD`) was therefore unreachable in
+# with an internal capital (`Grand_PRIX`, `TeamPrincipal`, `Pit_crewHQ`) was therefore unreachable in
 # reverse, by ANY string function: since #300 the positional name is validated lowercase, so the
-# information was not merely folded, it was never stored. Ten of 668 models across the consuming
-# apps were affected, including a central dimension table.
+# information was not merely folded, it was never stored.
 #
 # `model_resolved` is the fix: the child model is RECORDED at registration, where `set_models`
 # already holds it as the loop variable, and READ at query time. It is deliberately NOT nullable —
@@ -225,7 +224,7 @@ end
 # any time, whereas the binding is derivable from NOTHING once registration ends — that is the whole
 # content of #343. It is the reverse-side counterpart to `ManyToManyRelation`'s
 # `owner_binding`/`related_binding`, and it is the spelling a diagnostic or a code generator has to
-# print for a user to be able to type it (`M.Dim_CNES`). Dropping it would re-create the hole.
+# print for a user to be able to type it (`M.Grand_PRIX`). Dropping it would re-create the hole.
 #
 # The old tuple's 4th slot (the child's own pk) is gone: nothing in `src/` ever read it, and it is
 # now derivable as `get_model_pk_field(rel.model_resolved)`. Storing a derived value nothing reads is
@@ -1246,10 +1245,10 @@ end
 # prefix — it is the absence of one, spelled badly. The distinction matters because `Settings` is
 # populated generically from `connection.yml`'s `config:` block (`hasfield(Settings, Symbol(k))` ->
 # `setfield!`), so `django_prefix: ''` reaches this field, and every consumer composes
-# `"$(prefix)_"`. Treating `""` as set derives `_dim_uf` for a table named `dim_uf`, and strips a
+# `"$(prefix)_"`. Treating `""` as set derives `_pit_lane` for a table named `pit_lane`, and strips a
 # bare `"_"` from every logical name. Before #345 the first of those was at least loud — the
-# generated `Model("_dim_uf", …)` was rejected at include time by the leading-underscore guard — but
-# with the prefix moved into `db_table` the file loads and every query silently reads `_dim_uf`.
+# generated `Model("_pit_lane", …)` was rejected at include time by the leading-underscore guard — but
+# with the prefix moved into `db_table` the file loads and every query silently reads `_pit_lane`.
 function _django_app_label(settings::PormGSettings)::Union{Nothing, String}
   prefix = settings.django_prefix
   (prefix === nothing || isempty(prefix)) && return nothing
@@ -2532,7 +2531,7 @@ end
 
 The Julia BINDING `Model_to_str` will emit for a model called `name` — derivation only, with no
 dedup and no registration. Extracted (#346) because the Django importer has to know the binding of
-every class **before** it renders the first one: a cross-app `ForeignKey("core.Pessoa")` is rewritten
+every class **before** it renders the first one: a cross-app `ForeignKey("core.Spectator")` is rewritten
 to the target's binding, and the target may be rendered later in the same file. Two expressions
 computing this would be exactly the drift the `isidentifier` guard below exists to prevent, so there
 is one, and both callers use it.
@@ -4356,8 +4355,8 @@ function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vecto
   # while the introspection pin was the only pin; they no longer do, and the difference is a file
   # that does not load. `_validate_positional_model_name` rejects a leading underscore REGARDLESS of
   # `db_table`, so with the app prefix now living in `db_table`, `class _Internal` under prefix
-  # `dash` would emit `Model("_internal", db_table = "dash__internal")` and throw at include time —
-  # where before #345 it emitted the (loadable) `Model("dash__internal")`. Keying on the pin instead
+  # `myapp` would emit `Model("_internal", db_table = "myapp__internal")` and throw at include time —
+  # where before #345 it emitted the (loadable) `Model("myapp__internal")`. Keying on the pin instead
   # restores that, and closes the same hole for an explicit `Meta.db_table`, which had it all along.
   #
   # An ALL-underscore table (`_`, `___`) strips to the empty string, which as a positional name
@@ -4368,7 +4367,7 @@ function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vecto
   #
   # The positional slot is the LOGICAL handle and nothing else (#345). It is `lowercase(model.name)`,
   # which for the Django importer is `lowercase(<class name>)` — Django's own derivation
-  # (`model.__name__.lower()`), so `Dim_uf` -> "dim_uf" and `ImportBatch` -> "importbatch" both agree
+  # (`model.__name__.lower()`), so `Pit_lane` -> "pit_lane" and `ImportBatch` -> "importbatch" both agree
   # with the app's real table minus its prefix. The prefix itself is pinned as `db_table` above.
   _pins_table = db_table_abs !== nothing
   _lowered = model.name |> lowercase
@@ -5427,7 +5426,7 @@ function _relation_from_many_to_many(
   # Django's rule for this case differs from its normal one for exactly that reason — one table
   # cannot carry the same column twice — so it names the ends `from_<model>_id` / `to_<model>_id`.
   # PormG keeps its own `<model>_<pk>` stem rather than Django's hardcoded `_id`, so a model keyed on
-  # `codigo` gets `from_driver_codigo`; for the usual `id` pk the two spellings coincide.
+  # `ref_code` gets `from_driver_ref_code`; for the usual `id` pk the two spellings coincide.
   #
   # Gated on NEITHER side being pinned, not per-side. `ManyToManyField("Driver", source_field =
   # "mentor_id")` on a self-relation already yields the valid pair `mentor_id` / `driver_id` today —

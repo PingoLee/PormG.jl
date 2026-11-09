@@ -59,8 +59,9 @@ affected. Find the groups first, then the reads.
 rg -n --glob '**/*models*.jl' 'ForeignKey\(|OneToOneField\(|ManyToManyField\('
 
 # 2. Then the reads of the OLD bare key, for each affected child model. Substitute its lowercase
-#    logical name (django_prefix stripped, as get_model_name derives it).
-rg -n --glob '**/*.jl' '"tb_cidadao__|related_objects\["tb_cidadao"\]'
+#    logical name (django_prefix stripped, as get_model_name derives it), and read the hits:
+#    a forward `driver__` lookup from another model matches too.
+rg -n --glob '**/*.jl' '"driver__|related_objects\["driver"\]'
 ```
 
 You do not have to derive the new names by hand: `set_models` logs every one it derives at `@info` —
@@ -70,20 +71,20 @@ is <name>` — so loading the models once prints the complete list.
 ### Migrate your app
 
 ```julia
-# Tb_cidadao declares TWO foreign keys to Tb_localidade and names neither:
-#   co_localidade          = Models.ForeignKey(Tb_localidade, …)
-#   co_localidade_endereco = Models.ForeignKey(Tb_localidade, …)
+# Driver declares TWO foreign keys to Circuit and names neither:
+#   home_circuit  = Models.ForeignKey(Circuit, …)
+#   debut_circuit = Models.ForeignKey(Circuit, …)
 
 # ✗ BEFORE — one of the two answered to the bare model name, and which one was hash order.
-rows = eM.Tb_localidade.objects.
-    filter("tb_cidadao__no_cidadao" => "Senna").
-    values("no_localidade").
+rows = M.Circuit.objects.
+    filter("driver__surname" => "Senna").
+    values("name").
     list()
 
 # ✓ AFTER — each is named after the field that carries it.
-rows = eM.Tb_localidade.objects.
-    filter("tb_cidadao_co_localidade__no_cidadao" => "Senna").
-    values("no_localidade").
+rows = M.Circuit.objects.
+    filter("driver_home_circuit__surname" => "Senna").
+    values("name").
     list()
 ```
 
@@ -91,6 +92,6 @@ Or pin the names in the model and never think about it again — an explicit `re
 unaffected by any of this:
 
 ```julia
-co_localidade          = Models.ForeignKey(Tb_localidade, …, related_name = "cidadaos"),
-co_localidade_endereco = Models.ForeignKey(Tb_localidade, …, related_name = "cidadaos_endereco"),
+home_circuit  = Models.ForeignKey(Circuit, …, related_name = "home_drivers"),
+debut_circuit = Models.ForeignKey(Circuit, …, related_name = "debut_drivers"),
 ```

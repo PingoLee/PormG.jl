@@ -11,20 +11,20 @@ using PormG.Models: Model, CharField, IDField, DateTimeField
 # assertable against bare mock connections. Mirrors test_bulk_on_conflict.jl.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# db_column-mapped model (no_cbo -> nome_cbo) proves the clause renders physical names.
-UocCbo = Model("dash_dim_cbo",
+# db_column-mapped model (team -> team_name) proves the clause renders physical names.
+UocConstructor = Model("constructor",
   id = IDField(),
-  co_cbo = CharField(),
-  no_cbo = CharField(db_column = "nome_cbo"),
+  constructorref = CharField(),
+  team = CharField(db_column = "team_name"),
 )
-UocCbo.connect_key = "uoc_pg"
+UocConstructor.connect_key = "uoc_pg"
 
-UocCboSl = Model("dash_dim_cbo",
+UocConstructorSl = Model("constructor",
   id = IDField(),
-  co_cbo = CharField(),
-  no_cbo = CharField(db_column = "nome_cbo"),
+  constructorref = CharField(),
+  team = CharField(db_column = "team_name"),
 )
-UocCboSl.connect_key = "uoc_sqlite"
+UocConstructorSl.connect_key = "uoc_sqlite"
 
 # Model with an auto_now field, to prove auto_now is refreshed on the DO UPDATE arm.
 UocEvt = Model("evt",
@@ -42,28 +42,28 @@ PormG.config["uoc_pg"] = PormG.Configuration.Settings(connections = MockPgUOC(),
 PormG.config["uoc_sqlite"] = PormG.Configuration.Settings(connections = MockSqliteUOC(), change_data = true)
 
 @testset "update_or_create SQL rendering (PostgreSQL mock)" begin
-  sql = UocCbo.objects.update_or_create("id" => 1;
-    defaults = ["co_cbo" => "225", "no_cbo" => "Cardio"], show_query = :sql)
+  sql = UocConstructor.objects.update_or_create("id" => 1;
+    defaults = ["constructorref" => "mclaren", "team" => "McLaren"], show_query = :sql)
 
   # ON CONFLICT on the lookup field; SET lists only the defaults.
-  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\", \"nome_cbo\" = EXCLUDED.\"nome_cbo\"", sql)
-  # db_column mapping: logical no_cbo renders as physical nome_cbo in the SET.
-  @test !occursin("\"no_cbo\" = EXCLUDED", sql)
+  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\", \"team_name\" = EXCLUDED.\"team_name\"", sql)
+  # db_column mapping: logical team renders as physical team_name in the SET.
+  @test !occursin("\"team\" = EXCLUDED", sql)
   # PG created-detection sentinel on RETURNING.
-  # #1490: the declared columns (physical `nome_cbo`), never `*`, then the sentinel.
-  @test occursin("RETURNING \"id\", \"co_cbo\", \"nome_cbo\", (xmax = 0) AS \"__pormg_created\"", sql)
+  # #1490: the declared columns (physical `team_name`), never `*`, then the sentinel.
+  @test occursin("RETURNING \"id\", \"constructorref\", \"team_name\", (xmax = 0) AS \"__pormg_created\"", sql)
   # The lookup field is NOT in the SET (it's the match key, not an updated column).
   @test !occursin("\"id\" = EXCLUDED", sql)
 
   # Multi-column lookup → composite conflict target.
-  sql_multi = UocCbo.objects.update_or_create("id" => 1, "co_cbo" => "225";
-    defaults = ["no_cbo" => "X"], show_query = :sql)
-  @test occursin("ON CONFLICT (\"id\", \"co_cbo\") DO UPDATE SET \"nome_cbo\" = EXCLUDED.\"nome_cbo\"", sql_multi)
+  sql_multi = UocConstructor.objects.update_or_create("id" => 1, "constructorref" => "mclaren";
+    defaults = ["team" => "X"], show_query = :sql)
+  @test occursin("ON CONFLICT (\"id\", \"constructorref\") DO UPDATE SET \"team_name\" = EXCLUDED.\"team_name\"", sql_multi)
 
   # db_column field as the conflict target resolves to the physical column too.
-  sql_dbcol_target = UocCbo.objects.update_or_create("no_cbo" => "Cardio";
-    defaults = ["co_cbo" => "225"], show_query = :sql)
-  @test occursin("ON CONFLICT (\"nome_cbo\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\"", sql_dbcol_target)
+  sql_dbcol_target = UocConstructor.objects.update_or_create("team" => "McLaren";
+    defaults = ["constructorref" => "mclaren"], show_query = :sql)
+  @test occursin("ON CONFLICT (\"team_name\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\"", sql_dbcol_target)
 end
 
 @testset "update_or_create refreshes auto_now on the update arm" begin
@@ -82,21 +82,21 @@ end
 end
 
 @testset "update_or_create parameters cover the merged insert values" begin
-  res = UocCbo.objects.update_or_create("id" => 1;
-    defaults = ["co_cbo" => "225", "no_cbo" => "Cardio"], show_query = :dict)
+  res = UocConstructor.objects.update_or_create("id" => 1;
+    defaults = ["constructorref" => "mclaren", "team" => "McLaren"], show_query = :dict)
   @test res isa Dict
   @test haskey(res, :sql_text)
-  # VALUES binds one param per participating column (lookup ∪ defaults): id, co_cbo, no_cbo.
+  # VALUES binds one param per participating column (lookup ∪ defaults): id, constructorref, team.
   @test length(res[:parameters]) == 3
   @test 1 in res[:parameters]
-  @test "225" in res[:parameters]
-  @test "Cardio" in res[:parameters]
+  @test "mclaren" in res[:parameters]
+  @test "McLaren" in res[:parameters]
 end
 
 @testset "update_or_create SQLite avoids RETURNING" begin
-  sql = UocCboSl.objects.update_or_create("id" => 1;
-    defaults = ["co_cbo" => "225", "no_cbo" => "Cardio"], show_query = :sql)
-  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\", \"nome_cbo\" = EXCLUDED.\"nome_cbo\"", sql)
+  sql = UocConstructorSl.objects.update_or_create("id" => 1;
+    defaults = ["constructorref" => "mclaren", "team" => "McLaren"], show_query = :sql)
+  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\", \"team_name\" = EXCLUDED.\"team_name\"", sql)
   # SQLite path deliberately avoids RETURNING (created detection is out-of-band).
   @test !occursin("RETURNING", sql)
   @test !occursin("__pormg_created", sql)
@@ -120,19 +120,19 @@ end
 
 @testset "update_or_create validation errors" begin
   @test occursin("at least one lookup pair",
-    _uoc_error(() -> UocCbo.objects.update_or_create(; defaults = ["co_cbo" => "x"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create(; defaults = ["constructorref" => "x"], show_query = :dict)))
   @test occursin("`defaults` must be non-empty",
-    _uoc_error(() -> UocCbo.objects.update_or_create("id" => 1; show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("id" => 1; show_query = :dict)))
   @test occursin("must be a `field => value` pair",
-    _uoc_error(() -> UocCbo.objects.update_or_create("id" => 1; defaults = ["co_cbo"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("id" => 1; defaults = ["constructorref"], show_query = :dict)))
   @test occursin("lookup field nope is not a field",
-    _uoc_error(() -> UocCbo.objects.update_or_create("nope" => 1; defaults = ["co_cbo" => "x"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("nope" => 1; defaults = ["constructorref" => "x"], show_query = :dict)))
   @test occursin("defaults field nope is not a field",
-    _uoc_error(() -> UocCbo.objects.update_or_create("id" => 1; defaults = ["nope" => "x"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("id" => 1; defaults = ["nope" => "x"], show_query = :dict)))
   @test occursin("appear in both lookup and defaults",
-    _uoc_error(() -> UocCbo.objects.update_or_create("id" => 1; defaults = ["id" => 2, "co_cbo" => "x"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("id" => 1; defaults = ["id" => 2, "constructorref" => "x"], show_query = :dict)))
   @test occursin("duplicate lookup field",
-    _uoc_error(() -> UocCbo.objects.update_or_create("id" => 1, "id" => 2; defaults = ["co_cbo" => "x"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("id" => 1, "id" => 2; defaults = ["constructorref" => "x"], show_query = :dict)))
   @test occursin("duplicate defaults field",
-    _uoc_error(() -> UocCbo.objects.update_or_create("id" => 1; defaults = ["co_cbo" => "a", "co_cbo" => "b"], show_query = :dict)))
+    _uoc_error(() -> UocConstructor.objects.update_or_create("id" => 1; defaults = ["constructorref" => "a", "constructorref" => "b"], show_query = :dict)))
 end

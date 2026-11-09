@@ -929,7 +929,7 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
     # table's own CASCADE FK on the owner side, not by this loop.
     related_value isa Models.ManyToManyRelation && continue
     # #343: read the resolved child. This used to respell the binding with `capitalize_symbol`,
-    # which cannot produce an internal capital, so a cascade through `Dim_CNES` threw UndefVarError.
+    # which cannot produce an internal capital, so a cascade through `Grand_PRIX` threw UndefVarError.
     # Its django-prefix strip went with it: `get_model_name` strips the prefix at REGISTRATION, so
     # the stored name never carried one and the strip was a guaranteed no-op. The tuple's `pk_field`
     # and `pk_model` slots were destructured here and never read — both are gone with the tuple.

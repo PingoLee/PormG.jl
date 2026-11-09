@@ -475,7 +475,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #354 → #1602: a module's models are the ones it DECLARES (`Models.@models`); nothing scans its names.
 # A model the module reaches through `using` is registered by listing it in the declaration, which
-# also records its exact binding (`Dim_CNES`, the mixed-case spelling no guess can produce). The
+# also records its exact binding (`Grand_PRIX`, the mixed-case spelling no guess can produce). The
 # fixtures below declare their `using`-scoped targets; the third module does not, and its target stays
 # unregistered.
 module UsingScopedSharedModels
@@ -484,7 +484,7 @@ module UsingScopedSharedModels
   export Uschampionship
   Uschampionship = Models.Model("uschampionship",
     id = Models.IDField(),
-    nome = Models.CharField(),
+    full_name = Models.CharField(),
   )
 end
 
@@ -506,8 +506,8 @@ end
 module UsingScopedMixedCaseSharedModels
   import PormG
   import PormG.Models
-  export Dim_CNES
-  Dim_CNES = Models.Model("dim_cnes",
+  export Grand_PRIX
+  Grand_PRIX = Models.Model("grand_prix",
     id = Models.IDField(),
     code = Models.CharField(),
   )
@@ -522,9 +522,9 @@ module UsingScopedMixedCaseAppModels
   UsUser = Models.Model("ususer",
     id = Models.IDField(),
     name = Models.CharField(),
-    cnes_units = Models.ManyToManyField(Dim_CNES, related_name = "users"),
+    grands_prix = Models.ManyToManyField(Grand_PRIX, related_name = "users"),
   )
-  Models.@models UsUser Dim_CNES
+  Models.@models UsUser Grand_PRIX
   PormG.Models.set_models(@__MODULE__, "m2m_mock")
 end
 
@@ -556,16 +556,16 @@ end
 end
 
 @testset "a declared using-scoped model with a mixed-case binding records it exactly (#354, #1602)" begin
-  @test !(:Dim_CNES in names(UsingScopedMixedCaseAppModels; all=true, imported=true))
+  @test !(:Grand_PRIX in names(UsingScopedMixedCaseAppModels; all=true, imported=true))
   all_models = Models.get_all_models(UsingScopedMixedCaseAppModels)
-  @test any(m -> m === UsingScopedMixedCaseSharedModels.Dim_CNES, all_models)
-  @test UsingScopedMixedCaseSharedModels.Dim_CNES._module === UsingScopedMixedCaseAppModels
-  @test UsingScopedMixedCaseSharedModels.Dim_CNES.connect_key == "m2m_mock"
+  @test any(m -> m === UsingScopedMixedCaseSharedModels.Grand_PRIX, all_models)
+  @test UsingScopedMixedCaseSharedModels.Grand_PRIX._module === UsingScopedMixedCaseAppModels
+  @test UsingScopedMixedCaseSharedModels.Grand_PRIX.connect_key == "m2m_mock"
 
-  # The exact binding, from the declaration — not the lossy "Dim_cnes" guess.
-  rel = Models.get_many_to_many_relation(UsingScopedMixedCaseAppModels.UsUser, "cnes_units")
-  @test rel.related_binding == "Dim_CNES"
-  @test rel.related_model_resolved === UsingScopedMixedCaseSharedModels.Dim_CNES   # #1601
+  # The exact binding, from the declaration — not the lossy "Grand_prix" guess.
+  rel = Models.get_many_to_many_relation(UsingScopedMixedCaseAppModels.UsUser, "grands_prix")
+  @test rel.related_binding == "Grand_PRIX"
+  @test rel.related_model_resolved === UsingScopedMixedCaseSharedModels.Grand_PRIX   # #1601
 end
 
 @testset "a using-scoped model the module does not declare is not its model (#1602)" begin
@@ -740,9 +740,9 @@ end
 #
 # `_many_to_many_table_name` strips `django_prefix` (via `get_model_name`) but
 # `_many_to_many_column_name` never did — it reads `model.name` raw. So a model
-# named `dash_dim_uf` derived the column `dash_dim_uf_id` while Django's real
-# through-table column is `dim_uf_id`: PormG queried a column that did not exist.
-# After #345 the importer emits `Model("dim_uf", db_table = "dash_dim_uf")`, and
+# named `myapp_pit_lane` derived the column `myapp_pit_lane_id` while Django's real
+# through-table column is `pit_lane_id`: PormG queried a column that did not exist.
+# After #345 the importer emits `Model("pit_lane", db_table = "myapp_pit_lane")`, and
 # the derivation lands on Django's spelling. This pins that the column follows
 # `name` (the logical handle) and NOT `db_table` (the physical table).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -750,27 +750,27 @@ end
   no_prefix = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true)
 
   # The post-#345 shape: logical name un-prefixed, physical table pinned.
-  post = Models.Model("dim_uf", db_table = "dash_dim_uf", id = Models.IDField())
-  @test Models._many_to_many_column_name(post, "id") == "dim_uf_id"   # == Django's column
+  post = Models.Model("pit_lane", db_table = "myapp_pit_lane", id = Models.IDField())
+  @test Models._many_to_many_column_name(post, "id") == "pit_lane_id"   # == Django's column
 
   # The pre-#345 shape, for contrast: prefix fused into the name.
-  pre = Models.Model("dash_dim_uf", id = Models.IDField())
-  @test Models._many_to_many_column_name(pre, "id") == "dash_dim_uf_id"
+  pre = Models.Model("myapp_pit_lane", id = Models.IDField())
+  @test Models._many_to_many_column_name(pre, "id") == "myapp_pit_lane_id"
 
   # The derived join TABLE reads the logical name too, so it is unchanged by the move — with the
   # prefix out of `name`, `get_model_name`'s strip is simply a no-op on the same string.
-  m2m = Models.ManyToManyField("Dim_uf")
-  @test Models._many_to_many_table_name(post, "ufs", m2m, no_prefix) == "dim_uf_ufs"
+  m2m = Models.ManyToManyField("Pit_lane")
+  @test Models._many_to_many_table_name(post, "lanes", m2m, no_prefix) == "pit_lane_lanes"
   prefixed = PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true,
-                                          django_prefix = "dash")
-  @test Models._many_to_many_table_name(post, "ufs", m2m, prefixed) == "dim_uf_ufs"
+                                          django_prefix = "myapp")
+  @test Models._many_to_many_table_name(post, "lanes", m2m, prefixed) == "pit_lane_lanes"
 
   # ...which is exactly why the importer pins `db_table` on the field: PormG's derivation is
   # `<logical model>_<field>`, Django's is `<the owning model's table>_<field>` (its `opts.db_table`,
   # which is `<app>_<model>` only by default and follows `Meta.db_table` otherwise), and only a pin
   # reconciles them.
-  pinned = Models.ManyToManyField("Dim_uf", db_table = "dash_dimibge_ufs")
-  @test Models._many_to_many_table_name(post, "ufs", pinned, prefixed) == "dash_dimibge_ufs"
+  pinned = Models.ManyToManyField("Pit_lane", db_table = "myapp_pitwall_lanes")
+  @test Models._many_to_many_table_name(post, "lanes", pinned, prefixed) == "myapp_pitwall_lanes"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1165,15 +1165,15 @@ end
   # A field-level `db_table` pin still wins on the auto path — it names the synthesized join table,
   # and it must NOT be confused with a through MODEL's `db_table` (#345, and the note in
   # `docs/src/schema_conventions.md`).
-  owner = Models.Model("dim_uf", db_table = "dash_dim_uf", id = Models.IDField())
-  target = Models.Model("regiao", db_table = "dash_regiao", id = Models.IDField())
-  pinned = Models.ManyToManyField(target, db_table = "dash_dimibge_ufs")
+  owner = Models.Model("pit_lane", db_table = "myapp_pit_lane", id = Models.IDField())
+  target = Models.Model("region", db_table = "myapp_region", id = Models.IDField())
+  pinned = Models.ManyToManyField(target, db_table = "myapp_pitwall_lanes")
   pinned_rel = Models._relation_from_many_to_many(
-    owner, "Dim_uf", "ufs", pinned, target, "Regiao",
+    owner, "Pit_lane", "lanes", pinned, target, "Region",
     PormG.Configuration.Settings(connections = M2MMockPostgres(), change_data = true),
     model_map = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(),
   )
-  @test pinned_rel.through_table == "dash_dimibge_ufs"
+  @test pinned_rel.through_table == "myapp_pitwall_lanes"
   @test pinned_rel.through_model_resolved === nothing
 end
 
@@ -1231,7 +1231,7 @@ end
 # join-rendering testset below has a real `_module` to resolve bindings against — the derivation
 # testsets call `_relation_from_many_to_many` directly and do not need it.
 #
-# `Teammate` carries the default `id` primary key (the Django-identical case) and `Rival` a `codigo`
+# `Teammate` carries the default `id` primary key (the Django-identical case) and `Rival` a `ref_code`
 # one, so both spellings the fix has to produce are fixtured.
 # ─────────────────────────────────────────────────────────────────────────────
 module ManyToManySelfModels
@@ -1245,7 +1245,7 @@ Teammate = Models.Model("teammate",
 )
 
 Rival = Models.Model("rival",
-  codigo = Models.CharField(primary_key=true),
+  ref_code = Models.CharField(primary_key=true),
   rivals = Models.ManyToManyField("Rival", related_name="rival_of"),
 )
 
@@ -1280,11 +1280,11 @@ const M2MSELF = ManyToManySelfModels
   # --- A non-`id` primary key keeps PormG's stem ------------------------------------------------
   # Django would spell both ends `_id` regardless; PormG addresses the column its own migration
   # planner creates, which follows the pk field name.
-  codigo = Models.Model("piloto", codigo = Models.CharField(primary_key=true))
-  codigo_rel = Models._relation_from_many_to_many(
-    codigo, "Piloto", "parceiros", Models.ManyToManyField("Piloto"), codigo, "Piloto", settings)
-  @test codigo_rel.owner_column == "from_piloto_codigo"
-  @test codigo_rel.related_column == "to_piloto_codigo"
+  ref_code = Models.Model("wheelman", ref_code = Models.CharField(primary_key=true))
+  ref_code_rel = Models._relation_from_many_to_many(
+    ref_code, "Wheelman", "partners", Models.ManyToManyField("Wheelman"), ref_code, "Wheelman", settings)
+  @test ref_code_rel.owner_column == "from_wheelman_ref_code"
+  @test ref_code_rel.related_column == "to_wheelman_ref_code"
 
   # --- Explicit pins still win, on both sides ---------------------------------------------------
   pinned = Models.ManyToManyField("Driver", source_field="left_id", target_field="right_id")
@@ -1577,8 +1577,8 @@ end
 
   # --- The non-`id` primary key fixture reaches the same place ----------------------------------
   rival_rel = Models.get_many_to_many_relation(M2MSELF.Rival, "rivals")
-  @test rival_rel.owner_column == "from_rival_codigo"
-  @test rival_rel.related_column == "to_rival_codigo"
+  @test rival_rel.owner_column == "from_rival_ref_code"
+  @test rival_rel.related_column == "to_rival_ref_code"
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -145,8 +145,8 @@ a physical name is escaped rather than validated.
     all of it: Django's through table is `<the owning model's table>_<field>`, so the table needs the
     pin the importer applies, while the columns line up on their own — *provided the primary key is
     named `id`*. Django always spells its m2m columns `<model_name>_id`; PormG uses the target's
-    actual pk field name, so a model keyed on `codigo` derives `matricula_codigo` where Django wrote
-    `matricula_id`. Pin the field's `source_field` / `target_field` in that case.
+    actual pk field name, so a model keyed on `ref_code` derives `enrolment_ref_code` where Django wrote
+    `enrolment_id`. Pin the field's `source_field` / `target_field` in that case.
 
     All of the above is the *auto-generated* case. Give the field an explicit `through=` and the join
     table **is** that model's table — its own `db_table` if it declares one — so the field-level
@@ -252,11 +252,11 @@ names the Django **app label** whose tables the connection reads, since Django n
 
 - When PormG **generates** a model file (via the Django importer), the prefix is emitted as the
   model's [`db_table`](#Pinning-an-explicit-table-name-with-db_table). The logical handle,
-  `"dim_uf"`, is the binding lowercased, so the positional slot is left out and loading derives it:
+  `"pit_lane"`, is the binding lowercased, so the positional slot is left out and loading derives it:
 
   ```julia
-  # class Dim_uf(models.Model) imported with django_prefix = "dash"
-  Dim_uf::Models.ModelType = Models.Model(db_table = "dash_dim_uf", …)
+  # class Pit_lane(models.Model) imported with django_prefix = "myapp"
+  Pit_lane::Models.ModelType = Models.Model(db_table = "myapp_pit_lane", …)
   ```
 
   A `Meta.db_table` in the Django source still wins outright, exactly as in Django.
@@ -279,8 +279,8 @@ The physical-table rule is unchanged: the table is `db_table` when set, else `na
     file — which is what `makemigrations` and `migrate` operate on, one per database — carry every
     app in the project.
 
-    Files generated before this keep working untouched: `Models.Model("dash_dim_uf", …)` still means
-    the table `dash_dim_uf`. The new spelling only appears when you regenerate.
+    Files generated before this keep working untouched: `Models.Model("myapp_pit_lane", …)` still means
+    the table `myapp_pit_lane`. The new spelling only appears when you regenerate.
 
 !!! note "A project with more than one app does not use `django_prefix` at all"
     `django_prefix` is the **single-app** spelling of an app label. Pass

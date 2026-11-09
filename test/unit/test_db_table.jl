@@ -57,7 +57,7 @@ DbtResult.connect_key = "db_table_mock"
 # inert when unused.
 DbtPlain = Model("dbt_plain_scratch",
   id   = IDField(),
-  nome = CharField(),
+  full_name = CharField(),
 )
 DbtPlain.connect_key = "db_table_mock"
 
@@ -366,7 +366,7 @@ DbtPlain.connect_key = "db_table_mock"
   @testset "reverse joins and Exists() subqueries render db_table" begin
     rmod = Module(:DbtReverseScratch)
     Base.eval(rmod, :(using PormG))
-    rparent = Model("dbtr_parent_scratch", id = IDField(), nome = CharField())
+    rparent = Model("dbtr_parent_scratch", id = IDField(), full_name = CharField())
     # The CHILD is the one carrying db_table here — it is the table a reverse traversal reaches.
     rchild = Model("dbtr_child_scratch", db_table = "Dbtr_Child_Legacy",
       id = IDField(), note = CharField(),
@@ -383,7 +383,7 @@ DbtPlain.connect_key = "db_table_mock"
       fk_field = :parentid, target_pk = :id, model_name = :dbtr_child_scratch,
       binding = :Dbtr_child_scratch, model_resolved = rchild)
 
-    rev = inspect_query(rparent.objects.values("nome", "kids__note"))[:sql_text]
+    rev = inspect_query(rparent.objects.values("full_name", "kids__note"))[:sql_text]
     @test occursin("\"Dbtr_Child_Legacy\"", rev)
     @test !occursin("\"dbtr_child_scratch\"", rev)
 
@@ -457,43 +457,43 @@ DbtPlain.connect_key = "db_table_mock"
     # A class-shaped name with the table pinned the way the importer pins it. The positional slot is
     # the LOGICAL handle (`lowercase(class)` — Django's own `model.__name__.lower()`), the binding is
     # the class name untouched, and `db_table` carries the app-prefixed physical table.
-    klass = Model("Dim_uf", Dict{String, PormG.PormGField}("id" => IDField()))
-    PormG.Models._apply_db_table!(klass, "dash_dim_uf")
+    klass = Model("Pit_lane", Dict{String, PormG.PormGField}("id" => IDField()))
+    PormG.Models._apply_db_table!(klass, "myapp_pit_lane")
     gen = Model_to_str(klass)
-    @test occursin("Models.Model(\"dim_uf\", db_table = \"dash_dim_uf\"", gen)
-    @test !occursin("Models.Model(\"dash_dim_uf\"", gen)     # prefix never in the positional slot
-    @test occursin("Dim_uf::Models.ModelType = Models.Model(", gen)            # binding is the class name, untouched
+    @test occursin("Models.Model(\"pit_lane\", db_table = \"myapp_pit_lane\"", gen)
+    @test !occursin("Models.Model(\"myapp_pit_lane\"", gen)     # prefix never in the positional slot
+    @test occursin("Pit_lane::Models.ModelType = Models.Model(", gen)            # binding is the class name, untouched
     reloaded = Base.eval(rmod, Meta.parse(gen))
-    @test model_table_name(reloaded) == "dash_dim_uf"
-    @test reloaded.name == "dim_uf"
+    @test model_table_name(reloaded) == "myapp_pit_lane"
+    @test reloaded.name == "pit_lane"
 
     # --- inspectdb path: model.name IS the physical table, already carrying the app prefix ---
-    # The `dash_dash_…` double-prefix defect #345 fixed is now structurally unreachable: nothing in
+    # The `myapp_myapp_…` double-prefix defect #345 fixed is now structurally unreachable: nothing in
     # this function can see an app label. Asserted anyway — "unreachable" is a claim about today's
     # code, and this is the output that would change if it stopped being true.
-    live = Model("dash_dim_uf", Dict{String, PormG.PormGField}("id" => IDField()))
+    live = Model("myapp_pit_lane", Dict{String, PormG.PormGField}("id" => IDField()))
     igen = Model_to_str(live; name_is_physical_table = true)
-    @test occursin("Models.Model(\"dash_dim_uf\"", igen)
-    @test !occursin("dash_dash_dim_uf", igen)
+    @test occursin("Models.Model(\"myapp_pit_lane\"", igen)
+    @test !occursin("myapp_myapp_pit_lane", igen)
     ireloaded = Base.eval(rmod, Meta.parse(igen))
-    @test model_table_name(ireloaded) == "dash_dim_uf"
+    @test model_table_name(ireloaded) == "myapp_pit_lane"
 
     # A mixed-case live table pins its own spelling, so the declaration addresses the table it was
     # read from rather than a lowercased one that does not exist.
-    mixed = Model("Dash_Dim_Uf", Dict{String, PormG.PormGField}("id" => IDField()))
+    mixed = Model("Myapp_Pit_Lane", Dict{String, PormG.PormGField}("id" => IDField()))
     mgen = Model_to_str(mixed; name_is_physical_table = true)
-    @test occursin("db_table = \"Dash_Dim_Uf\"", mgen)
+    @test occursin("db_table = \"Myapp_Pit_Lane\"", mgen)
     mreloaded = Base.eval(rmod, Meta.parse(mgen))
-    @test model_table_name(mreloaded) == "Dash_Dim_Uf"
+    @test model_table_name(mreloaded) == "Myapp_Pit_Lane"
 
     # An explicit table is ABSOLUTE, as in Django. Built through the Dict constructor +
     # `_apply_db_table!`, which is the importer's own path: the kwargs constructor would reject the
     # CLASS-shaped positional name via the #300 lowercase guard, which the importer deliberately does
     # not go through.
-    pinned = Model("Matricula", Dict{String, PormG.PormGField}("id" => IDField()))
-    PormG.Models._apply_db_table!(pinned, "rh_matricula_legado")
+    pinned = Model("Enrolment", Dict{String, PormG.PormGField}("id" => IDField()))
+    PormG.Models._apply_db_table!(pinned, "f1_enrolment_legacy")
     pgen = Model_to_str(pinned)
-    @test occursin("Models.Model(\"matricula\", db_table = \"rh_matricula_legado\"", pgen)
+    @test occursin("Models.Model(\"enrolment\", db_table = \"f1_enrolment_legacy\"", pgen)
   end
 
   # ─────────────────────────────────────────────────────────────────────────────

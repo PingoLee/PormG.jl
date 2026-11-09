@@ -759,7 +759,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 PormG.config["fkshort_prefixed"] = PormG.Configuration.Settings(
   connections = MockPostgres(), change_data = true,
-  db_def_folder = "fkshort_prefixed", django_prefix = "dash")
+  db_def_folder = "fkshort_prefixed", django_prefix = "myapp")
 
 module FkShortFormPrefixedModels
 import PormG
@@ -803,10 +803,10 @@ end
 #
 # `Settings` is populated generically from connection.yml's `config:` block
 # (`hasfield` -> `setfield!`), so `django_prefix: ''` reaches the field. Every
-# consumer composes "$(prefix)_", so treating "" as set derives `_dim_uf` for a
-# table named `dim_uf`. Before #345 that at least failed loudly — the generated
-# `Model("_dim_uf", …)` was rejected at include time — but with the prefix moved
-# into `db_table` the file would load and every query would read `_dim_uf`.
+# consumer composes "$(prefix)_", so treating "" as set derives `_pit_lane` for a
+# table named `pit_lane`. Before #345 that at least failed loudly — the generated
+# `Model("_pit_lane", …)` was rejected at include time — but with the prefix moved
+# into `db_table` the file would load and every query would read `_pit_lane`.
 # ─────────────────────────────────────────────────────────────────────────────
 const EMPTY_PREFIX_SETTINGS = PormG.Configuration.Settings(
   connections = MockPostgres(), change_data = true,
@@ -821,8 +821,8 @@ PormG.config["empty_prefix_q"] = EMPTY_PREFIX_SETTINGS
   @test PormG.Models._django_app_label(empty_prefix) === nothing
 
   # `get_model_name` must not strip a bare "_" from every logical name.
-  named = PormG.Models.Model("dim_uf", Dict{String, PormG.PormGField}("id" => PormG.Models.IDField()))
-  @test PormG.Models.get_model_name(named, empty_prefix, false) == "dim_uf"
+  named = PormG.Models.Model("pit_lane", Dict{String, PormG.PormGField}("id" => PormG.Models.IDField()))
+  @test PormG.Models.get_model_name(named, empty_prefix, false) == "pit_lane"
 
   # The RENDER half of this contract moved out of `Model_to_str` in #346 — it no longer takes a
   # `Settings` at all — and is now asserted at the importer, which is where the app label turns into

@@ -567,7 +567,7 @@ function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table
                       prev_how::Union{String,Nothing})
   # #343: the child model is READ off the relation, never rebuilt from its name. The old
   # `Symbol(uppercasefirst(lowercased_name))` could only ever spell `Xxxxx`, so a binding with an
-  # internal capital (Dim_CNES, CustomUser) raised UndefVarError instead of joining.
+  # internal capital (Grand_PRIX, TeamPrincipal) raised UndefVarError instead of joining.
   reverse_model = rel.model_resolved
   join_field = reverse_model.fields[String(rel.fk_field)]
   how = _determine_join_type(join_field, previus_how = prev_how, second_fild_name = vector[2])

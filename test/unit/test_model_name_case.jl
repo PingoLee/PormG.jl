@@ -280,8 +280,8 @@ NameCaseDriver.connect_key = "model_name_case_mock"
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "introspection and Django-importer paths stay verbatim" begin
     # Django importer: `Models.Model(class_name, fields_dict)` with a Dict{Symbol, Any}.
-    django_like = Model("CustomUser", Dict{Symbol, Any}(:id => IDField()))
-    @test django_like.name == "CustomUser"
+    django_like = Model("TeamPrincipal", Dict{Symbol, Any}(:id => IDField()))
+    @test django_like.name == "TeamPrincipal"
 
     # inspectdb: `Models.Model(table_name, fields_dict)` with a Dict{String, PormGField}.
     introspected = Model("Driver_Profile", Dict{String, PormG.PormGField}("id" => IDField()))
@@ -296,11 +296,11 @@ NameCaseDriver.connect_key = "model_name_case_mock"
     settings = PormG.Configuration.Settings(connections = MockPostgresNameCase(), change_data = true)
 
     # Django importer (name_is_physical_table = false, the default): the physical table genuinely IS
-    # the lowercased class name. Pinning `db_table = "CustomUser"` here would invent a table that
+    # the lowercased class name. Pinning `db_table = "TeamPrincipal"` here would invent a table that
     # does not exist and break every query against it.
     generated = Models.Model_to_str(django_like)
-    @test occursin("Models.Model(\"customuser\"", generated)
-    @test !occursin("Models.Model(\"CustomUser\"", generated)
+    @test occursin("Models.Model(\"teamprincipal\"", generated)
+    @test !occursin("Models.Model(\"TeamPrincipal\"", generated)
     @test !occursin("db_table", generated)
 
     # inspectdb (name_is_physical_table = true): the name came off a live database, so the original

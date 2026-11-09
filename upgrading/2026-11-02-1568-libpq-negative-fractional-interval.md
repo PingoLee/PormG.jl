@@ -1,6 +1,6 @@
 ## A negative interval with a fraction of a second reads back exact through LibPQ (#1568)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1568 ; `ext/PormGLibPQExt.jl`
 - **Recorded**: 2026-11-02
 - **Severity**: behavior (bug fix, silent wrong value). PostgreSQL through the LibPQ driver only. Postgres.jl, SQLite and MySQL read these values unchanged.

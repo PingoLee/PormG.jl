@@ -1,6 +1,6 @@
 ## MySQL: a duration filter on a `Cast(<duration>, "interval")` alias compares microseconds (#1456)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1456 ; `src/querybuilder/expression_render.jl` (`_render_interval_operand`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change, MySQL only. A filter comparing a duration with an alias over `Cast(<duration>, "interval")` now returns the rows it names. It used to compare every duration with `0`, so `>` matched every positive duration and `<` matched none.

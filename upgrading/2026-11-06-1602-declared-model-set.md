@@ -1,6 +1,6 @@
 ## A models module declares its models with `Models.@models`; PormG no longer scans the module's names (#1602)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1602, #1599, #354 ; `src/Models.jl`, `src/Utils.jl`, `src/Generator.jl`, `src/migrations/planner.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for a models module registered with `set_models` after a plain `include`

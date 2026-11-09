@@ -1,6 +1,6 @@
 ## Arithmetic over a window function on a date, a timestamp or a duration, and a duration beside a time, is typed (#1459)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1459, #1465 ; `src/querybuilder/expression_render.jl` (`_side_kind`, `_side_function_kind`, `_temporal_side_kind`), `src/querybuilder/expression_kind.jl` (`_typed_right_operand`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change on every engine, in queries that were wrong before. Arithmetic over a window value function (`Lag`, `Lead`, …) on a date, a timestamp or a duration now builds as date, timestamp or duration arithmetic, or raises `QueryBuildError` where the engine cannot compute it. Before, it was computed as plain number arithmetic: a silently wrong value, or a server error. A duration multiplied or divided by a time cast now raises `QueryBuildError` on SQLite and MySQL.

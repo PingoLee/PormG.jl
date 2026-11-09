@@ -1,6 +1,6 @@
 ## `Extract`'s `MILLISECONDS`, `MICROSECONDS` and `JULIAN` are decimals: PostgreSQL casts them to `numeric`, and `Concat` over a fractional one is refused (#1552)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1552 ; `src/querybuilder/projection_types.jl` (`_decimal_extract_kind`), `src/querybuilder/expression_kind.jl`, `src/Dialect.jl` (`EXTRACT`)
 - **Recorded**: 2026-11-01
 - **Severity**: behavior change on PostgreSQL and MySQL. `Concat` over `Extract(x, "milliseconds")`, and over `Extract(x, "julian")` of a timestamp, now raises `QueryBuildError`, where it built. A CTE column over any of the three parts now builds, where it raised. PostgreSQL renders the three parts `EXTRACT(… FROM x)::numeric`, so on a server older than 14 they read back as a `Decimal` instead of a `Float64`.

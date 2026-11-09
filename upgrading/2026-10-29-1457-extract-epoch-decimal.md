@@ -1,6 +1,6 @@
 ## `Extract(x, "EPOCH")` is a decimal: PostgreSQL casts it to `numeric`, and MySQL builds its quotient (#1457)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1457 ; `src/Dialect.jl` (`EXTRACT`), `src/querybuilder/projection_types.jl` (`_epoch_extract`), `src/querybuilder/expression_kind.jl`
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change on PostgreSQL and MySQL. Queries over `EPOCH` that raised `QueryBuildError` now build, and `Concat` over `EPOCH`, which built, now raises it. PostgreSQL renders `EXTRACT(EPOCH FROM x)::numeric`. On a PostgreSQL server older than 14, the value reads back as a `Decimal` instead of a `Float64`.

@@ -1,6 +1,6 @@
 ## An offline SQLite key renders for the `server_version` it states, and needs no driver (#1452)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1452 ; `src/Configuration.jl` (`register_offline`, `_offline_server_version`), `src/ConnectionPool.jl` (`_server_version` for `SQLiteConnectionPool`), `src/querybuilder/execution_bulk.jl` (`_backend_parameter_limit`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change, SQLite offline keys only. A query whose SQL depends on the SQLite version used to render for the SQLite library of the process, with `using SQLite`, and raise without it. It now renders for `register_offline(…; server_version)`, and raises `InvalidConfigurationError` when no version was stated, with the driver loaded or not.

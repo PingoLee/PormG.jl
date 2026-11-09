@@ -1,6 +1,6 @@
 ## The bulk writers take any Tables.jl table, and `allocate_primary_keys` loses `clone` (#1344)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1344 (phases 3 and 4, decisions 3 and 2) ; `src/querybuilder/execution_bulk.jl` (`_bulk_frame`, `allocate_primary_keys`, `bulk_insert`'s `returning`)
 - **Recorded**: 2026-10-31
 - **Severity**: breaking for `allocate_primary_keys(…; clone = …)`, which now raises. With a `DataFrame`, `bulk_insert`, `bulk_update` and `bulk_copy` write and return what they did before; the table lists the error types and message texts that changed, and the three ways `allocate_primary_keys`' result differs (the key column's element type on LibPQ, a refusal where PostgreSQL has no sequence, the frame's metadata).

@@ -1,6 +1,6 @@
 ## `Concat` over arithmetic on a `Case` with a float branch is refused, as the `Case` alone is (#1551)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1551 ; `src/querybuilder/projection_types.jl` (`_textless_walk_leaf`, `_textless_number`)
 - **Recorded**: 2026-11-01
 - **Severity**: behavior change. On every engine, `Concat` over arithmetic on a `Case` that has a float or a decimal branch and no `output_field` now raises `QueryBuildError` when the query is built; it used to build. On SQLite, a cast of such arithmetic to an integer or to a zero-scale `numeric` raises `QueryBuildError` too.

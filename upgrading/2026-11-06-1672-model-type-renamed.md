@@ -1,6 +1,6 @@
 ## `PormG.Models.Model_Type` is renamed `PormG.Models.ModelType`, and is public (#1672)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1672, #1663 ; `src/Models.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for code that names the concrete model type. Code that holds a model (`M.Race`) without naming its type is unaffected.

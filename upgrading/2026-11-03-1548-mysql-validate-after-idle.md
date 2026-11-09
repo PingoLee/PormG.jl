@@ -1,6 +1,6 @@
 ## MySQL pings a connection idle past `validate_after_idle` before using it; the key above 0 raises on PostgreSQL and SQLite (#1548)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1548, #1618 ; `src/ConnectionPool.jl`, `src/Configuration.jl`, `ext/PormGMySQLExt.jl`
 - **Recorded**: 2026-11-03
 - **Severity**: behavior. On MySQL a statement that raised now runs, and an unreachable server after an idle period raises `PoolConnectError` instead of `OperationalError`. A `connection.yml` that sets `validate_after_idle` above 0 on PostgreSQL or SQLite, which loaded with an "unrecognised key" warning, now raises at `load`.

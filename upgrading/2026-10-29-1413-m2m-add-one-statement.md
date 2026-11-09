@@ -1,6 +1,6 @@
 ## Many-to-many `add`: one statement per add on PostgreSQL, per group of 2048 targets on MySQL (#1413)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1413 ; `src/querybuilder/many_to_many.jl` (`_m2m_add!`, `_m2m_distinct_ids`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change, narrow. On MySQL, an `add` whose error you catch inside your own transaction keeps fewer targets. On PostgreSQL, the targets are bound as an array of the related key's declared type. On MySQL, two targets that only a case-insensitive collation equates (a text key on a table PormG did not create) are now both inserted. Otherwise the same rows are linked and the same errors are raised.

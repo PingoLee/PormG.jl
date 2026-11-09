@@ -1,6 +1,6 @@
 ## `PormG.config` holds `Configuration.Settings` only (#1622)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1622, part of #1599 ; `src/Kernel.jl`, `src/Configuration.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for code that stores its own `PormGSettings` subtype in `PormG.config` or

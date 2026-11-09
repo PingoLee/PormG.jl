@@ -1,6 +1,6 @@
 ## A filter on an alias over a value that carries an uncast JSON key is refused on every engine (#1506)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1506 ; `src/querybuilder/projection_types.jl` (`_refuse_json_key_carrier_filter`, `_render_alias_predicate_node`), `src/querybuilder/filter_operators.jl` (`_json_key_carrier_refusal`), `src/querybuilder/filter_nodes.jl`
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. A filter that built now raises `FilterError`. Over a key holding a number, it matched no row on SQLite and raised no error, and it failed at the server on PostgreSQL. Over a key holding text, with a text default, it returned the right rows, and it is refused too.

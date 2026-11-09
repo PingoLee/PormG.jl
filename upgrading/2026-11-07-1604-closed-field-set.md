@@ -1,6 +1,6 @@
 ## A model holds PormG's own field types only; `ModelType.name` is a `String` (#1604)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1604, #1599 ; `src/Models.jl`
 - **Recorded**: 2026-11-07
 - **Severity**: breaking, for code that defines its own `PormGField` subtype and puts it in a model, or that assigns a non-`String` to `ModelType.name`. Models built from PormG's field constructors are unaffected.

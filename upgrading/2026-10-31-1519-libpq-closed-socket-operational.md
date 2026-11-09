@@ -1,6 +1,6 @@
 ## LibPQ: a socket closed under a statement raises `OperationalError`, not `StatementError` (#1519)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1519 ; `ext/PormGLibPQExt.jl` (`backend_is_connection_error`)
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change. The exception type changes for one failure, under the LibPQ driver only.

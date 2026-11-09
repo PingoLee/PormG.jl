@@ -1,6 +1,6 @@
 ## `query |> DataFrame`: a query is a Tables.jl source, and `PormG.QueryBuilder.DataFrame` is gone (#1344)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1344 (phase 1) ; `src/querybuilder/execution_read.jl` (`Tables.columns(::SQLObjectHandler)`), `src/QueryBuilder.jl`
 - **Recorded**: 2026-10-30
 - **Severity**: breaking, for one name only. `query |> DataFrame` returns the same frame it returned before, on every engine. What is gone is the public binding `PormG.QueryBuilder.DataFrame`, and with it PormG's own `DataFrame` method and docstring.

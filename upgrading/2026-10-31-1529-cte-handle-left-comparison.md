@@ -1,6 +1,6 @@
 ## A `CTE(...)` handle on the left of a comparison builds the comparison (#1529)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1529 ; `src/querybuilder/operators.jl` (the `CTEReference` comparison family), `src/querybuilder/types.jl` (`FExpression.field_name`, `isequal(::CTEReference, …)`)
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change on every engine. `CTE(...) == x` returns a predicate where it returned `false`, and `CTE(...) < x` (and `<=`, `>`, `>=`) builds where it raised `MethodError`.

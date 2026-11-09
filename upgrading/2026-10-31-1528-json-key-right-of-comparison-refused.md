@@ -1,6 +1,6 @@
 ## A JSON key on the right of a comparison is refused on every engine (#1528)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1528 ; `src/querybuilder/json_key_refusal.jl` (`_JSONKeyRightOperand`, `_refuse_json_key_right_operand`), `src/querybuilder/expression_render.jl` (`_render_expr_node`), `src/querybuilder/filter_nodes.jl` (`_render_column_rhs`)
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change on every engine. A comparison with a JSON key, or a value that carries one, on its right now raises `FilterError` when the query is built. On PostgreSQL it was a server error; on SQLite it compared the key's native value with the column.

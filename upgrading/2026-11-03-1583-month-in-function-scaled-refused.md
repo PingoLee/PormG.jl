@@ -1,6 +1,6 @@
 ## A month inside a function, scaled by a fraction or divided, raises `QueryBuildError` on PostgreSQL (#1583)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1583 ; `src/column_ir.jl` (`CInterval.calendar`), `src/querybuilder/expression_kind.jl` (`_literal_kind`, `_unify_kinds`), `src/querybuilder/expression_render.jl` (`_calendar_scale_refused`)
 - **Recorded**: 2026-11-03
 - **Severity**: behavior change on PostgreSQL only. A `Month` or a `Year` literal among a function's values (a `Case` branch, a `Lag` `default`, a `Subquery` that projects one), then multiplied by a factor that is not whole or divided, built and returned a value. It now raises `QueryBuildError` when the query is built. SQLite and MySQL are unchanged.

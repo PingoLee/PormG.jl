@@ -1,6 +1,6 @@
 ## `makemigrations`: `db_index` indexes get a derived name, and duplicate copies of one are planned away (#1341)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1341 ; `src/migrations/planner.jl` (`_one_column_index_name`, `_plan_index_copies!`), `src/migrations/introspection.jl` (the three readers), `src/migrations/column_spec.jl` (`LiveTable`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change on PostgreSQL, SQLite and MySQL. A new `db_index` index has a different name. A plan over a column carrying the same index more than once now drops the extra copies (destructive, so `migrate` needs `destructive = true`). `LiveTable.indexes` changes type.

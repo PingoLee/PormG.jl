@@ -1,6 +1,6 @@
 ## A pool connect runs off the pool's lock, and a `Ctrl+C` during it reaches the caller (#1540)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1540 ; `src/ConnectionPool.jl` (`acquire_connection`, `_connect_reserved!`)
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change. One exception changes for an interrupted connect; the rest is timing.

@@ -1,6 +1,6 @@
 ## The generated models file binds each model with a typed global (`Race::Models.ModelType = …`); a plain or `const` file still loads (#1650)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1650, #1663, #1672, part of #1599 ; `src/Models.jl` (`Model_to_str`), `docs/src/models.md`
 - **Recorded**: 2026-11-06
 - **Severity**: behavior change. `Model_to_str`, and every models file PormG writes, returns different text. Queries are unchanged. A session that has a plain or `const` models file loaded must restart once after the file switches to the typed form (below).

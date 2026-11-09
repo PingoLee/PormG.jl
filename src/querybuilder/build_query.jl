@@ -158,10 +158,10 @@ function _render_on_conditions(instruc::SQLInstruction, value::JoinRow)::Vector{
   return out
 end
 
-function build(object::SQLObject;
+function build(object::SQLObjectQuery;   # #1698: the body stores it in `InstructionObject.object::SQLObjectQuery`
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
   connection::Union{Nothing,_SQLEngine}=nothing,
-  parameters::Union{Nothing,AbstractPormGParam}=nothing,
+  parameters::Union{Nothing,ParamCollector}=nothing,   # #1698: the closed collector set
   outer::Union{Nothing,SQLInstruction}=nothing,
   # #1002: the statement only asks whether a row matches — an `EXISTS`, an `IN (…)`, a mutation scoped by
   # `pk IN (…)` — so a repeated base row cannot be observed and the cardinality check does not apply.
@@ -213,11 +213,6 @@ function build(object::SQLObject;
         table_alias=table_alias === nothing ? SQLTbAlias() : table_alias,
         alias=get_alias(table_alias),
         connection=connection,
-        # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the
-        # absence of one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree
-        # about the same connection. With `django_prefix: ''` the old spelling produced `django == "_"`,
-        # so the reverse-join table fallback below prefixed every unpinned table with an underscore.
-        django=(_app_label = Models._django_app_label(settings); _app_label === nothing ? nothing : _app_label * "_"), # TODO, remover
         parameters=parameters,
         outer=outer,
         cte_body=cte_body,
@@ -226,6 +221,17 @@ function build(object::SQLObject;
         defer_outer_join_check=defer_outer_join_check,
         cte_state=cte_state,
       )
+      # `_django_app_label` rather than a bare `=== nothing` check (#345): an empty prefix is the absence of
+      # one, and this must agree with `Model_to_str`/`get_model_name` or the two disagree about the same
+      # connection. With `django_prefix: ''` the old spelling produced `django == "_"`, so the reverse-join
+      # table fallback prefixed every unpinned table with an underscore.
+      # #1698: set after construction, not as a keyword. The other keywords' values are each one concrete
+      # type in a specialized instance of this closure (a keyword argument or a `let` binding); this one
+      # is computed from `settings` at run time, a `Union{Nothing,String}`, which made the keyword
+      # `NamedTuple` abstract, so the `@kwdef` constructor call was an unresolved `kwcall` in the trimmed
+      # fixture's `list(T)` once the slots before it were closed. A keyword added here keeps that rule.
+      app_label = Models._django_app_label(settings)
+      instruct.django = app_label === nothing ? nothing : app_label * "_"   # TODO, remover
 
       # #977: the moment the registry is final (above) — every relation and `cjoin` link the join conditions could name
       # is declared now, so this is where they are bound onto their paths and checked (#962, #974).

@@ -1374,11 +1374,11 @@ function _projection_filter_names(q::SQLObject)::Set{String}
   return names
 end
 
-function _first_projection_alias_filter(q::SQLObject)::Union{Nothing,String}
+function _first_projection_alias_filter(q::SQLObjectQuery)::Union{Nothing,String}
   names = _projection_filter_names(q)
   isempty(names) && return nothing
   for f in q.filter
-    hit = _projection_alias_in_filter(f, names)
+    hit = with_filter_node(_projection_alias_in_filter, f, names)   # #1698: the slot's walk
     hit === nothing || return hit
   end
   return nothing

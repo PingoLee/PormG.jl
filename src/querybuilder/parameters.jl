@@ -5,13 +5,7 @@
 # The `current_context` field exists for interface compatibility but is ignored
 # because PostgreSQL uses numbered placeholders whose order is irrelevant.
 # ─────────────────────────────────────────────────────────────────────────────
-mutable struct PgParameterizedQuery <: PormGPostgresParam
-  sql::String
-  parameters::Union{AbstractVector,Tuple}
-  parameter_count::Int
-
-  PgParameterizedQuery(sql::String, parameters::Union{AbstractVector,Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
-end
+# `PgParameterizedQuery` is defined in `types.jl` (#1698), ahead of the slots that name it.
 get_parameter(connection::PormGPostgres) = PgParameterizedQuery("", Any[], 0)
 
 function _postgres_parameter_cast(::Nothing)
@@ -42,39 +36,8 @@ end
 # list under two names, and every bucket verb below is written once, on `PormGPositionalParam`. Only
 # `add_parameter!` — what a value becomes on the wire — is each engine's own.
 # ─────────────────────────────────────────────────────────────────────────────
-for (T, S) in ((:SQLiteParameterizedQuery, :PormGSQLiteParam), (:MySQLParameterizedQuery, :PormGMySQLParam))
-@eval mutable struct $T <: $S
-  sql::String
-  # Separate buckets for each SQL section — one per clause that can carry a `?`, in no particular
-  # order here; `_BUCKET_ORDER` below is the clause order and the only list that must match the
-  # statement text.
-  cte_params::Vector{Any}
-  select_params::Vector{Any}
-  update_params::Vector{Any}
-  join_params::Vector{Any}
-  where_params::Vector{Any}
-  # #587: GROUP BY and ORDER BY had no bucket, so an ordering expression that binds — the
-  # `@yyyy_q` / `@yyyy_quad` labels expand to a CONCAT/CASE with nine operands — was filed under
-  # `:join`, which flattens BEFORE `:where` while its text renders AFTER it. Every other parameter
-  # in the statement shifted by the size of the expression, the counts still agreed, and SQLite
-  # returned the wrong rows without an error. `:group` exists because `get_order_query` copies an
-  # unprojected ordering expression into GROUP BY verbatim, `?` and all, and GROUP BY prints
-  # BEFORE HAVING — so the same values are needed twice, in two clause positions.
-  group_params::Vector{Any}
-  having_params::Vector{Any}
-  order_params::Vector{Any}
-  # #46: LIMIT and OFFSET, bound like every other user value. Last, because their text is: the only
-  # thing printed after them is the `FOR UPDATE` lock clause, which binds nothing.
-  limit_params::Vector{Any}
-  # Active bucket selector
-  current_context::Symbol
-
-  function $T(sql::String="", current_context::Symbol=:where)
-    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], current_context)
-  end
-end
-end
-const _BucketedQuery = Union{SQLiteParameterizedQuery, MySQLParameterizedQuery}
+# `SQLiteParameterizedQuery`, `MySQLParameterizedQuery` and `_BucketedQuery` are defined in `types.jl`
+# (#1698), ahead of the slots that name them.
 get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
 get_parameter(connection::PormGMySQL) = MySQLParameterizedQuery()
 
@@ -154,7 +117,10 @@ function _apply_like_wildcards(value::Any, operator::String)::Any
   end
 end
 # Convenience: operate on the instruction object directly
-set_context!(instruc::SQLInstruction, context::Symbol) = instruc.parameters !== nothing ? set_context!(instruc.parameters, context) : nothing
+# #1698: the instruction-level verbs reach the collector through `with_collector`, the closed walk over
+# `ParamCollector` (types.jl), after the `nothing` arm.
+set_context!(instruc::SQLInstruction, context::Symbol) =
+  (p = instruc.parameters; p === nothing ? nothing : with_collector(set_context!, p, context))
 
 """
     with_bucket(f, params_or_instruc, context::Symbol)
@@ -185,7 +151,9 @@ function with_bucket(f, sq::PormGPositionalParam, context::Symbol)
   end
 end
 with_bucket(f, instruc::SQLInstruction, context::Symbol) =
-  instruc.parameters === nothing ? f() : with_bucket(f, instruc.parameters, context)
+  (p = instruc.parameters; p === nothing ? f() : with_collector(_with_bucket_on, p, f, context))
+# `with_bucket` with the collector first, the argument order `with_collector` calls in.
+_with_bucket_on(sq, f::F, context::Symbol) where {F} = with_bucket(f, sq, context)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Positional parameter marks
@@ -206,7 +174,7 @@ const ParameterMark = Tuple{Union{Nothing,Vector{Any}},Int}
 _positional_bucket(::PormGPostgresParam) = nothing
 _positional_bucket(sq::PormGPositionalParam) = _current_bucket(sq)
 _positional_bucket(instruc::SQLInstruction) =
-  instruc.parameters === nothing ? nothing : _positional_bucket(instruc.parameters)
+  (p = instruc.parameters; p === nothing ? nothing : with_collector(_positional_bucket, p))
 
 function parameter_mark(instruc::SQLInstruction)::ParameterMark
   bucket = _positional_bucket(instruc)
@@ -286,7 +254,8 @@ function nested_parameter_mark(sq)::NestedMark
   sq isa PormGPositionalParam || return nothing
   return ntuple(i -> length(_bucket_for(sq, _BUCKET_ORDER[i])), _N_BUCKETS)
 end
-nested_parameter_mark(instruc::SQLInstruction)::NestedMark = nested_parameter_mark(instruc.parameters)
+nested_parameter_mark(instruc::SQLInstruction)::NestedMark =
+  (p = instruc.parameters; p === nothing ? nothing : with_collector(nested_parameter_mark, p))
 
 """
     detach_nested_run!(instruc, mark) -> Vector{Any}
@@ -308,7 +277,7 @@ function detach_nested_run!(sq, mark::NestedMark)::Vector{Any}
   return run
 end
 detach_nested_run!(instruc::SQLInstruction, mark::NestedMark)::Vector{Any} =
-  detach_nested_run!(instruc.parameters, mark)
+  (p = instruc.parameters; p === nothing ? Any[] : with_collector(detach_nested_run!, p, mark))
 
 # Append a lifted run to whatever bucket is active on `sq`. The `SQLInstruction` form below is the
 # common one; this bare-collector form exists because `build_cte_clause` holds only the parameter
@@ -343,7 +312,7 @@ function copy_parameters_to!(sq::PormGPositionalParam, ctx::Symbol, values::Vect
   return nothing
 end
 copy_parameters_to!(instruc::SQLInstruction, ctx::Symbol, values::Vector{Any}) =
-  instruc.parameters === nothing ? nothing : copy_parameters_to!(instruc.parameters, ctx, values)
+  (p = instruc.parameters; p === nothing ? nothing : with_collector(copy_parameters_to!, p, ctx, values))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # add_parameter!  – push a value and return the placeholder string
@@ -532,9 +501,15 @@ function add_parameter!(instruc::SQLInstruction, value::Union{Sockets.IPAddr,Abs
       why = "PormG refuses it rather than bind its text, which would not compare as an address; " *
             "pass `string(address)` if you only need the text."))
   end
-  return add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
+  return with_collector(_add_parameter_on, instruc.parameters, value, contains, operator, sql_type)::String
 end
-add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) = add_parameter!(instruc.parameters, value; contains=contains, operator=operator, sql_type=sql_type)
+add_parameter!(instruc::SQLInstruction, value::Any; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing) =
+  with_collector(_add_parameter_on, instruc.parameters, value, contains, operator, sql_type)::String
+# `add_parameter!` on the collector, positionally: `with_collector` passes no keywords (#1698). An
+# instruction with no collector (`_declaration_instruction`, a test's bare instruction) raises a
+# `MethodError` naming `_add_parameter_on` and `nothing`, where it named `add_parameter!(::Nothing, …)`.
+_add_parameter_on(sq, value, contains::Bool, operator::String, sql_type::Union{Nothing,String}) =
+  add_parameter!(sq, value; contains=contains, operator=operator, sql_type=sql_type)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # get_final_parameters – return the parameters in correct SQL clause order

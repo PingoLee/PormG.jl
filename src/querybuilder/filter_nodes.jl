@@ -91,7 +91,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # #1066: the projection is kept, and probed, when it decides the subquery's rows — as `exists()`.
   keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0)
   _keeps_order(q.object, keep_values) || (q.object.order = [])
-  keep_values || (q.object.values = [])
+  keep_values || (q.object.values = ProjectionNode[])
   # #1053: the subquery's own slice is kept. It used to be reset here, so `Exists(sub.limit(0))`
   # was true whenever `sub` had a row. The probe is `LIMIT 0` or `LIMIT 1` — the smaller of the
   # caller's limit and 1, a literal the code chooses — and the caller's OFFSET binds, as `exists()`'s

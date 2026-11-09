@@ -129,7 +129,7 @@ _order_field(f) = throw(QueryBuildError(
 # bullet; `test_docstring_coverage.jl` enforces both halves.
 function _values!(q::SQLObject, values)
   # every call of values, reset the values
-  q.values = []
+  q.values = ProjectionNode[]
   for v in values
     isa(v, Symbol) && (v = String(v))
     if isa(v, SQLTypeText) || isa(v, SQLTypeField)
@@ -226,7 +226,7 @@ end
 #
 # A fresh vector, never `empty!`: `_terminal_copy` shares `values` with the caller's handler.
 function _values!(q::SQLObject, values::AbstractVector{<:AbstractString})
-  q.values = Vector{Union{SQLTypeText,SQLTypeField}}()
+  q.values = ProjectionNode[]
   for v in values
     push!(q.values, _values_field(v))
   end
@@ -287,7 +287,10 @@ end
 # `field_names` check is wrong in BOTH directions — with `note` carrying `db_column = "obs"`,
 # `values("*", "obs" => x)` collides (the star contributes `obs`) while `values("*", "note" => x)`
 # does not, and a name-based check gets both backwards.
-function _reject_duplicate_projection_names(q::SQLObject)
+# #1698: `q.values` is the closed `ProjectionNode`, so `name` is a `Union{Nothing,String}` and each call
+# below is static; the label goes through the slot's walk. Under `juliac --trim` the abstract element
+# made `name == "*"` a call with no compiled target (round 4 of #1600).
+function _reject_duplicate_projection_names(q::SQLObjectQuery)
   isempty(q.values) && return nothing
   seen = Dict{String,String}()          # output name => what claimed it
   for v in q.values
@@ -304,7 +307,7 @@ function _reject_duplicate_projection_names(q::SQLObject)
         _claim_projection_name!(seen, col, "\"*\"")
       end
     else
-      _claim_projection_name!(seen, name, _describe_projection(v))
+      _claim_projection_name!(seen, name, with_projection_node(_describe_projection, v)::String)
     end
   end
   return nothing
@@ -602,11 +605,12 @@ end
 # `String` per projection into a `Vector{Any}`, `join` them, and hand the result to `query()`, which
 # printed it into its own buffer — the list was built twice. A projection's rendered text is a `String`
 # on every common path, and that branch no longer calls `string` on it: only the other parts (a
-# `CTEReference`, a function node) are converted. The reads of `field.field` / `_as` / `custom_as`
-# stay dynamic, since `select` holds the abstract `SQLTypeField`.
+# `CTEReference`, a function node) are converted. Since #1698 `select` is a `Vector{SQLField}`, so the
+# reads of `_as` / `custom_as` are static on the build path; `field.field` is the phase-2 `FieldPart`.
+# The signature still takes any `SQLTypeField` vector, which is what a hand-built list in a test is.
 # A field that throws partway through leaves what was printed before it in `io`; every caller lets
 # the error propagate and drops the buffer.
-function _query_select(io::IO, array::Vector{SQLTypeField}, connection)::Nothing
+function _query_select(io::IO, array::Vector{<:SQLTypeField}, connection)::Nothing
   if isempty(array) || !isassigned(array, 1)
     print(io, "*")
     return nothing
@@ -633,7 +637,7 @@ end
 
 # The projection list as a `String`, for the two callers that splice it into a statement of their own
 # (`_exists_projection`, the `count()` projection).
-function _query_select(array::Vector{SQLTypeField}, connection)::String
+function _query_select(array::Vector{<:SQLTypeField}, connection)::String
   io = IOBuffer()
   _query_select(io, array, connection)
   return String(take!(io))

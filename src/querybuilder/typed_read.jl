@@ -98,13 +98,11 @@ function _typed_projection!(q::SQLObjectHandler, ::Type{T}) where T
   return q
 end
 
-# A projection's output name, split by hand over the two concrete node types: `obj.values` holds the
-# abstract `Union{SQLTypeText,SQLTypeField}`, and the call on it was dynamic and returned `Any` (#1605;
-# round 1 of #1600, row 9).
-# `SQLField` and `SQLText` are the two node types a projection holds (the only subtypes in src/), so the
-# second arm asserts rather than dispatching again.
-_typed_output_name(@nospecialize(v::Union{SQLTypeText,SQLTypeField}))::Union{Nothing,String} =
-  v isa SQLField ? _projection_output_name(v) : _projection_output_name(v::SQLText)
+# A projection's output name, through the slot's walk (#1698): `obj.values` used to hold the abstract
+# `Union{SQLTypeText,SQLTypeField}`, and the call on it was dynamic and returned `Any` (#1605; round 1 of
+# #1600, row 9). It holds the closed `ProjectionNode` now, and `with_projection_node` is its one walk.
+_typed_output_name(@nospecialize(v::ProjectionNode))::Union{Nothing,String} =
+  with_projection_node(_projection_output_name, v)::Union{Nothing,String}
 
 # The handler a typed read runs on: the caller's is never written to (#43, #199). With no `values()`
 # the projection is set to `fieldnames(T)`, on a shallow copy (#1624: the build writes nothing, so the
@@ -481,16 +479,16 @@ function _execute_select_rows(q::SQLObjectHandler, ::Type{T})::Vector{T} where T
   end
 end
 
-# The statement's parameters, split by hand over the three collectors a build makes: the instruction's
-# slot is the abstract `AbstractPormGParam`, and a keyword call carrying it could not be resolved
-# statically (`juliac --trim`), so each branch calls `fetch` with a concrete one.
-function _fetch_rows(connection, sql::String, @nospecialize(params), decoder::_RowDecoder{T})::Vector{T} where T
-  params isa SQLiteParameterizedQuery && return fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
-  params isa PgParameterizedQuery && return fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
-  params isa MySQLParameterizedQuery && return fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
-  # A build makes one of the three collectors, or none at all.
-  return fetch(connection, sql; params = params::Nothing, _decode = decoder)::Vector{T}
+# The statement's parameters at their concrete collector type, so the keyword call into `fetch` resolves
+# statically (`juliac --trim`). This was a split by hand over the three collectors while the slot was the
+# abstract `AbstractPormGParam`; it goes through the slot's own walk now (#1698), so a collector added to
+# `ParamCollector` is one list, not two. A build makes one of the three, or none at all.
+function _fetch_rows(connection, sql::String, params::Union{Nothing,ParamCollector}, decoder::_RowDecoder{T})::Vector{T} where T
+  params === nothing && return fetch(connection, sql; params = nothing, _decode = decoder)::Vector{T}
+  return with_collector(_fetch_rows_on, params, connection, sql, decoder)::Vector{T}
 end
+_fetch_rows_on(params, connection, sql::String, decoder::_RowDecoder{T}) where T =
+  fetch(connection, sql; params = params, _decode = decoder)::Vector{T}
 
 """
     first(objct::SQLObjectHandler, T::Type; show_query = :execute) -> Union{Nothing, T}

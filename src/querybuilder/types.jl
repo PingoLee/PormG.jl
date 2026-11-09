@@ -1,3 +1,51 @@
+# The parameter collectors (#1698): defined here, ahead of the two `parameters` slots that name them
+# (`InstructionObject`, `SQLObjectQuery`). Their verbs and the bucket strategy are in `parameters.jl`.
+# PostgreSQL: numbered `$N` markers, one linear vector.
+mutable struct PgParameterizedQuery <: PormGPostgresParam
+  sql::String
+  parameters::Union{AbstractVector,Tuple}
+  parameter_count::Int
+
+  PgParameterizedQuery(sql::String, parameters::Union{AbstractVector,Tuple}, parameter_count::Int) = new(sql, parameters, parameter_count)
+end
+# SQLite and MySQL: positional `?` markers, collected per clause (`parameters.jl`, *Contextual Bucket
+# Strategy*).
+for (T, S) in ((:SQLiteParameterizedQuery, :PormGSQLiteParam), (:MySQLParameterizedQuery, :PormGMySQLParam))
+@eval mutable struct $T <: $S
+  sql::String
+  # Separate buckets for each SQL section — one per clause that can carry a `?`, in no particular
+  # order here; `_BUCKET_ORDER` below is the clause order and the only list that must match the
+  # statement text.
+  cte_params::Vector{Any}
+  select_params::Vector{Any}
+  update_params::Vector{Any}
+  join_params::Vector{Any}
+  where_params::Vector{Any}
+  # #587: GROUP BY and ORDER BY had no bucket, so an ordering expression that binds — the
+  # `@yyyy_q` / `@yyyy_quad` labels expand to a CONCAT/CASE with nine operands — was filed under
+  # `:join`, which flattens BEFORE `:where` while its text renders AFTER it. Every other parameter
+  # in the statement shifted by the size of the expression, the counts still agreed, and SQLite
+  # returned the wrong rows without an error. `:group` exists because `get_order_query` copies an
+  # unprojected ordering expression into GROUP BY verbatim, `?` and all, and GROUP BY prints
+  # BEFORE HAVING — so the same values are needed twice, in two clause positions.
+  group_params::Vector{Any}
+  having_params::Vector{Any}
+  order_params::Vector{Any}
+  # #46: LIMIT and OFFSET, bound like every other user value. Last, because their text is: the only
+  # thing printed after them is the `FOR UPDATE` lock clause, which binds nothing.
+  limit_params::Vector{Any}
+  # Active bucket selector
+  current_context::Symbol
+
+  function $T(sql::String="", current_context::Symbol=:where)
+    new(sql, Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], Any[], current_context)
+  end
+end
+end
+const _BucketedQuery = Union{SQLiteParameterizedQuery, MySQLParameterizedQuery}
+# The closed set of collectors, the type of both `parameters` slots; read through `with_collector`.
+const ParamCollector = Union{PgParameterizedQuery, SQLiteParameterizedQuery, MySQLParameterizedQuery}
+
 # ExistsObject is a standalone EXISTS predicate, not a binary operator.
 # It is defined here — before FilterType — because FilterType references it
 # and Julia evaluates constant definitions sequentially at load time.
@@ -565,242 +613,6 @@ function with_scope(f, instruc::SQLInstruction; kw...)
   end
 end
 
-#
-# SQLInstruction Objects (instructions to build a query)
-#
-@kwdef mutable struct InstructionObject <: SQLInstruction
-  text::String # text to be used in the query
-  table_alias::SQLTableAlias
-  alias::String
-  object::SQLObject
-  select::Vector{SQLTypeField} = SQLTypeField[] # one slot per projection; `get_select_query` sizes it (#1335)
-  # #1593: the clause vectors are typed at construction (`String[]`, not an `Any[]` converted on
-  # assignment) and stay eager — every build reads them, from the render and the dialects.
-  join::Vector{String} = String[]  # values to be used in join query
-  _where::Vector{String} = String[]  # values to be used in where query
-  aggregate::Bool = false
-  group::Vector{String} = String[]  # values to be used in group query
-  # #789: every non-aggregate `PARTITION BY` / `ORDER BY` term a window's OVER clause rendered, with
-  # the values it bound, in render order. `_group_window_terms!` adds them to `group` once the
-  # statement is known to aggregate; rendering them a second time there would bind them twice.
-  # `nothing` until the first window (#1593); write through `_window_group_terms!`.
-  window_group_terms::Union{Nothing,Vector{Tuple{String,Vector{Any}}}} = nothing
-  # #1115: the `order_by` terms `get_order_query` rendered but left out of `group` because they hold
-  # an aggregate or a window, as declared. `_check_mixed_grouping` walks exactly these — a term that
-  # resolved to a projection alias is not here: its expression is the projection's, already checked
-  # there, even where a NULL sort key repeats it (#1130). `nothing` until the first such term (#1593).
-  ungrouped_order_terms::Union{Nothing,Vector{SQLTypeField}} = nothing
-  # #1130: the values each projection bound, by output name, in the order its markers print. An ORDER
-  # BY term that repeats a projection's SQL in its NULL sort key (`_projection_null_key`) binds them
-  # again from here, so the projection is never rendered a second time. `nothing` until a projection
-  # binds a value (#1593).
-  projection_params::Union{Nothing,Dict{String,Vector{Any}}} = nothing
-  # #1130: the ORDER BY terms whose NULL sort key kept the projection's alias, which no FROM column
-  # named when ORDER BY rendered; `_refuse_late_shadowed_null_key` rechecks them once every join exists.
-  # `nothing` until the first one (#1593).
-  alias_null_keys::Union{Nothing,Vector{String}} = nothing
-  # #1130: this build is the predicate of an UPDATE or DELETE (`build(…; mutation = true)`).
-  mutation::Bool = false
-  # #1431: the caller checks the RIGHT/FULL capability rows itself, against the statement it prints
-  # (`update()`), so `build_row_join_sql_text` leaves them to it (`build(…; defer_outer_join_check = true)`).
-  defer_outer_join_check::Bool = false
-  having::Vector{String} = String[] # values to be used in having query
-  order::Vector{String} = String[] # values to be used in order query
-  # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
-  row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
-  # The path of each join `_insert_join` tracked (model__model__ etc). `nothing` until the first (#1593).
-  row_path::Union{Nothing,Vector{String}} = nothing
-  # #169: the alias each relation path's join ended up under, keyed by the CANONICAL path — what a
-  # `select_for_update(of = …)` target resolves through. `row_path` cannot answer that: it is not
-  # aligned with `row_join` and records nothing on a dedup hit. Written by `_finish_hop!` and the M2M
-  # branch only when this query takes a row lock (`_records_lock_targets`) — an `of` lock resolves
-  # through it, a lock without `of` names the outer join it refuses by it (#1106) — so the other
-  # builds never allocate it (#41).
-  join_alias_by_path::Union{Nothing,Dict{String,String}} = nothing
-  # #977: each `on()` / `cjoin(filters = …)` path's conditions, BOUND — every left-side column lowered
-  # onto the path, every check run — by `_bind_join_conditions!` before anything renders, and its
-  # explicit `join_type`. Both keyed by the CANONICAL path (`_canonical_join_path`: the FK short form
-  # resolved), so `on("status", …)` and a traversal spelled `status_id__…` find each other. The query
-  # object keeps them as written; a hop reads them from here (`_finish_hop!`).
-  # Both `nothing` until the query declares an `on()` / `cjoin(filters = …)` path (#1593).
-  join_conditions::Union{Nothing,Dict{String,Vector{FilterType}}} = nothing
-  join_type_overrides::Union{Nothing,Dict{String,String}} = nothing
-  # #982: the `cjoin_on` half of the same binding (`_bind_cjoin_on_conditions!`). `cjoin_on_paths` is
-  # every relation path an alias's ON clause names, as the segments `build()` materializes BEFORE the
-  # alias rows, so rendering that ON clause adds no join; `cjoin_on_order` is the order the alias rows
-  # are emitted in — every alias after the aliases its ON clause names, declaration order otherwise.
-  # The three are `nothing` until the query declares a `cjoin_on` alias (#1593).
-  cjoin_on_paths::Union{Nothing,Vector{Vector{String}}} = nothing
-  # #1002: for each `cjoin_on_paths` entry, the alias whose ON clause names it and the column as the
-  # caller wrote it — what a cardinality refusal quotes.
-  cjoin_on_written::Union{Nothing,Vector{Tuple{String,String}}} = nothing
-  cjoin_on_order::Union{Nothing,Vector{String}} = nothing
-  # #1002: every hop of this build that can repeat or drop a base row — a reverse or ManyToMany hop, or
-  # a forward one to a non-unique column — keyed by the alias of the row that survived dedup, with what
-  # first reached it and whether a declaring introducer reached it too (`_record_join_reach!`).
-  # `_check_join_cardinality` reads it. `nothing` until the first such hop: most builds have none, and a
-  # build is allocation-sensitive (#41).
-  join_reaches::Union{Nothing,Dict{String,JoinReach}} = nothing
-  # #1367: the aliases whose join type `on(path, join_type = …)` STATED (`join_type_overrides`), under the
-  # dedup survivor's alias (`_finish_hop!`). `_promote_outer_joins!` derives a join type and never
-  # replaces a stated one. `nothing` until the first such hop, for #41's reason.
-  stated_join_types::Union{Nothing,Set{String}} = nothing
-  # #174: each alias's ON conditions as `build_row_join_sql_text` rendered them — markers bound once,
-  # into `:join`. The correlated UPDATE … FROM carries them into its WHERE from here; rendering them a
-  # second time would bind every value twice. `nothing` until the first such ON clause (#1593).
-  cjoin_on_rendered::Union{Nothing,Dict{String,Vector{String}}} = nothing
-  # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
-  # The three memos (#474) are `nothing` until their first write (#1593), through `memos.jl` only.
-  tab_field_cache::Union{Nothing,Dict{MemoKey,PormGField}} = nothing # cache to be used in join query (#474: keyed by MemoKey)
-  # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
-  # JSON-path gate renders an extraction; tested by the filter-render branch to bind the RHS as
-  # plain text (not through the JSON formatter) and to reject containment operators on a nested key
-  # path.
-  #
-  # #478 — this was a `Dict` mapping to `(JSON base field, validated key segments)`, and both halves
-  # of that value were dead. The base field is separately written to `tab_field_cache` on the very
-  # next line of `_render_json_lookup`, the segments are consumed by `Dialect._json_extract_expr`
-  # BEFORE the write, and both readers were `haskey` membership tests — `_render_json_lookup_comparison`
-  # re-derives everything it needs from the filter expression it is handed. It was a `Set` wearing a
-  # `Dict`'s allocation, so it is spelled as one now. Reach it through `memo_json_lookup` (`memos.jl`).
-  json_lookup_paths::Union{Nothing,Set{MemoKey}} = nothing
-  # #564 — the canonical kind each PROJECTION evaluates to, keyed by the RESULT-ROW column name
-  # (`_projection_output_name`, the same expression `_query_select` renders the `AS` alias from, so
-  # this key and the one the driver hands back agree by construction rather than by coincidence).
-  #
-  # DELIBERATELY NOT A FOURTH MEMO, and not reached through `memos.jl`. The three memos there are
-  # RESOLUTION caches keyed by `MemoKey` — a namespace plus a name — consulted DURING the build to
-  # avoid re-resolving an expression. This is a description of the RESULT SET, consumed AFTER the
-  # build by a reader whose only handle on a column is the name the driver gave it: `_list_raw` has
-  # no namespace to key with, and routing this through `memo_key` would force it to invent one.
-  projection_kinds::Dict{Symbol,CanonicalType} = Dict{Symbol,CanonicalType}()
-  # #888 — the read kind of each `Subquery(...)` this build RENDERED, keyed by the node itself. The
-  # inner build records its one projection's kind (`projection_kinds` above, written back onto the
-  # rendered copy of the handler); `_get_select_query(::SubqueryObject)` files it here, and
-  # `_read_kind` (and `_subquery_read_record`) read it AFTER the render — the order every other kind
-  # lookup keeps (#564). Not a memo, for the reason `projection_kinds` gives: it describes a result,
-  # it has no `MemoKey` namespace, and nothing reads it to skip a render. Keyed by IDENTITY because
-  # the kind is a function of the node's own query, so a node projected twice answers the same, and
-  # the caller's node is never written to (#508). `nothing` until the first typed subquery: most
-  # builds render none, and a build is allocation-sensitive (#41).
-  subquery_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
-  # #929 — and the FORMATTER a value compared with that subquery must satisfy: its one projected
-  # column's, as the inner build resolved it (`_expression_formatter` over the inner instruction, so a
-  # joined path and `Max(…)` over a column answer too). Kept beside the kind, not derived from it:
-  # `field_canonical_kind` names only the kinds the read path owns, so a uuid column has a formatter
-  # but no kind. Same keying and laziness as `subquery_kinds`.
-  subquery_formatters::Union{Nothing,IdDict{SubqueryObject,Function}} = nothing
-  # #1124 — and the textless CLASSIFICATION of that column (`_concat_textless_operand` over the inner
-  # instruction, in the same `built` window as the formatter). Kept beside the two above because
-  # neither can stand in for it: a float has no read kind, and the number formatter is the
-  # integer's too, so `Concat(…, Subquery(<float>))` built while the float itself was refused. The
-  # `(kind, what)` pair the classifier answers for the inner expression, read by its `SubqueryObject`
-  # arm. Same keying and laziness as `subquery_kinds`.
-  subquery_textless::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
-  # #1111 — and what the same expression answers once DIVIDED (`_whole_numeric_operand`: a whole
-  # number PostgreSQL types `numeric`), recorded in the same window, so `Subquery(…) / 2` is refused
-  # where `Floor(x) / 2` is. Separate from the textless record because the expression alone has one
-  # text; only the division splits it.
-  subquery_whole_numeric::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
-  # #1482 — and whether the expression carries an uncast JSON key's value (`_json_number_side`), so
-  # arithmetic over `Coalesce(Subquery(…), 0)` is refused as over the key (#1483). Same keying.
-  subquery_json_key::Union{Nothing,IdDict{SubqueryObject,Tuple{String,String}}} = nothing
-  # #1153 — and its kind under EVERY policy (`_expression_kind` over the inner instruction, in the
-  # same window): `subquery_kinds` is the READ kind, which names no integer or float, so
-  # `Floor(Subquery(<integer>))` was `numeric` on PostgreSQL. Same keying and laziness as above.
-  subquery_all_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
-  # #1110 — the subqueries whose read kind (`subquery_kinds`) is a declared decimal the engine left
-  # unapplied (`_reads_unapplied_declaration`): the projection applies its width on read, a value
-  # composed over it is the computed number it means. Same keying and laziness as above.
-  subquery_unapplied::Union{Nothing,IdDict{SubqueryObject,Bool}} = nothing
-  # #1624 — the state each CTE body's build derived (`CTEState`), by CTE name, handed in by the caller
-  # that rendered the WITH clause (`build_cte_clause` runs before this instruction exists). `nothing`
-  # when this statement renders no WITH: `update()`/`bulk_update` pass none, which is what the #433
-  # refusal reads ("the statement being built emits no WITH clause").
-  cte_state::Union{Nothing,Dict{String,CTEState}} = nothing
-  connection::ConnType = nothing
-  # array_defs::SQLTypeArrays = SQLArrays()
-  cache::Union{Nothing,Dict{MemoKey,SQLTypeField}} = nothing
-  django::OptionalString = nothing
-  parameters::Union{Nothing,AbstractPormGParam} = nothing # parameters to be used in the query
-  outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
-  # #1557: the name of the CTE whose BODY this instruction builds, or "" when it builds no CTE body.
-  # `build_cte_clause` builds each body as a query of its own, with `outer = nothing` even when the
-  # CTE belongs to a correlated subquery, so an `OuterRef` there has nothing to resolve against. The
-  # one refusal point (`_get_filter_query(::OuterRefObject)`) reads this to say so, instead of telling
-  # a user already inside an `Exists` to build a correlated subquery.
-  cte_body::String = ""
-  # #1557: whether the query that DECLARES that CTE is itself correlated (has an enclosing query), so
-  # the refusal only sends the user there when an `OuterRef` would resolve in it.
-  cte_body_correlated::Bool = false
-  # #74 fan-out guard: record each at-risk aggregate's source alias so build() can refuse
-  # silently-inflated COUNT/SUM/AVG. To-many joins carry `ModelJoin.to_many` (stamped onto the dedup
-  # survivor by `_flag_to_many!`) or `AnchorlessJoin.to_many` (#174, `_cjoin_on_to_many`) and the many-side alias set is derived from the *deduped* row_join at check time
-  # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
-  # `nothing` until the first aggregate (#1593).
-  agg_sources::Union{Nothing,Vector{AggSource}} = nothing
-  # #194 grouped-correlation guard — same evidence-plumbing shape as `agg_sources` above, and for
-  # the same reason: what the guard needs cannot be read back off the rendered state.
-  #
-  # The render state the #194 recorder reads — see `RenderScope`. Written ONLY through `with_scope`,
-  # which restores the previous scope in a `finally`; `test/unit/test_render_scope.jl` scans for any
-  # other write.
-  scope::RenderScope = RenderScope()
-  # One entry per OuterRef actually RENDERED inside a correlated subquery of this query, whatever
-  # clause it sits in — the guard, not the recorder, decides which ones matter (#932).
-  # Written at resolution time rather than collected by walking the inner query's AST, because the
-  # two have opposite failure modes: a walker must enumerate every node type an OuterRef can hide in
-  # and every miss is a silent wrong number, while a recorder's invariant — "a ref that was not
-  # recorded was not rendered, and a ref that was not rendered cannot affect the answer" — holds by
-  # construction. A walk is also actively WRONG here: `_build_exists_query` discards the inner
-  # `values()`, so `Exists(q.values("t" => Lower(OuterRef("surname"))))` never renders that ref, and
-  # a collector reading `.values` would refuse a correct query.
-  #
-  # `expr` is the resolved outer SQL (`"Tb"."driverid"`), directly comparable to the group set —
-  # which is why the guard needs no parallel semantic bookkeeping on the group side. `phase` and
-  # `group_key` are the scope at the moment of rendering — the two facts a walker could not know.
-  # `nothing` until the first correlated reference (#1593).
-  outer_refs::Union{Nothing,Vector{CorrelatedRef}} = nothing
-end
-
-# #1593: the containers above that only a join condition, a `cjoin_on`, a window, an aggregate, a
-# correlated subquery or a JSON lookup fills are `nothing` until their first write, as the six lazy
-# fields before them (`join_reaches`, …): a plain read fills none of them, and a build is
-# allocation-sensitive (#41). Each is written through its accessor below, which allocates it on first
-# use; a reader takes the `nothing` arm (`_lazy_isempty`, `_lazy_length`, `_lazy_get`,
-# `something(x, ())`). The three memos have theirs in `memos.jl`, their only reader (#474).
-_window_group_terms!(i::InstructionObject)::Vector{Tuple{String,Vector{Any}}} =
-  (v = i.window_group_terms; v === nothing ? (i.window_group_terms = Tuple{String,Vector{Any}}[]) : v)
-_ungrouped_order_terms!(i::InstructionObject)::Vector{SQLTypeField} =
-  (v = i.ungrouped_order_terms; v === nothing ? (i.ungrouped_order_terms = SQLTypeField[]) : v)
-_projection_params!(i::InstructionObject)::Dict{String,Vector{Any}} =
-  (v = i.projection_params; v === nothing ? (i.projection_params = Dict{String,Vector{Any}}()) : v)
-_alias_null_keys!(i::InstructionObject)::Vector{String} =
-  (v = i.alias_null_keys; v === nothing ? (i.alias_null_keys = String[]) : v)
-_row_path!(i::InstructionObject)::Vector{String} =
-  (v = i.row_path; v === nothing ? (i.row_path = String[]) : v)
-_join_conditions!(i::InstructionObject)::Dict{String,Vector{FilterType}} =
-  (v = i.join_conditions; v === nothing ? (i.join_conditions = Dict{String,Vector{FilterType}}()) : v)
-_join_type_overrides!(i::InstructionObject)::Dict{String,String} =
-  (v = i.join_type_overrides; v === nothing ? (i.join_type_overrides = Dict{String,String}()) : v)
-_cjoin_on_paths!(i::InstructionObject)::Vector{Vector{String}} =
-  (v = i.cjoin_on_paths; v === nothing ? (i.cjoin_on_paths = Vector{String}[]) : v)
-_cjoin_on_written!(i::InstructionObject)::Vector{Tuple{String,String}} =
-  (v = i.cjoin_on_written; v === nothing ? (i.cjoin_on_written = Tuple{String,String}[]) : v)
-_cjoin_on_order!(i::InstructionObject)::Vector{String} =
-  (v = i.cjoin_on_order; v === nothing ? (i.cjoin_on_order = String[]) : v)
-_cjoin_on_rendered!(i::InstructionObject)::Dict{String,Vector{String}} =
-  (v = i.cjoin_on_rendered; v === nothing ? (i.cjoin_on_rendered = Dict{String,Vector{String}}()) : v)
-_agg_sources!(i::InstructionObject)::Vector{AggSource} =
-  (v = i.agg_sources; v === nothing ? (i.agg_sources = AggSource[]) : v)
-_outer_refs!(i::InstructionObject)::Vector{CorrelatedRef} =
-  (v = i.outer_refs; v === nothing ? (i.outer_refs = CorrelatedRef[]) : v)
-
-# Read a lazy container as empty while it is unset.
-_lazy_isempty(x)::Bool = x === nothing || isempty(x)
-_lazy_length(x)::Int = x === nothing ? 0 : length(x)
-_lazy_get(d, key, default) = d === nothing ? default : get(d, key, default)
-
 # Store information to decide the name from table alias in subquery
 mutable struct SQLTbAlias <: SQLTableAlias
   count::Int   # #1593: was `Integer`, an abstract field that boxed every `get_alias` increment
@@ -1006,141 +818,6 @@ struct AliasJoin
   join_type::String                    # normalized; "INNER" by default
 end
 
-mutable struct SQLObjectQuery <: SQLObject
-  # #1615 / #1599 I4: the concrete model type, the only `PormGModel` there is. An abstract slot made
-  # every `q.model.…` read a dynamic dispatch, and `juliac --trim` refused the write path on it (round 3
-  # of #1600, W15). Typed as `ModelType` and no deeper: what a model holds is the model graph's (#1604).
-  model::Models.ModelType
-  connect_key::OptionalString # Override for multi-tenant scenarios
-  values::Vector{Union{SQLTypeText,SQLTypeField}}
-  filter::Vector{FilterType} # filters to be used in the query
-  insert::OrderedCollections.OrderedDict{String,Any} # values to be used to create or insert (ordered so INSERT/UPDATE column lists follow call order — #97)
-  limit::Union{Nothing,Int} # `nothing` = no LIMIT; `0` is LIMIT 0, zero rows (#1049)
-  offset::Int               # `0` = no OFFSET, which is what OFFSET 0 means anyway
-  order::Vector{SQLTypeOrder}
-  group::Vector{String}
-  having::Vector{String}
-  list_joins::Vector{String} # is ther a better way to do this?
-  distinct::Bool # Add distinct field
-  for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
-  # ORDERED for the same reason as `alias_join` below and `insert` above. `build_cte_clause`
-  # emits the WITH clause by ITERATING this container, and the CTE bodies' positional parameters
-  # are collected in that same pass — so under a plain `Dict` the rendered SQL for one query was
-  # decided by how Julia hashed the CTE NAME STRINGS. Renaming a CTE for readability reordered
-  # the WITH clause, and so did upgrading Julia: 1.13.0 changed string hashing and flipped the
-  # pair in `test_alignment_sqlite.jl`'s "Multiple CTEs" testset, which had been asserting
-  # declaration order that a `Dict` never promised. Text and parameters do flip together, so
-  # binding stayed correct — what was lost is that the same query rendered the same SQL twice.
-  ctes::OrderedCollections.OrderedDict{String,CTEDict}
-  # The PATH namespace (#484): `cjoin` / `on()` entries, keyed by a join path on the base model.
-  # Ordered because materialization order decides generated alias numbering (#449).
-  custom_join::OrderedCollections.OrderedDict{String,PathJoin}
-  # The ALIAS namespace (#484): `cjoin_on` entries, keyed by the alias the caller declared.
-  #
-  # ORDERED, and load-bearing (#449). Binding emits the aliases in dependency order and breaks every
-  # tie by iterating this container (`_cjoin_on_emission_order`, #982), so its order decides which of
-  # two independent `cjoin_on` joins is emitted first — and with it the generated-alias numbering.
-  # Under a plain `Dict` that order came from hashing the ALIAS STRINGS, so renaming an alias for
-  # readability changed the statement while reversing the DECLARATION changed nothing. Same reason
-  # `insert` above is ordered (#97).
-  alias_join::OrderedCollections.OrderedDict{String,AliasJoin}
-  parameters::Union{Nothing,AbstractPormGParam}
-  # #564 — the canonical kind of each projection, which the build used to write back here beside
-  # `parameters`. #1624: the build writes neither any more — both are on its instruction
-  # (`instruction.parameters`, `instruction.projection_kinds`), returned by `_render_select` — so on a
-  # handler these two slots stay as constructed (`nothing`, an empty map). They are kept because the
-  # copy-rule tests assert exactly that (#43), and `Base.deepcopy` still does not carry them.
-  projection_kinds::Dict{Symbol,CanonicalType}
-
-  SQLObjectQuery(; model::Models.ModelType, connect_key=nothing, values=[], filter=[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=nothing, offset=0,
-    order=[], group=[], having=[], list_joins=[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
-    custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing,
-    projection_kinds=Dict{Symbol,CanonicalType}()) =
-    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, distinct, for_update, ctes, custom_join, alias_join, parameters, projection_kinds)
-end
-
-function Base.deepcopy(obj::SQLObjectHandler)
-  return ObjectHandler(object=deepcopy(obj.object))
-end
-
-# #43: CTE state must be copied deeply enough that a copy's execution can't mutate
-# the original. A shallow `copy(ctes)` aliases the inner CTEDict values, so
-# materializing the per-build "model" on one copy clobbered the other. Rebuild each CTEDict
-# with a fresh dict: deep-copy the sub-query handler (recursion covers nested CTEs) and carry
-# the scalar join config by reference (Pair/String are immutable). Since #1624 a build derives
-# nothing into this dict (`CTEState`, on the instruction), so there is no transient key to drop.
-function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::OrderedCollections.OrderedDict{String,CTEDict}
-  out = OrderedCollections.OrderedDict{String,CTEDict}()
-  for (name, cte_dict) in ctes
-    fresh = CTEDict()
-    for (k, v) in cte_dict
-      fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
-    end
-    out[name] = fresh
-  end
-  return out
-end
-
-# #112: a copy must share no MUTABLE state with its original.
-#
-# Before #484 the entries were `Dict{String,Any}` and `on()` rewrote them in place, so a shallow
-# `copy` let a copy's `on()` rewrite the original's join definition. #484 made the entries immutable
-# structs and every writer replace-on-update, which closes that route — but an immutable struct is
-# only as immutable as what it points at, and `filters` is a `Vector`. Measured on this branch before
-# the vector copy went in: `push!(q2.object.custom_join["owner"].filters, …)` after `q2 = q.copy()`
-# added a predicate to the ORIGINAL's rendered ON clause. Grepped at the time of writing, no `src/`
-# reader of a stored filters vector mutates it — but that is a snapshot, not an invariant, and
-# keeping the guarantee a PROPERTY of the copy rather than a convention every future writer has to
-# remember is the whole point of #112. `test_order_by_joins.jl` already reaches for that idiom
-# white-box.
-#
-# What stays shared, deliberately: the vector's `FilterType` ELEMENTS (every writer replaces the
-# whole vector; none edits an element), and `PathJoin.field` / `AliasJoin.target`, which hold a
-# ModelType → Module that `deepcopy` cannot traverse — the very reason the original copy was shallow.
-#
-# Both containers are ORDERED (#449) and rebuilt by insertion, so declaration order survives a
-# `.copy()`; an unordered accumulator here would silently re-hash it out on every copy.
-function _copy_path_joins(m::OrderedCollections.OrderedDict{String,PathJoin})::OrderedCollections.OrderedDict{String,PathJoin}
-  out = OrderedCollections.OrderedDict{String,PathJoin}()
-  for (path, config) in m
-    out[path] = PathJoin(copy(config.filters), config.field, config.join_type)
-  end
-  return out
-end
-function _copy_alias_joins(m::OrderedCollections.OrderedDict{String,AliasJoin})::OrderedCollections.OrderedDict{String,AliasJoin}
-  out = OrderedCollections.OrderedDict{String,AliasJoin}()
-  for (alias, config) in m
-    out[alias] = AliasJoin(config.target, copy(config.filters), config.join_type)
-  end
-  return out
-end
-
-function Base.deepcopy(obj::SQLObjectQuery)
-  try
-    return SQLObjectQuery(
-      model=obj.model,  # PormGModel doesn't need deep copy (immutable reference)
-      connect_key=obj.connect_key,
-      values=deepcopy(obj.values),
-      filter=deepcopy(obj.filter),
-      insert=deepcopy(obj.insert),
-      limit=obj.limit,
-      offset=obj.offset,
-      order=deepcopy(obj.order),
-      group=deepcopy(obj.group),
-      having=deepcopy(obj.having),
-      list_joins=deepcopy(obj.list_joins),
-      distinct=obj.distinct,
-      for_update=obj.for_update,  # #26: immutable/set-once lock clause — share by reference (like distinct)
-      ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (a deep copy of each sub-query)
-      custom_join=_copy_path_joins(obj.custom_join),  # #112/#484: fresh map, fresh filters vectors
-      alias_join=_copy_alias_joins(obj.alias_join)    # (`field` / `target` shared by ref — see above)
-    )
-  catch e
-    @pormg_debug false
-    @error "Error in deepcopy for SQLObjectQuery" exception = (e, catch_backtrace())
-    rethrow(e)
-  end
-end
 function Base.deepcopy(filter::Vector{FilterType})
   return [deepcopy(f) for f in filter]
 end
@@ -1577,6 +1254,468 @@ end
 OuterRef(::OuterRefObject) = throw(QueryBuildError(
   "OuterRef(OuterRef(…)) is not supported: an OuterRef binds the immediately enclosing query only, so a " *
   "nested subquery correlates to the subquery around it (#938). Correlate each level on the one around it."))
+
+#
+# The closed node sets of the query state (#1698 phase 1, #1599 I4)
+#
+# The slots the query state keeps its nodes in used to be typed by the abstract `SQLType*` families
+# (`Kernel.jl`), so every element read out of one was abstract: one dynamic dispatch per call under the
+# JIT, and in a `juliac --trim` image a call with no compiled target, which raised a `MethodError` at run
+# time (round 4 of #1600: `==(::Any, "*")` in `_reject_duplicate_projection_names`). Each slot now names
+# the concrete node structs it can hold, and its readers take an element through one walk: a closed set
+# of `isa`s, so each branch is a static call. The shape is `with_pool`'s (#1622), #1604's `AnyField` and
+# #1605's `ReadParser`.
+#
+# The sets are what the writers store (the `values()`/`filter()` builders in `object_manager.jl`, the CTE
+# view in `ctes.jl`, `get_parameter`), not narrowed: `FilterNode` is every concrete member `FilterType`
+# admits. A node struct a builder or a renderer adds later joins its union AND its walk;
+# `test/unit/test_trim_shape_pins.jl` reads both and fails on a concrete subtype that is in neither.
+#
+# Phase 2 (#1698), still abstract: `SQLObjectQuery.order` (`SQLTypeOrder`) and the recursive fields inside
+# the nodes (`QObject.filters`, `QorObject.or`, `FObject.column`, `FExpression`'s operands,
+# `OperObject.column`/`values`, `SQLField.field`, `SQLOrder.field`). A field of a recursive node cannot
+# name a struct defined after it, so those keep `FilterType`/`FieldPart` until their own walk.
+
+# `SQLObjectQuery.values`: a column or expression (`SQLField`) or a `Value(x)` literal (`SQLText`).
+# `InstructionObject.select` holds the rendered projections, always `SQLField`.
+const ProjectionNode = Union{SQLText,SQLField}
+# `SQLObjectQuery.filter`: a predicate, a `Q`/`Qor` group, a bare boolean `F(...)` (#863), an `OuterRef`
+# (rendered against the enclosing query) or an `Exists`.
+const FilterNode = Union{OperObject,QObject,QorObject,FExpression,OuterRefObject,ExistsObject}
+
+# The walks take a `Vararg` tail rather than a closure, as `with_pool` does: a caller passes a top-level
+# function and its arguments, so nothing is captured and nothing can be boxed (#1693). `Vararg{Any,N}`,
+# not a bare `args...`, so the tail is specialized and the splat into `f` is static.
+"""
+    with_projection_node(f, node, args...) -> f(node, args...)
+
+`f(node, args...)` with `node` at its concrete type, for an element of `SQLObjectQuery.values`
+(`ProjectionNode`). Any other value raises a `MethodError` naming `f` and the value (`_unlisted_node`).
+"""
+function with_projection_node(f::F, @nospecialize(node), args::Vararg{Any,N}) where {F,N}
+  node isa SQLField && return f(node, args...)
+  node isa SQLText && return f(node, args...)
+  return _unlisted_node(f, node, args...)
+end
+
+"""
+    with_filter_node(f, node, args...) -> f(node, args...)
+
+`f(node, args...)` with `node` at its concrete type, for an element of `SQLObjectQuery.filter`
+(`FilterNode`). Its six members are past inference's union-splitting limit, so a call on an element
+that does not go through here dispatches at run time. Any other value raises a `MethodError` naming
+`f` and the value (`_unlisted_node`).
+"""
+function with_filter_node(f::F, @nospecialize(node), args::Vararg{Any,N}) where {F,N}
+  node isa OperObject && return f(node, args...)
+  node isa QObject && return f(node, args...)
+  node isa QorObject && return f(node, args...)
+  node isa FExpression && return f(node, args...)
+  node isa OuterRefObject && return f(node, args...)
+  node isa ExistsObject && return f(node, args...)
+  return _unlisted_node(f, node, args...)
+end
+
+"""
+    with_collector(f, params, args...) -> f(params, args...)
+
+`f(params, args...)` with the parameter collector at its concrete type (`ParamCollector`), for the
+`parameters` slot of an instruction or a query. The caller takes the `nothing` arm first. Any other
+value raises a `MethodError` naming `f` and the value (`_unlisted_node`).
+"""
+function with_collector(f::F, @nospecialize(params), args::Vararg{Any,N}) where {F,N}
+  params isa SQLiteParameterizedQuery && return f(params, args...)
+  params isa PgParameterizedQuery && return f(params, args...)
+  params isa MySQLParameterizedQuery && return f(params, args...)
+  return _unlisted_node(f, params, args...)
+end
+
+# A value outside a closed set. The slots are typed by their unions, so nothing outside one can be stored
+# there; a caller that hands a walk something else (a value read from elsewhere, `nothing` where the
+# caller skipped its `nothing` arm) gets a `MethodError` naming `f` and the value, raised without a
+# dynamic call. It is the error class a call with no method raised before, not its text: when `f` has an
+# untyped method, Julia lists it as a candidate, so read the message as "`f` was not called on this".
+@noinline _unlisted_node(f, @nospecialize(node), args::Vararg{Any,N}) where {N} =
+  throw(MethodError(f, (node, args...)))
+
+mutable struct SQLObjectQuery <: SQLObject
+  # #1615 / #1599 I4: the concrete model type, the only `PormGModel` there is. An abstract slot made
+  # every `q.model.…` read a dynamic dispatch, and `juliac --trim` refused the write path on it (round 3
+  # of #1600, W15). Typed as `ModelType` and no deeper: what a model holds is the model graph's (#1604).
+  model::Models.ModelType
+  connect_key::OptionalString # Override for multi-tenant scenarios
+  # #1698: the closed node sets (`ProjectionNode`, `FilterNode` above), read through their walks.
+  values::Vector{ProjectionNode}
+  filter::Vector{FilterNode} # filters to be used in the query
+  insert::OrderedCollections.OrderedDict{String,Any} # values to be used to create or insert (ordered so INSERT/UPDATE column lists follow call order — #97)
+  limit::Union{Nothing,Int} # `nothing` = no LIMIT; `0` is LIMIT 0, zero rows (#1049)
+  offset::Int               # `0` = no OFFSET, which is what OFFSET 0 means anyway
+  order::Vector{SQLTypeOrder}
+  group::Vector{String}
+  having::Vector{String}
+  list_joins::Vector{String} # is ther a better way to do this?
+  distinct::Bool # Add distinct field
+  for_update::Union{Nothing,ForUpdateClause} # #26: row-level lock clause (nothing = no lock)
+  # ORDERED for the same reason as `alias_join` below and `insert` above. `build_cte_clause`
+  # emits the WITH clause by ITERATING this container, and the CTE bodies' positional parameters
+  # are collected in that same pass — so under a plain `Dict` the rendered SQL for one query was
+  # decided by how Julia hashed the CTE NAME STRINGS. Renaming a CTE for readability reordered
+  # the WITH clause, and so did upgrading Julia: 1.13.0 changed string hashing and flipped the
+  # pair in `test_alignment_sqlite.jl`'s "Multiple CTEs" testset, which had been asserting
+  # declaration order that a `Dict` never promised. Text and parameters do flip together, so
+  # binding stayed correct — what was lost is that the same query rendered the same SQL twice.
+  ctes::OrderedCollections.OrderedDict{String,CTEDict}
+  # The PATH namespace (#484): `cjoin` / `on()` entries, keyed by a join path on the base model.
+  # Ordered because materialization order decides generated alias numbering (#449).
+  custom_join::OrderedCollections.OrderedDict{String,PathJoin}
+  # The ALIAS namespace (#484): `cjoin_on` entries, keyed by the alias the caller declared.
+  #
+  # ORDERED, and load-bearing (#449). Binding emits the aliases in dependency order and breaks every
+  # tie by iterating this container (`_cjoin_on_emission_order`, #982), so its order decides which of
+  # two independent `cjoin_on` joins is emitted first — and with it the generated-alias numbering.
+  # Under a plain `Dict` that order came from hashing the ALIAS STRINGS, so renaming an alias for
+  # readability changed the statement while reversing the DECLARATION changed nothing. Same reason
+  # `insert` above is ordered (#97).
+  alias_join::OrderedCollections.OrderedDict{String,AliasJoin}
+  parameters::Union{Nothing,ParamCollector}   # #1698: the closed collector set
+  # #564 — the canonical kind of each projection, which the build used to write back here beside
+  # `parameters`. #1624: the build writes neither any more — both are on its instruction
+  # (`instruction.parameters`, `instruction.projection_kinds`), returned by `_render_select` — so on a
+  # handler these two slots stay as constructed (`nothing`, an empty map). They are kept because the
+  # copy-rule tests assert exactly that (#43), and `Base.deepcopy` still does not carry them.
+  projection_kinds::Dict{Symbol,CanonicalType}
+
+  SQLObjectQuery(; model::Models.ModelType, connect_key=nothing, values=ProjectionNode[], filter=FilterNode[], insert=OrderedCollections.OrderedDict{String,Any}(), limit=nothing, offset=0,
+    order=SQLTypeOrder[], group=String[], having=String[], list_joins=String[], distinct=false, for_update=nothing, ctes=OrderedCollections.OrderedDict{String,CTEDict}(),
+    custom_join=OrderedCollections.OrderedDict{String,PathJoin}(), alias_join=OrderedCollections.OrderedDict{String,AliasJoin}(), parameters=nothing,
+    projection_kinds=Dict{Symbol,CanonicalType}()) =
+    new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, distinct, for_update, ctes, custom_join, alias_join, parameters, projection_kinds)
+end
+
+function Base.deepcopy(obj::SQLObjectHandler)
+  return ObjectHandler(object=deepcopy(obj.object))
+end
+
+# #43: CTE state must be copied deeply enough that a copy's execution can't mutate
+# the original. A shallow `copy(ctes)` aliases the inner CTEDict values, so
+# materializing the per-build "model" on one copy clobbered the other. Rebuild each CTEDict
+# with a fresh dict: deep-copy the sub-query handler (recursion covers nested CTEs) and carry
+# the scalar join config by reference (Pair/String are immutable). Since #1624 a build derives
+# nothing into this dict (`CTEState`, on the instruction), so there is no transient key to drop.
+function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::OrderedCollections.OrderedDict{String,CTEDict}
+  out = OrderedCollections.OrderedDict{String,CTEDict}()
+  for (name, cte_dict) in ctes
+    fresh = CTEDict()
+    for (k, v) in cte_dict
+      fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
+    end
+    out[name] = fresh
+  end
+  return out
+end
+
+# #112: a copy must share no MUTABLE state with its original.
+#
+# Before #484 the entries were `Dict{String,Any}` and `on()` rewrote them in place, so a shallow
+# `copy` let a copy's `on()` rewrite the original's join definition. #484 made the entries immutable
+# structs and every writer replace-on-update, which closes that route — but an immutable struct is
+# only as immutable as what it points at, and `filters` is a `Vector`. Measured on this branch before
+# the vector copy went in: `push!(q2.object.custom_join["owner"].filters, …)` after `q2 = q.copy()`
+# added a predicate to the ORIGINAL's rendered ON clause. Grepped at the time of writing, no `src/`
+# reader of a stored filters vector mutates it — but that is a snapshot, not an invariant, and
+# keeping the guarantee a PROPERTY of the copy rather than a convention every future writer has to
+# remember is the whole point of #112. `test_order_by_joins.jl` already reaches for that idiom
+# white-box.
+#
+# What stays shared, deliberately: the vector's `FilterType` ELEMENTS (every writer replaces the
+# whole vector; none edits an element), and `PathJoin.field` / `AliasJoin.target`, which hold a
+# ModelType → Module that `deepcopy` cannot traverse — the very reason the original copy was shallow.
+#
+# Both containers are ORDERED (#449) and rebuilt by insertion, so declaration order survives a
+# `.copy()`; an unordered accumulator here would silently re-hash it out on every copy.
+function _copy_path_joins(m::OrderedCollections.OrderedDict{String,PathJoin})::OrderedCollections.OrderedDict{String,PathJoin}
+  out = OrderedCollections.OrderedDict{String,PathJoin}()
+  for (path, config) in m
+    out[path] = PathJoin(copy(config.filters), config.field, config.join_type)
+  end
+  return out
+end
+function _copy_alias_joins(m::OrderedCollections.OrderedDict{String,AliasJoin})::OrderedCollections.OrderedDict{String,AliasJoin}
+  out = OrderedCollections.OrderedDict{String,AliasJoin}()
+  for (alias, config) in m
+    out[alias] = AliasJoin(config.target, copy(config.filters), config.join_type)
+  end
+  return out
+end
+
+# #1698: the query's own slot, element by element through its walk. The recursive `FilterType` fields
+# keep `Base.deepcopy(::Vector{FilterType})` (#1684 is the typed clone).
+Base.deepcopy(filter::Vector{FilterNode}) = FilterNode[with_filter_node(deepcopy, f) for f in filter]
+function Base.deepcopy(obj::SQLObjectQuery)
+  try
+    return SQLObjectQuery(
+      model=obj.model,  # PormGModel doesn't need deep copy (immutable reference)
+      connect_key=obj.connect_key,
+      values=deepcopy(obj.values),
+      filter=deepcopy(obj.filter),
+      insert=deepcopy(obj.insert),
+      limit=obj.limit,
+      offset=obj.offset,
+      order=deepcopy(obj.order),
+      group=deepcopy(obj.group),
+      having=deepcopy(obj.having),
+      list_joins=deepcopy(obj.list_joins),
+      distinct=obj.distinct,
+      for_update=obj.for_update,  # #26: immutable/set-once lock clause — share by reference (like distinct)
+      ctes=_copy_ctes(obj.ctes),  # #43: independent CTE state (a deep copy of each sub-query)
+      custom_join=_copy_path_joins(obj.custom_join),  # #112/#484: fresh map, fresh filters vectors
+      alias_join=_copy_alias_joins(obj.alias_join)    # (`field` / `target` shared by ref — see above)
+    )
+  catch e
+    @pormg_debug false
+    @error "Error in deepcopy for SQLObjectQuery" exception = (e, catch_backtrace())
+    rethrow(e)
+  end
+end
+
+#
+# SQLInstruction Objects (instructions to build a query)
+#
+@kwdef mutable struct InstructionObject <: SQLInstruction
+  text::String # text to be used in the query
+  table_alias::SQLTableAlias
+  alias::String
+  # #1698: the query this instruction builds, always an `SQLObjectQuery`. It was the abstract `SQLObject`
+  # only because that struct was defined after this one, so every `instruc.object.…` read dispatched at
+  # run time in front of the closed slots behind it.
+  object::SQLObjectQuery
+  select::Vector{SQLField} = SQLField[] # one slot per projection; `get_select_query` sizes it (#1335). #1698: `SQLField`, the only `SQLTypeField`
+  # #1593: the clause vectors are typed at construction (`String[]`, not an `Any[]` converted on
+  # assignment) and stay eager — every build reads them, from the render and the dialects.
+  join::Vector{String} = String[]  # values to be used in join query
+  _where::Vector{String} = String[]  # values to be used in where query
+  aggregate::Bool = false
+  group::Vector{String} = String[]  # values to be used in group query
+  # #789: every non-aggregate `PARTITION BY` / `ORDER BY` term a window's OVER clause rendered, with
+  # the values it bound, in render order. `_group_window_terms!` adds them to `group` once the
+  # statement is known to aggregate; rendering them a second time there would bind them twice.
+  # `nothing` until the first window (#1593); write through `_window_group_terms!`.
+  window_group_terms::Union{Nothing,Vector{Tuple{String,Vector{Any}}}} = nothing
+  # #1115: the `order_by` terms `get_order_query` rendered but left out of `group` because they hold
+  # an aggregate or a window, as declared. `_check_mixed_grouping` walks exactly these — a term that
+  # resolved to a projection alias is not here: its expression is the projection's, already checked
+  # there, even where a NULL sort key repeats it (#1130). `nothing` until the first such term (#1593).
+  ungrouped_order_terms::Union{Nothing,Vector{SQLField}} = nothing
+  # #1130: the values each projection bound, by output name, in the order its markers print. An ORDER
+  # BY term that repeats a projection's SQL in its NULL sort key (`_projection_null_key`) binds them
+  # again from here, so the projection is never rendered a second time. `nothing` until a projection
+  # binds a value (#1593).
+  projection_params::Union{Nothing,Dict{String,Vector{Any}}} = nothing
+  # #1130: the ORDER BY terms whose NULL sort key kept the projection's alias, which no FROM column
+  # named when ORDER BY rendered; `_refuse_late_shadowed_null_key` rechecks them once every join exists.
+  # `nothing` until the first one (#1593).
+  alias_null_keys::Union{Nothing,Vector{String}} = nothing
+  # #1130: this build is the predicate of an UPDATE or DELETE (`build(…; mutation = true)`).
+  mutation::Bool = false
+  # #1431: the caller checks the RIGHT/FULL capability rows itself, against the statement it prints
+  # (`update()`), so `build_row_join_sql_text` leaves them to it (`build(…; defer_outer_join_check = true)`).
+  defer_outer_join_check::Bool = false
+  having::Vector{String} = String[] # values to be used in having query
+  order::Vector{String} = String[] # values to be used in order query
+  # df_join::Union{Missing, DataFrames.DataFrame} = missing # dataframe to be used in join query
+  row_join::Vector{JoinRow} = JoinRow[] # the materialized joins, one typed row each (#487)
+  # The path of each join `_insert_join` tracked (model__model__ etc). `nothing` until the first (#1593).
+  row_path::Union{Nothing,Vector{String}} = nothing
+  # #169: the alias each relation path's join ended up under, keyed by the CANONICAL path — what a
+  # `select_for_update(of = …)` target resolves through. `row_path` cannot answer that: it is not
+  # aligned with `row_join` and records nothing on a dedup hit. Written by `_finish_hop!` and the M2M
+  # branch only when this query takes a row lock (`_records_lock_targets`) — an `of` lock resolves
+  # through it, a lock without `of` names the outer join it refuses by it (#1106) — so the other
+  # builds never allocate it (#41).
+  join_alias_by_path::Union{Nothing,Dict{String,String}} = nothing
+  # #977: each `on()` / `cjoin(filters = …)` path's conditions, BOUND — every left-side column lowered
+  # onto the path, every check run — by `_bind_join_conditions!` before anything renders, and its
+  # explicit `join_type`. Both keyed by the CANONICAL path (`_canonical_join_path`: the FK short form
+  # resolved), so `on("status", …)` and a traversal spelled `status_id__…` find each other. The query
+  # object keeps them as written; a hop reads them from here (`_finish_hop!`).
+  # Both `nothing` until the query declares an `on()` / `cjoin(filters = …)` path (#1593).
+  join_conditions::Union{Nothing,Dict{String,Vector{FilterType}}} = nothing
+  join_type_overrides::Union{Nothing,Dict{String,String}} = nothing
+  # #982: the `cjoin_on` half of the same binding (`_bind_cjoin_on_conditions!`). `cjoin_on_paths` is
+  # every relation path an alias's ON clause names, as the segments `build()` materializes BEFORE the
+  # alias rows, so rendering that ON clause adds no join; `cjoin_on_order` is the order the alias rows
+  # are emitted in — every alias after the aliases its ON clause names, declaration order otherwise.
+  # The three are `nothing` until the query declares a `cjoin_on` alias (#1593).
+  cjoin_on_paths::Union{Nothing,Vector{Vector{String}}} = nothing
+  # #1002: for each `cjoin_on_paths` entry, the alias whose ON clause names it and the column as the
+  # caller wrote it — what a cardinality refusal quotes.
+  cjoin_on_written::Union{Nothing,Vector{Tuple{String,String}}} = nothing
+  cjoin_on_order::Union{Nothing,Vector{String}} = nothing
+  # #1002: every hop of this build that can repeat or drop a base row — a reverse or ManyToMany hop, or
+  # a forward one to a non-unique column — keyed by the alias of the row that survived dedup, with what
+  # first reached it and whether a declaring introducer reached it too (`_record_join_reach!`).
+  # `_check_join_cardinality` reads it. `nothing` until the first such hop: most builds have none, and a
+  # build is allocation-sensitive (#41).
+  join_reaches::Union{Nothing,Dict{String,JoinReach}} = nothing
+  # #1367: the aliases whose join type `on(path, join_type = …)` STATED (`join_type_overrides`), under the
+  # dedup survivor's alias (`_finish_hop!`). `_promote_outer_joins!` derives a join type and never
+  # replaces a stated one. `nothing` until the first such hop, for #41's reason.
+  stated_join_types::Union{Nothing,Set{String}} = nothing
+  # #174: each alias's ON conditions as `build_row_join_sql_text` rendered them — markers bound once,
+  # into `:join`. The correlated UPDATE … FROM carries them into its WHERE from here; rendering them a
+  # second time would bind every value twice. `nothing` until the first such ON clause (#1593).
+  cjoin_on_rendered::Union{Nothing,Dict{String,Vector{String}}} = nothing
+  # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
+  # The three memos (#474) are `nothing` until their first write (#1593), through `memos.jl` only.
+  tab_field_cache::Union{Nothing,Dict{MemoKey,PormGField}} = nothing # cache to be used in join query (#474: keyed by MemoKey)
+  # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
+  # JSON-path gate renders an extraction; tested by the filter-render branch to bind the RHS as
+  # plain text (not through the JSON formatter) and to reject containment operators on a nested key
+  # path.
+  #
+  # #478 — this was a `Dict` mapping to `(JSON base field, validated key segments)`, and both halves
+  # of that value were dead. The base field is separately written to `tab_field_cache` on the very
+  # next line of `_render_json_lookup`, the segments are consumed by `Dialect._json_extract_expr`
+  # BEFORE the write, and both readers were `haskey` membership tests — `_render_json_lookup_comparison`
+  # re-derives everything it needs from the filter expression it is handed. It was a `Set` wearing a
+  # `Dict`'s allocation, so it is spelled as one now. Reach it through `memo_json_lookup` (`memos.jl`).
+  json_lookup_paths::Union{Nothing,Set{MemoKey}} = nothing
+  # #564 — the canonical kind each PROJECTION evaluates to, keyed by the RESULT-ROW column name
+  # (`_projection_output_name`, the same expression `_query_select` renders the `AS` alias from, so
+  # this key and the one the driver hands back agree by construction rather than by coincidence).
+  #
+  # DELIBERATELY NOT A FOURTH MEMO, and not reached through `memos.jl`. The three memos there are
+  # RESOLUTION caches keyed by `MemoKey` — a namespace plus a name — consulted DURING the build to
+  # avoid re-resolving an expression. This is a description of the RESULT SET, consumed AFTER the
+  # build by a reader whose only handle on a column is the name the driver gave it: `_list_raw` has
+  # no namespace to key with, and routing this through `memo_key` would force it to invent one.
+  projection_kinds::Dict{Symbol,CanonicalType} = Dict{Symbol,CanonicalType}()
+  # #888 — the read kind of each `Subquery(...)` this build RENDERED, keyed by the node itself. The
+  # inner build records its one projection's kind (`projection_kinds` above, written back onto the
+  # rendered copy of the handler); `_get_select_query(::SubqueryObject)` files it here, and
+  # `_read_kind` (and `_subquery_read_record`) read it AFTER the render — the order every other kind
+  # lookup keeps (#564). Not a memo, for the reason `projection_kinds` gives: it describes a result,
+  # it has no `MemoKey` namespace, and nothing reads it to skip a render. Keyed by IDENTITY because
+  # the kind is a function of the node's own query, so a node projected twice answers the same, and
+  # the caller's node is never written to (#508). `nothing` until the first typed subquery: most
+  # builds render none, and a build is allocation-sensitive (#41).
+  subquery_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
+  # #929 — and the FORMATTER a value compared with that subquery must satisfy: its one projected
+  # column's, as the inner build resolved it (`_expression_formatter` over the inner instruction, so a
+  # joined path and `Max(…)` over a column answer too). Kept beside the kind, not derived from it:
+  # `field_canonical_kind` names only the kinds the read path owns, so a uuid column has a formatter
+  # but no kind. Same keying and laziness as `subquery_kinds`.
+  subquery_formatters::Union{Nothing,IdDict{SubqueryObject,Function}} = nothing
+  # #1124 — and the textless CLASSIFICATION of that column (`_concat_textless_operand` over the inner
+  # instruction, in the same `built` window as the formatter). Kept beside the two above because
+  # neither can stand in for it: a float has no read kind, and the number formatter is the
+  # integer's too, so `Concat(…, Subquery(<float>))` built while the float itself was refused. The
+  # `(kind, what)` pair the classifier answers for the inner expression, read by its `SubqueryObject`
+  # arm. Same keying and laziness as `subquery_kinds`.
+  subquery_textless::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
+  # #1111 — and what the same expression answers once DIVIDED (`_whole_numeric_operand`: a whole
+  # number PostgreSQL types `numeric`), recorded in the same window, so `Subquery(…) / 2` is refused
+  # where `Floor(x) / 2` is. Separate from the textless record because the expression alone has one
+  # text; only the division splits it.
+  subquery_whole_numeric::Union{Nothing,IdDict{SubqueryObject,Tuple{Symbol,String}}} = nothing
+  # #1482 — and whether the expression carries an uncast JSON key's value (`_json_number_side`), so
+  # arithmetic over `Coalesce(Subquery(…), 0)` is refused as over the key (#1483). Same keying.
+  subquery_json_key::Union{Nothing,IdDict{SubqueryObject,Tuple{String,String}}} = nothing
+  # #1153 — and its kind under EVERY policy (`_expression_kind` over the inner instruction, in the
+  # same window): `subquery_kinds` is the READ kind, which names no integer or float, so
+  # `Floor(Subquery(<integer>))` was `numeric` on PostgreSQL. Same keying and laziness as above.
+  subquery_all_kinds::Union{Nothing,IdDict{SubqueryObject,CanonicalType}} = nothing
+  # #1110 — the subqueries whose read kind (`subquery_kinds`) is a declared decimal the engine left
+  # unapplied (`_reads_unapplied_declaration`): the projection applies its width on read, a value
+  # composed over it is the computed number it means. Same keying and laziness as above.
+  subquery_unapplied::Union{Nothing,IdDict{SubqueryObject,Bool}} = nothing
+  # #1624 — the state each CTE body's build derived (`CTEState`), by CTE name, handed in by the caller
+  # that rendered the WITH clause (`build_cte_clause` runs before this instruction exists). `nothing`
+  # when this statement renders no WITH: `update()`/`bulk_update` pass none, which is what the #433
+  # refusal reads ("the statement being built emits no WITH clause").
+  cte_state::Union{Nothing,Dict{String,CTEState}} = nothing
+  connection::ConnType = nothing
+  # array_defs::SQLTypeArrays = SQLArrays()
+  cache::Union{Nothing,Dict{MemoKey,SQLField}} = nothing   # #1698: `select`'s memo, the same node set
+  django::OptionalString = nothing
+  parameters::Union{Nothing,ParamCollector} = nothing # parameters to be used in the query (#1698: the closed collector set)
+  outer::Union{Nothing,SQLInstruction} = nothing # parent query instruction for correlated subqueries
+  # #1557: the name of the CTE whose BODY this instruction builds, or "" when it builds no CTE body.
+  # `build_cte_clause` builds each body as a query of its own, with `outer = nothing` even when the
+  # CTE belongs to a correlated subquery, so an `OuterRef` there has nothing to resolve against. The
+  # one refusal point (`_get_filter_query(::OuterRefObject)`) reads this to say so, instead of telling
+  # a user already inside an `Exists` to build a correlated subquery.
+  cte_body::String = ""
+  # #1557: whether the query that DECLARES that CTE is itself correlated (has an enclosing query), so
+  # the refusal only sends the user there when an `OuterRef` would resolve in it.
+  cte_body_correlated::Bool = false
+  # #74 fan-out guard: record each at-risk aggregate's source alias so build() can refuse
+  # silently-inflated COUNT/SUM/AVG. To-many joins carry `ModelJoin.to_many` (stamped onto the dedup
+  # survivor by `_flag_to_many!`) or `AnchorlessJoin.to_many` (#174, `_cjoin_on_to_many`) and the many-side alias set is derived from the *deduped* row_join at check time
+  # (deriving avoids over-counting when _cache_join builds the same join twice). See _check_aggregate_fanout.
+  # `nothing` until the first aggregate (#1593).
+  agg_sources::Union{Nothing,Vector{AggSource}} = nothing
+  # #194 grouped-correlation guard — same evidence-plumbing shape as `agg_sources` above, and for
+  # the same reason: what the guard needs cannot be read back off the rendered state.
+  #
+  # The render state the #194 recorder reads — see `RenderScope`. Written ONLY through `with_scope`,
+  # which restores the previous scope in a `finally`; `test/unit/test_render_scope.jl` scans for any
+  # other write.
+  scope::RenderScope = RenderScope()
+  # One entry per OuterRef actually RENDERED inside a correlated subquery of this query, whatever
+  # clause it sits in — the guard, not the recorder, decides which ones matter (#932).
+  # Written at resolution time rather than collected by walking the inner query's AST, because the
+  # two have opposite failure modes: a walker must enumerate every node type an OuterRef can hide in
+  # and every miss is a silent wrong number, while a recorder's invariant — "a ref that was not
+  # recorded was not rendered, and a ref that was not rendered cannot affect the answer" — holds by
+  # construction. A walk is also actively WRONG here: `_build_exists_query` discards the inner
+  # `values()`, so `Exists(q.values("t" => Lower(OuterRef("surname"))))` never renders that ref, and
+  # a collector reading `.values` would refuse a correct query.
+  #
+  # `expr` is the resolved outer SQL (`"Tb"."driverid"`), directly comparable to the group set —
+  # which is why the guard needs no parallel semantic bookkeeping on the group side. `phase` and
+  # `group_key` are the scope at the moment of rendering — the two facts a walker could not know.
+  # `nothing` until the first correlated reference (#1593).
+  outer_refs::Union{Nothing,Vector{CorrelatedRef}} = nothing
+end
+
+# #1593: the containers above that only a join condition, a `cjoin_on`, a window, an aggregate, a
+# correlated subquery or a JSON lookup fills are `nothing` until their first write, as the six lazy
+# fields before them (`join_reaches`, …): a plain read fills none of them, and a build is
+# allocation-sensitive (#41). Each is written through its accessor below, which allocates it on first
+# use; a reader takes the `nothing` arm (`_lazy_isempty`, `_lazy_length`, `_lazy_get`,
+# `something(x, ())`). The three memos have theirs in `memos.jl`, their only reader (#474).
+_window_group_terms!(i::InstructionObject)::Vector{Tuple{String,Vector{Any}}} =
+  (v = i.window_group_terms; v === nothing ? (i.window_group_terms = Tuple{String,Vector{Any}}[]) : v)
+_ungrouped_order_terms!(i::InstructionObject)::Vector{SQLField} =
+  (v = i.ungrouped_order_terms; v === nothing ? (i.ungrouped_order_terms = SQLField[]) : v)
+_projection_params!(i::InstructionObject)::Dict{String,Vector{Any}} =
+  (v = i.projection_params; v === nothing ? (i.projection_params = Dict{String,Vector{Any}}()) : v)
+_alias_null_keys!(i::InstructionObject)::Vector{String} =
+  (v = i.alias_null_keys; v === nothing ? (i.alias_null_keys = String[]) : v)
+_row_path!(i::InstructionObject)::Vector{String} =
+  (v = i.row_path; v === nothing ? (i.row_path = String[]) : v)
+_join_conditions!(i::InstructionObject)::Dict{String,Vector{FilterType}} =
+  (v = i.join_conditions; v === nothing ? (i.join_conditions = Dict{String,Vector{FilterType}}()) : v)
+_join_type_overrides!(i::InstructionObject)::Dict{String,String} =
+  (v = i.join_type_overrides; v === nothing ? (i.join_type_overrides = Dict{String,String}()) : v)
+_cjoin_on_paths!(i::InstructionObject)::Vector{Vector{String}} =
+  (v = i.cjoin_on_paths; v === nothing ? (i.cjoin_on_paths = Vector{String}[]) : v)
+_cjoin_on_written!(i::InstructionObject)::Vector{Tuple{String,String}} =
+  (v = i.cjoin_on_written; v === nothing ? (i.cjoin_on_written = Tuple{String,String}[]) : v)
+_cjoin_on_order!(i::InstructionObject)::Vector{String} =
+  (v = i.cjoin_on_order; v === nothing ? (i.cjoin_on_order = String[]) : v)
+_cjoin_on_rendered!(i::InstructionObject)::Dict{String,Vector{String}} =
+  (v = i.cjoin_on_rendered; v === nothing ? (i.cjoin_on_rendered = Dict{String,Vector{String}}()) : v)
+_agg_sources!(i::InstructionObject)::Vector{AggSource} =
+  (v = i.agg_sources; v === nothing ? (i.agg_sources = AggSource[]) : v)
+_outer_refs!(i::InstructionObject)::Vector{CorrelatedRef} =
+  (v = i.outer_refs; v === nothing ? (i.outer_refs = CorrelatedRef[]) : v)
+
+# Read a lazy container as empty while it is unset.
+_lazy_isempty(x)::Bool = x === nothing || isempty(x)
+_lazy_length(x)::Int = x === nothing ? 0 : length(x)
+_lazy_get(d, key, default) = d === nothing ? default : get(d, key, default)
 
 # #444 — a CTE column reference. `SQLTypeCTE` (Kernel.jl) was declared with zero subtypes and zero
 # uses; this is what it was reserved for. Deliberately NOT `<: SQLTypeF`: that would auto-admit the

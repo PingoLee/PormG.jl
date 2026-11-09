@@ -21,6 +21,7 @@
 using Test
 using PormG
 using PormG: Configuration
+using InteractiveUtils: InteractiveUtils
 # The #1683 pins read the handle type each driver extension registers; the suite loads all four.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
@@ -91,6 +92,85 @@ function _dynamic_calls_deep(f, argtypes::Tuple; depth::Int = 6)::Vector{String}
   walk(Base.signature_type(f, argtypes), depth)
   return found
 end
+
+# The dynamic calls of `tt`'s optimized code (a signature type; a keyword body is followed as in
+# `_dynamic_calls_kw`) that take an ELEMENT OF A QUERY-STATE SLOT at an abstract type (#1698): an argument
+# whose type is not concrete and is a supertype of a slot's closed set (`ProjectionNode`, `FilterNode`,
+# `ParamCollector`) or of `SQLObjectQuery` (`object`), or is `SQLTypeField` itself (`select`'s old element
+# type). That is the shape every such element had while the slots were typed by the abstract `SQLType*`
+# families. A call on a phase-2 field (`SQLField.field`'s `FieldPart`, `OperObject.column`'s
+# `ColumnPart`) is not one, and neither is a call taking an `Any` (a literal's value), so a pin on a
+# reader holds what #1698 closed and no more.
+function _slot_element_calls(@nospecialize(tt))::Vector{String}
+  QB = PormG.QueryBuilder
+  sets = (QB.ProjectionNode, QB.FilterNode, QB.ParamCollector, QB.SQLObjectQuery)
+  slot_arg(@nospecialize(T)) = T === PormG.SQLTypeField ||
+                               (T !== Any && !isconcretetype(T) && any(U -> U <: T, sets))
+  argtype(ci, a) = a isa Core.SSAValue ? Core.Compiler.widenconst(ci.ssavaluetypes[a.id]) :
+                   a isa Core.Argument ? Core.Compiler.widenconst(ci.slottypes[a.n]) : Core.Typeof(a)
+  F1 = Base.unwrap_unionall(tt).parameters[1]
+  fname = isdefined(F1, :instance) ? string(nameof(F1.instance)) : ""
+  found = String[]
+  walk(tt, depth) = for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+    for (i, stmt) in enumerate(ci.code)
+      stmt isa Expr || continue
+      if stmt.head === :call
+        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        any(a -> slot_arg(argtype(ci, a)), stmt.args) && push!(found, "$(i): $(stmt)")
+      elseif stmt.head === :invoke && depth > 0
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        (mi isa Core.MethodInstance && mi.def isa Method) || continue
+        startswith(string(mi.def.name), "#$(fname)#") && walk(mi.specTypes, depth - 1)
+      end
+    end
+  end
+  walk(tt, 1)
+  return found
+end
+
+# Every struct PormG or one of its loaded driver extensions defines below one of `roots`, found by walking
+# `subtypes` down from each root (#1698): the concrete ones, and the ones a type parameter leaves open
+# (`struct Foo{T} <: SQLTypeF`), which no closed union can list and which the pin therefore refuses. A
+# struct a test file defines is not PormG's and is skipped.
+function _node_subtypes(roots::Tuple)
+  # Every extension `Project.toml` declares, so one added later is counted without editing this list.
+  # Read section-aware without a TOML dependency, as `test_compat_guards.jl` does: the `test` target
+  # does not carry the TOML stdlib.
+  owners = Module[PormG]
+  section = ""
+  for raw in eachline(joinpath(pkgdir(PormG), "Project.toml"))
+    line = strip(raw)
+    startswith(line, "[") && (section = line; continue)
+    (section == "[extensions]" && occursin('=', line)) || continue
+    ext = Base.get_extension(PormG, Symbol(strip(first(split(line, '=')))))
+    ext === nothing || push!(owners, ext)
+  end
+  ours(@nospecialize(T)) = Base.moduleroot(parentmodule(T)) in owners
+  concrete = Set{DataType}(); open = Set{Any}(); seen = Set{Any}()
+  stack = Any[roots...]
+  while !isempty(stack)
+    T = pop!(stack)
+    T in seen && continue
+    push!(seen, T)
+    if T isa UnionAll
+      ours(T) && push!(open, T)
+    elseif T isa DataType && isconcretetype(T)
+      ours(T) && push!(concrete, T)
+    elseif T isa DataType && isabstracttype(T)
+      append!(stack, InteractiveUtils.subtypes(T))
+    end
+  end
+  return concrete, open
+end
+_concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
+
+# A visitor for the walk pins (#1698): a real call, not a builtin and not inlined, so a walk that reaches
+# it statically shows an `:invoke`.
+@noinline _tsp_visit(@nospecialize(n)) = 1
+@noinline _tsp_visit(@nospecialize(n), x::Int) = x
+# A reader holding a projection at the old abstract element type, for the detector's own check (#1698).
+_tsp_old_reader(v::Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}) =
+  PormG.QueryBuilder._describe_projection(v[])
 
 # A settings type of its own, which `config` no longer accepts (#1622).
 struct _TspOtherSettings <: PormG.PormGSettings end
@@ -433,6 +513,119 @@ end
       @test isempty(dyn)
       isempty(dyn) || @info "dynamic _values_field calls" tt dyn
     end
+  end
+
+  # What: the query state's node slots (#1698 phase 1): `SQLObjectQuery.values`/`filter`/`parameters` and
+  #   `InstructionObject.object`/`select`/`cache`/`ungrouped_order_terms`/`parameters`, and the walk each
+  #   closed set is read through.
+  # Expected: each slot is typed by its closed union; every concrete struct PormG defines under the
+  #   abstract families the slot used to name is a member of that union AND has an `isa` arm in its walk,
+  #   and the walk has no other arm.
+  # Why: the slots were typed by the abstract `SQLType*` families, so every element read out of one was
+  #   abstract: a dispatch per call under the JIT, and in the trimmed fixture's `list(T)` a `MethodError`
+  #   at the next read of a slot (`==(::Any, "*")`, round 4 of #1600). A node type added later that joins
+  #   neither the union nor the walk would bring that back silently; a member missing from the walk would
+  #   raise a `MethodError` on every query that used it.
+  @testset "the query state's node slots are closed unions, each with one walk (#1698)" begin
+    QB = PormG.QueryBuilder
+    @test fieldtype(QB.SQLObjectQuery, :values) === Vector{QB.ProjectionNode}
+    @test fieldtype(QB.SQLObjectQuery, :filter) === Vector{QB.FilterNode}
+    @test fieldtype(QB.SQLObjectQuery, :parameters) === Union{Nothing, QB.ParamCollector}
+    @test fieldtype(QB.InstructionObject, :parameters) === Union{Nothing, QB.ParamCollector}
+    @test fieldtype(QB.InstructionObject, :object) === QB.SQLObjectQuery
+    @test fieldtype(QB.InstructionObject, :select) === Vector{QB.SQLField}
+    @test fieldtype(QB.InstructionObject, :cache) === Union{Nothing, Dict{QB.MemoKey, QB.SQLField}}
+    @test fieldtype(QB.InstructionObject, :ungrouped_order_terms) === Union{Nothing, Vector{QB.SQLField}}
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "types.jl"), String)
+    # The walk's body without its comment lines, so a commented-out arm does not count as one.
+    function walk_body(name)
+      start = findfirst("function $(name)(", src)[1]
+      body = src[start:findnext("\nend", src, start)[end]]
+      return join(filter(l -> !startswith(lstrip(l), "#"), split(body, '\n')), '\n')
+    end
+    for (union, roots, walk, var) in (
+        (QB.ProjectionNode, (PormG.SQLTypeText, PormG.SQLTypeField), "with_projection_node", "node"),
+        (QB.FilterNode, Tuple(Base.uniontypes(QB.FilterType)), "with_filter_node", "node"),
+        (QB.ParamCollector, (PormG.AbstractPormGParam,), "with_collector", "params"))
+      members = Set{DataType}(Base.uniontypes(union))
+      @test all(isconcretetype, members)
+      concrete, open = _node_subtypes(roots)
+      @test concrete == members
+      @test isempty(open)   # a parametric node struct cannot be listed in a closed union
+      body = walk_body(walk)
+      for T in members
+        @test occursin("$(var) isa $(nameof(T)) && return f($(var), args...)", body)
+      end
+      @test count("$(var) isa ", body) == length(members)
+    end
+    # `select` and its memo hold the rendered projections: `SQLField` is the only `SQLTypeField`.
+    @test _concrete_subtypes((PormG.SQLTypeField,)) == Set([QB.SQLField])
+  end
+
+  # What: the three walks (`with_projection_node`, `with_filter_node`, `with_collector`).
+  # Expected: each calls `f(node, args...)` with the node at its concrete type; a value outside the set
+  #   raises `MethodError`; the instance for an `Any` node makes no dynamic call.
+  # Why: the walk is what lets a reader holding a slot element call on it statically (#1698). Its refusal
+  #   is the `MethodError` a dispatch with no method raised before, so no caller sees a different error,
+  #   and it adds no verifier row.
+  @testset "the slot walks route at the concrete type and refuse the rest (#1698)" begin
+    QB = PormG.QueryBuilder
+    q = QB.QObject(filters = QB.FilterType[])
+    @test QB.with_filter_node(typeof, q) === QB.QObject
+    @test QB.with_filter_node((n, x) -> (typeof(n), x), q, 7) === (QB.QObject, 7)
+    @test QB.with_projection_node(typeof, QB.SQLText(1)) === QB.SQLText
+    @test QB.with_projection_node(typeof, QB.SQLField("raceid")) === QB.SQLField
+    @test QB.with_collector(typeof, QB.SQLiteParameterizedQuery()) === QB.SQLiteParameterizedQuery
+    @test QB.with_collector(typeof, QB.PgParameterizedQuery("", Any[], 0)) === QB.PgParameterizedQuery
+    @test QB.with_collector(typeof, QB.MySQLParameterizedQuery()) === QB.MySQLParameterizedQuery
+    @test_throws MethodError QB.with_filter_node(typeof, QB.SQLField("raceid"))
+    @test_throws MethodError QB.with_projection_node(typeof, "raceid")
+    @test_throws MethodError QB.with_collector(typeof, nothing)
+    for walk in (QB.with_projection_node, QB.with_filter_node, QB.with_collector)
+      @test isempty(_dynamic_calls(walk, (typeof(_tsp_visit), Any)))
+      @test isempty(_dynamic_calls(walk, (typeof(_tsp_visit), Any, Int)))
+    end
+  end
+
+  # What: the readers of the slots the trimmed fixture's `list(T)` reaches: the duplicate-name check and
+  #   its label, the WHERE loop, the alias scans of the filters, the typed read's output name, and the
+  #   instruction-level parameter verbs (`with_bucket`, `set_context!`, `add_parameter!`, the marks).
+  # Expected: no dynamic call taking a slot element at an abstract type (`_slot_element_calls`). Measured
+  #   on main (7c02952) with the same detector: `_reject_duplicate_projection_names`, `get_filter_query`,
+  #   `_first_projection_alias_filter`, `with_bucket`, `set_context!`, `_positional_bucket` and
+  #   `add_parameter!` each made such a call there. `_filters_name_alias` passed on main too: its element
+  #   was narrowed by `f isa ExistsObject && continue` to a union the detector does not flag. The
+  #   `_describe_projection` and `_typed_output_name` rows and the two marks were not in that measurement;
+  #   with those four they guard against a regression rather than prove the change.
+  # Why: `_reject_duplicate_projection_names` and `_describe_projection` were the two reads round 4 of
+  #   #1600 stopped at (`==(::Any, "*")`, then `_describe_projection(::SQLField)`), and
+  #   `with_bucket(f, instruc.parameters, …)` was the call site above 469 verifier rows: the build ran in
+  #   a closure called through a dynamic dispatch (#1698).
+  @testset "the slot readers on the typed read's path make no call on an abstract element (#1698)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    body_f = () -> nothing
+    for tt in (Tuple{typeof(QB._reject_duplicate_projection_names), QB.SQLObjectQuery},
+               Tuple{typeof(QB._describe_projection), QB.SQLField},
+               Tuple{typeof(QB._describe_projection), QB.SQLText},
+               Tuple{typeof(QB.get_filter_query), QB.SQLObjectQuery, I},
+               Tuple{typeof(QB._filters_name_alias), QB.SQLObjectQuery},
+               Tuple{typeof(QB._first_projection_alias_filter), QB.SQLObjectQuery},
+               Tuple{typeof(QB._typed_output_name), QB.ProjectionNode},
+               Tuple{typeof(QB.with_bucket), typeof(body_f), I, Symbol},
+               Tuple{typeof(QB.set_context!), I, Symbol},
+               Tuple{typeof(QB._positional_bucket), I},
+               Tuple{typeof(QB.nested_parameter_mark), I},
+               Tuple{typeof(QB.detach_nested_run!), I, QB.NestedMark},
+               Tuple{typeof(QB.add_parameter!), I, String})
+      calls = _slot_element_calls(tt)
+      @test isempty(calls)
+      isempty(calls) || @info "calls on an abstract slot element" tt calls
+    end
+    # The detector, on the shape it looks for: a call taking an element at the old abstract type.
+    # Measured, not vacuous: green on CI run 42505770103 (ubuntu and windows), and the reader pin above
+    # finds calls in 7 of its readers on main 7c02952.
+    @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
   end
 
   # What: the calls that hand a driver handle, read from a pool's untyped `Vector{Any}` slot, to the

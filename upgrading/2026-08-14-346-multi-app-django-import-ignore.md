@@ -30,10 +30,10 @@ rg -n 'import_models_from_django' --glob '*.jl' -A6 | rg -n 'ignore_table'
 
 ```julia
 # before
-import_models_from_django(source; db = "sgrh", ignore_table = ["django_migrations"])
+import_models_from_django(source; db = "f1_paddock", ignore_table = ["django_migrations"])
 
 # after — delete the keyword; it never did anything
-import_models_from_django(source; db = "sgrh")
+import_models_from_django(source; db = "f1_paddock")
 ```
 
 ### 2. `Models.Model_to_str` takes no `settings` argument
@@ -143,7 +143,7 @@ file, **regenerating now replaces those foreign keys with plain columns.** Two w
     ["core"    => "server/core/models.py",
      "access"  => "server/access/models.py",
      "imports" => "server/imports/models.py"];
-    db = "sgrh", file = "models.jl", force_replace = true)
+    db = "f1_paddock", file = "models.jl", force_replace = true)
   ```
 
 - Or pass `strict_relations = true` to make every such target an `InvalidMigrationError` naming the
@@ -155,13 +155,13 @@ Regenerating an **unchanged** `models.py` now raises `InvalidMigrationError` in 
 produce a file: two classes whose names differ only in case.
 
 ```python
-class Pessoa(models.Model): ...
-class pessoa(models.Model): ...     # same Django model name, same derived table
+class Spectator(models.Model): ...
+class spectator(models.Model): ...     # same Django model name, same derived table
 ```
 
-Both name the model `pessoa` and derive the same table, so the second used to overwrite the first in
+Both name the model `spectator` and derive the same table, so the second used to overwrite the first in
 the index — leaving two declarations pointing at one table and a binding nothing could reach. Django
-refuses such a project outright (*"Conflicting 'pessoa' models in application"*), so the fix is to
+refuses such a project outright (*"Conflicting 'spectator' models in application"*), so the fix is to
 rename one of the classes; there is no spelling of this that was ever going to work.
 
 *How to find it before regenerating:*

@@ -19,7 +19,7 @@ isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 """
     import_db_default_source(field_line) -> String
 
-Import a `models.py` holding `Dim_status`, a `Lap` class with `field_line` as its one field, and a
+Import a `models.py` holding `Race_status`, a `Lap` class with `field_line` as its one field, and a
 `Sibling` class after it, under a throwaway config. Returns the generated text.
 """
 function import_db_default_source(field_line::AbstractString)
@@ -35,7 +35,7 @@ function import_db_default_source(field_line::AbstractString)
     BAD_LENGTH = "ten"
     RESULT_DEFAULT = "Finished"
 
-    class Dim_status(models.Model):
+    class Race_status(models.Model):
         status = models.CharField(max_length=50)
 
     class Lap(models.Model):
@@ -69,11 +69,11 @@ end
 const SIBLING = "position = Models.IntegerField()"
 
 @testset "a literal db_default on a ForeignKey imports as default= (#1469)" begin
-    # Expected: `statusid_id = Models.ForeignKey("Dim_status", default=0, …)`, and the next model.
+    # Expected: `statusid_id = Models.ForeignKey("Race_status", default=0, …)`, and the next model.
     # Why: this one field aborted the import of the whole file ("'db_default' must be a String").
-    g = import_db_default_source("statusid = models.ForeignKey(Dim_status, on_delete=models.RESTRICT, default=0, db_default=0, db_constraint=False)")
+    g = import_db_default_source("statusid = models.ForeignKey(Race_status, on_delete=models.RESTRICT, default=0, db_default=0, db_constraint=False)")
     @test field_line(g, "statusid_id") ==
-          "statusid_id = Models.ForeignKey(\"Dim_status\", default=0, pk_field=\"id\", on_delete=RESTRICT, db_constraint=false))"
+          "statusid_id = Models.ForeignKey(\"Race_status\", default=0, pk_field=\"id\", on_delete=RESTRICT, db_constraint=false))"
     @test !occursin("db_default", g)
     @test occursin(SIBLING, g)
 end

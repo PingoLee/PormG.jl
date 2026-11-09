@@ -2,82 +2,82 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.db.models.deletion import RESTRICT
 
-class Dim_servidor(models.Model):
-    nome = models.CharField(max_length=250)
+class Timing_server(models.Model):
+    full_name = models.CharField(max_length=250)
     host = models.CharField(max_length=250)
     port = models.CharField(max_length=250)
     user = models.CharField(max_length=250)
     password = models.CharField(max_length=250)
 
-class Dim_municipio(models.Model):
-    nome = models.CharField(max_length=250, blank=True, null=True)
-    ativo = models.BooleanField(default=True)
-    atualizacao = models.DateField(null=True, blank=True)
-    cibge = models.BigIntegerField(null=True)
-    servidor = models.ForeignKey(Dim_servidor, on_delete=models.RESTRICT, null=True, db_constraint=False)
-    extrato = models.IntegerField(null=True)
+class Race_venue(models.Model):
+    full_name = models.CharField(max_length=250, blank=True, null=True)
+    enabled = models.BooleanField(default=True)
+    refreshed_on = models.DateField(null=True, blank=True)
+    venue_code = models.BigIntegerField(null=True)
+    server = models.ForeignKey(Timing_server, on_delete=models.RESTRICT, null=True, db_constraint=False)
+    statement_no = models.IntegerField(null=True)
 
-class Dim_CNES(models.Model):
-    ibge = models.ForeignKey(Dim_municipio, on_delete=models.CASCADE, db_constraint=False)
-    no_cnes = models.CharField(max_length=250, blank=True, null=True)
-    obs_lot = models.TextField(null=True)
-    nu_cnes_temp = models.ForeignKey("Dim_CNES", on_delete=models.SET_NULL, null=True, related_name="unidades_abrigadas", db_constraint=False)
-    agendamento_online = models.CharField(default="0", choices=(("0", "Nao implantado"), ("1", "Em implantacao"), ("2", "Implantado")), max_length=1)
-    vaccine_def = models.JSONField(null=True, blank=True)
+class Grand_PRIX(models.Model):
+    venue = models.ForeignKey(Race_venue, on_delete=models.CASCADE, db_constraint=False)
+    gp_label = models.CharField(max_length=250, blank=True, null=True)
+    notes = models.TextField(null=True)
+    host_gp = models.ForeignKey("Grand_PRIX", on_delete=models.SET_NULL, null=True, related_name="hosted_gps", db_constraint=False)
+    online_booking = models.CharField(default="0", choices=(("0", "Not deployed"), ("1", "Deploying"), ("2", "Deployed")), max_length=1)
+    medical_def = models.JSONField(null=True, blank=True)
 
-class CustomUser(AbstractUser):
-    user_type = models.CharField(default=3, choices=((1, "HOD"), (2, "Consultor"), (3, "Gestor")), max_length=10)
-    municipio = models.ForeignKey(Dim_municipio, on_delete=models.RESTRICT, default=0, null=False, blank=False, db_constraint=False)
-    unidade = models.ForeignKey(Dim_CNES, on_delete=RESTRICT, default=0, null=False, blank=False, db_constraint=False)
-    atualizacao = models.DateField(null=True, blank=True)
-    visualizador = models.BooleanField(default=False)
+class TeamPrincipal(AbstractUser):
+    user_type = models.CharField(default=3, choices=((1, "HOD"), (2, "Consultant"), (3, "Principal")), max_length=10)
+    venue_ref = models.ForeignKey(Race_venue, on_delete=models.RESTRICT, default=0, null=False, blank=False, db_constraint=False)
+    home_gp = models.ForeignKey(Grand_PRIX, on_delete=RESTRICT, default=0, null=False, blank=False, db_constraint=False)
+    refreshed_on = models.DateField(null=True, blank=True)
+    viewer = models.BooleanField(default=False)
 
-class PasswordResetToken(models.Model):
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="password_reset_tokens")
+class LoginToken(models.Model):
+    user = models.ForeignKey(TeamPrincipal, on_delete=models.CASCADE, related_name="login_tokens")
     token = models.CharField(max_length=64, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     used = models.BooleanField(default=False)
 
-class ReporteProblema(models.Model):
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="reportes_problema")
-    ibge = models.ForeignKey(Dim_municipio, on_delete=models.RESTRICT, blank=True, null=True, related_name="reportes_problema")
-    tipo = models.CharField(max_length=20, choices=(("BUG", "Bug"), ("SUGESTAO", "Sugestao")), default="BUG")
-    status = models.CharField(max_length=20, choices=(("PENDENTE", "Pendente"), ("RESOLVIDO", "Resolvido")), default="PENDENTE")
-    descricao = models.TextField()
-    imagem = models.FileField(upload_to="reportes/", null=True, blank=True)
-    retorno = models.TextField(blank=True, default="")
-    retorno_at = models.DateTimeField(null=True, blank=True)
-    usuario_lido_em = models.DateTimeField(null=True, blank=True)
-    retorno_por = models.ForeignKey("CustomUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="reportes_respondidos")
-    data_criacao = models.DateTimeField(auto_now_add=True)
+class IssueReport(models.Model):
+    user = models.ForeignKey(TeamPrincipal, on_delete=models.CASCADE, related_name="issue_reports")
+    venue = models.ForeignKey(Race_venue, on_delete=models.RESTRICT, blank=True, null=True, related_name="issue_reports")
+    variety = models.CharField(max_length=20, choices=(("BUG", "Bug"), ("SUGGESTION", "Suggestion")), default="BUG")
+    status = models.CharField(max_length=20, choices=(("PENDING", "Pending"), ("RESOLVED", "Resolved")), default="PENDING")
+    description = models.TextField()
+    image = models.FileField(upload_to="reports/", null=True, blank=True)
+    reply = models.TextField(blank=True, default="")
+    reply_at = models.DateTimeField(null=True, blank=True)
+    user_read_at = models.DateTimeField(null=True, blank=True)
+    reply_by = models.ForeignKey("TeamPrincipal", on_delete=models.SET_NULL, null=True, blank=True, related_name="reports_answered")
+    opened_on = models.DateTimeField(auto_now_add=True)
 
-class Cust_adminHOD(models.Model):
+class Pit_crewHQ(models.Model):
     id = models.AutoField(primary_key=True)
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, db_constraint=False)
-    criado_em = models.DateTimeField(auto_now=True)
+    user = models.OneToOneField(TeamPrincipal, on_delete=models.CASCADE, db_constraint=False)
+    created_on = models.DateTimeField(auto_now=True)
     objects = models.Manager()
 
-class Prod_antropometria(models.Model):
-    ibge = models.ForeignKey(Dim_municipio, on_delete=models.CASCADE)
-    nu_peso = models.FloatField(null=True)
-    nu_altura = models.FloatField(null=True)
-    hora_ag = models.TimeField(null=True)
-    tempo_atendimento = models.DurationField(null=True)
+class Lap_telemetry(models.Model):
+    venue = models.ForeignKey(Race_venue, on_delete=models.CASCADE)
+    weight_kg = models.FloatField(null=True)
+    height_cm = models.FloatField(null=True)
+    slot_time = models.TimeField(null=True)
+    service_time = models.DurationField(null=True)
 
-class Dim_cnes_grupo(models.Model):
-    ibge = models.ForeignKey(Dim_municipio, on_delete=models.CASCADE, db_constraint=False, related_name="grupos_unidades")
-    nome = models.CharField(max_length=120)
-    publico = models.BooleanField(default=False)
-    criado_por = models.ForeignKey("CustomUser", on_delete=models.SET_NULL, null=True, blank=True, db_constraint=False, related_name="grupos_unidades")
-    unidades = models.ManyToManyField(Dim_CNES, blank=True, related_name="grupos_unidades")
-    criado_em = models.DateTimeField(auto_now_add=True)
-    atualizado_em = models.DateTimeField(auto_now=True)
+class Grand_prix_group(models.Model):
+    venue = models.ForeignKey(Race_venue, on_delete=models.CASCADE, db_constraint=False, related_name="gp_groups")
+    full_name = models.CharField(max_length=120)
+    is_public = models.BooleanField(default=False)
+    authored_by = models.ForeignKey("TeamPrincipal", on_delete=models.SET_NULL, null=True, blank=True, db_constraint=False, related_name="gp_groups")
+    gps = models.ManyToManyField(Grand_PRIX, blank=True, related_name="gp_groups")
+    created_on = models.DateTimeField(auto_now_add=True)
+    updated_on = models.DateTimeField(auto_now=True)
 
-class Dim_interacao_programa(models.Model):
-    cod_programa = models.CharField(max_length=50, unique=True, db_index=True)
-    nome = models.CharField(max_length=150)
-    ativo = models.BooleanField(default=True)
-    nivel_destino = models.PositiveSmallIntegerField(default=3)
-    tipos_permitidos = models.JSONField(default=list, blank=True)
+class Media_programme(models.Model):
+    programme_code = models.CharField(max_length=50, unique=True, db_index=True)
+    full_name = models.CharField(max_length=150)
+    enabled = models.BooleanField(default=True)
+    target_tier = models.PositiveSmallIntegerField(default=3)
+    allowed_kinds = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -9,7 +9,7 @@ using PormG.Migrations
 # `import_models_from_django` used to take ONE models.py. A real Django project splits its models
 # across apps, and two things broke at the seam:
 #
-#   1. cross-app targets (`ForeignKey("core.Pessoa")`, `settings.AUTH_USER_MODEL`) reached the
+#   1. cross-app targets (`ForeignKey("core.Spectator")`, `settings.AUTH_USER_MODEL`) reached the
 #      generated file verbatim and threw at `set_models` — `_resolve_target_model` is a BINDING
 #      lookup in one module and nothing else;
 #   2. one connection-level `django_prefix` could not express three app labels, which is what #345
@@ -445,7 +445,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 class User(AbstractUser):
-    matricula = models.CharField(max_length=20)
+    enrolment = models.CharField(max_length=20)
 
 class Operator(AbstractUser):
     crachá = models.CharField(max_length=20)
@@ -522,10 +522,10 @@ class Race(models.Model):
         generated = @test_logs (:warn, r"auth_user_model names no imported model") match_mode=:any begin
             import_models_from_django(["access" => two_users, "racing" => referencing];
                                       db = config_key4, file = "auth_typo.jl",
-                                      force_replace = true, auth_user_model = "access.Usuario")
+                                      force_replace = true, auth_user_model = "access.Subscriber")
             read(joinpath(config_key4, "auth_typo.jl"), String)
         end
-        @test occursin("'access.Usuario' is not in the imported app set", generated)
+        @test occursin("'access.Subscriber' is not in the imported app set", generated)
         @test occursin("reported_by_id = Models.BigIntegerField(", generated)
     finally
         cleanup_project_test!(config_key4, existed4)
@@ -650,7 +650,7 @@ end
 
     # Each rejection, with the message that has to name the offending value.
     for (overrides, needle) in (
-            (Dict("access.Motorista" => "DriverLicence"), "access.Motorista"),   # key names nothing
+            (Dict("access.Chauffeur" => "DriverLicence"), "access.Chauffeur"),   # key names nothing
             (Dict("access.Driver" => "Driver Licence"), "not a legal Julia identifier"),
             (Dict("access.Driver" => "___"), "write-only"),
             (Dict("access.Driver" => "driverLicence"), "DriverLicence"),          # not capitalized
@@ -685,8 +685,8 @@ end
     let core = """
 from django.db import models
 
-class Pessoa(models.Model):
-    nome = models.CharField(max_length=40)
+class Spectator(models.Model):
+    full_name = models.CharField(max_length=40)
 """,
         importsapp = """
 from django.db import models
@@ -703,7 +703,7 @@ class Batch(models.Model):
                 try
                     import_models_from_django(pairs; db = k, file = "ovorder.jl",
                                               force_replace = true,
-                                              binding_overrides = Dict("imports.Batch" => "Pessoa"))
+                                              binding_overrides = Dict("imports.Batch" => "Spectator"))
                 catch e
                     err = e
                 end
@@ -714,7 +714,7 @@ class Batch(models.Model):
             end
         end
         @test length(unique(messages)) == 1          # order-independent, to the character
-        @test occursin("derived binding of 'core.Pessoa'", messages[1])
+        @test occursin("derived binding of 'core.Spectator'", messages[1])
     end
 
     # A bare key works when the class name is unambiguous, so a single-app project need not qualify.
@@ -736,13 +736,13 @@ end
 # Django Importer (#346): the pre-flight refusals
 #
 # A connection-level `django_prefix` is not merely redundant in a multi-app import — it is actively
-# harmful. `get_model_name` strips that ONE prefix from EVERY logical name, so `core_pessoa` would
-# become `pessoa` while `access_pessoa` survived intact, and the reverse lookup would then want
-# `Pessoa` while the binding is `Core_pessoa`. Cheap to detect here; near-impossible to diagnose at
+# harmful. `get_model_name` strips that ONE prefix from EVERY logical name, so `core_spectator` would
+# become `spectator` while `access_spectator` survived intact, and the reverse lookup would then want
+# `Spectator` while the binding is `Core_spectator`. Cheap to detect here; near-impossible to diagnose at
 # query time.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the multi-app importer refuses a connection-level django_prefix and malformed input (#346)" begin
-    config_key, db_dir_existed = project_config!(django_prefix = "dash")
+    config_key, db_dir_existed = project_config!(django_prefix = "myapp")
     try
         err = nothing
         try
@@ -754,7 +754,7 @@ end
         @test err isa PormG.InvalidMigrationError
         msg = sprint(showerror, err)
         @test occursin("django_prefix", msg)
-        @test occursin("dash", msg)
+        @test occursin("myapp", msg)
         @test !isfile(joinpath(config_key, "refused.jl"))
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -835,7 +835,7 @@ class Circuit(models.Model):
 
         # A label whose SHAPE is not a Django app_label. It is composed straight into every table
         # name, and `_lookup_class_ref` splits `"<app>.<Class>"` on the dot — so a dotted label
-        # yields `db_table = "My.app_pessoa"` and makes every qualified reference into that app
+        # yields `db_table = "My.app_spectator"` and makes every qualified reference into that app
         # unresolvable, degrading silently.
         for bad in ("My.app", "2fast", "has space", "has-dash")
             err = nothing
@@ -860,11 +860,11 @@ class Circuit(models.Model):
         cased = """
 from django.db import models
 
-class Pessoa(models.Model):
-    nome = models.CharField(max_length=40)
+class Spectator(models.Model):
+    full_name = models.CharField(max_length=40)
 
-class pessoa(models.Model):
-    outro = models.CharField(max_length=40)
+class spectator(models.Model):
+    spare = models.CharField(max_length=40)
 """
         err = nothing
         try
@@ -876,7 +876,7 @@ class pessoa(models.Model):
         @test err isa PormG.InvalidMigrationError
         msg = sprint(showerror, err)
         @test occursin("differ only in case", msg)
-        @test occursin("core_pessoa", msg)
+        @test occursin("core_spectator", msg)
 
         # A MISTYPED PATH. This is the silent-loss shape the pairs API invents: "no newline and not
         # a file" is otherwise read as source TEXT, so one wrong path out of three parses to zero
@@ -1099,21 +1099,21 @@ class ImportBatch(TimeStampedModel):
     concrete = """
 from django.db import models
 
-class Venda(models.Model):
+class Ticket(models.Model):
     total = models.IntegerField()
 """
     child = """
 from django.db import models
-from core.models import Venda
+from core.models import Ticket
 
-class Pedido(Venda):
+class SeasonTicket(Ticket):
     obs = models.CharField(max_length=40)
 """
     generated2, config_key3, existed3 = import_project(["core" => concrete, "imports" => child];
                                                         output_file = "crossapp_mti.jl")
     try
         @test occursin("Django multi-table inheritance", generated2)
-        @test !occursin(r"(const )?Pedido(::Models\.ModelType)? = Models\.Model", generated2)
+        @test !occursin(r"(const )?SeasonTicket(::Models\.ModelType)? = Models\.Model", generated2)
     finally
         cleanup_project_test!(config_key3, existed3)
     end
@@ -1125,8 +1125,8 @@ class Pedido(Venda):
     orphan = """
 from django.db import models
 
-class Relatorio(ExternalBase):
-    titulo = models.CharField(max_length=80)
+class RaceReport(ExternalBase):
+    caption = models.CharField(max_length=80)
 """
     generated3, config_key4, existed4 = import_project(["core" => concrete, "imports" => orphan];
                                                         output_file = "crossapp_orphan.jl")
@@ -1135,8 +1135,8 @@ class Relatorio(ExternalBase):
         @test !occursin("not defined in this file", generated3)
         @test occursin("add the app that defines them to the pair list", generated3)
         # The model is still imported, with its own columns — a missing base never costs a table.
-        @test occursin("\nRelatorio::Models.ModelType = Models.Model(db_table = \"imports_relatorio\"", generated3)
-        @test occursin("titulo = Models.CharField(max_length=80)", generated3)
+        @test occursin("\nRaceReport::Models.ModelType = Models.Model(db_table = \"imports_racereport\"", generated3)
+        @test occursin("caption = Models.CharField(max_length=80)", generated3)
     finally
         cleanup_project_test!(config_key4, existed4)
     end
@@ -1158,7 +1158,7 @@ end
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.CharField(max_length=10, primary_key=True)
+    ref_code = models.CharField(max_length=10, primary_key=True)
 
 class Ref(models.Model):
     t = models.ForeignKey('Thing', on_delete=models.CASCADE)
@@ -1174,7 +1174,7 @@ class Ref(models.Model):
         # the testset passes even when `autofields_ignore` is not applied at all — the model is
         # emitted either way, just with a different set of columns, so asserting only its existence
         # tests nothing about the ordering this testset is named for.
-        @test !occursin("codigo", generated)
+        @test !occursin("ref_code", generated)
         @test occursin("\nThing::Models.ModelType = Models.Model(db_table = \"racing_thing\",\n  id = Models.IDField())", generated)
 
         # ...and the FK actually resolves, which is the property that was broken.
@@ -1249,7 +1249,7 @@ end
 from django.db import models
 
 class Base(models.Model):
-    nome = models.CharField(max_length=40)
+    full_name = models.CharField(max_length=40)
 
 class BaseProxy(Base):
     class Meta:
@@ -1740,8 +1740,8 @@ end
 # Django Importer (#346): join columns follow the CLASS, not the primary key's name
 #
 # Django names a join-table column `<lowercased class>_id` — always, whatever the primary key is
-# called. PormG derives `<model.name>_<pk field>`, so a legacy model keyed on `codigo` made PormG
-# address `driver_codigo` where Django created `driver_id`. The pin needs BOTH models, and the
+# called. PormG derives `<model.name>_<pk field>`, so a legacy model keyed on `ref_code` made PormG
+# address `driver_ref_code` where Django created `driver_id`. The pin needs BOTH models, and the
 # target may be built after its owner, so it runs once every model exists.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a ManyToMany join column ignores the target's primary-key name (#346)" begin
@@ -1749,7 +1749,7 @@ end
 from django.db import models
 
 class Driver(models.Model):
-    codigo = models.CharField(max_length=10, primary_key=True)
+    ref_code = models.CharField(max_length=10, primary_key=True)
 
 class Team(models.Model):
     drivers = models.ManyToManyField(Driver)
@@ -1758,7 +1758,7 @@ class Team(models.Model):
                                                            output_file = "m2m_pk.jl")
     try
         @test occursin("target_field=\"driver_id\"", generated)
-        @test !occursin("driver_codigo", generated)
+        @test !occursin("driver_ref_code", generated)
         # The OWNER's PK is `id`, and its name is unchanged, so its side needs no pin.
         @test !occursin("source_field=", generated)
     finally
@@ -1770,10 +1770,10 @@ class Team(models.Model):
 from django.db import models
 
 class Driver(models.Model):
-    codigo = models.CharField(max_length=10, primary_key=True)
+    ref_code = models.CharField(max_length=10, primary_key=True)
 
 class Team(models.Model):
-    sigla = models.CharField(max_length=5, primary_key=True)
+    acronym = models.CharField(max_length=5, primary_key=True)
     drivers = models.ManyToManyField(Driver)
 """
     generated2, config_key2, existed2 = import_project(["racing" => both]; output_file = "m2m_pk2.jl")
@@ -1802,8 +1802,8 @@ class Status(models.TextChoices):
     CORE_A = "ca", "Core A"
     CORE_B = "cb", "Core B"
 
-class Pessoa(models.Model):
-    situacao = models.CharField(max_length=2, choices=Status.choices, default=Status.CORE_A)
+class Spectator(models.Model):
+    phase = models.CharField(max_length=2, choices=Status.choices, default=Status.CORE_A)
 """
     other = """
 from django.db import models
@@ -1812,7 +1812,7 @@ class Status(models.TextChoices):
     OTHER_X = "ox", "Other X"
 
 class Batch(models.Model):
-    situacao = models.CharField(max_length=2, choices=Status.choices, default=Status.OTHER_X)
+    phase = models.CharField(max_length=2, choices=Status.choices, default=Status.OTHER_X)
 """
     # Asserted in BOTH orders: the defect was that the last-listed app won, so a single order can
     # pass by luck.
@@ -1846,7 +1846,7 @@ from django.db import models
 from core.models import Status
 
 class Batch(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices, default=Status.DRAFT)
+    phase = models.CharField(max_length=1, choices=Status.choices, default=Status.DRAFT)
 """
     generated2, key2, existed2 = import_project(["core" => shared, "imports" => consumer];
                                                  output_file = "enum_shared.jl")
@@ -1953,7 +1953,7 @@ end
 # `AbstractUser` INHERITS `id` from `models.Model` rather than owning it, so declaring any
 # `primary_key=True` field suppresses it — exactly as on any other model. The importer instead
 # injected an `id` for every AbstractUser subclass before reading a single field, so a legacy user
-# table keyed on `matricula` came out with TWO primary keys and was unusable: `get_model_pk_field`
+# table keyed on `enrolment` came out with TWO primary keys and was unusable: `get_model_pk_field`
 # refuses more than one, and `save()`, every ManyToManyField touching the model, the relation wiring
 # and the migration planner all go through it. The failure is deferred, not immediate — the model is
 # built and registered without complaint, then throws at the first read.
@@ -1964,12 +1964,12 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 class User(AbstractUser):
-    matricula = models.CharField(max_length=20, primary_key=True)
+    enrolment = models.CharField(max_length=20, primary_key=True)
 """
     generated, config_key, db_dir_existed = import_project(["access" => own_pk];
                                                            output_file = "auth_own_pk.jl")
     try
-        @test occursin("matricula = Models.CharField(primary_key=true, max_length=20)", generated)
+        @test occursin("enrolment = Models.CharField(primary_key=true, max_length=20)", generated)
         # The implicit `id` is GONE, not merely shadowed. `User` is the only model in this file, so
         # a bare search for the field is unambiguous.
         @test !occursin("Models.IDField()", generated)
@@ -1978,11 +1978,11 @@ class User(AbstractUser):
         @test occursin("username = Models.CharField()", generated)
 
         # The property the old #346 test deliberately did not assert: the model LOADS. Before this
-        # fix `get_model_pk_field` threw ModelDefinitionError here, naming `matricula, id`.
+        # fix `get_model_pk_field` threw ModelDefinitionError here, naming `enrolment, id`.
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
         user = Core.eval(sandbox, :(auth_own_pk.User))
-        @test Base.invokelatest(PormG.Models.get_model_pk_field, user) == :matricula
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, user) == :enrolment
         @test !haskey(user.fields, "id")
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -1995,7 +1995,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 class User(AbstractUser):
-    apelido = models.CharField(max_length=20)
+    nickname = models.CharField(max_length=20)
 """
     generated2, key2, existed2 = import_project(["access" => no_pk];
                                                  output_file = "auth_no_pk.jl")
@@ -2053,22 +2053,22 @@ end
 from django.db import models
 
 class Base(models.Model):
-    codigo = models.CharField(max_length=10, primary_key=True)
+    ref_code = models.CharField(max_length=10, primary_key=True)
 
     class Meta:
         abstract = True
 
 class Thing(Base):
-    codigo = models.CharField(max_length=10)
+    ref_code = models.CharField(max_length=10)
 """
     generated, config_key, db_dir_existed = import_project(["access" => source];
                                                            output_file = "abstract_pk_override.jl")
     try
         # The child's redeclaration wins, and it is not a key...
-        @test occursin("codigo = Models.CharField(max_length=10)", generated)
-        @test !occursin("codigo = Models.CharField(primary_key=true", generated)
+        @test occursin("ref_code = Models.CharField(max_length=10)", generated)
+        @test !occursin("ref_code = Models.CharField(primary_key=true", generated)
         # ...so nothing claims the key and Django's implicit `id` is what the model gets. Before the
-        # fix this model was emitted with `codigo` as its ONLY field and no primary key anywhere.
+        # fix this model was emitted with `ref_code` as its ONLY field and no primary key anywhere.
         @test occursin("id = Models.IDField()", generated)
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
@@ -2097,7 +2097,7 @@ class Circuit(models.Model):
     name = models.CharField(max_length=40)
 
 class User(AbstractUser):
-    matricula = models.CharField(max_length=20, primary_key=True)
+    enrolment = models.CharField(max_length=20, primary_key=True)
     circuits = models.ManyToManyField(Circuit)
 """
     config_key, db_dir_existed = project_config!()
@@ -2110,7 +2110,7 @@ class User(AbstractUser):
             read(joinpath(config_key, "auth_pk_m2m.jl"), String)
         end
         # Django names the join column from the CLASS (`user_id`), not from the key field
-        # (`matricula_id`), which is why the pin is needed at all.
+        # (`enrolment_id`), which is why the pin is needed at all.
         @test occursin("circuits = Models.ManyToManyField(\"Circuit\", db_table=\"access_user_circuits\", source_field=\"user_id\")",
                        generated)
         # `Circuit` is keyed on `id` and its binding matches its class name, so its end needs no pin.
@@ -2139,25 +2139,25 @@ end
     unkeyable = """
 from django.db import models
 
-class Municipio(models.Model):
-    codigo = models.IntegerField(primary_key=True)
-    nome = models.CharField(max_length=40)
+class Venue(models.Model):
+    ref_code = models.IntegerField(primary_key=True)
+    full_name = models.CharField(max_length=40)
 """
     generated, config_key, db_dir_existed = import_project(["access" => unkeyable];
                                                            output_file = "unkeyable_pk.jl")
     try
-        @test occursin("codigo = Models.IntegerField()", generated)
-        # NO phantom `id`. `access_municipio` is keyed on `codigo` and has no `id` column.
+        @test occursin("ref_code = Models.IntegerField()", generated)
+        # NO phantom `id`. `access_venue` is keyed on `ref_code` and has no `id` column.
         @test !occursin("Models.IDField()", generated)
         # ...and the artifact states the gap rather than shipping a silently key-less model.
         # `access.`, not bare — the import carries an app label, so the marker is qualified (#371).
-        @test occursin("# PormG: 'access.Municipio' declares its primary key on 'codigo'", generated)
+        @test occursin("# PormG: 'access.Venue' declares its primary key on 'ref_code'", generated)
         @test occursin("This model therefore has NO primary key", generated)
 
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
         @test Base.invokelatest(PormG.Models.get_model_pk_field,
-                                Core.eval(sandbox, :(unkeyable_pk.Municipio))) === nothing
+                                Core.eval(sandbox, :(unkeyable_pk.Venue))) === nothing
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -2187,22 +2187,22 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.AutoField()
-    nome = models.CharField(max_length=40)
+    ref_code = models.AutoField()
+    full_name = models.CharField(max_length=40)
 """
     generated2, key2, existed2 = import_project(["access" => auto]; output_file = "auto_pk.jl")
     try
         # `IDField`, not `AutoField` (#399) — but the property under test is unchanged: a bare
         # `models.AutoField()` declares no `primary_key`, yet the field it BUILDS is the key, so the
         # synthetic `id` must stay away. Asserted on the built model rather than on the rendered
-        # text, since `codigo` and a phantom `id` would now render as the same field type.
-        @test occursin("codigo = Models.IDField()", generated2)
+        # text, since `ref_code` and a phantom `id` would now render as the same field type.
+        @test occursin("ref_code = Models.IDField()", generated2)
         # ...and it must not be reported as unkeyable either — the built field is a fine key.
         @test !occursin("declares its primary key", generated2)
         sandbox2 = Module()
         Core.eval(sandbox2, Meta.parse(generated2))
         thing = Core.eval(sandbox2, :(auto_pk.Thing))
-        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :codigo
+        @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :ref_code
         @test !haskey(thing.fields, "id")
         @test length(thing.fields) == 2
     finally
@@ -2223,7 +2223,7 @@ end
 from django.db import models
 
 class Base(models.Model):
-    nome = models.CharField(max_length=40)
+    full_name = models.CharField(max_length=40)
 
 class BaseProxy(Base):
     class Meta:
@@ -2250,36 +2250,36 @@ end
 # Django Importer (#346): names differing only in CASE collide too
 #
 # The Julia binding is `uppercasefirst(name)`; the positional name is `lowercase(name)` — a coarser
-# equivalence, and the one `set_models` keys a reverse accessor on. `core.Pessoa` and `legacy.PESSOA`
+# equivalence, and the one `set_models` keys a reverse accessor on. `core.Spectator` and `legacy.SPECTATOR`
 # derive different bindings, so they slipped past app-qualification and collided downstream, where
-# `Model_to_str` renamed one to `pessoa2` with no warning and no marker, decided by list order.
+# `Model_to_str` renamed one to `spectator2` with no warning and no marker, decided by list order.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "class names differing only in case are app-qualified too (#346)" begin
     upper = """
 from django.db import models
 
-class Pessoa(models.Model):
-    nome = models.CharField(max_length=40)
+class Spectator(models.Model):
+    full_name = models.CharField(max_length=40)
 """
     lower = """
 from django.db import models
 
-class PESSOA(models.Model):
-    outro = models.CharField(max_length=40)
+class SPECTATOR(models.Model):
+    spare = models.CharField(max_length=40)
 """
     for pairs in (["core" => upper, "legacy" => lower], ["legacy" => lower, "core" => upper])
         generated, config_key, db_dir_existed = import_project(pairs; output_file = "case_clash.jl")
         try
             # Both qualified, both tables intact, and no digit suffix anywhere.
-            @test occursin("\nCore_pessoa::Models.ModelType = Models.Model(db_table = \"core_pessoa\"", generated)
-            @test occursin("\nLegacy_pessoa::Models.ModelType = Models.Model(db_table = \"legacy_pessoa\"", generated)
-            @test !occursin("pessoa2", generated)
-            @test !occursin("Pessoa2", generated)
+            @test occursin("\nCore_spectator::Models.ModelType = Models.Model(db_table = \"core_spectator\"", generated)
+            @test occursin("\nLegacy_spectator::Models.ModelType = Models.Model(db_table = \"legacy_spectator\"", generated)
+            @test !occursin("spectator2", generated)
+            @test !occursin("Spectator2", generated)
             # ...and the file still loads with two distinct bindings.
             sandbox = Module()
             Core.eval(sandbox, Meta.parse(generated))
-            @test Core.eval(sandbox, :(isdefined(case_clash, :Core_pessoa)))
-            @test Core.eval(sandbox, :(isdefined(case_clash, :Legacy_pessoa)))
+            @test Core.eval(sandbox, :(isdefined(case_clash, :Core_spectator)))
+            @test Core.eval(sandbox, :(isdefined(case_clash, :Legacy_spectator)))
         finally
             cleanup_project_test!(config_key, db_dir_existed)
         end
@@ -2300,7 +2300,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 class User(AbstractUser):
-    matricula = models.CharField(max_length=20)
+    enrolment = models.CharField(max_length=20)
 
 class Circuit(models.Model):
     name = models.CharField(max_length=120)
@@ -2359,7 +2359,7 @@ end
 # The positional slot of `Models.Model(...)` IS the table whenever nothing pins `db_table`, and with
 # no app label nothing does. Pass 1 rewrites `entry.name` for a `binding_overrides` entry and for the
 # digit backstop, so on that path a rename silently re-pointed the model at a table Django never
-# created: `class Circuit` overridden to `Pista` emitted `Models.Model("pista")`, and `class CASCADE`
+# created: `class Circuit` overridden to `Raceway` emitted `Models.Model("raceway")`, and `class CASCADE`
 # emitted `Models.Model("cascade2")` where the pre-#346 importer correctly emitted `"cascade"`.
 #
 # `Model_to_str` has enforced the rule since #338 — a dedup that changes the name pins the PRE-dedup
@@ -2377,17 +2377,17 @@ class Circuit(models.Model):
     name = models.CharField(max_length=50)
 """;
         output_file = "django_one_app_override.jl",
-        binding_overrides = Dict("Circuit" => "Pista"))
+        binding_overrides = Dict("Circuit" => "Raceway"))
     try
         # The handle is the caller's choice; the TABLE stays Django's. Before the fix this line was
-        # `Pista = Models.Model("pista",` with no `db_table` anywhere in the file.
-        @test occursin("\nPista::Models.ModelType = Models.Model(db_table = \"circuit\"", generated)
+        # `Raceway = Models.Model("raceway",` with no `db_table` anywhere in the file.
+        @test occursin("\nRaceway::Models.ModelType = Models.Model(db_table = \"circuit\"", generated)
 
         # Stronger than the string: the model PormG actually builds must ADDRESS Django's table.
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
-        pista = Core.eval(sandbox, :(django_one_app_override.Pista))
-        @test Base.invokelatest(PormG.Models.model_table_name, pista) == "circuit"
+        raceway = Core.eval(sandbox, :(django_one_app_override.Raceway))
+        @test Base.invokelatest(PormG.Models.model_table_name, raceway) == "circuit"
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -2628,7 +2628,7 @@ class _Stint(models.Model):
     end
 
     # The LABELLED half, which loaded before but addressed `foo_id` where Django created `_foo_id`.
-    # The owner's table carries the label (`dash__foo`), and so does the join table. The join column
+    # The owner's table carries the label (`myapp__foo`), and so does the join table. The join column
     # does not, because Django builds it from the class alone.
     generated, config_key, db_dir_existed = import_one_app("""
 from django.db import models
@@ -2638,9 +2638,9 @@ class Race(models.Model):
 
 class _Foo(models.Model):
     races = models.ManyToManyField(Race)
-"""; output_file = "django_1095_m2m_labelled.jl", django_prefix = "dash")
+"""; output_file = "django_1095_m2m_labelled.jl", django_prefix = "myapp")
     try
-        @test occursin("races = Models.ManyToManyField(\"Race\", db_table=\"dash__foo_races\", source_field=\"_foo_id\")", generated)
+        @test occursin("races = Models.ManyToManyField(\"Race\", db_table=\"myapp__foo_races\", source_field=\"_foo_id\")", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -3245,8 +3245,8 @@ end
 # the BINDING alone while `conflicts` tested two keys — so a POSITIONAL collision found no claimant,
 # reported `nothing`, and took the silent path the guard was written to prevent.
 #
-# `Dict("Circuit" => "PESSOA")` beside `class Pessoa` is the sharp case: no underscores, one app, and
-# `PESSOA`/`Pessoa` are different bindings that share the positional name `pessoa`.
+# `Dict("Circuit" => "SPECTATOR")` beside `class Spectator` is the sharp case: no underscores, one app, and
+# `SPECTATOR`/`Spectator` are different bindings that share the positional name `spectator`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "an override colliding on the POSITIONAL name raises, naming the real claimant (#346)" begin
     config_key, db_dir_existed = project_config!()
@@ -3259,20 +3259,20 @@ from django.db import models
 class Circuit(models.Model):
     name = models.CharField(max_length=50)
 
-class Pessoa(models.Model):
+class Spectator(models.Model):
     name = models.CharField(max_length=50)
 """]; db = config_key, file = "django_project_pos_clash.jl", force_replace = true,
-                 binding_overrides = Dict("Circuit" => "PESSOA"))
+                 binding_overrides = Dict("Circuit" => "SPECTATOR"))
         catch e
             err = e
         end
-        # It used to renaming `core.Pessoa` to `Pessoa2` and blame "the generated module's own
+        # It used to renaming `core.Spectator` to `Spectator2` and blame "the generated module's own
         # imports" in the marker — a model the caller never mentioned, silently moved.
         @test err isa PormG.InvalidMigrationError
         msg = sprint(showerror, err)
         # The message must name the override the caller actually typed, not a reserved binding.
         @test occursin("binding_overrides", msg)
-        @test occursin("core.Pessoa", msg)
+        @test occursin("core.Spectator", msg)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -3332,13 +3332,13 @@ end
 @testset "a base from a third-party library does not collide with another app's class (#370)" begin
     # `reports` inherits BaseReport from a library. `billing` happens to declare a CONCRETE class of
     # the same name and knows nothing about `reports`. Before #370 the two were the same name and so
-    # the same class, and `Relatorio` was refused as multi-table inheritance and dropped.
+    # the same class, and `RaceReport` was refused as multi-table inheritance and dropped.
     reports = """
 from django.db import models
 from library.base import BaseReport
 
-class Relatorio(BaseReport):
-    titulo = models.CharField(max_length=80)
+class RaceReport(BaseReport):
+    caption = models.CharField(max_length=80)
 """
     billing = """
 from django.db import models
@@ -3350,8 +3350,8 @@ class BaseReport(models.Model):
                                              output_file = "crossapp_thirdparty.jl")
     try
         # The table is HERE. This assertion is the issue.
-        @test occursin("\nRelatorio::Models.ModelType = Models.Model(db_table = \"reports_relatorio\"", generated)
-        @test occursin("titulo = Models.CharField(max_length=80)", generated)
+        @test occursin("\nRaceReport::Models.ModelType = Models.Model(db_table = \"reports_racereport\"", generated)
+        @test occursin("caption = Models.CharField(max_length=80)", generated)
         # ...and it is not refused for inheritance it never had.
         @test !occursin("Django multi-table inheritance", generated)
         # `billing`'s own class is untouched by any of this.
@@ -3370,7 +3370,7 @@ class BaseReport(models.Model):
     alone, key2, existed2 = import_project(["reports" => reports];
                                            output_file = "alone_thirdparty.jl")
     try
-        @test occursin("Relatorio::Models.ModelType = Models.Model(", alone)
+        @test occursin("RaceReport::Models.ModelType = Models.Model(", alone)
     finally
         cleanup_project_test!(key2, existed2)
     end
@@ -3386,14 +3386,14 @@ class TimeStampedModel(models.Model):
     class Meta:
         abstract = True
 
-class Venda(models.Model):
+class Ticket(models.Model):
     total = models.IntegerField()
 """
     good = """
 from django.db import models
 from core.models import TimeStampedModel
 
-class Pedido(TimeStampedModel):
+class SeasonTicket(TimeStampedModel):
     obs = models.CharField(max_length=40)
 """
     generated, key, existed = import_project(["core" => core, "shop" => good];
@@ -3409,16 +3409,16 @@ class Pedido(TimeStampedModel):
     # gating the lookup must not cost the refusal that keeps a wrong primary key off the disk.
     mti = """
 from django.db import models
-from core.models import Venda
+from core.models import Ticket
 
-class Pedido(Venda):
+class SeasonTicket(Ticket):
     obs = models.CharField(max_length=40)
 """
     generated2, key2, existed2 = import_project(["core" => core, "shop" => mti];
                                                 output_file = "gate_mti.jl")
     try
         @test occursin("Django multi-table inheritance", generated2)
-        @test !occursin(r"(const )?Pedido(::Models\.ModelType)? = Models\.Model", generated2)
+        @test !occursin(r"(const )?SeasonTicket(::Models\.ModelType)? = Models\.Model", generated2)
     finally
         cleanup_project_test!(key2, existed2)
     end
@@ -3428,7 +3428,7 @@ class Pedido(Venda):
     ungated = """
 from django.db import models
 
-class Pedido(TimeStampedModel):
+class SeasonTicket(TimeStampedModel):
     obs = models.CharField(max_length=40)
 """
     generated3, key3, existed3 = import_project(["core" => core, "shop" => ungated];
@@ -3440,16 +3440,16 @@ class Pedido(TimeStampedModel):
         @test occursin("'TimeStampedModel' is declared by app 'core', but app 'shop' does not " *
                        "import it — add the import if that is what you meant", generated3)
         # The table itself survives — a missing base never costs a table.
-        @test occursin("Pedido::Models.ModelType = Models.Model(", generated3)
+        @test occursin("SeasonTicket::Models.ModelType = Models.Model(", generated3)
     finally
         cleanup_project_test!(key3, existed3)
     end
 end
 
 @testset "a base's own bases resolve in ITS app, not the importing one (#370)" begin
-    # Two-hop abstract chain. `shop` imports only `Auditavel`, whose own base exists solely in
-    # `core`. Resolving that in the IMPORTING app's namespace loses it, which makes `Auditavel`
-    # field-less and therefore not-a-model, which poisons `Pedido` — and `Pedido` is then dropped
+    # Two-hop abstract chain. `shop` imports only `Audited`, whose own base exists solely in
+    # `core`. Resolving that in the IMPORTING app's namespace loses it, which makes `Audited`
+    # field-less and therefore not-a-model, which poisons `SeasonTicket` — and `SeasonTicket` is then dropped
     # with no marker at all. Strictly worse than the defect #370 set out to remove.
     core = """
 from django.db import models
@@ -3460,21 +3460,21 @@ class TimeStampedModel(models.Model):
     class Meta:
         abstract = True
 
-class Auditavel(TimeStampedModel):
+class Audited(TimeStampedModel):
     class Meta:
         abstract = True
 """
     shop = """
 from django.db import models
-from core.models import Auditavel
+from core.models import Audited
 
-class Pedido(Auditavel):
+class SeasonTicket(Audited):
     obs = models.CharField(max_length=40)
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "twohop.jl")
     try
-        @test occursin("Pedido::Models.ModelType = Models.Model(", generated)
+        @test occursin("SeasonTicket::Models.ModelType = Models.Model(", generated)
         # The grandparent's column arrives through a base that declares none of its own.
         @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated)
         @test occursin("obs = Models.CharField(max_length=40)", generated)
@@ -3545,7 +3545,7 @@ class TimeStampedModel(models.Model):
 from django.db import models
 from core.models import TimeStampedModel as TSM
 
-class Pedido(TSM):
+class SeasonTicket(TSM):
     obs = models.CharField(max_length=40)
 """
     generated, key, existed = import_project(["core" => core, "shop" => aliased];
@@ -3563,7 +3563,7 @@ class Pedido(TSM):
 from django.db import models
 from core.models import *
 
-class Pedido(TimeStampedModel):
+class SeasonTicket(TimeStampedModel):
     obs = models.CharField(max_length=40)
 """
     generated2, key2, existed2 = import_project(["core" => core, "shop" => starred];
@@ -3581,21 +3581,21 @@ class Pedido(TimeStampedModel):
 from django.db import models
 from core.models import TimeStampedModel
 
-class Perfil(TimeStampedModel):
-    nome = models.CharField(max_length=20)
+class Profile(TimeStampedModel):
+    full_name = models.CharField(max_length=20)
 """
     downstream = """
 from django.db import models
 from access.models import TimeStampedModel
 
-class Pedido(TimeStampedModel):
+class SeasonTicket(TimeStampedModel):
     obs = models.CharField(max_length=40)
 """
     generated3, key3, existed3 = import_project(["core" => core, "access" => access,
                                                  "shop" => downstream];
                                                 output_file = "reexport.jl")
     try
-        @test occursin("Pedido::Models.ModelType = Models.Model(", generated3)
+        @test occursin("SeasonTicket::Models.ModelType = Models.Model(", generated3)
         @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated3)
         @test !occursin("not defined in", generated3)
     finally
@@ -3606,7 +3606,7 @@ end
 @testset "a module path names an app by label or by package directory (#370)" begin
     # `Page` is here so the vendor-path sub-test below can actually FAIL when the rule is wrong.
     # Without a concrete class of that name in `core`, `from wagtail.core.models import Page` leaves
-    # `Page` unresolved either way, `Artigo` is emitted either way, and the assertion passes whether
+    # `Page` unresolved either way, `Article` is emitted either way, and the assertion passes whether
     # or not the module path was matched — a test that cannot see the bug it was written for.
     core = """
 from django.db import models
@@ -3617,7 +3617,7 @@ class TimeStampedModel(models.Model):
     class Meta:
         abstract = True
 
-class Pedido(models.Model):
+class SeasonTicket(models.Model):
     total = models.IntegerField()
 
 class Page(models.Model):
@@ -3633,8 +3633,8 @@ class Page(models.Model):
 from django.db import models
 from apps.core.models import TimeStampedModel
 
-class Nota(TimeStampedModel):
-    texto = models.CharField(max_length=20)
+class Memo(TimeStampedModel):
+    body_copy = models.CharField(max_length=20)
 """
     generated, key, existed = import_project(
         ["core" => joinpath(nest_root, "apps", "core", "models.py"), "shop" => nested];
@@ -3651,8 +3651,8 @@ class Nota(TimeStampedModel):
 from django.db import models
 from apps.core import TimeStampedModel
 
-class Nota(TimeStampedModel):
-    texto = models.CharField(max_length=20)
+class Memo(TimeStampedModel):
+    body_copy = models.CharField(max_length=20)
 """
     generated5, key5, existed5 = import_project(
         ["core" => joinpath(nest_root, "apps", "core", "models.py"), "shop" => pkg_nested];
@@ -3672,15 +3672,15 @@ class Nota(TimeStampedModel):
 from django.db import models
 from wagtail.core.models import Page
 
-class Artigo(Page):
-    corpo = models.CharField(max_length=100)
+class Article(Page):
+    body_text = models.CharField(max_length=100)
 """
     generated6, key6, existed6 = import_project(
         ["core" => joinpath(nest_root, "apps", "core", "models.py"), "cms" => vendor];
         output_file = "vendor_models_tail.jl")
     try
-        @test occursin("\nArtigo::Models.ModelType = Models.Model(db_table = \"cms_artigo\"", generated6)
-        @test occursin("corpo = Models.CharField(max_length=100)", generated6)
+        @test occursin("\nArticle::Models.ModelType = Models.Model(db_table = \"cms_article\"", generated6)
+        @test occursin("body_text = Models.CharField(max_length=100)", generated6)
         @test !occursin("Django multi-table inheritance", generated6)
     finally
         cleanup_project_test!(key6, existed6)
@@ -3688,20 +3688,20 @@ class Artigo(Page):
     end
 
     # A SIBLING module of the same app is not its models module. `core/forms.py` may perfectly well
-    # declare its own `Pedido`, and binding that to the model `core/models.py` declares would be
+    # declare its own `SeasonTicket`, and binding that to the model `core/models.py` declares would be
     # #370 one module over.
     from_forms = """
 from django.db import models
-from core.forms import Pedido
+from core.forms import SeasonTicket
 
-class Recibo(Pedido):
-    valor = models.IntegerField()
+class Receipt(SeasonTicket):
+    amount = models.IntegerField()
 """
     generated2, key2, existed2 = import_project(["core" => core, "shop" => from_forms];
                                                 output_file = "sibling_module.jl")
     try
         @test !occursin("Django multi-table inheritance", generated2)
-        @test occursin("Recibo::Models.ModelType = Models.Model(", generated2)
+        @test occursin("Receipt::Models.ModelType = Models.Model(", generated2)
         @test occursin("not defined in any app of this import", generated2)
     finally
         cleanup_project_test!(key2, existed2)
@@ -3717,8 +3717,8 @@ class Recibo(Pedido):
 from django.db import models
 from customers.models import TimeStampedModel
 
-class Nota(TimeStampedModel):
-    texto = models.CharField(max_length=20)
+class Memo(TimeStampedModel):
+    body_copy = models.CharField(max_length=20)
 """
     generated3, key3, existed3 = import_project(["crm" => joinpath(dir_root, "customers", "models.py"),
                                                  "shop" => by_package];
@@ -3727,7 +3727,7 @@ class Nota(TimeStampedModel):
         @test occursin("created_at = Models.DateTimeField(auto_now_add=true)", generated3)
         @test !occursin("not defined in", generated3)
         # The label still drives the table prefix; only the LOOKUP accepts either spelling.
-        @test occursin("db_table = \"crm_pedido\"", generated3)
+        @test occursin("db_table = \"crm_seasonticket\"", generated3)
     finally
         cleanup_project_test!(key3, existed3)
         rm(dir_root; recursive = true, force = true)
@@ -3742,26 +3742,26 @@ end
     src = """
 from django.db import models
 
-class Perfil(CustomUser):
+class Profile(TeamPrincipal):
     pass
 
-class ContatoForm(forms.Form):
+class ContactForm(forms.Form):
     pass
 
 class Real(models.Model):
-    nome = models.CharField(max_length=10)
+    full_name = models.CharField(max_length=10)
 """
     generated, key, existed = import_project(["app" => src]; output_file = "silent_drop.jl")
     try
         @test occursin("Real::Models.ModelType = Models.Model(", generated)
-        @test !occursin(r"(const )?Perfil(::Models\.ModelType)? = Models\.Model", generated)
+        @test !occursin(r"(const )?Profile(::Models\.ModelType)? = Models\.Model", generated)
         # `app.`, not bare — this import carries an app label, so the marker names the class
         # app-qualified like every other report (#371). The BASE stays verbatim: it is quoted from
         # the source, not the class being reported on.
-        @test occursin("# PormG: class 'app.Perfil' inherits 'CustomUser'", generated)
+        @test occursin("# PormG: class 'app.Profile' inherits 'TeamPrincipal'", generated)
         @test occursin("declares no field of its own", generated)
         # A `forms.Form` helper produces no noise — the namespace already settles what it is.
-        @test !occursin("ContatoForm", generated)
+        @test !occursin("ContactForm", generated)
     finally
         cleanup_project_test!(key, existed)
     end
@@ -3781,7 +3781,7 @@ class Status(models.TextChoices):
 from django.db import models
 
 class Batch(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "enum_ungated.jl")
@@ -3798,7 +3798,7 @@ from django.db import models
 from core.models import Status as S
 
 class Batch(models.Model):
-    situacao = models.CharField(max_length=1, choices=S.choices, default=S.DRAFT)
+    phase = models.CharField(max_length=1, choices=S.choices, default=S.DRAFT)
 """
     generated2, key2, existed2 = import_project(["core" => core, "shop" => shop2];
                                                 output_file = "enum_gated.jl")
@@ -3815,7 +3815,7 @@ from django.db import models
 from core.models import Status
 
 class Batch(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 
 class Status(models.TextChoices):
     OPEN = "o", "Open"
@@ -3846,7 +3846,7 @@ from django.db import models
 from core.models import BaseUser
 
 class User(BaseUser):
-    matricula = models.CharField(max_length=20)
+    enrolment = models.CharField(max_length=20)
 """
     racing = """
 from django.conf import settings
@@ -3878,22 +3878,22 @@ from django.db import models
 class Page(models.Model):
     slug = models.CharField(max_length=30)
 
-class Perfil(models.Model):
-    apelido = models.CharField(max_length=30)
+class Profile(models.Model):
+    nickname = models.CharField(max_length=30)
 """
     # `wagtail.core` ends in `core`, and `core` is a real app in this run.
     cms = """
 from django.db import models
 from wagtail.core import Page
 
-class Artigo(Page):
-    corpo = models.CharField(max_length=100)
+class Article(Page):
+    body_text = models.CharField(max_length=100)
 """
     generated, key, existed = import_project(["core" => core, "cms" => cms];
                                              output_file = "thirdparty_tail.jl")
     try
-        @test occursin("\nArtigo::Models.ModelType = Models.Model(db_table = \"cms_artigo\"", generated)
-        @test occursin("corpo = Models.CharField(max_length=100)", generated)
+        @test occursin("\nArticle::Models.ModelType = Models.Model(db_table = \"cms_article\"", generated)
+        @test occursin("body_text = Models.CharField(max_length=100)", generated)
         @test !occursin("Django multi-table inheritance", generated)
     finally
         cleanup_project_test!(key, existed)
@@ -3902,19 +3902,19 @@ class Artigo(Page):
     # A SINGLE-dot import names a submodule of the app doing the importing. Stripping the dot leaves
     # `core`, a perfectly ordinary app label — so one dot must never be read as naming another app,
     # with or without a `models` tail.
-    for (name, line) in (("dot_pkg", "from .core import Perfil"),
-                         ("dot_models", "from .core.models import Perfil"))
+    for (name, line) in (("dot_pkg", "from .core import Profile"),
+                         ("dot_models", "from .core.models import Profile"))
         shop = """
 from django.db import models
 $(line)
 
-class Conta(Perfil):
-    saldo = models.IntegerField()
+class Ledger(Profile):
+    credit = models.IntegerField()
 """
         generated2, key2, existed2 = import_project(["core" => core, "shop" => shop];
                                                     output_file = "relative_$(name).jl")
         try
-            @test occursin("\nConta::Models.ModelType = Models.Model(db_table = \"shop_conta\"", generated2)
+            @test occursin("\nLedger::Models.ModelType = Models.Model(db_table = \"shop_ledger\"", generated2)
             @test !occursin("Django multi-table inheritance", generated2)
         finally
             cleanup_project_test!(key2, existed2)
@@ -3925,10 +3925,10 @@ class Conta(Perfil):
     # spells a genuine cross-app import. That one must resolve.
     ascending = """
 from django.db import models
-from ..core.models import Perfil
+from ..core.models import Profile
 
-class Conta(Perfil):
-    saldo = models.IntegerField()
+class Ledger(Profile):
+    credit = models.IntegerField()
 """
     generated4, key4, existed4 = import_project(["core" => core, "shop" => ascending];
                                                 output_file = "relative_ascend.jl")
@@ -3942,10 +3942,10 @@ class Conta(Perfil):
     # The one absolute single-component form IS the app package, re-exporting through `__init__.py`.
     pkg = """
 from django.db import models
-from core import Perfil
+from core import Profile
 
-class Conta(Perfil):
-    saldo = models.IntegerField()
+class Ledger(Profile):
+    credit = models.IntegerField()
 """
     generated3, key3, existed3 = import_project(["core" => core, "shop" => pkg];
                                                 output_file = "bare_package.jl")
@@ -3965,10 +3965,10 @@ end
 from django.db import models
 
 class Base(models.Model):
-    class Situacao(models.TextChoices):
-        ATIVO = "A", "Ativo"
+    class Phase(models.TextChoices):
+        ACTIVE = "A", "Active"
 
-    situacao = models.CharField(max_length=1, choices=Situacao.choices)
+    phase = models.CharField(max_length=1, choices=Phase.choices)
 
     class Meta:
         abstract = True
@@ -3978,22 +3978,22 @@ from django.db import models
 from core.models import Base as CoreBase
 
 class Base(models.Model):
-    class Situacao(models.TextChoices):
-        OUTRO = "O", "Outro"
+    class Phase(models.TextChoices):
+        SPARE = "O", "Spare"
 
     class Meta:
         abstract = True
 
-class Pedido(CoreBase):
+class SeasonTicket(CoreBase):
     total = models.IntegerField()
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "enum_class_scope.jl")
     try
-        # `Pedido` inherits `core.Base`, so its `situacao` must carry CORE's members.
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"A\", \"Ativo\"),))",
+        # `SeasonTicket` inherits `core.Base`, so its `phase` must carry CORE's members.
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"A\", \"Active\"),))",
                        generated)
-        @test !occursin("\"Outro\"", generated)
+        @test !occursin("\"Spare\"", generated)
     finally
         cleanup_project_test!(key, existed)
     end
@@ -4024,7 +4024,7 @@ class Status(models.TextChoices):
     DRAFT = "d", "Draft"
 
 class Base(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 
     class Meta:
         abstract = True
@@ -4036,13 +4036,13 @@ from core.models import Base
 class Status(models.TextChoices):
     OPEN = "o", "Open"
 
-class Pedido(Base):
+class SeasonTicket(Base):
     total = models.IntegerField()
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "enum_stmt_origin.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
                        generated)
         # shop's enumeration must not appear at all — its `Status` is a different name in a
         # different module, and nothing in this file was written against it.
@@ -4073,8 +4073,8 @@ class Base(models.Model):
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+class SeasonTicket(Base):
+    phase = models.CharField(max_length=1, choices=Status.choices)
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "enum_stmt_no_reach.jl")
@@ -4082,7 +4082,7 @@ class Pedido(Base):
         # The enumeration must NOT be borrowed...
         @test !occursin("\"Draft\"", generated)
         # ...the column stays real, with `choices` dropped...
-        @test occursin("situacao = Models.CharField(max_length=1)", generated)
+        @test occursin("phase = Models.CharField(max_length=1)", generated)
         # ...and the drop is reported in the file, not just on the console (#341).
         @test occursin("references `Status`, which this file does not define", generated)
     finally
@@ -4108,7 +4108,7 @@ from django.db import models
 from enums.models import Status
 
 class Base(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 
     class Meta:
         abstract = True
@@ -4117,13 +4117,13 @@ class Base(models.Model):
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
+class SeasonTicket(Base):
     total = models.IntegerField()
 """
     generated, key, existed = import_project(["enums" => enums_app, "core" => core, "shop" => shop];
                                              output_file = "enum_stmt_gated.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
                        generated)
         # The false-negative marker this overlay exists to prevent.
         @test !occursin("references `Status`, which this file does not define", generated)
@@ -4154,7 +4154,7 @@ class Base(models.Model):
         abstract = True
 
 class Child(Base):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 """
     generated, key, existed = import_project(["app" => src]; output_file = "enum_module_wins.jl")
     try
@@ -4166,7 +4166,7 @@ class Child(Base):
 end
 
 @testset "a base's own statement still sees its nested enum (#402)" begin
-    # The shape the ordering above must NOT break: `situacao` is written in Base's body, where
+    # The shape the ordering above must NOT break: `phase` is written in Base's body, where
     # `Status` IS the nested one. Base's own class scope leads its statement's list, so ranking bases
     # below the module cannot reach it — this fails if the reorder is ever taken further and drops
     # the owner's own class scope rather than just demoting its ancestors.
@@ -4180,7 +4180,7 @@ class Base(models.Model):
     class Status(models.TextChoices):
         NESTED = "n", "Nested"
 
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 
     class Meta:
         abstract = True
@@ -4190,7 +4190,7 @@ class Child(Base):
 """
     generated, key, existed = import_project(["app" => src]; output_file = "enum_base_still.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
         @test !occursin("\"Module\"", generated)
     finally
@@ -4223,13 +4223,13 @@ class Base(models.Model):
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
-    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+class SeasonTicket(Base):
+    phase = models.CharField(max_length=1, choices=Base.Status.choices)
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "enum_qualified_xapp.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
         @test !occursin("references `Base.Status`", generated)
     finally
@@ -4257,13 +4257,13 @@ class Base(models.Model):
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+class SeasonTicket(Base):
+    phase = models.CharField(max_length=1, choices=Status.choices)
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "enum_leniency.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
     finally
         cleanup_project_test!(key, existed)
@@ -4286,7 +4286,7 @@ from django.db import models
 from enums.models import Status
 
 class Base(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 
     class Meta:
         abstract = True
@@ -4295,14 +4295,14 @@ class Base(models.Model):
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
+class SeasonTicket(Base):
     total = models.IntegerField()
 """
     for (label, pairs) in (("enums_first", ["enums" => enums_app, "core" => core, "shop" => shop]),
                            ("shop_first",  ["shop" => shop, "core" => core, "enums" => enums_app]))
         generated, key, existed = import_project(pairs; output_file = "enum_order_$(label).jl")
         try
-            @test occursin("situacao = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
+            @test occursin("phase = Models.CharField(max_length=1, choices=((\"d\", \"Draft\"),))",
                            generated)
         finally
             cleanup_project_test!(key, existed)
@@ -4319,7 +4319,7 @@ end
 from django.db import models
 
 class Base(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
 
     class Meta:
         abstract = True
@@ -4331,7 +4331,7 @@ from core.models import Base
 class Status(models.TextChoices):
     OPEN = "o", "Open"
 
-class Pedido(Base):
+class SeasonTicket(Base):
     total = models.IntegerField()
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
@@ -4363,7 +4363,7 @@ from django.db import models
 from access.models import Status
 
 class Batch(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices, default=Status.DRAFT)
+    phase = models.CharField(max_length=1, choices=Status.choices, default=Status.DRAFT)
 """
     generated, key, existed = import_project(["core" => core, "access" => access, "shop" => shop];
                                              output_file = "enum_reexport.jl")
@@ -4413,7 +4413,7 @@ from django.db import models
 from $(first).models import *
 from $(second).models import *
 
-class Conta(Foo):
+class Ledger(Foo):
     own = models.IntegerField()
 """
         generated, key, existed = import_project(["y" => y, "x" => x, "b" => b, "c" => c,
@@ -4421,7 +4421,7 @@ class Conta(Foo):
                                                  output_file = "star_order_$(label).jl")
         try
             # Whichever order the two star imports appear in, `Foo` resolves and its column arrives.
-            @test occursin("Conta::Models.ModelType = Models.Model(", generated)
+            @test occursin("Ledger::Models.ModelType = Models.Model(", generated)
             @test !occursin("not defined in any app of this import", generated)
         finally
             cleanup_project_test!(key, existed)
@@ -4439,14 +4439,14 @@ end
 from django.db import models
 from model_utils.managers import InheritanceManager
 
-class MeuManager(InheritanceManager):
+class MyManager(InheritanceManager):
     pass
 
-class Perfil(CustomUser):
+class Profile(TeamPrincipal):
     pass
 
 class Real(models.Model):
-    nome = models.CharField(max_length=10)
+    full_name = models.CharField(max_length=10)
 """
     generated, key, existed = import_project(["app" => src]; output_file = "thirdparty_helper.jl")
     try
@@ -4454,12 +4454,12 @@ class Real(models.Model):
         # Named, so a reader dismisses the library in one glance...
         # App-qualified on both, because this arity has a label (#371); the imported base and its
         # module are quoted from the source and stay exactly as written.
-        @test occursin("# PormG: class 'app.MeuManager' inherits 'InheritanceManager', imported " *
+        @test occursin("# PormG: class 'app.MyManager' inherits 'InheritanceManager', imported " *
                        "from 'model_utils.managers', which nothing in this import defines", generated)
         # ...and a base with no import line at all says exactly that instead.
-        @test occursin("# PormG: class 'app.Perfil' inherits 'CustomUser', which nothing in this " *
+        @test occursin("# PormG: class 'app.Profile' inherits 'TeamPrincipal', which nothing in this " *
                        "import defines and this models.py does not import", generated)
-        @test !occursin(r"(const )?Perfil(::Models\.ModelType)? = Models\.Model", generated)
+        @test !occursin(r"(const )?Profile(::Models\.ModelType)? = Models\.Model", generated)
     finally
         cleanup_project_test!(key, existed)
     end
@@ -4470,17 +4470,17 @@ class Real(models.Model):
 from django.db import models
 from core.models import TimeStampedModel
 
-class Pedido(TimeStampedModel):
+class SeasonTicket(TimeStampedModel):
     pass
 
-class Outro(models.Model):
-    nome = models.CharField(max_length=10)
+class Spare(models.Model):
+    full_name = models.CharField(max_length=10)
 """
     generated2, key2, existed2 = import_one_app(single; output_file = "single_ancestry_lost.jl")
     try
         # Bare here, and that is the rule working rather than an exception to it: `import_one_app`
         # passes no `django_prefix`, so there is no app label to qualify with (#371).
-        @test occursin("# PormG: class 'Pedido' inherits 'TimeStampedModel', imported from " *
+        @test occursin("# PormG: class 'SeasonTicket' inherits 'TimeStampedModel', imported from " *
                        "'core.models', which nothing in this import defines", generated2)
         @test occursin("\"<app_label>\" => \"<models.py>\" pairs", generated2)
     finally
@@ -4492,8 +4492,8 @@ end
 # Django Importer (#371): a report NAMES its class app-qualified
 #
 # `# PormG:` markers and the `@warn` beside them used to interpolate the bare Python class name.
-# In a multi-app project two apps may each declare `Pessoa` — the generated file then holds
-# `Core_pessoa` and `Access_pessoa`, and a marker reading `on 'Pessoa'` traces back to neither.
+# In a multi-app project two apps may each declare `Spectator` — the generated file then holds
+# `Core_spectator` and `Access_spectator`, and a marker reading `on 'Spectator'` traces back to neither.
 #
 # The reports are built by four different mechanisms and only one of them was ever qualified, so
 # this testset deliberately triggers one marker from EACH:
@@ -4510,83 +4510,83 @@ end
     core = """
 from django.db import models
 
-class Pessoa(models.Model):
-    class Situacao(models.TextChoices):
-        RASCUNHO = "RA", "Rascunho"
-        ATIVO = "AT", "Ativo"
+class Spectator(models.Model):
+    class Phase(models.TextChoices):
+        SKETCH = "RA", "Sketch"
+        ACTIVE = "AT", "Active"
 
-    codigo = models.IntegerField(primary_key=True)
-    estado = models.CharField(max_length=2, choices=Situacao.choices, default=Situacao.RASCUNHO)
+    ref_code = models.IntegerField(primary_key=True)
+    switch_state = models.CharField(max_length=2, choices=Phase.choices, default=Phase.SKETCH)
     tags = HStoreField()
 
     class Meta:
-        nao_existe_essa_opcao = True
-        unique_together = CHAVE_EXTERNA
+        no_such_option = True
+        unique_together = EXTERNAL_KEY
 """
     access = """
 from django.db import models
 
-class Pessoa(models.Model):
-    nome = models.CharField(max_length=40)
-    situacao = models.CharField(max_length=20, default=Status.DRAFT)
+class Spectator(models.Model):
+    full_name = models.CharField(max_length=40)
+    phase = models.CharField(max_length=20, default=Status.DRAFT)
 
     class Meta:
-        db_table = TABELA_LEGADO
-        ordering = ['nome']
+        db_table = LEGACY_TABLE
+        ordering = ['full_name']
 """
     generated, config_key, db_dir_existed = import_project(["core" => core, "access" => access];
                                                            output_file = "qualified_markers.jl")
     try
         # The field path — `process_class_fields!` and `parse_field_args`. The second is #371's own
         # reproduction case, verbatim.
-        @test occursin("# PormG: field 'tags' on 'core.Pessoa'", generated)
-        @test occursin("# PormG: field 'situacao' on 'access.Pessoa' references `Status`, which " *
+        @test occursin("# PormG: field 'tags' on 'core.Spectator'", generated)
+        @test occursin("# PormG: field 'phase' on 'access.Spectator' references `Status`, which " *
                        "this file does not define", generated)
 
         # Inline in `_import_django_apps` — a model-level report and two Meta-level ones.
-        @test occursin("# PormG: 'core.Pessoa' declares its primary key on 'codigo'", generated)
-        @test occursin("# PormG: Meta.nao_existe_essa_opcao on 'core.Pessoa' is not recognised",
+        @test occursin("# PormG: 'core.Spectator' declares its primary key on 'ref_code'", generated)
+        @test occursin("# PormG: Meta.no_such_option on 'core.Spectator' is not recognised",
                        generated)
-        @test occursin("# PormG: Meta.db_table on 'access.Pessoa' is not a string literal", generated)
-        @test occursin("# PormG: Meta.ordering on 'access.Pessoa'", generated)
+        @test occursin("# PormG: Meta.db_table on 'access.Spectator' is not a string literal", generated)
+        @test occursin("# PormG: Meta.ordering on 'access.Spectator'", generated)
 
         # A Meta helper, which owns its own copy of the label.
-        @test occursin("# PormG: Meta.unique_together on 'core.Pessoa' is not a tuple or list " *
+        @test occursin("# PormG: Meta.unique_together on 'core.Spectator' is not a tuple or list " *
                        "literal", generated)
 
         # The CLASS, never the HANDLE. The collision renamed both models, so `entry.name` and the
         # Python class name have diverged here — a marker naming the handle would say
-        # 'Core_pessoa' and send the reader looking for a class no models.py declares.
-        @test occursin("Core_pessoa::Models.ModelType = Models.Model(", generated)
-        @test occursin("Access_pessoa::Models.ModelType = Models.Model(", generated)
-        @test !occursin("Core_pessoa'", generated)
-        @test !occursin("Access_pessoa'", generated)
+        # 'Core_spectator' and send the reader looking for a class no models.py declares.
+        @test occursin("Core_spectator::Models.ModelType = Models.Model(", generated)
+        @test occursin("Access_spectator::Models.ModelType = Models.Model(", generated)
+        @test !occursin("Core_spectator'", generated)
+        @test !occursin("Access_spectator'", generated)
 
-        # The blanket guard, over the marker lines only. `'Pessoa'` with its opening quote cannot
-        # match `'core.Pessoa'`, so this fails on any site the fix missed — including ones this
+        # The blanket guard, over the marker lines only. `'Spectator'` with its opening quote cannot
+        # match `'core.Spectator'`, so this fails on any site the fix missed — including ones this
         # fixture does not trigger, should a later change route them differently. The count is
         # asserted so the negative cannot pass by matching an empty list.
         marker_lines = filter(l -> startswith(strip(l), "# PormG:"), split(generated, '\n'))
         @test length(marker_lines) == 7
-        @test all(l -> !occursin("'Pessoa'", l), marker_lines)
+        @test all(l -> !occursin("'Spectator'", l), marker_lines)
 
         # ...and the enum machinery still RESOLVES, which is what qualifying `class_name` instead
         # of adding `class_label` would have broken. This is the assertion that matters: `enums` is
         # keyed by the bare Python class name, so an "app.Class" scope key makes `_lookup_enum`
-        # miss and `estado` comes back a plain `CharField(max_length=2)` with neither choices nor
+        # miss and `switch_state` comes back a plain `CharField(max_length=2)` with neither choices nor
         # default. Assert the RESOLVED pair — a degraded field proves nothing here, because a
         # reference the importer cannot see is dropped whether the scope key is right or wrong.
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
-        core_pessoa = Core.eval(sandbox, :(qualified_markers.Core_pessoa))
-        @test core_pessoa.fields["estado"].choices == (("RA", "Rascunho"), ("AT", "Ativo"))
-        @test core_pessoa.fields["estado"].default == "RA"
+        core_spectator = Core.eval(sandbox, :(qualified_markers.Core_spectator))
+        @test core_spectator.fields["switch_state"].choices == (("RA", "Sketch"), ("AT", "Active"))
+        @test core_spectator.fields["switch_state"].default == "RA"
 
         # The other app declares no `Status` at all, so its reference degrades — the column is real,
         # the enumeration is not. That is the marker asserted above, seen from the model side.
-        access_pessoa = Core.eval(sandbox, :(qualified_markers.Access_pessoa))
-        @test access_pessoa.fields["situacao"].default === nothing
-        @test access_pessoa.fields["situacao"].choices === nothing
+        access_spectator = Core.eval(sandbox, :(qualified_markers.Access_spectator))
+        @test access_spectator.fields["phase"].default === nothing
+        @test access_spectator.fields["phase"].choices === nothing
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -4598,40 +4598,40 @@ end
 # Its own testset because these three are the reason the label is computed where it is. A duplicate
 # declaration, a proxy and a multi-table-inheritance child are all reported and then `continue`d
 # ABOVE `entry = get(index.by_ref, …)` — so a fix that read the label off `entry` would leave
-# exactly the reports a reader has least other context for still saying `'Pessoa'`.
+# exactly the reports a reader has least other context for still saying `'Spectator'`.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "the reports emitted before the index lookup are app-qualified too (#371)" begin
     source = """
 from django.db import models
 
-class Venda(models.Model):
+class Ticket(models.Model):
     total = models.IntegerField()
 
-class Pedido(Venda):
+class SeasonTicket(Ticket):
     obs = models.CharField(max_length=40)
 
-class ServidorAtivo(Venda):
+class ActiveEngineer(Ticket):
     class Meta:
         proxy = True
 
-class Dupla(models.Model):
+class Duo(models.Model):
     a = models.IntegerField()
 
-class Dupla(models.Model):
+class Duo(models.Model):
     b = models.IntegerField()
 """
     generated, config_key, db_dir_existed = import_project(["core" => source];
                                                            output_file = "prelookup_markers.jl")
     try
-        @test occursin("# PormG: model 'core.Pedido' inherits the concrete model 'Venda'", generated)
-        @test occursin("# PormG: model 'core.ServidorAtivo' is a Django proxy", generated)
-        @test occursin("# PormG: 'core.Dupla' is declared more than once", generated)
+        @test occursin("# PormG: model 'core.SeasonTicket' inherits the concrete model 'Ticket'", generated)
+        @test occursin("# PormG: model 'core.ActiveEngineer' is a Django proxy", generated)
+        @test occursin("# PormG: 'core.Duo' is declared more than once", generated)
 
         # The other half of the rule: a name quoted because the SOURCE wrote it stays verbatim.
-        # `Venda` above is the parent Django names in the inheritance, not the class the report is
+        # `Ticket` above is the parent Django names in the inheritance, not the class the report is
         # about — qualifying it would misquote the models.py.
-        @test occursin("concrete model 'Venda' (Django multi-table inheritance)", generated)
-        @test !occursin("'core.Venda' (Django multi-table", generated)
+        @test occursin("concrete model 'Ticket' (Django multi-table inheritance)", generated)
+        @test !occursin("'core.Ticket' (Django multi-table", generated)
     finally
         cleanup_project_test!(config_key, db_dir_existed)
     end
@@ -4865,7 +4865,7 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.UUIDField()
-    nome = models.CharField(max_length=10)
+    full_name = models.CharField(max_length=10)
 """
     generated, config_key, db_dir_existed = import_project(["access" => declared_id];
                                                            output_file = "declared_id.jl")
@@ -4933,7 +4933,7 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.UUIDField(primary_key=True)
-    nome = models.CharField(max_length=10)
+    full_name = models.CharField(max_length=10)
 """
     gen_keyed, key_keyed, existed_keyed = import_project(["access" => keyed_id];
                                                           output_file = "declared_id_keyed.jl")
@@ -4971,34 +4971,34 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.BigAutoField(primary_key=True)
-    caminho = models.FilePathField()
-    nome = models.CharField(max_length=10)
+    filepath = models.FilePathField()
+    full_name = models.CharField(max_length=10)
 
 class EverythingElse(models.Model):
-    nome = models.CharField(max_length=40)
+    full_name = models.CharField(max_length=40)
 """
     untouched_app = """
 from django.db import models
 
 class Untouched(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 """
     generated, config_key, db_dir_existed = import_project(["racing" => unknown_type,
                                                             "access" => untouched_app];
                                                            output_file = "unknown_field_type.jl")
     try
         # The rest of the DECLARING class survives...
-        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test occursin("full_name = Models.CharField(max_length=10)", generated)
         # ...its SIBLING class in the same file survives...
         @test occursin("EverythingElse::Models.ModelType = Models.Model(", generated)
         # ...and so does the other app, which the old failure took down with it.
         @test occursin("Untouched::Models.ModelType = Models.Model(", generated)
         # The column itself is gone, and that is what the marker exists to say.
-        @test !occursin("caminho = Models.", generated)
+        @test !occursin("filepath = Models.", generated)
 
         # The report names the field, the class AND the models.py line — a reader with the generated
         # file open has to be able to find the declaration in the Django source.
-        @test occursin("# PormG: field 'caminho' on 'racing.Thing' (models.py line 5) is a " *
+        @test occursin("# PormG: field 'filepath' on 'racing.Thing' (models.py line 5) is a " *
                        "models.FilePathField", generated)
         @test occursin("NOT imported", generated)
         # The hazard the skip creates: the live column is now invisible to the model, so the planner
@@ -5009,8 +5009,8 @@ class Untouched(models.Model):
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
         thing = Core.eval(sandbox, :(unknown_field_type.Thing))
-        @test !haskey(thing.fields, "caminho")
-        @test haskey(thing.fields, "nome")
+        @test !haskey(thing.fields, "filepath")
+        @test haskey(thing.fields, "full_name")
         @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) == :id
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -5023,8 +5023,8 @@ class Untouched(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    caminho = models.FilePathField()
-    nome = models.CharField(max_length=10)
+    filepath = models.FilePathField()
+    full_name = models.CharField(max_length=10)
 """
     key_strict, existed_strict = project_config!()
     try
@@ -5038,7 +5038,7 @@ class Thing(models.Model):
         end
         @test err isa PormG.InvalidMigrationError
         msg = sprint(showerror, err)
-        @test occursin("field 'caminho' in class 'racing.Thing'", msg)
+        @test occursin("field 'filepath' in class 'racing.Thing'", msg)
         @test occursin("models.FilePathField", msg)
         @test occursin("strict_fields = true", msg)
         # ...and it really did abort: nothing was written.
@@ -5055,17 +5055,17 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.SmallIntegerField(primary_key=True)
-    nome = models.CharField(max_length=10)
+    ref_code = models.SmallIntegerField(primary_key=True)
+    full_name = models.CharField(max_length=10)
 """
     gen_pk, key_pk, existed_pk = import_project(["racing" => unknown_pk];
                                                  output_file = "unknown_pk_type.jl")
     try
         # NO phantom key. This is the assertion the whole `unsupported_pk` set exists for.
         @test !occursin("Models.IDField()", gen_pk)
-        @test occursin("nome = Models.CharField(max_length=10)", gen_pk)
+        @test occursin("full_name = Models.CharField(max_length=10)", gen_pk)
         # The marker carries the key consequence too, so one report covers the whole outcome.
-        @test occursin("# PormG: field 'codigo' on 'racing.Thing'", gen_pk)
+        @test occursin("# PormG: field 'ref_code' on 'racing.Thing'", gen_pk)
         @test occursin("It is also this model's PRIMARY KEY in Django", gen_pk)
         # ...and NOT through the `lost_pk` report, whose wording ("imported WITHOUT it") would
         # describe a column this file does not contain.
@@ -5090,7 +5090,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.SmallIntegerField(primary_key=True)
+    ref_code = models.SmallIntegerField(primary_key=True)
 """
     key_empty, existed_empty = project_config!()
     try
@@ -5120,22 +5120,22 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    caminho = models.FilePathField(choices=[('a', 'A')])
-    porta = models.SmallIntegerField()
-    nome = models.CharField(max_length=10)
+    filepath = models.FilePathField(choices=[('a', 'A')])
+    port_no = models.SmallIntegerField()
+    full_name = models.CharField(max_length=10)
 """
     gen_ord, key_ord, existed_ord = import_project(["racing" => ordering_src];
                                                     output_file = "unknown_ordering.jl",
                                                     autofields_ignore = ["Manager",
                                                                          "SmallIntegerField"])
     try
-        # `porta` was dropped by the caller: no column, and no report either.
-        @test !occursin("porta", gen_ord)
-        # `caminho` was dropped by PormG: reported once, as a TYPE problem...
-        @test occursin("field 'caminho' on 'racing.Thing'", gen_ord)
+        # `port_no` was dropped by the caller: no column, and no report either.
+        @test !occursin("port_no", gen_ord)
+        # `filepath` was dropped by PormG: reported once, as a TYPE problem...
+        @test occursin("field 'filepath' on 'racing.Thing'", gen_ord)
         # ...and not a second time as an option problem on a column that does not exist.
         @test !occursin("has no choices slot", gen_ord)
-        @test occursin("nome = Models.CharField(max_length=10)", gen_ord)
+        @test occursin("full_name = Models.CharField(max_length=10)", gen_ord)
     finally
         cleanup_project_test!(key_ord, existed_ord)
     end
@@ -5198,14 +5198,14 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.SmallIntegerField()
-    nome = models.CharField(max_length=10)
+    full_name = models.CharField(max_length=10)
 """
     generated, config_key, db_dir_existed = import_project(["racing" => skipped_id];
                                                            output_file = "skipped_id.jl")
     try
         # THE assertion: no phantom key over a name the class already claimed.
         @test !occursin("Models.IDField()", generated)
-        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test occursin("full_name = Models.CharField(max_length=10)", generated)
 
         # Both reports are present and they AGREE — the artifact must not say a column was skipped
         # and then render one at the same key.
@@ -5264,7 +5264,7 @@ end
 # skip that only `continue`s therefore does not skip: the BASE's field stays at that key, and the
 # model renders the base's type while the marker beside it says the column was not imported.
 #
-# The concrete failure: a child overriding `codigo = CharField(max_length=10, primary_key=True)` with
+# The concrete failure: a child overriding `ref_code = CharField(max_length=10, primary_key=True)` with
 # an unimplemented type emitted a VARCHAR(10) primary key over a SMALLINT column. A silent fallback to
 # the wrong type is strictly worse than the missing column the marker promises.
 #
@@ -5276,32 +5276,32 @@ end
 from django.db import models
 
 class Base(models.Model):
-    codigo = models.CharField(max_length=10, primary_key=True)
+    ref_code = models.CharField(max_length=10, primary_key=True)
 
     class Meta:
         abstract = True
 
 class Thing(Base):
-    codigo = models.SmallIntegerField(primary_key=True)
-    nome = models.CharField(max_length=10)
+    ref_code = models.SmallIntegerField(primary_key=True)
+    full_name = models.CharField(max_length=10)
 """
     generated, config_key, db_dir_existed = import_project(["racing" => overridden];
                                                            output_file = "overridden_skip.jl")
     try
         # The base's field must NOT survive its own override.
-        @test !occursin("codigo = Models.CharField", generated)
+        @test !occursin("ref_code = Models.CharField", generated)
         @test !occursin("primary_key=true", generated)
-        @test occursin("nome = Models.CharField(max_length=10)", generated)
-        # ...and no implicit `id` either: Django keys this table on `codigo`.
+        @test occursin("full_name = Models.CharField(max_length=10)", generated)
+        # ...and no implicit `id` either: Django keys this table on `ref_code`.
         @test !occursin("Models.IDField()", generated)
         # The marker is now TRUE about the column it names.
-        @test occursin("field 'codigo' on 'racing.Thing'", generated)
+        @test occursin("field 'ref_code' on 'racing.Thing'", generated)
         @test occursin("It is also this model's PRIMARY KEY in Django", generated)
 
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
         thing = Core.eval(sandbox, :(overridden_skip.Thing))
-        @test !haskey(thing.fields, "codigo")
+        @test !haskey(thing.fields, "ref_code")
         @test Base.invokelatest(PormG.Models.get_model_pk_field, thing) === nothing
     finally
         cleanup_project_test!(config_key, db_dir_existed)
@@ -5314,23 +5314,23 @@ class Thing(Base):
 from django.db import models
 
 class Base(models.Model):
-    codigo = models.SmallIntegerField(primary_key=True)
+    ref_code = models.SmallIntegerField(primary_key=True)
 
     class Meta:
         abstract = True
 
 class Thing(Base):
-    codigo = models.CharField(max_length=10, primary_key=True)
+    ref_code = models.CharField(max_length=10, primary_key=True)
 """
     gen_rev, key_rev, existed_rev = import_project(["racing" => reverse_override];
                                                     output_file = "reverse_override.jl")
     try
-        @test occursin("codigo = Models.CharField(", gen_rev)
+        @test occursin("ref_code = Models.CharField(", gen_rev)
         @test !occursin("Models.IDField()", gen_rev)
         sandbox_rev = Module()
         Core.eval(sandbox_rev, Meta.parse(gen_rev))
         @test Base.invokelatest(PormG.Models.get_model_pk_field,
-                                Core.eval(sandbox_rev, :(reverse_override.Thing))) == :codigo
+                                Core.eval(sandbox_rev, :(reverse_override.Thing))) == :ref_code
     finally
         cleanup_project_test!(key_rev, existed_rev)
     end
@@ -5352,8 +5352,8 @@ end
 from django.db import models
 
 class Thing(models.Model):
-    nome = models.CharField(max_length=10)
-    idx = models.Index(fields=['nome'])
+    full_name = models.CharField(max_length=10)
+    idx = models.Index(fields=['full_name'])
 """
     generated, config_key, db_dir_existed = import_project(["racing" => not_a_field];
                                                            output_file = "not_a_field.jl")
@@ -5361,7 +5361,7 @@ class Thing(models.Model):
         # The import survives — which is the property under test. `Models.Index` exists, so the
         # `isdefined` half alone would have let it through to the constructor.
         @test occursin("Thing::Models.ModelType = Models.Model(", generated)
-        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test occursin("full_name = Models.CharField(max_length=10)", generated)
         @test !occursin("idx = Models.", generated)
         @test occursin("field 'idx' on 'racing.Thing'", generated)
         @test occursin("models.Index", generated)
@@ -5382,17 +5382,17 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    nome = models.CharField(max_length=10)
-    quando = models.DateTimeField(null=True)
-    quanto = models.DecimalField(max_digits=6, decimal_places=2)
+    full_name = models.CharField(max_length=10)
+    occurred_at = models.DateTimeField(null=True)
+    how_much = models.DecimalField(max_digits=6, decimal_places=2)
 """
     gen_clean, key_clean, existed_clean = import_project(["racing" => clean_src];
                                                           output_file = "strict_clean.jl",
                                                           strict_fields = true)
     try
-        @test occursin("nome = Models.CharField(max_length=10)", gen_clean)
-        @test occursin("quando = Models.DateTimeField(", gen_clean)
-        @test occursin("quanto = Models.DecimalField(", gen_clean)
+        @test occursin("full_name = Models.CharField(max_length=10)", gen_clean)
+        @test occursin("occurred_at = Models.DateTimeField(", gen_clean)
+        @test occursin("how_much = Models.DecimalField(", gen_clean)
         @test occursin("id = Models.IDField()", gen_clean)
         @test !occursin("does not implement", gen_clean)
     finally
@@ -5420,12 +5420,12 @@ end
 from django.db import models
 
 class Other(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 
 class Thing(models.Model):
     owner = models.ForeignKey(Other, on_delete=models.CASCADE)
     owner_id = models.SmallIntegerField()
-    nome = models.CharField(max_length=10)
+    full_name = models.CharField(max_length=10)
 """
     generated, config_key, db_dir_existed = import_project(["racing" => fk_clash];
                                                            output_file = "fk_key_clash.jl")
@@ -5434,7 +5434,7 @@ class Thing(models.Model):
         @test !occursin("owner_id = Models.ForeignKey", generated)
         @test occursin("field 'owner_id' on 'racing.Thing'", generated)
         # Everything else on the class, and the FK's target model, are untouched.
-        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test occursin("full_name = Models.CharField(max_length=10)", generated)
         @test occursin("Other::Models.ModelType = Models.Model(", generated)
         # The model still gets its implicit key: nothing here claimed `id` or the primary key.
         sandbox = Module()
@@ -5507,8 +5507,8 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.CharField(max_length=10)
-    nome = models.CharField(max_length=40)
-    ativo = models.BooleanField()
+    full_name = models.CharField(max_length=40)
+    enabled = models.BooleanField()
 """
     generated, config_key, db_dir_existed =
         import_project(["access" => src]; output_file = "ignored_id.jl",
@@ -5525,8 +5525,8 @@ class Thing(models.Model):
         # a models.py Django accepts, and it lands here only because the caller dropped CharField.
         @test !occursin("models.E004", generated)
         # The columns the ignore list did not name are untouched.
-        @test occursin("ativo = Models.BooleanField()", generated)
-        @test !occursin("nome =", generated)
+        @test occursin("enabled = Models.BooleanField()", generated)
+        @test !occursin("full_name =", generated)
         # The model really does come out keyless — the marker is describing a fact, not hedging.
         sandbox = Module()
         Core.eval(sandbox, Meta.parse(generated))
@@ -5545,7 +5545,7 @@ from django.db import models
 
 class Thing(models.Model):
     id = models.CharField(max_length=10)
-    nome = models.CharField(max_length=40)
+    full_name = models.CharField(max_length=40)
 """
     key_e, existed_e = project_config!()
     try
@@ -5586,17 +5586,17 @@ end
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.CharField(max_length=10, primary_key=True)
-    ativo = models.BooleanField()
+    ref_code = models.CharField(max_length=10, primary_key=True)
+    enabled = models.BooleanField()
 """
     generated, config_key, db_dir_existed =
         import_project(["access" => src]; output_file = "ignored_pk.jl",
                        autofields_ignore = ["Manager", "CharField"])
     try
-        # The name claimed is `codigo`, not `id`, so nothing suppresses the implicit key.
+        # The name claimed is `ref_code`, not `id`, so nothing suppresses the implicit key.
         @test occursin("id = Models.IDField()", generated)
-        @test occursin("ativo = Models.BooleanField()", generated)
-        @test !occursin("codigo", generated)
+        @test occursin("enabled = Models.BooleanField()", generated)
+        @test !occursin("ref_code", generated)
         # And no #428 marker: this class never declared a field named `id`.
         @test !occursin("declares a field named 'id'", generated)
     finally
@@ -5625,7 +5625,7 @@ class Base(models.Model):
 
 class Thing(Base):
     id = models.BigIntegerField()
-    ativo = models.BooleanField()
+    enabled = models.BooleanField()
 """
     generated, config_key, db_dir_existed =
         import_project(["access" => src]; output_file = "ignore_override.jl",
@@ -5671,7 +5671,7 @@ end
 from django.db import models
 
 class Other(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 
 class Thing(models.Model):
     owner = models.ForeignKey(Other, on_delete=models.CASCADE)
@@ -5701,7 +5701,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Other(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 
 class Thing(models.Model):
     owner_id = models.IntegerField()
@@ -5726,15 +5726,15 @@ class Thing(models.Model):
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.CharField(max_length=5)
-    codigo = models.IntegerField()
+    ref_code = models.CharField(max_length=5)
+    ref_code = models.IntegerField()
 """
     generated_c, key_c, existed_c =
         import_project(["racing" => plain_clash]; output_file = "same_body_plain.jl")
     try
-        @test occursin("both write the column 'codigo'", generated_c)
+        @test occursin("both write the column 'ref_code'", generated_c)
         @test !occursin("Django appends `_id`", generated_c)
-        @test occursin("codigo = Models.IntegerField()", generated_c)
+        @test occursin("ref_code = Models.IntegerField()", generated_c)
     finally
         cleanup_project_test!(key_c, existed_c)
     end
@@ -5768,17 +5768,17 @@ end
 from django.db import models
 
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 
 class Base(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
     owner = models.ForeignKey(Other, on_delete=models.CASCADE)
 
     class Meta:
         abstract = True
 
 class Thing(Base):
-    nome = models.CharField(max_length=40)
+    full_name = models.CharField(max_length=40)
     owner = models.ForeignKey(Other, on_delete=models.PROTECT)
 """
     generated, config_key, db_dir_existed =
@@ -5786,7 +5786,7 @@ class Thing(Base):
     try
         @test !occursin("both write the column", generated)
         # ...and both overrides took effect, which is what the silence is protecting.
-        @test occursin("nome = Models.CharField(max_length=40)", generated)
+        @test occursin("full_name = Models.CharField(max_length=40)", generated)
         @test occursin("on_delete=PROTECT", generated)
         @test !occursin("on_delete=CASCADE", generated)
     finally
@@ -5802,7 +5802,7 @@ end
 from django.db import models
 
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 
 class Base(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE, related_name='bases')
@@ -5855,12 +5855,12 @@ end
 from django.db import models
 
 class Other(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 
 class Thing(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE)
     other_id = models.SmallIntegerField()
-    ativo = models.BooleanField()
+    enabled = models.BooleanField()
 """
     generated, key, existed = import_project(["racing" => later_unsupported];
                                              output_file = "collision_later_skipped.jl")
@@ -5883,7 +5883,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Other(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 
 class Thing(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE)
@@ -5908,7 +5908,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Other(models.Model):
-    nome = models.CharField(max_length=5)
+    full_name = models.CharField(max_length=5)
 
 class Thing(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE)
@@ -5948,7 +5948,7 @@ class Base(models.Model):
 
 class Thing(Base):
     id = models.CharField(max_length=10)
-    ativo = models.BooleanField()
+    enabled = models.BooleanField()
 """
     generated, config_key, db_dir_existed =
         import_project(["access" => src]; output_file = "ignored_id_over_built.jl",
@@ -6028,7 +6028,7 @@ end
 @testset "each declaration's origin is named independently (#429)" begin
     other = """
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 """
 
     # A. Two different abstract bases. The child's own body declares neither field.
@@ -6048,7 +6048,7 @@ class BaseB(models.Model):
         abstract = True
 
 class Thing(BaseA, BaseB):
-    ativo = models.BooleanField()
+    enabled = models.BooleanField()
 """
     generated, key, existed = import_project(["racing" => two_bases];
                                              output_file = "collision_two_bases.jl")
@@ -6058,7 +6058,7 @@ class Thing(BaseA, BaseB):
         # Prefix matches, so the app-boundary suffix needs its own negative or a mutation that
         # appends it unconditionally passes every assertion here. Both bases are in `racing`.
         @test !occursin("another app", generated)
-        # The claim that killed the first version: `Thing`'s body holds only `ativo`.
+        # The claim that killed the first version: `Thing`'s body holds only `enabled`.
         @test !occursin("declared on this class", generated)
         @test !occursin("in the SAME class body", generated)
     finally
@@ -6083,7 +6083,7 @@ class Mid(Root):
         abstract = True
 
 class Thing(Mid):
-    ativo = models.BooleanField()
+    enabled = models.BooleanField()
 """
     gen_b, key_b, existed_b = import_project(["racing" => chain];
                                              output_file = "collision_chain.jl")
@@ -6109,7 +6109,7 @@ class Base(models.Model):
         abstract = True
 
 class Thing(Base):
-    ativo = models.BooleanField()
+    enabled = models.BooleanField()
 """
     gen_c, key_c, existed_c = import_project(["racing" => one_base];
                                              output_file = "collision_one_base.jl")
@@ -6162,13 +6162,13 @@ end
 from django.db import models
 
 class Thing(models.Model):
-    codigo = models.CharField(max_length=5)
-    codigo = models.IntegerField()
+    ref_code = models.CharField(max_length=5)
+    ref_code = models.IntegerField()
 """
     generated, key, existed = import_project(["racing" => duplicate_name];
                                              output_file = "collision_same_name.jl")
     try
-        @test occursin("both write the column 'codigo'", generated)
+        @test occursin("both write the column 'ref_code'", generated)
         @test occursin("Python keeps only the last assignment", generated)
         @test occursin("`manage.py check` passes", generated)
         @test occursin("Delete the declaration you did not mean", generated)
@@ -6185,7 +6185,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 
 class Thing(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE)
@@ -6211,7 +6211,7 @@ class Thing(models.Model):
 from django.db import models
 
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 
 class Thing(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE)
@@ -6235,8 +6235,8 @@ end
 # The origin phrase first compared owners by class NAME, justified in a comment as "a class cannot
 # inherit from one of its own name, which the inheritance-cycle guard refuses outright". The guard
 # is keyed on `(app, cls.name)`, so it refuses a class inheriting from itself in the SAME app and
-# says nothing about a same-named abstract base in another one — `core.Pessoa` abstract and
-# `rh.Pessoa` concrete is an ordinary Django layout.
+# says nothing about a same-named abstract base in another one — `core.Spectator` abstract and
+# `archive.Spectator` concrete is an ordinary Django layout.
 #
 # The symptom was a phrase that contradicted itself on its face: the two-different-owners arm
 # printing "the first declared on this class, the second declared on this class", with two line
@@ -6247,7 +6247,7 @@ end
 from django.db import models
 
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 
 class Thing(models.Model):
     other = models.ForeignKey(Other, on_delete=models.CASCADE)
@@ -6292,7 +6292,7 @@ end
 @testset "the ManyToManyField clause does not assume the m2m survived (#429)" begin
     other = """
 class Other(models.Model):
-    rotulo = models.CharField(max_length=5)
+    tag_line = models.CharField(max_length=5)
 """
 
     # A. m2m declared FIRST: the ForeignKey's column is what the file emits.
@@ -6318,12 +6318,12 @@ class Thing(models.Model):
     both_m2m = """
 from django.db import models
 $other
-class Outro(models.Model):
-    rotulo = models.CharField(max_length=5)
+class Spare(models.Model):
+    tag_line = models.CharField(max_length=5)
 
 class Thing(models.Model):
     tags = models.ManyToManyField(Other)
-    tags = models.ManyToManyField(Outro)
+    tags = models.ManyToManyField(Spare)
 """
     gen_b, key_b, existed_b = import_project(["racing" => both_m2m];
                                              output_file = "collision_both_m2m.jl")
@@ -6334,7 +6334,7 @@ class Thing(models.Model):
         # which never sees either field.
         @test occursin("Python keeps only the last assignment", gen_b)
         @test !occursin("models.E007", gen_b)
-        @test occursin("tags = Models.ManyToManyField(\"Outro\"", gen_b)
+        @test occursin("tags = Models.ManyToManyField(\"Spare\"", gen_b)
     finally
         cleanup_project_test!(key_b, existed_b)
     end
@@ -6371,7 +6371,7 @@ end
 # The fix registers the aliased token as an enum key in `_django_graph_from_scopes`, next to the
 # module-scope alias loop that has done the same for imported module-level enums since #370. The
 # fixture below is shared by the whole group: `core` declares an abstract `Base` with a nested
-# `Status`, and a SECOND abstract class `Outra` whose nested `Status` has different members. That
+# `Status`, and a SECOND abstract class `Decoy` whose nested `Status` has different members. That
 # second class is not decoration — it is what makes the collision testset able to fail.
 # ─────────────────────────────────────────────────────────────────────────────
 const ALIAS_ENUM_CORE = """
@@ -6384,7 +6384,7 @@ class Base(models.Model):
     class Meta:
         abstract = True
 
-class Outra(models.Model):
+class Decoy(models.Model):
     class Status(models.TextChoices):
         WRONG = "w", "Wrong"
 
@@ -6399,14 +6399,14 @@ class Outra(models.Model):
 from django.db import models
 from core.models import Base as CoreBase
 
-class Pedido(CoreBase):
-    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+class SeasonTicket(CoreBase):
+    phase = models.CharField(max_length=1, choices=CoreBase.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "shop" => shop];
                                              output_file = "enum_alias_qualified.jl")
     try
         # The same result the un-aliased spelling produces — that equivalence IS the issue.
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
         # And the marker whose advice was unfollowable is gone. Asserted on the specific reference,
         # not on `# PormG:` at all: this fixture legitimately carries an unrelated marker (`core`
@@ -6426,13 +6426,13 @@ end
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
-    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+class SeasonTicket(Base):
+    phase = models.CharField(max_length=1, choices=Base.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "shop" => shop];
                                              output_file = "enum_unaliased_xapp.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
     finally
         cleanup_project_test!(key, existed)
@@ -6448,12 +6448,12 @@ class Base(models.Model):
     class Meta:
         abstract = True
 
-class Pedido(Base):
-    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+class SeasonTicket(Base):
+    phase = models.CharField(max_length=1, choices=Base.Status.choices)
 """
     generated2, key2, existed2 = import_project(single; output_file = "enum_unaliased_single.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated2)
     finally
         cleanup_project_test!(key2, existed2)
@@ -6461,29 +6461,29 @@ class Pedido(Base):
 end
 
 @testset "an alias that collides with a real class name resolves to the class it names (#425)" begin
-    # The case that decided the design. `shop` binds `core`'s `Base` under the name `Outra` — and
-    # `core` also DECLARES an `Outra`, with a different `Status`. Python's answer is unambiguous:
-    # `Outra` is a name in `shop`'s module and it is bound to `Base`, so `Outra.Status` is
+    # The case that decided the design. `shop` binds `core`'s `Base` under the name `Decoy` — and
+    # `core` also DECLARES a `Decoy`, with a different `Status`. Python's answer is unambiguous:
+    # `Decoy` is a name in `shop`'s module and it is bound to `Base`, so `Decoy.Status` is
     # `NESTED`.
     #
     # An earlier candidate fix carried the alias alongside each scope entry and retried it only
-    # AFTER the pre-existing lenient key, which looks `Outra` up as a scope name in any app already
-    # in scope — so it found `core`'s real `Outra` first and imported `WRONG` in silence. This
+    # AFTER the pre-existing lenient key, which looks `Decoy` up as a scope name in any app already
+    # in scope — so it found `core`'s real `Decoy` first and imported `WRONG` in silence. This
     # assertion is what rejected that design, and it rejected the same mistake a second time during
     # #512, which first appended the `enum_aliases` probe after that same loop. `_lookup_enum`'s
     # qualified fallback is therefore three explicit passes — the writing module's own scopes, then
     # its own bindings, then every other app in scope — which is Python's order.
     shop = """
 from django.db import models
-from core.models import Base as Outra
+from core.models import Base as Decoy
 
-class Pedido(Outra):
-    situacao = models.CharField(max_length=1, choices=Outra.Status.choices)
+class SeasonTicket(Decoy):
+    phase = models.CharField(max_length=1, choices=Decoy.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "shop" => shop];
                                              output_file = "enum_alias_collision.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
         # The wrong enumeration, named explicitly. A silent wrong value is the one outcome this
         # importer exists to prevent, so it is asserted absent rather than merely not asserted.
@@ -6494,7 +6494,7 @@ class Pedido(Outra):
 end
 
 @testset "an alias resolves even when the base is reachable through another token first (#425)" begin
-    # The diamond. `Pedido` reaches `core.Base` twice: through `access.Mixin` and directly through
+    # The diamond. `SeasonTicket` reaches `core.Base` twice: through `access.Mixin` and directly through
     # its own `CoreBase` alias. `_enum_scopes`' `seen` set makes the FIRST token to reach an
     # ancestor win, and the walk descends `Mixin` first — so any fix that records the alias inside
     # that walk records `access`'s token and discards `shop`'s own. Registering the binding from
@@ -6513,14 +6513,14 @@ from django.db import models
 from access.models import Mixin
 from core.models import Base as CoreBase
 
-class Pedido(Mixin, CoreBase):
-    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+class SeasonTicket(Mixin, CoreBase):
+    phase = models.CharField(max_length=1, choices=CoreBase.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "access" => access,
                                               "shop" => shop];
                                              output_file = "enum_alias_diamond.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
     finally
         cleanup_project_test!(key, existed)
@@ -6546,8 +6546,8 @@ class Mixin(CoreBase):
 from django.db import models
 from access.models import Mixin
 
-class Pedido(Mixin):
-    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+class SeasonTicket(Mixin):
+    phase = models.CharField(max_length=1, choices=CoreBase.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE, "access" => access,
                                               "shop" => shop];
@@ -6557,7 +6557,7 @@ class Pedido(Mixin):
         @test occursin("references `CoreBase.Status`", generated)
         @test occursin("which this file does not define", generated)
         # The column is real and survives; only the enumeration is dropped.
-        @test occursin("situacao = Models.CharField(max_length=1)", generated)
+        @test occursin("phase = Models.CharField(max_length=1)", generated)
     finally
         cleanup_project_test!(key, existed)
     end
@@ -6572,16 +6572,16 @@ end
 from django.db import models
 from core.models import Base as CoreBase
 
-class Pedido(CoreBase):
-    situacao = models.CharField(max_length=1, choices=Nada.Status.choices)
+class SeasonTicket(CoreBase):
+    phase = models.CharField(max_length=1, choices=Nowhere.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE,
                                               "shop" => shop_unknown_owner];
                                              output_file = "enum_alias_unknown_owner.jl")
     try
         @test !occursin("(\"n\", \"Nested\")", generated)
-        @test occursin("references `Nada.Status`", generated)
-        @test occursin("situacao = Models.CharField(max_length=1)", generated)
+        @test occursin("references `Nowhere.Status`", generated)
+        @test occursin("phase = Models.CharField(max_length=1)", generated)
     finally
         cleanup_project_test!(key, existed)
     end
@@ -6590,8 +6590,8 @@ class Pedido(CoreBase):
 from django.db import models
 from core.models import Base as CoreBase
 
-class Pedido(CoreBase):
-    situacao = models.CharField(max_length=1, choices=CoreBase.Nope.choices)
+class SeasonTicket(CoreBase):
+    phase = models.CharField(max_length=1, choices=CoreBase.Nope.choices)
 """
     generated2, key2, existed2 = import_project(["core" => ALIAS_ENUM_CORE,
                                                  "shop" => shop_unknown_member];
@@ -6599,7 +6599,7 @@ class Pedido(CoreBase):
     try
         @test !occursin("(\"n\", \"Nested\")", generated2)
         @test occursin("references `CoreBase.Nope`", generated2)
-        @test occursin("situacao = Models.CharField(max_length=1)", generated2)
+        @test occursin("phase = Models.CharField(max_length=1)", generated2)
     finally
         cleanup_project_test!(key2, existed2)
     end
@@ -6621,19 +6621,19 @@ end
 # statement was written in. That is a stricter rule than the pass above it, not a looser one, which
 # is what keeps the grandparent case below dropped.
 #
-# Ordering inside the qualified fallback is load-bearing and is asserted by the `Outra` collision
+# Ordering inside the qualified fallback is load-bearing and is asserted by the `Decoy` collision
 # testset above: own scopes, then own bindings, then every other app in scope. Consulting bindings
 # after the all-apps loop finds another app's real class of that name first and imports the wrong
 # enumeration in SILENCE.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "an alias bound in the base's own module resolves for a child in another app (#512)" begin
     # The issue's reproduction, and the one that shows the defect rather than merely a gap: `core`
-    # writes BOTH the alias and the field that uses it, and `shop.Pedido` inherits that statement.
+    # writes BOTH the alias and the field that uses it, and `shop.SeasonTicket` inherits that statement.
     # One statement, one file, two different answers before this change.
     other = """
 from django.db import models
 
-class Fonte(models.Model):
+class Feed(models.Model):
     class Status(models.TextChoices):
         NESTED = "n", "Nested"
 
@@ -6642,22 +6642,22 @@ class Fonte(models.Model):
 """
     core = """
 from django.db import models
-from other.models import Fonte as OF
+from other.models import Feed as OF
 
 class Base(OF):
-    situacao = models.CharField(max_length=1, choices=OF.Status.choices)
+    phase = models.CharField(max_length=1, choices=OF.Status.choices)
 
     class Meta:
         abstract = True
 
-class CoreConcreto(Base):
-    nome = models.CharField(max_length=10)
+class CoreConcrete(Base):
+    full_name = models.CharField(max_length=10)
 """
     shop = """
 from django.db import models
 from core.models import Base
 
-class Pedido(Base):
+class SeasonTicket(Base):
     total = models.IntegerField()
 """
     generated, key, existed = import_project(["other" => other, "core" => core, "shop" => shop];
@@ -6666,7 +6666,7 @@ class Pedido(Base):
         # Both models carry the enumeration. Counted, not merely found: one occurrence would mean
         # the old split answer with the resolving half passing the assertion.
         @test length(collect(eachmatch(r"choices=\(\(\"n\", \"Nested\"\),\)\)", generated))) == 2
-        @test occursin("nome = Models.CharField(max_length=10)", generated)
+        @test occursin("full_name = Models.CharField(max_length=10)", generated)
         @test occursin("total = Models.IntegerField()", generated)
         # ...and no marker survives, because there is nothing left to report. The old one was
         # unfollowable anyway: `other` IS in the pair list, which is how `Base` resolved its own
@@ -6690,17 +6690,17 @@ end
 from django.db import models
 from core.models import Base as CoreBase
 
-class Pedido(models.Model):
-    situacao = models.CharField(max_length=1, choices=CoreBase.Status.choices)
+class SeasonTicket(models.Model):
+    phase = models.CharField(max_length=1, choices=CoreBase.Status.choices)
 """
     generated, key, existed = import_project(["core" => ALIAS_ENUM_CORE,
                                               "shop" => shop_never_inherited];
                                              output_file = "enum_alias_never_inherited.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated)
         @test !occursin("references `CoreBase.Status`", generated)
-        # The decoy `Outra` in the shared fixture declares a conflicting `Status`. Asserted absent
+        # The `Decoy` class in the shared fixture declares a conflicting `Status`. Asserted absent
         # because a wrong enumeration is worse than a dropped one.
         @test !occursin("(\"w\", \"Wrong\")", generated)
     finally
@@ -6714,14 +6714,14 @@ class Pedido(models.Model):
 from django.db import models
 from core.models import Base
 
-class Pedido(models.Model):
-    situacao = models.CharField(max_length=1, choices=Base.Status.choices)
+class SeasonTicket(models.Model):
+    phase = models.CharField(max_length=1, choices=Base.Status.choices)
 """
     generated_p, key_p, existed_p = import_project(["core" => ALIAS_ENUM_CORE,
                                                     "shop" => shop_plain];
                                                    output_file = "enum_plain_never_inherited.jl")
     try
-        @test occursin("situacao = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
+        @test occursin("phase = Models.CharField(max_length=1, choices=((\"n\", \"Nested\"),))",
                        generated_p)
         @test !occursin("references `Base.Status`", generated_p)
     finally
@@ -6743,7 +6743,7 @@ from django.db import models
 LEN = 5
 
 class Base(models.Model):
-    nome = models.CharField(max_length=LEN)
+    full_name = models.CharField(max_length=LEN)
 
     class Meta:
         abstract = True
@@ -6754,14 +6754,14 @@ from core.models import Base
 
 LEN = 50
 
-class Pedido(Base):
-    apelido = models.CharField(max_length=LEN)
+class SeasonTicket(Base):
+    nickname = models.CharField(max_length=LEN)
 """
     generated, key, existed = import_project(["core" => core, "shop" => shop];
                                              output_file = "const_948_origin.jl")
     try
-        @test occursin("nome = Models.CharField(max_length=5)", generated)
-        @test occursin("apelido = Models.CharField(max_length=50)", generated)
+        @test occursin("full_name = Models.CharField(max_length=5)", generated)
+        @test occursin("nickname = Models.CharField(max_length=50)", generated)
         @test !occursin("# PormG: field", generated)
     finally
         cleanup_project_test!(key, existed)

@@ -20,10 +20,10 @@ to fuse it into the generated model's **positional name**:
 
 ```julia
 # before — the app label is part of the logical name
-Dim_uf = Models.Model("dash_dim_uf", …)
+Pit_lane = Models.Model("myapp_pit_lane", …)
 
 # after — the logical handle and the physical table are separate
-Dim_uf = Models.Model("dim_uf", db_table = "dash_dim_uf", …)
+Pit_lane = Models.Model("pit_lane", db_table = "myapp_pit_lane", …)
 ```
 
 One value cannot express the `core_` / `access_` / `imports_` of a real multi-app Django project, and
@@ -32,22 +32,22 @@ PormG is structurally one models file per *database*, not per app. Carrying the 
 import (#346).
 
 The Julia **binding is unchanged**: it was always derived from the Python class name and never saw
-the prefix. `M.Dim_uf` keeps working.
+the prefix. `M.Pit_lane` keeps working.
 
 ### The one forced case — regenerating a prefixed import that has a `ManyToManyField`
 
-**Existing generated files keep working untouched.** `Models.Model("dash_dim_uf", …)` still means the
-table `dash_dim_uf`; nothing forces you to regenerate. The new spelling only appears when you do.
+**Existing generated files keep working untouched.** `Models.Model("myapp_pit_lane", …)` still means the
+table `myapp_pit_lane`; nothing forces you to regenerate. The new spelling only appears when you do.
 
 When you regenerate, a model with an **auto-derived** `ManyToManyField` (no `db_table` of its own, no
-`through=`) changes all three names of its join table. For `class DimIbge` with `ufs =
-ManyToManyField(Dim_uf)` under `django_prefix = "dash"`:
+`through=`) changes all three names of its join table. For `class PitWall` with `lanes =
+ManyToManyField(Pit_lane)` under `django_prefix = "myapp"`:
 
 | | before | after | Django's actual |
 | :--- | :--- | :--- | :--- |
-| join table | `dimibge_ufs` | `dash_dimibge_ufs` | `dash_dimibge_ufs` |
-| owner column | `dash_dimibge_id` | `dimibge_id` | `dimibge_id` |
-| target column | `dash_dim_uf_id` | `dim_uf_id` | `dim_uf_id` |
+| join table | `pitwall_lanes` | `myapp_pitwall_lanes` | `myapp_pitwall_lanes` |
+| owner column | `myapp_pitwall_id` | `pitwall_id` | `pitwall_id` |
+| target column | `myapp_pit_lane_id` | `pit_lane_id` | `pit_lane_id` |
 
 The right-hand columns are what changed and why: **before, PormG agreed with Django on none of the
 three.** The table dropped the app label (`get_model_name` stripped it) while the columns kept it
@@ -56,10 +56,10 @@ as well.
 
 If the owning class declares `Meta.db_table`, the join table follows **that** rather than the app
 prefix — Django derives it from `opts.db_table`, not from `<app>_<model>`. For
-`Meta.db_table = "rh_matricula_legado"` with `setores = ManyToManyField(...)`:
+`Meta.db_table = "f1_enrolment_legacy"` with `crews = ManyToManyField(...)`:
 
 ```
-matricula_setores   →   rh_matricula_legado_setores
+enrolment_crews   →   f1_enrolment_legacy_crews
 ```
 
 Which way this bites depends on who created the through table:

@@ -15,7 +15,7 @@ using PormG
 PormG.setup()
 
 # Custom folder
-PormG.setup("db_bs")
+PormG.setup("db_other")
 ```
 This will guide you through creating the `db/` folder and configuring your connection.
 

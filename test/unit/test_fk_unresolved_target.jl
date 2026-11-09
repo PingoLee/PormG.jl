@@ -104,10 +104,10 @@ end
     # name or owner, so without this the error is "target X is missing" for a parent that a dozen
     # children may reference — and every DDL call site has both in scope, so they all pass them.
     ctx_err = try
-      fk_target_table(digit_fk; column = "co_dia_semana", model = "tb_agendado"); nothing
+      fk_target_table(digit_fk; column = "statusid", model = "race_entry"); nothing
     catch e; e end
-    @test occursin("co_dia_semana", ctx_err.msg)
-    @test occursin("tb_agendado", ctx_err.msg)
+    @test occursin("statusid", ctx_err.msg)
+    @test occursin("race_entry", ctx_err.msg)
     # …and stays well-formed when the caller cannot: no empty parenthetical, no dangling "in".
     @test !occursin("(foreign key)", err.msg)
     @test !occursin(" in )", err.msg)
@@ -149,11 +149,11 @@ end
     ddl_err = try
       PormG.Dialect.create_table(MockSlFkUnres(),
         Model("fku_ddl_ctx_scratch", id = IDField(),
-              co_dia_semana = ForeignKey("Fku_Filtered_Parent", pk_field = "id")))
+              statusid = ForeignKey("Fku_Filtered_Parent", pk_field = "id")))
       nothing
     catch e; e end
     @test ddl_err isa PormG.ModelDefinitionError
-    @test occursin("co_dia_semana", ddl_err.msg)
+    @test occursin("statusid", ddl_err.msg)
     @test occursin("fku_ddl_ctx_scratch", ddl_err.msg)
 
     ddl = PormG.Dialect.create_table(MockSlFkUnres(), child)

@@ -14,9 +14,9 @@ end
     # Recreated at the start of this block so all inner testsets see a clean state.
     # Keep integration output quiet here; warning behavior is covered in unit tests.
     M.New_join_position.objects.delete(allow_delete_all=true, show_query=:execute)
-    M.New_join_position.objects.create("result" => 1, "description" => "teste 1")
-    M.New_join_position.objects.create("result" => 2, "description" => "teste 2")
-    M.New_join_position.objects.create("result" => 3, "description" => "teste 3")
+    M.New_join_position.objects.create("result" => 1, "description" => "test 1")
+    M.New_join_position.objects.create("result" => 2, "description" => "test 2")
+    M.New_join_position.objects.create("result" => 3, "description" => "test 3")
 
     @testset "simple join: all rows returned, deep path resolved" begin
         # A cjoin with no ON filter attaches every matching joined row.
@@ -33,10 +33,10 @@ end
         # Predicates that belong to the calling model (New_join_position) are rejected
         # by cjoin. Allowing them would silently produce WHERE semantics, not ON semantics.
         q1 = M.New_join_position.objects
-        @test_throws PormGError q1.cjoin("result" => "Result", filters=["description" => "teste 1"], warn=false)
+        @test_throws PormGError q1.cjoin("result" => "Result", filters=["description" => "test 1"], warn=false)
 
         q2 = M.New_join_position.objects
-        @test_throws PormGError q2.cjoin("result" => "Result", filters=["result__description" => "teste 1"], warn=false)
+        @test_throws PormGError q2.cjoin("result" => "Result", filters=["result__description" => "test 1"], warn=false)
     end
 
     @testset "ON filter restricts joined rows (LEFT JOIN default)" begin
@@ -49,8 +49,8 @@ end
 
         @test size(df, 1) == 3
         @test "result__statusid__status" in names(df)
-        @test df[df.description.=="teste 1", :result__statusid__status][1] == "Finished"
-        @test df[df.description.=="teste 2", :result__statusid__status][1] === missing
+        @test df[df.description.=="test 1", :result__statusid__status][1] == "Finished"
+        @test df[df.description.=="test 2", :result__statusid__status][1] === missing
     end
 
     @testset "ON filter with table-prefixed field name" begin
@@ -62,8 +62,8 @@ end
         df = query |> DataFrame
 
         @test size(df, 1) == 3
-        @test df[df.description.=="teste 1", :result__statusid__status][1] == "Finished"
-        @test df[df.description.=="teste 2", :result__statusid__status][1] === missing
+        @test df[df.description.=="test 1", :result__statusid__status][1] == "Finished"
+        @test df[df.description.=="test 2", :result__statusid__status][1] === missing
     end
 
     @testset "ON filter combined with WHERE filter" begin
@@ -71,12 +71,12 @@ end
         # .filter(...) on the main query then restricts the overall result set.
         query = M.New_join_position.objects
         query.cjoin("result" => "Result", filters=["resultid" => 1], warn=false)
-        query.filter("description" => "teste 1")
+        query.filter("description" => "test 1")
         query.values("result__statusid__status", "description", "result")
         df = query |> DataFrame
 
         @test size(df, 1) == 1
-        @test df[1, :description] == "teste 1"
+        @test df[1, :description] == "test 1"
         @test df[1, :result__statusid__status] == "Finished"
     end
 
@@ -89,7 +89,7 @@ end
         df = query |> DataFrame
 
         @test size(df, 1) == 1
-        @test df[1, :description] == "teste 1"
+        @test df[1, :description] == "test 1"
         @test df[1, :result__statusid__status] == "Finished"
     end
 
@@ -109,7 +109,7 @@ end
         df = query |> DataFrame
 
         @test df |> nrow == 1
-        @test df[1, :description] == "teste 1"
+        @test df[1, :description] == "test 1"
         @test df[1, :result] == df[1, :result__statusid] == 1
     end
 

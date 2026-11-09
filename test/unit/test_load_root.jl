@@ -31,7 +31,7 @@ const _LR857_MODELS =
     "module models\nimport PormG.Models\n" *
     "Driver857 = Models.Model(\n    id = Models.IDField(),\n    surname = Models.CharField(null = true)\n)\nend\n"
 
-# A project root holding `db/` and `db_bs/`, a second directory to stand in, and a clean global
+# A project root holding `db/` and `db_other/`, a second directory to stand in, and a clean global
 # config. Every pool opened inside is closed and the config restored, whatever the body did.
 function _lr857_with_project(f)
     saved = copy(PormG.config)
@@ -39,7 +39,7 @@ function _lr857_with_project(f)
     elsewhere = mktempdir()
     try
         empty!(PormG.config)
-        for d in ("db", "db_bs")
+        for d in ("db", "db_other")
             mkpath(joinpath(root, d))
             write(joinpath(root, d, "connection.yml"), _LR857_YML)
         end
@@ -75,10 +75,10 @@ end
 
 @testset "load_many(paths; root) returns the short keys" begin
     _lr857_with_project() do root, elsewhere
-        @test Configuration.load_many(["db", "db_bs"]; root = root, env = "test") == ["db", "db_bs"]
-        @test sort(collect(keys(PormG.config))) == ["db", "db_bs"]
-        @test PormG.config["db_bs"].db_def_folder ==
-              PormG.Models._canonical_folder_path(joinpath(root, "db_bs"))
+        @test Configuration.load_many(["db", "db_other"]; root = root, env = "test") == ["db", "db_other"]
+        @test sort(collect(keys(PormG.config))) == ["db", "db_other"]
+        @test PormG.config["db_other"].db_def_folder ==
+              PormG.Models._canonical_folder_path(joinpath(root, "db_other"))
     end
 end
 
@@ -213,27 +213,27 @@ end
 
 @testset "migrations resolve against the folder, not pwd(), and the hint names the key" begin
     _lr857_with_project() do root, elsewhere
-        db_bs = joinpath(root, "db_bs")
-        write(joinpath(db_bs, "models.jl"), _LR857_MODELS)
-        @test Configuration.load("db_bs"; root = root, env = "test") == "db_bs"
+        db_other = joinpath(root, "db_other")
+        write(joinpath(db_other, "models.jl"), _LR857_MODELS)
+        @test Configuration.load("db_other"; root = root, env = "test") == "db_other"
 
         logger = Test.TestLogger(min_level = Logging.Info)
-        with_logger(() -> Migrations.makemigrations("db_bs"; interactive = false), logger)
+        with_logger(() -> Migrations.makemigrations("db_other"; interactive = false), logger)
 
         # The plan is written under the folder; nothing appears under the working directory.
-        @test isfile(joinpath(db_bs, "migrations", "pending_migrations.jl"))
-        @test !ispath(joinpath(elsewhere, "db_bs"))
+        @test isfile(joinpath(db_other, "migrations", "pending_migrations.jl"))
+        @test !ispath(joinpath(elsewhere, "db_other"))
 
         # The hint tells the user what to call, so it must name the KEY: `migrate(db::String)` looks
         # its argument up as a key, and the absolute folder is not one.
         hint = only(filter(r -> occursin("Migration plan generated", string(r.message)), logger.logs))
-        @test occursin("migrate(\"db_bs\")", string(hint.message))
+        @test occursin("migrate(\"db_other\")", string(hint.message))
         @test !occursin(root, string(hint.message))
 
         # …and following it works, archiving under the folder.
-        res = with_logger(() -> Migrations.migrate("db_bs"; interactive = false), NullLogger())
+        res = with_logger(() -> Migrations.migrate("db_other"; interactive = false), NullLogger())
         @test res.outcome === :applied
-        @test !isempty(readdir(joinpath(db_bs, "migrations", "applied_migrations")))
+        @test !isempty(readdir(joinpath(db_other, "migrations", "applied_migrations")))
     end
 end
 

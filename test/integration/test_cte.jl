@@ -14,16 +14,16 @@ end
     @testset "basic: CTE with join_field, aggregated column reachable" begin
         duplicates = M.Result.objects
         duplicates.filter("statusid" => 1)
-        duplicates.values("driverid", "dias" => Count("resultid"))
+        duplicates.values("driverid", "dup_count" => Count("resultid"))
 
         main_query = M.Result.objects
         main_query.with("tb_dup" => duplicates, join_field="driverid" => "driverid")
         main_query.filter("resultid__@lte" => 100)
-        main_query.values("resultid", "driverid", CTE("tb_dup", "dias"))
+        main_query.values("resultid", "driverid", CTE("tb_dup", "dup_count"))
         df = main_query |> DataFrame
 
         @test nrow(df) == 100
-        @test filter(row -> row.resultid == 1, df)[1, :tb_dup__dias] == 312
+        @test filter(row -> row.resultid == 1, df)[1, :tb_dup__dup_count] == 312
         @test filter(row -> row.resultid == 1, df) |> nrow == 1
         @test filter(row -> row.resultid == 100, df)[1, :driverid] == 5
     end
@@ -347,7 +347,7 @@ end
         # Reuse the "basic" CTE: count results ≤ 100 joined with driver finish counts.
         duplicates = M.Result.objects
         duplicates.filter("statusid" => 1)
-        duplicates.values("driverid", "dias" => Count("resultid"))
+        duplicates.values("driverid", "dup_count" => Count("resultid"))
 
         main_query = M.Result.objects
         main_query.with("tb_dup" => duplicates, join_field="driverid" => "driverid")
@@ -363,7 +363,7 @@ end
         # so exists() must return true (and must not silently drop the CTE).
         duplicates = M.Result.objects
         duplicates.filter("statusid" => 1)
-        duplicates.values("driverid", "dias" => Count("resultid"))
+        duplicates.values("driverid", "dup_count" => Count("resultid"))
 
         main_query = M.Result.objects
         main_query.with("tb_dup" => duplicates, join_field="driverid" => "driverid")
@@ -376,7 +376,7 @@ end
         # CTE source is fine, but the main query asks for an impossible resultid.
         duplicates = M.Result.objects
         duplicates.filter("statusid" => 1)
-        duplicates.values("driverid", "dias" => Count("resultid"))
+        duplicates.values("driverid", "dup_count" => Count("resultid"))
 
         main_query = M.Result.objects
         main_query.with("tb_dup" => duplicates, join_field="driverid" => "driverid")
@@ -703,16 +703,16 @@ end
 @testset "CTE copy-independence and re-execution (#43)" begin
     dup = M.Result.objects
     dup.filter("statusid" => 1)
-    dup.values("driverid", "dias" => Count("resultid"))
+    dup.values("driverid", "dup_count" => Count("resultid"))
 
     q = M.Result.objects
     q.with("tb_dup" => dup, join_field="driverid" => "driverid")
     q.filter("resultid__@lte" => 100)
-    q.values("resultid", "driverid", CTE("tb_dup", "dias"))
+    q.values("resultid", "driverid", CTE("tb_dup", "dup_count"))
     q.order_by("resultid")   # deterministic row order so DataFrame equality is stable
 
     # AC4: re-executing the same query returns identical results (no accumulation).
-    # isequal (not ==): tb_dup__dias comes from a LEFT join and can be `missing`, and
+    # isequal (not ==): tb_dup__dup_count comes from a LEFT join and can be `missing`, and
     # DataFrame `==` returns `missing` (not a Bool) when any cell is missing — which
     # would ERROR @test rather than fail. isequal treats missing == missing and yields Bool.
     df_first = q |> DataFrame

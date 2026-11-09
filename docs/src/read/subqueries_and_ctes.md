@@ -568,7 +568,7 @@ q.filter("ev__seen__@yyyy_mm__@lte" => "1991-10")  # operator suffix
 ```
 
 An **unaliased** projection is named by joining the two halves with a double underscore, so
-`values("tb_dup__dias")` produces a column called `tb_dup__dias`.
+`values("tb_dup__dup_count")` produces a column called `tb_dup__dup_count`.
 
 **SQL functions, aggregates and window clauses take the path** wherever they take a field path:
 

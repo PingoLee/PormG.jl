@@ -65,7 +65,7 @@ grep -rnE '(^|[[:space:],(])[A-Za-z0-9_]*(__[A-Za-z0-9_]*|_)[[:space:]]*=[[:spac
 Recipe #2 is line-based, so it misses a declaration that puts the model name on its own line.
 `Model_to_str` never does that, so this only affects hand-written models. A `__` in **`db_table`** is
 exempt and needs no search: the accessor derives from the logical name only, so
-`Models.Model("internal", db_table = "dash__internal")` — the shape the Django importer emits under
+`Models.Model("internal", db_table = "myapp__internal")` — the shape the Django importer emits under
 an app prefix — is unaffected.
 
 **Run recipe #3 on generated files too — the two halves of the rule behave oppositely there.**

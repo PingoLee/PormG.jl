@@ -625,8 +625,8 @@ end
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "Field constructors: common kwargs and the relation family" begin
     for probe in _PROBES603
-      c = Mo603.CharField(max_length = 10, verbose_name = probe("Sobrenome"), db_column = probe("surname"))
-      @test c.verbose_name == "Sobrenome"
+      c = Mo603.CharField(max_length = 10, verbose_name = probe("Surname"), db_column = probe("surname"))
+      @test c.verbose_name == "Surname"
       @test c.db_column == "surname"
       # Concrete `String`, so nothing hands the DDL path a view.
       @test c.verbose_name isa String
@@ -643,7 +643,7 @@ end
       @test o2o.related_name == "profile" && o2o.pk_field == "driverid"
 
       m2m = Mo603.ManyToManyField(probe("Driver"); through = probe("entries"),
-                                  verbose_name = probe("Pilotos"), db_table = probe("driver_race"),
+                                  verbose_name = probe("Drivers"), db_table = probe("driver_race"),
                                   source_field = probe("driverid"), target_field = probe("raceid"))
       @test m2m.to == "Driver" && m2m.through == "entries"
       @test m2m.db_table == "driver_race" && m2m.source_field == "driverid"

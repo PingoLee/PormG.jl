@@ -1313,11 +1313,11 @@ end
         # ─────────────────────────────────────────────────────────────────────────────
         # Bulk Update: combined DateTimeField + nullable IntegerField + FK + BooleanField
         #
-        # This mirrors the production call shape that prompted the test:
+        # The call shape this covers:
         #   bulk_update(Model.objects, df0,
-        #     columns=[..., "dt_fim", "dt_inicio", ..., "st_fechado_automaticamente",
-        #              "nu_responsavel_anterior", ..., "st_registro_tardio", ...],
-        #     match_on=["id"], filters=["ibge_id" => IBGE]
+        #     columns=[..., "ended_at", "started_at", ..., "closed_automatically",
+        #              "previous_owner_id", ..., "late_entry", ...],
+        #     match_on=["id"], filters=["raceid" => RACE_ID]
         #   )
         # The key scenarios are:
         #   - A DateTime value lands correctly in a nullable DateTimeField column
@@ -1366,7 +1366,7 @@ end
                     is_active    = [true, false],
                 )
 
-                # Static filter "label__@in" acts as the ibge_id equivalent:
+                # Static filter "label__@in" acts as the raceid equivalent:
                 # it must restrict the UPDATE to only the combo rows even though the
                 # DataFrame IDs would uniquely identify them on their own.
                 bulk_update(

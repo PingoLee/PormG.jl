@@ -225,10 +225,10 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Folder-name fallback still resolves the normal case" begin
   cfg = Dict("db"     => _S550(db_def_folder = "db"),
-             "db_gal" => _S550(db_def_folder = "db_gal"))
+             "db_other" => _S550(db_def_folder = "db_other"))
 
   @test PormG.Models._resolve_connect_key("../db", cfg)     == "db"
-  @test PormG.Models._resolve_connect_key("../db_gal", cfg) == "db_gal"
+  @test PormG.Models._resolve_connect_key("../db_other", cfg) == "db_other"
 
   # Nothing matches at either rank → nothing, which is the caller's implicit-load branch.
   @test PormG.Models._resolve_connect_key("../db_unknown", cfg) === nothing

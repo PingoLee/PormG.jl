@@ -5,7 +5,7 @@ PormG uses a flexible configuration system designed for Julia's asynchronous env
 ## Core Concepts
 
 ### 1. Configuration Folders
-In PormG, a **Configuration Folder** (like `db/` or `db_sch/`) is the unit of connection management. Each folder contains a `connection.yml` file that defines how to connect to the database.
+In PormG, a **Configuration Folder** (like `db/` or `db_myapp/`) is the unit of connection management. Each folder contains a `connection.yml` file that defines how to connect to the database.
 
 - **Default Folder:** If you don't specify a path, PormG often looks for `db/`.
 - **Multiple Databases:** You can have multiple folders (e.g., `db_primary`, `db_analytics`) to manage different connections in the same app.

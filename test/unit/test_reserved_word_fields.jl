@@ -34,7 +34,7 @@ ReservedWordModel = Model("reserved_word_scratch",
   id        = IDField(),
   function_ = CharField(null=true, db_column="function"),
   end_      = CharField(null=true, db_column="end"),
-  nome      = CharField(null=true),
+  full_name = CharField(null=true),
 )
 ReservedWordModel.connect_key = "default"
 
@@ -59,7 +59,7 @@ PormG.config["default"] = PormG.Configuration.Settings(
     @test format_fild_name("_end")      == "_end"
     @test format_fild_name("_function") == "_function"
     # Already-bare names still pass through unchanged.
-    @test format_fild_name("nome")      == "nome"
+    @test format_fild_name("full_name") == "full_name"
     @test format_fild_name("id")        == "id"
     # Case is PRESERVED, not folded (#57): declare `driverId`, keep `driverId`.
     @test format_fild_name("driverId")  == "driverId"
@@ -124,7 +124,7 @@ PormG.config["default"] = PormG.Configuration.Settings(
   @testset "values projects reserved-word columns with an alias" begin
     q = ReservedWordModel.objects
     q.filter("function_" => "x")
-    q.values("the_end" => "end_", "function_", "nome")
+    q.values("the_end" => "end_", "function_", "full_name")
     insp = inspect_query(q)
     # Projection renders the PHYSICAL column; the alias is the caller's, or the field name.
     @test occursin("\"Tb\".\"end\" as \"the_end\"", insp[:sql_text])

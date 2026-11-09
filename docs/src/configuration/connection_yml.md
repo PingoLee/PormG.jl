@@ -366,10 +366,10 @@ schema is owned by a Django project:
 ```yaml
 dev:
   adapter: PostgreSQL
-  database: sgrh
+  database: f1_paddock
   config:
     change_data: true
-    django_prefix: dash      # Django tables are dash_<model>
+    django_prefix: myapp     # Django tables are myapp_<model>
 ```
 
 It only ever shapes **names**. The Django importer emits it as each generated model's `db_table`;

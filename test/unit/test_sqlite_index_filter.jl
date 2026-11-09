@@ -327,7 +327,7 @@ end
       # decision the #318 comment said belonged in its own issue. The cross-reader agreement itself
       # is asserted in `test_key_type_round_trip.jl`; what is pinned HERE is that the uniqueness
       # signal this file is about (`_sqlite_single_column_unique_columns`) is what drives it.
-      fetch(pool, "CREATE TABLE parent318 (id INTEGER PRIMARY KEY, nome TEXT);")
+      fetch(pool, "CREATE TABLE parent318 (id INTEGER PRIMARY KEY, full_name TEXT);")
       fetch(pool, """CREATE TABLE child318 (
         id INTEGER PRIMARY KEY,
         o2o INTEGER UNIQUE REFERENCES parent318(id),

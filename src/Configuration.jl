@@ -1739,7 +1739,7 @@ a physical connection for this key, in place of the process-wide hook set with
 
 Without `root`, `path` is both the key and the folder, resolved against `pwd()`. With `root`, the
 two separate (#857): the key is `path` exactly as passed, and the folder is `joinpath(root, path)`,
-stored absolute as `Settings.db_def_folder`. That gives short, stable keys (`"db"`, `"db_bs"`)
+stored absolute as `Settings.db_def_folder`. That gives short, stable keys (`"db"`, `"db_other"`)
 without running from the project root:
 
 ```julia

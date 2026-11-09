@@ -464,8 +464,8 @@ An operand of `Coalesce`, `Greatest`, `Least`, `NullIf`, `Power`, `Mod` and `Con
 **Binary (single condition):** pass `otherwise` directly to `When` — no `Case` wrapper needed:
 
 ```julia
-# CASE WHEN idade >= 60 THEN 'Sim' ELSE 'Não' END
-"mais_60" => When("idade__@gte" => 60, then = "Sim", otherwise = "Não")
+# CASE WHEN position <= 3 THEN 'Yes' ELSE 'No' END
+"podium" => When("position__@lte" => 3, then = "Yes", otherwise = "No")
 ```
 
 **Multi-branch:** wrap a vector of `When` fragments in `Case`:

@@ -2,7 +2,7 @@
 Unit tests for deep (3-hop) ForeignKey traversal SQL generation.
 
 `test_complex_queries.jl` covers Django short-form joins up to 2 hops
-(`result__driver__forename`). Downstream consumers traverse FK chains three hops
+(`result__driver__forename`). A query can traverse FK chains three hops
 deep using the *explicit* FK field-name convention (e.g. `personid__cityid__countryid__name`),
 which walks the join builder's loop one level further and emits a third `INNER JOIN`.
 

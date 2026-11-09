@@ -499,7 +499,7 @@ end
 # multibyte character — a table name or default in Portuguese is enough.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "DryRunResult shows multibyte SQL and each lossy class" begin
-    long = """ALTER TABLE "corridas" DROP COLUMN "situação"; -- """ * repeat("ã", 200)
+    long = """ALTER TABLE "races" DROP COLUMN "situação"; -- """ * repeat("ã", 200)
     silent = LossyAlter(:decimal_scale, "results", "points", "numeric(10,4)", "numeric(10,2)"; scale = 2)
     failing = LossyAlter(:set_not_null, "results", "grid", "integer", "integer"; rows = 3)
     counted_ok = LossyAlter(:set_not_null, "results", "laps", "integer", "integer"; rows = 0)

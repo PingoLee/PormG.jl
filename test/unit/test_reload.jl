@@ -139,10 +139,10 @@ function _run_import_models_package_regression()
     mktempdir() do temp_root
         # This temporary package mirrors the failure mode reported by the user:
         # the package source lives under src/, but the imported model module
-        # lives outside src/ and is loaded via `../db_sch/sch_models.jl`.
+        # lives outside src/ and is loaded via `../db_myapp/myapp_models.jl`.
         #
         # On the broken implementation this path triggered one of three outcomes:
-        # 1. Revise silently skipped the include and `sch_models` stayed undefined.
+        # 1. Revise silently skipped the include and `myapp_models` stayed undefined.
         # 2. The Revise extension mutated PormG.Utils during precompilation and
         #    Julia aborted with the closed-module incremental compilation error.
         # 3. Revise file watchers stayed open and precompilation hung.
@@ -158,11 +158,11 @@ function _run_import_models_package_regression()
         pkg_root = joinpath(temp_root, pkg_name)
         src_dir = joinpath(pkg_root, "src")
         db_dir = joinpath(pkg_root, "db")
-        db_sch_dir = joinpath(pkg_root, "db_sch")
+        db_myapp_dir = joinpath(pkg_root, "db_myapp")
         db_rt_dir = joinpath(pkg_root, "db_rt")
         mkpath(src_dir)
         mkpath(db_dir)
-        mkpath(db_sch_dir)
+        mkpath(db_myapp_dir)
         mkpath(db_rt_dir)
 
         _write_scratch_project(pkg_root, pkg_name, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
@@ -174,22 +174,22 @@ function _run_import_models_package_regression()
                                 "SQLite" => "0aa819cd-b072-5ff4-a722-6bc24af294d9"])
 
         _write_reload_sqlite_connection(joinpath(db_dir, "connection.yml"))
-        _write_reload_sqlite_connection(joinpath(db_sch_dir, "connection.yml"))
+        _write_reload_sqlite_connection(joinpath(db_myapp_dir, "connection.yml"))
         _write_reload_sqlite_connection(joinpath(db_rt_dir, "connection.yml"))
 
-        open(joinpath(db_sch_dir, "sch_models.jl"), "w") do f
+        open(joinpath(db_myapp_dir, "myapp_models.jl"), "w") do f
             write(f, """
-            module sch_models
+            module myapp_models
                 import PormG.Models
 
-                SchThing = Models.Model(\"sch_thing\",
+                MyappThing = Models.Model(\"myapp_thing\",
                     id = Models.IDField(),
                     name = Models.CharField()
                 )
             end
             """)
         end
-        write(joinpath(db_sch_dir, "repl_models.jl"), _reload_models_source("repl_models", "ReplThing", false))
+        write(joinpath(db_myapp_dir, "repl_models.jl"), _reload_models_source("repl_models", "ReplThing", false))
         write(joinpath(db_rt_dir, "rt_models.jl"), _reload_models_source("rt_models", "RtThing", false))
 
         open(joinpath(src_dir, "$(pkg_name).jl"), "w") do f
@@ -200,12 +200,12 @@ function _run_import_models_package_regression()
             const PKG_ROOT = normpath(joinpath(@__DIR__, ".."))
 
             PormG.Configuration.load(joinpath(PKG_ROOT, \"db\"))
-            PormG.Configuration.load(joinpath(PKG_ROOT, \"db_sch\"))
+            PormG.Configuration.load(joinpath(PKG_ROOT, \"db_myapp\"))
 
-            PormG.@import_models \"../db_sch/sch_models.jl\" sch_models
-            import .sch_models as SM
+            PormG.@import_models \"../db_myapp/myapp_models.jl\" myapp_models
+            import .myapp_models as SM
 
-            const MODEL_OK = isdefined(SM, :SchThing) && basename(SM.SchThing.connect_key) == \"db_sch\"
+            const MODEL_OK = isdefined(SM, :MyappThing) && basename(SM.MyappThing.connect_key) == \"db_myapp\"
 
             # #1487: the run-time bind. The body reads no configuration; `__init__` loads it and binds.
             include(\"../db_rt/rt_models.jl\")
@@ -232,14 +232,14 @@ function _run_import_models_package_regression()
         # #1487: a session-level `@import_models` (the REPL shape; `cd` above makes the path resolve),
         # then edit both models files and let Revise apply them. One marker per path, so a failure
         # names the path that did not reload.
-        PormG.Configuration.load(joinpath(ARGS[1], "db_sch"); env = "test")
-        PormG.@import_models "db_sch/repl_models.jl" repl_models
+        PormG.Configuration.load(joinpath(ARGS[1], "db_myapp"); env = "test")
+        PormG.@import_models "db_myapp/repl_models.jl" repl_models
         const PKG = TempReloadPkg
         println("RT_BOUND:", basename(PKG.rt_models.RtThing.connect_key) == "db_rt")
         sleep(1.0)   # a new mtime, and the watchers are up
-        write(joinpath(ARGS[1], "db_sch", "repl_models.jl"), ARGS[3])
+        write(joinpath(ARGS[1], "db_myapp", "repl_models.jl"), ARGS[3])
         write(joinpath(ARGS[1], "db_rt", "rt_models.jl"), ARGS[4])
-        paths = (("MACRO", Base.invokelatest(getfield, Main, :repl_models), :ReplThing, "db_sch"),
+        paths = (("MACRO", Base.invokelatest(getfield, Main, :repl_models), :ReplThing, "db_myapp"),
                  ("RUNTIME", PKG.rt_models, :RtThing, "db_rt"))
         function markers()
             map(paths) do (label, mod, thing, folder)
@@ -753,7 +753,7 @@ end
     @test occursin("MANIFEST_SEEDED:true\n", output)
     @test occursin("MANIFEST_DRIFT:\n", output)
     @test !occursin("Evaluation into the closed module", output)
-    @test !occursin("UndefVarError: `sch_models` not defined", output)
+    @test !occursin("UndefVarError: `myapp_models` not defined", output)
     @test !occursin("world prior to its definition world", output)
     @test !occursin("waiting for IO to finish", output)
     # #1487: both binding paths reload under Revise — the edited field, and a model the edit added,

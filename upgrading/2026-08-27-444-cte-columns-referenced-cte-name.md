@@ -58,8 +58,8 @@ before, and `join_field`'s pair stays two plain strings (it is already scoped by
 sits in). Only the *reference* changes.
 
 **Output column names are unchanged.** An unaliased projection joins the two halves with a DOUBLE
-underscore, so `values(CTE("tb_dup","dias"))` still emits a column named `tb_dup__dias` and code that
-reads results by name (`df[1, :tb_dup__dias]`) needs no edit.
+underscore, so `values(CTE("tb_dup","dup_count"))` still emits a column named `tb_dup__dup_count` and code that
+reads results by name (`df[1, :tb_dup__dup_count]`) needs no edit.
 
 Three further points, because the second argument is a **path**, not a bare column:
 
@@ -140,10 +140,10 @@ for line in cte_references(query); println(line); end
 ```julia
 # ── projections ──────────────────────────────────────────────────────────────
 # ✗ before
-q.values("resultid", "tb_dup__dias")
+q.values("resultid", "tb_dup__dup_count")
 q.values("max_points" => "high_scorers__max_points")
 # ✓ after — the emitted column name is identical in both cases
-q.values("resultid", CTE("tb_dup", "dias"))
+q.values("resultid", CTE("tb_dup", "dup_count"))
 q.values("max_points" => CTE("high_scorers", "max_points"))
 
 # ── filters ──────────────────────────────────────────────────────────────────

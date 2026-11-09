@@ -2011,8 +2011,8 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UPDATE forward-FK anti-join alignment: base FK is present, joined target row
-# is missing, and the update clears the base FK. This mirrors the production
-# co_agendado_id / co_agendado__id__@isnull repair query.
+# is missing, and the update clears the base FK. This covers the
+# race_entry_id / race_entry__id__@isnull repair query shape.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Alignment Verification - UPDATE forward FK anti-join clears base FK" begin
     q = M.Just_a_test_deletion.objects

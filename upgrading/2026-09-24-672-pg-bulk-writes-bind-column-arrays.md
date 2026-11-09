@@ -98,17 +98,17 @@ bulk_insert(M.Telemetry.objects, df)
 ```julia
 # Before: a golden test pinned the per-cell shape of a PostgreSQL bulk_insert
 @test norm(insp[:sql_text]) == norm(raw"""
-  INSERT INTO "dash_tab_vig_hanseniase" ("ibge_id", "hash", …)
+  INSERT INTO "lap_telemetry" ("raceid", "hash", …)
   VALUES ($1, $2, …), ($9, $10, …)""")
-@test insp[:parameters] == Any[IBGE, "a", …, IBGE, "b", …]
+@test insp[:parameters] == Any[RACE_ID, "a", …, RACE_ID, "b", …]
 
 # After: one typed array per column, in the INSERT's column order (bulk_update likewise:
 # `FROM unnest($2::varchar[], …) AS source (…)`, no `source."col"::type` casts, and
 # parameters = [filter values…, one vector per source column])
 @test norm(insp[:sql_text]) == norm(raw"""
-  INSERT INTO "dash_tab_vig_hanseniase" ("ibge_id", "hash", …)
+  INSERT INTO "lap_telemetry" ("raceid", "hash", …)
   SELECT * FROM unnest($1::bigint[], $2::varchar[], …)""")
-@test insp[:parameters] == Any[[IBGE, IBGE], ["a", "b"], …]
+@test insp[:parameters] == Any[[RACE_ID, RACE_ID], ["a", "b"], …]
 ```
 
 ```julia

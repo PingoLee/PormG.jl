@@ -44,7 +44,7 @@ module _PrecompilePgPostgres end
       # `adapter:`/`database:` must sit inside an environment block: written at the top level they
       # belong to no environment, so `load()` threw `MissingConfigurationError` into the `try` below
       # and this workload only ever warmed the *failure* path (#348).
-      for d in ["db", "db_sch"]
+      for d in ["db", "db_myapp"]
         mkdir(d)
         open(joinpath(d, "connection.yml"), "w") do f
           write(f, """
@@ -62,7 +62,7 @@ module _PrecompilePgPostgres end
           # maintainer precompiling with PORMG_ENV=test exported would otherwise miss the `dev:`
           # block and land back on the swallowed-error path this fixture exists to avoid.
           Configuration.load(; env="dev")
-          Configuration.load("db_sch"; env="dev")
+          Configuration.load("db_myapp"; env="dev")
         catch
           # swallows any error: a precompile workload must never fail the package build, and a
           # miss here only costs compile time later.
@@ -224,10 +224,10 @@ module _PrecompilePgPostgres end
     end
   end
 
-  # Cleanup mock config after precompilation is done. "db"/"db_sch" are registered by the
+  # Cleanup mock config after precompilation is done. "db"/"db_myapp" are registered by the
   # `Configuration.load` calls above and point at a now-deleted tmpdir, so they must not be
   # serialized into the cache image alongside their pools.
-  for k in ("precompile", "db", "db_sch")
+  for k in ("precompile", "db", "db_myapp")
     s = get(config, k, nothing)
     s === nothing && continue
     s.connections === nothing || close_pool!(s.connections)

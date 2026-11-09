@@ -108,22 +108,22 @@ end
 @testset "load_many and is_loaded support multi-folder bootstrap" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")
-        db_sch_dir = joinpath(temp_root, "db_sch")
+        db_myapp_dir = joinpath(temp_root, "db_myapp")
         mkpath(db_dir)
-        mkpath(db_sch_dir)
+        mkpath(db_myapp_dir)
         _write_configuration_test_connection(joinpath(db_dir, "connection.yml"))
-        _write_configuration_test_connection(joinpath(db_sch_dir, "connection.yml"))
+        _write_configuration_test_connection(joinpath(db_myapp_dir, "connection.yml"))
 
         # This mirrors the server use case: choose a set of static folders once
         # and let PormG bootstrap them under the selected environment.
-        loaded = PormG.Configuration.load_many([db_dir, db_sch_dir]; env="test")
-        @test loaded == [db_dir, db_sch_dir]
+        loaded = PormG.Configuration.load_many([db_dir, db_myapp_dir]; env="test")
+        @test loaded == [db_dir, db_myapp_dir]
 
         @test PormG.Configuration.is_loaded(db_dir)
-        @test PormG.Configuration.is_loaded(abspath(db_sch_dir))
+        @test PormG.Configuration.is_loaded(abspath(db_myapp_dir))
         @test !PormG.Configuration.is_loaded(joinpath(temp_root, "missing_db"))
 
-        _cleanup_configuration_test_keys([db_dir, db_sch_dir])
+        _cleanup_configuration_test_keys([db_dir, db_myapp_dir])
     end
 end
 
@@ -867,7 +867,7 @@ end
                     "  database: \":memory:\"\n" *
                     "  config:\n" *
                     "    change_data: true\n" *
-                    "    djago_prefix: dash\n" *
+                    "    djago_prefix: myapp\n" *
                     "    chnge_db: true\n" *
                     "    timezone: 'UTC'\n"
                 )

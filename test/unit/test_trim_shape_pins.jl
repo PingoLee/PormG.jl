@@ -68,6 +68,30 @@ function _dynamic_calls_kw(f, argtypes::Tuple)::Vector{String}
   return found
 end
 
+# The same, following every `:invoke` `depth` levels down (#1706): a dynamic call inside a callee —
+# `WeakKeyDict`'s `isequal(pool, ::WeakRef)` under a registry lookup — is invisible to the one-level
+# scans above, which see only the resolved call into it.
+function _dynamic_calls_deep(f, argtypes::Tuple; depth::Int = 6)::Vector{String}
+  found = String[]
+  seen = Set{Any}()
+  walk(tt, d) = begin
+    tt in seen && return
+    push!(seen, tt)
+    for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
+      stmt isa Expr || continue
+      if stmt.head === :call
+        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        push!(found, "$(tt): $(stmt)")
+      elseif stmt.head === :invoke && d > 0
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        mi isa Core.MethodInstance && walk(mi.specTypes, d - 1)
+      end
+    end
+  end
+  walk(Base.signature_type(f, argtypes), depth)
+  return found
+end
+
 # A settings type of its own, which `config` no longer accepts (#1622).
 struct _TspOtherSettings <: PormG.PormGSettings end
 # A test's own stand-in pool, which `with_pool` hands on through its open arm.
@@ -75,6 +99,8 @@ struct _TspStandInPool <: PormG.PormGSQLite end
 # A stand-in under the PostgreSQL marker, and a test's own error with a one-argument reader (#1696).
 struct _TspStandInPGPool <: PormG.PormGPostgres end
 struct _TspFakeError <: Exception end
+# A pool nothing but the registry refers to, for the weak-key check (#1706).
+@noinline _tsp_insert_unreferenced!(r) = (r[PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)] = [5]; nothing)
 PormG.backend_error_fields(::_TspFakeError) =
   (sqlstate = "XX000", constraint = "fake_c", table = "fake_t", column = nothing, message = "fake")
 # A typed-read row type, for the projection pin (#1695).
@@ -669,6 +695,66 @@ end
     # A fields record that leaves a key out reads `nothing` for it, as the keyword constructors did.
     short = CP._as_database_error(lp, cases[7][2]; fields = (sqlstate = "23505", message = "duplicate key"))
     @test (short.sqlstate, short.constraint, short.table, short.column, short.message) == ("23505", N, N, N, "duplicate key")
+  end
+
+  # What: the pool-keyed registries, the waiter queues (`_POOL_WAITERS`, #124) and the monitor state
+  #   (`_POOL_MONITOR`, #125/#127/#1548), which hold per-pool state outside the pool structs.
+  # Expected: a lookup, a `get!` and `release_connection` (which reads the waiter queue on every
+  #   return) make no dynamic call on each pool type PormG builds; the registry is keyed by identity (two
+  #   pools with the same settings are two entries) and weak (a collected pool's entry goes, and it holds
+  #   no pool alive); `getindex` of a missing pool is a `KeyError`; `get!`, `haskey`, `delete!`, `empty!`
+  #   behave as a `Dict`'s; a stand-in pool is a key like any other.
+  # Why: both were `WeakKeyDict{Any,…}`, which hashes its key through `hash(::WeakRef)`, a dynamic
+  #   `hash(::Any)`: with the handle calls resolved (#1683), every trimmed lease ended in a `MethodError`
+  #   on `hash` in `release_connection` (#1706). The tests and the sweeper use the `Dict`-shaped methods.
+  @testset "the pool-keyed registries key on identity, without hashing (#1706)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    waiters(p) = PormG.ConnectionPool._waiters_for(p)
+    monitor(p) = PormG.ConnectionPool._monitor_state(p)
+    peek(p) = get(PormG.ConnectionPool._POOL_WAITERS, p, PormG.ConnectionPool.PoolWaiter[])
+    rel(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.release_connection(p, r[])
+    for P in pools
+      @test (P, "release_connection", _dynamic_calls(rel, (P, Base.RefValue{Any}))) == (P, "release_connection", String[])
+      # The lookups themselves, all the way down: the `WeakKeyDict` they replace resolved at this level and
+      # dispatched inside, on `WeakRef` (`hash`/`isequal` in `rehash!` under `get!` every session; in some
+      # sessions `isequal(pool, ::WeakRef)` on every lookup too), which only the deep walk sees.
+      for (name, f) in (("_waiters_for", waiters), ("_monitor_state", monitor), ("get(_POOL_WAITERS, …)", peek))
+        # depth 12: the `WeakKeyDict`'s `hash`/`isequal` on `WeakRef` sit under `lock` → closure → `get!`
+        # → `lock` → closure → `rehash!`; how much of that inference folds varies by session, and at 6
+        # one run of the parent's registry showed nothing.
+        dyn = _dynamic_calls_deep(f, (P,); depth = 12)
+        @test (P, name, dyn) == (P, name, String[])
+      end
+    end
+    @test CP._POOL_WAITERS isa CP._PoolRegistry && CP._POOL_MONITOR isa CP._PoolRegistry
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    @test !occursin(r"^const .*WeakKeyDict"m, src)
+
+    R = CP._PoolRegistry{Vector{Int}}()
+    a = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    b = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)   # the same settings: another pool, another key
+    @test !haskey(R, a) && get(R, a, :none) === :none && isempty(R)
+    @test_throws KeyError R[a]
+    R[a] = [1]
+    @test R[a] == [1] && haskey(R, a) && !haskey(R, b) && length(R) == 1
+    @test get!(() -> [2], R, b) == [2] && get!(() -> [3], R, b) == [2]   # created once, then found
+    @test length(R) == 2 && Set(map(objectid, CP._registry_pools(R))) == Set(objectid.((a, b)))
+    delete!(R, a)
+    @test !haskey(R, a) && haskey(R, b)
+    stand_in = _TspStandInPool()
+    R[stand_in] = [4]
+    @test R[stand_in] == [4]
+    empty!(R)
+    @test isempty(R) && !haskey(R, b)
+    # Weak: an entry does not keep its pool alive, and a collected pool's entry is gone.
+    weak = CP._PoolRegistry{Vector{Int}}()
+    _tsp_insert_unreferenced!(weak)
+    GC.gc(true); GC.gc(true)
+    @test isempty(CP._registry_pools(weak))
+    weak[b] = [6]                                       # an insert purges what was collected
+    @test length(weak.entries) == 1
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

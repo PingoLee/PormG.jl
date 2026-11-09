@@ -21,6 +21,8 @@
 using Test
 using PormG
 using PormG: Configuration
+# The #1683 pins read the handle type each driver extension registers; the suite loads all four.
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The type of the callee of `stmt` (an `Expr(:call, …)`) in the optimized `ci`.
 function _tsp_callee_type(ci::Core.CodeInfo, callee)::Type
@@ -399,6 +401,125 @@ end
       end
       @test isempty(dyn)
       isempty(dyn) || @info "dynamic _values_field calls" tt dyn
+    end
+  end
+
+  # What: the calls that hand a driver handle, read from a pool's untyped `Vector{Any}` slot, to the
+  #   driver: release (and its retire-on-return close), the liveness probe, renewal, close, the
+  #   transaction's finalize, and the statement dispatch, on each pool type PormG builds.
+  # Expected: every driver extension registers a CONCRETE handle type (`backend_handle_type`); with the
+  #   handle typed `Any`, as it comes out of a slot, none of those functions makes a dynamic call; a
+  #   handle of the registered type reaches the callee at that type, and a stand-in handle (the unit
+  #   suite's mocks) takes the open arm and reaches it unchanged.
+  # Why: the slots are `Vector{Any}` because core never names a driver type, so each of these calls
+  #   dispatched at run time, and in a trimmed image found nothing compiled: the Nitro pools probe's
+  #   `lease` missed `release_connection(pool, conn::Any)` (#1683, round 4 of #1600). A registered type
+  #   that is not concrete (`Postgres.Connection` is a `UnionAll`) would leave the call dynamic again.
+  @testset "a handle from an untyped slot reaches the driver at its concrete type (#1683)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    for P in pools
+      H = PormG.backend_handle_type(P)
+      @test (P, isconcretetype(H)) == (P, true)
+      for (name, f, args) in (("release_connection", CP.release_connection, (P, Any)),
+                              ("_renew_or_discard_connection!", CP._renew_or_discard_connection!, (P, Any)),
+                              ("_with_handle(backend_is_alive)", CP._with_handle, (typeof(PormG.backend_is_alive), P, Any)),
+                              ("_with_handle(_handle_close)", CP._with_handle, (typeof(CP._handle_close), P, Any)),
+                              ("_with_handle(_handle_close_latest)", CP._with_handle, (typeof(CP._handle_close_latest), P, Any)),
+                              ("_cancel_abandoned_statement!", CP._cancel_abandoned_statement!, (P, Any)),
+                              # both arities: on PostgreSQL and MySQL the 5-argument method forwards to
+                              # the 4-argument one, whose body the detector does not follow
+                              ("_execute_async/4", CP._execute_async, (P, Any, String, Nothing)),
+                              ("_execute_async/5", CP._execute_async, (P, Any, String, Nothing, Nothing)))
+        dyn = _dynamic_calls(f, args)
+        @test (P, name, dyn) == (P, name, String[])
+      end
+      for (name, f) in (("_close_driver_handle!", CP._close_driver_handle!),
+                        ("finalize_transaction_connection!", CP.finalize_transaction_connection!),
+                        ("_discard_connection!", CP._discard_connection!))
+        dyn = _dynamic_calls_kw(f, (P, Any))
+        @test (P, name, dyn) == (P, name, String[])
+      end
+    end
+    # The caller's side, which is where the probe's row was: a call with the handle typed `Any` (what
+    # `acquire_connection` returns) resolves only because the callee takes it `@nospecialize`.
+    rel(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.release_connection(p, r[])
+    cls(p, r::Base.RefValue{Any}) = PormG.ConnectionPool._close_driver_handle!(p, r[])
+    fin(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.finalize_transaction_connection!(p, r[]; renew = true)
+    ren(p, r::Base.RefValue{Any}) = PormG.ConnectionPool.reconnect_db(p, r[])
+    for P in pools, (name, caller) in (("release_connection", rel), ("_close_driver_handle!", cls),
+                                       ("finalize_transaction_connection!", fin), ("reconnect_db", ren))
+      dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}))
+      @test (P, name, dyn) == (P, name, String[])
+    end
+    # The barrier hands the callee the handle at the registered type, or a stand-in as it is.
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    db = SQLite.DB()
+    boxed = Any[db]
+    @test CP._with_handle((p, c) -> (p, typeof(c)), sl, boxed[1]) === (sl, SQLite.DB)
+    stand_in = Ref(:stand_in_handle)
+    @test CP._with_handle((p, c, x) -> (c, x), sl, stand_in, 7) === (stand_in, 7)
+    close(db)
+    # A driver that is not loaded registers nothing: the default is `Any`, and every handle passes.
+    @test PormG.backend_handle_type(_TspStandInPool) === Any
+    # Postgres.jl's `Connection` is a `UnionAll`; the type the extension registers must be the one its
+    # connect builds, or every handle takes the open arm (a `MethodError` in a trimmed image). No server:
+    # the type inference gives the connect call the extension makes.
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    built = Base.return_types(Core.kwcall, (NamedTuple{(:style,), Tuple{pgx._PormGStyle}},
+                                            typeof(Postgres.DBInterface.connect), Type{Postgres.Connection},
+                                            Postgres.ConnectionParams))
+    @test built == Any[PormG.backend_handle_type(CP.PostgresConnectionPool{:postgres})]
+
+    # The sites the reflection above cannot reach (inside a `lock` closure, an `invoke`d callee, a
+    # spawned task): by source, every driver call on a handle in ConnectionPool.jl and Configuration.jl
+    # goes through `_with_handle`, and `close` on a handle only through its named helpers. The SQLite
+    # worker's two statement calls are the reviewed exception: they run through `_call_latest`, the
+    # world-age helper #1609 owns, and are not a #1683 site.
+    # Driver generics that take a handle, called directly or handed on as a value (`_call_latest(f, …)`,
+    # `invokelatest(f, …)`), and `close` on a handle, called or broadcast.
+    generic = raw"backend_(?:is_alive|renew_connection|execute_async|execute_rows|execute|cancel_query!|drain_connection!|copy_in!|ping)"
+    driver_call = Regex(raw"\b(" * generic * raw")\(|(?:_call_latest|invokelatest)\((" * generic * raw"|close),")
+    close_call = r"(?<!\w)close\.?\((?:conn|retired|dead|new_conn|handle|handles|h|old|pool\.connections)\b"
+    # The named helpers the barrier calls, by their exact definitions, and the SQLite worker's two
+    # statement calls (#1609's `_call_latest`), each expected exactly once.
+    helpers = ("_handle_close(pool, conn) = close(conn)", "_handle_close_latest(pool, conn) = _call_latest(close, conn)",
+               "_handle_renew(pool, conn) = backend_renew_connection(pool, conn)",
+               "_handle_renew(pool, conn, read_only::Bool) = backend_renew_connection(pool, conn; read_only = read_only)")
+    # Backend.jl's default `backend_execute_rows` (a driver without a typed read) is reached only from that
+    # worker, so it is the same exception.
+    reviewed = ("_call_latest(backend_execute_rows, item.pool, item.conn", "_call_latest(backend_execute, item.pool, item.conn",
+                "backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
+                "decode_on_worker(decode, backend_execute(pool, conn, sql, params))")
+    # Every file in src/ except AdvisoryLock.jl, whose handle calls are #1708.
+    files = sort!([joinpath(root, f) for (root, _, fs) in walkdir(joinpath(pkgdir(PormG), "src")) for f in fs
+                   if endswith(f, ".jl") && f != "AdvisoryLock.jl"])
+    seen = Dict{String,Int}()
+    bare = String[]
+    for path in files
+      file = relpath(path, pkgdir(PormG))
+      in_doc = false
+      for (i, line) in enumerate(split(replace(read(path, String), "\r\n" => "\n"), '\n'))
+        s = strip(line)
+        startswith(s, "#") && continue
+        isodd(count("\"\"\"", line)) && (in_doc = !in_doc; continue)
+        in_doc && continue
+        h = findfirst(x -> startswith(s, x), helpers)
+        h === nothing || (seen[helpers[h]] = get(seen, helpers[h], 0) + 1; continue)
+        r = findfirst(x -> occursin(x, line), reviewed)
+        r === nothing || (seen[reviewed[r]] = get(seen, reviewed[r], 0) + 1; continue)
+        for m in eachmatch(driver_call, line)
+          # handed to the barrier: `_with_handle(` right before the callee
+          m.offset > 13 && line[prevind(line, m.offset, 13):prevind(line, m.offset)] == "_with_handle(" && continue
+          push!(bare, "$(file):$(i): $(s)")
+        end
+        occursin(close_call, line) && push!(bare, "$(file):$(i): $(s)")
+      end
+    end
+    @test bare == String[]
+    for x in (helpers..., reviewed...)
+      @test (x, get(seen, x, 0)) == (x, 1)
     end
   end
 

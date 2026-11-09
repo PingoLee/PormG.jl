@@ -290,6 +290,10 @@ const _CONNECTION_CONVERSIONS = Dict((:interval, Dates.CompoundPeriod) => _inter
 
 # ── Backend interface methods ────────────────────────────────────────────────
 
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{<:PormG.ConnectionPool.PostgresConnectionPool{:libpq}}) = LibPQ.Connection
+
 PormG.backend_connect(pool::PormGPostgres; read_only::Bool = false) = _open_connection(pool)
 
 function PormG.backend_renew_connection(pool::PormGPostgres, conn::LibPQ.Connection; read_only::Bool = false)

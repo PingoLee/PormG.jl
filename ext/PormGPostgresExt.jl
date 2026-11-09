@@ -47,6 +47,15 @@ _session_options(user::Union{Nothing, AbstractString}) =
 # migrations issue `DROP … IF EXISTS` and friends on purpose, so a warning per notice is noise that
 # also breaks `@test_logs`. Notices stay available at debug level.
 struct _PormGStyle <: Postgres.AbstractPostgresStyle end
+# The concrete type of a connection `_open_connection` opens: `Postgres.Connection` is a `UnionAll` over
+# its statement type and style, and the pool's handle barrier needs the concrete type (#1683). It is
+# what Postgres.jl's constructor builds (`new{Statement{typeof(style)}, typeof(style)}`, 2.2 to 2.6).
+# `test_trim_shape_pins.jl` checks that it is concrete and that it is the type inference gives
+# `DBInterface.connect(Postgres.Connection, params; style = _PormGStyle())`, so a Postgres.jl that builds
+# another type fails that pin. Without the pin, every handle would take the barrier's open arm: under the
+# JIT the dynamic call of before #1683, in a trimmed image the `MethodError` #1683 removed. A connect
+# that asserted it instead would refuse every connection, so `_open_connection` does not.
+const _Conn = Postgres.Connection{Postgres.Statement{_PormGStyle}, _PormGStyle}
 
 function Postgres.notice_callback(::_PormGStyle, notice)
   msg = get(notice, "M", "")
@@ -622,6 +631,10 @@ function _open_connection(pool::_Pool)::Postgres.Connection
   end
   return conn
 end
+
+# #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
+# driver at its concrete type (`backend_handle_type`'s docstring).
+PormG.backend_handle_type(::Type{_Pool}) = _Conn
 
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 

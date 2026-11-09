@@ -14,7 +14,7 @@ the rest. None of those has a consumer for an ordering term, so each accepted it
 then died at render with a raw `MethodError` outside the #231 taxonomy. It is now
 `SQLTypeOrder <: SQLType`.
 
-Three consequences a consuming app can see:
+Three consequences a caller can see:
 
 | spelling | before | after |
 |---|---|---|
@@ -48,7 +48,7 @@ WHERE RANK() OVER (ORDER BY "R1_1"."seen" ASC) = ?
 WHERE "R1_1"."seen" = ?
 ```
 
-No app should need an edit: the previous SQL put a window function in `WHERE`, which neither
+No working query needs an edit: the previous SQL put a window function in `WHERE`, which neither
 PostgreSQL nor SQLite accepts, so that query could not have been running successfully. The new
 rendering matches what `SQLOrder(CTE("ev","seen"))` has always produced.
 
@@ -58,8 +58,6 @@ rendering matches what `SQLOrder(CTE("ev","seen"))` has always produced.
 grep -rn 'SQLOrder(' --include='*.jl' .
 grep -rn 'SQLTypeField' --include='*.jl' .
 ```
-
-Measured across both consuming apps when this landed: **zero** hits for either.
 
 ### Migrate your app
 

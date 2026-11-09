@@ -184,6 +184,7 @@ integer columns.
 
 Passing the keyword always resolves it — **including for a stock-Django project**, whose
 `AUTH_USER_MODEL` is `"auth.User"` and which therefore has no `AbstractUser` subclass to find and no
-app you could add to the import. `auth_user_model = "auth.User"` names a model outside the import, so
-those relations degrade to plain columns like any other external target, with a `@warn` up front and
-a marker each. That is the intended way in for a project that never subclassed `AbstractUser`.
+Django app you could add to the import. `auth_user_model = "auth.User"` names a model outside the
+import, so those relations degrade to plain columns like any other external target, with a `@warn`
+up front and a marker each. That is the intended way in for a project that never subclassed
+`AbstractUser`.

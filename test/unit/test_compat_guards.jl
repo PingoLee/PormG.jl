@@ -2,7 +2,7 @@
 # test/unit/test_compat_guards.jl
 #
 # Dependency-resolution contracts that are load-bearing for an environment PormG's own test runs
-# never build: a DRIVER environment (#558), a CONSUMING-APP environment (#560), and a
+# never build: a DRIVER environment (#558), an APP environment (#560), and a
 # CompatHelper PR's environment (#599). The first two are about the declared `[compat]` ranges;
 # the third is about which END of one CI selects.
 #
@@ -13,15 +13,14 @@
 #   `Decimals` range that excludes 0.4 leaves LibPQ with no versions left and *any* app
 #   carrying the driver fails to resolve — `test/integration` included.
 #
-# CONTRACT 2 — `OrderedCollections` keeps the *consuming apps* resolvable (#560):
+# CONTRACT 2 — `OrderedCollections` keeps apps that cap it at 1 resolvable (#560):
 #   PormG's declared `[compat]` must not exclude `OrderedCollections 1`. PormG itself uses only
 #   `OrderedDict` / `OrderedSet` construction, which behaves identically on both majors, so keeping
-#   1 costs nothing — but dropping it costs the apps. Measured by resolving a scratch environment
-#   carrying each internal app's dependency set plus PormG: under `OrderedCollections = "2"`,
-#   2 of the 5 apps are unresolvable, and the resolver names PormG as the cause —
-#     * one app pins `XLSX = "0.11.3"`, and XLSX accepts OC 2 only from `0.12`
-#     * another pins `Genie = "5.35.5"`, and Genie accepts OC 2 only from `6`
-#   — while `"1, 2"` resolves all 5 (those two land on OC 1.8.2). #549 kept `"1, 2"` on purpose
+#   1 costs nothing — but dropping it costs every app whose other dependencies cap OC at 1:
+#     * XLSX accepts OC 2 only from `0.12`, so an app that pins `XLSX < 0.12` is capped
+#     * Genie accepts OC 2 only from `6`, so an app that pins `Genie < 6` is capped
+#   Under `OrderedCollections = "2"` such an environment is unresolvable and the resolver names
+#   PormG as the cause, while `"1, 2"` resolves it (on OC 1.8.2). #549 kept `"1, 2"` on purpose
 #   after fixing 53 fixture sites to construct `OrderedDict` explicitly; the narrowing came from
 #   the same blanket chore commit that broke `Decimals`, not from any need of PormG's.
 #
@@ -75,10 +74,10 @@
 #   possible fixes are opposites:
 #     * The usual case — PormG needs something the old version lacks. Raise the lower bound.
 #     * The case THIS FILE encodes — the floor is load-bearing (Decimals 0.4 for LibPQ,
-#       OrderedCollections 1 for the consuming apps). Raising it is exactly the wrong edit, and
+#       OrderedCollections 1 for apps capped at it). Raising it is exactly the wrong edit, and
 #       the red run is telling you to fix PormG instead. Read this file before moving a bound.
 #
-#   Neither half subsumes the third check: #560's break lived in a CONSUMING APP's environment,
+#   Neither half subsumes the third check: #560's break lived in an APP's environment,
 #   which no PormG-side resolve can observe. The two-scratch-env recipe (one env carrying LibPQ,
 #   one carrying a consuming app's declared dependency set) still stands before any narrowing.
 #
@@ -139,19 +138,19 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Compat guards: the `OrderedCollections` range must keep the consuming apps resolvable (#560)
-# Asserts the declared range still admits `1`. Measured: `"2"` alone leaves 2 of the 5 internal
-# apps unresolvable (XLSX below 0.12 and Genie below 6 both cap OC at 1), and PormG needs
-# nothing from OC 2 — the break is invisible to every PormG-side environment.
+# Compat guards: the `OrderedCollections` range must keep apps capped at OC 1 resolvable (#560)
+# Asserts the declared range still admits `1`. `"2"` alone leaves an app that pins XLSX below 0.12
+# or Genie below 6 unresolvable (both cap OC at 1), and PormG needs nothing from OC 2 — the break
+# is invisible to every PormG-side environment.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "OrderedCollections compat keeps the consuming apps resolvable (#560)" begin
+@testset "OrderedCollections compat keeps apps capped at OC 1 resolvable (#560)" begin
   oc = _compat_entry("OrderedCollections")
   @test oc !== nothing
 
   bounds = strip.(split(oc, ","))
-  # 1 is not a legacy major carried for politeness. Two of the five internal apps have an
-  # upstream that caps OrderedCollections at 1 — XLSX below 0.12, Genie below 6 — and PormG
-  # requiring 2 makes them unresolvable outright. PormG gains nothing from the exclusion: every
+  # 1 is not a legacy major carried for politeness. An app can have an upstream that caps
+  # OrderedCollections at 1 — XLSX below 0.12, Genie below 6 — and PormG requiring 2 makes it
+  # unresolvable outright. PormG gains nothing from the exclusion: every
   # construction site is an explicit `OrderedDict(...)` / `OrderedSet(...)` with the ELEMENT TYPE
   # SPELLED OUT, identical on both majors. Explicit alone is not enough — see the #574 paragraph
   # in the header: `OrderedDict(gen)` is explicit and still infers `{Any, Any}` below OC 1.3.
@@ -190,12 +189,12 @@ end
 #          bare `julia test/runtests.jl` does not — so it was invisible to a local rehearsal and
 #          surfaced only once CI ran `julia-runtest` (run 35018968976). Rehearse through
 #          `Pkg.test`, not by invoking the suite directly.
-#   Consuming-app blast radius, measured before raising these (#574, the second scratch env of
-#   the recipe above): `TimeZones` is the only one of the four that is a hard `[deps]` entry,
-#   so it is the only one an app resolves at all — `Aqua` is a test-only extra, and the `CSV`/
-#   `SQLite` floors are old. Resolving a scratch env carrying each #560 capping pin plus PormG:
-#   `XLSX 0.11.3`, `Genie 5.35.5`, and both together all resolve, landing on TimeZones 1.22.2 —
-#   ten minors above the new floor, because neither cap touches TimeZones. 3 of 3, no app affected.
+#   App blast radius, checked before raising these (#574, the second scratch env of the recipe
+#   above): `TimeZones` is the only one of the four that is a hard `[deps]` entry, so it is the
+#   only one an app resolves at all — `Aqua` is a test-only extra, and the `CSV`/`SQLite` floors
+#   are old. A scratch env carrying each #560 cap plus PormG (an XLSX pinned below 0.12, a Genie
+#   pinned below 6, and both together) resolves, landing on TimeZones 1.22.2 — ten minors above
+#   the new floor, because neither cap touches TimeZones.
 #   (Same run re-confirms CONTRACT 2: the capped envs land on OC 1.8.2, an uncapped one on 2.0.1.)
 #
 #   TimeZones PormG's DateTimeField conversions need named zones, and the floor failed in two
@@ -215,7 +214,7 @@ end
 #          in `[extras]` the floor job could no longer install 1.0.0. Measured before narrowing, as
 #          CONTRACT 2 asks: 1.2.0 resolves exactly alongside LibPQ 1.18.0 and Postgres 2.2.2, and the
 #          consuming app's declared dependency set (Nitro, which itself requires "^1.3") resolves
-#          with this PormG on 1.3.4. No app affected.
+#          with this PormG on 1.3.4.
 #   Postgres  2.2.2 (#788). 2.2.1 is the correctness minimum — an unnamed execute that fails before
 #          BindComplete must close its socket (JuliaDatabases/Postgres.jl#17), or every later
 #          statement on the connection hits `EOFError` — but 2.2.2 changed `isvalid` (#20), the
@@ -256,7 +255,7 @@ end
 #          before narrowing: this PormG resolves with YAML 0.4.7 beside LibPQ 1.18.0, Postgres 2.6.0,
 #          MySQL 2.2.2, SQLite 1.6.1, TimeZones 1.12.0 and PrecompileTools 1.2.0; an add pinned to
 #          YAML 0.4.6 no longer resolves; at 0.4.7 the unterminated sequences raise `ParserError` and
-#          `test_swallowed_errors.jl` passes. The consuming apps already require 0.4.7 or newer.
+#          `test_swallowed_errors.jl` passes.
 #
 # Asserted as ">= the measured floor" rather than as the literal string, so a legitimate
 # later raise or a widening to a new major still passes. Mutation gate: restoring any of the

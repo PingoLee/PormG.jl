@@ -25,8 +25,6 @@ from request input could inject SQL, on PostgreSQL only. SQLite already refused 
 3. **`Extract(x, part, format)` is gone.** Calling it is a `MethodError`. Use `Cast` to change the
    result type.
 
-Measured before the change: 0 `Extract(` calls of any arity in the five consuming apps.
-
 ### How to find the calls to migrate
 
 ```bash

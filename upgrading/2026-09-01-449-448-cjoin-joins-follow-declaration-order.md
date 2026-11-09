@@ -8,9 +8,8 @@
   previously built a query now raise at query-build time. Every one of them produced wrong results or invalid
   SQL, so nothing that was working stops working. Part of the `0.5.x` pre-publish wave.
 
-**Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `.with(` have **zero** call
-sites across the five consuming-app checkouts. The whole custom-join / CTE surface has no
-consumer yet, which is why refusing these shapes outright was preferred over warning about them.
+Refusing these shapes outright was preferred over warning about them: each one produced wrong
+results or invalid SQL, and PormG is pre-publish.
 
 ### What changed
 

@@ -9,10 +9,6 @@
   shape that built invalid SQL now renders, and one that built invalid SQL now raises. Part of the
   `0.5.x` pre-publish wave.
 
-**Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `CTE(` have **zero** call
-sites across the five consuming-app checkouts (re-measured on the current remotes). The one
-`.with(` among them names its CTE `tab_ind`, which is not a table.
-
 ### What changed
 
 **1. A CTE name may not be the `db_table` of any registered model, or a many-to-many join table (#479).** SQL keeps a

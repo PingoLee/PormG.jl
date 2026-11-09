@@ -4,7 +4,7 @@
 - **PormG ref**: `src/querybuilder/types.jl`, `src/querybuilder/ctes.jl`, `.github/workflows/CI.yml`
 - **Recorded**: 2026-09-10
 - **Severity**: **behavior change (very narrow)** — the rendered SQL string for a query with two or
-  more CTEs can change. No API change, no app edit, and no query that worked stops working.
+  more CTEs can change. No API change, no source edit, and no query that worked stops working.
 
 ### What changed
 

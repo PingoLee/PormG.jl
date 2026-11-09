@@ -7,8 +7,9 @@
 # The rule was written down and still did not hold on its own: a measured-count sentence survived a
 # PR that edited the very entry it sat in. This file makes the rule a check.
 #
-# Scope: entries still marked `- **Version**: Unreleased`. Released entries are history; cleaning
-# them is #1089's own work, so this file never fails on a train that has already shipped.
+# Scope: every entry, released or not. It first covered only entries marked `Unreleased`; #1089
+# then reworded the released ones (prose only, never a behavior claim), so the whole log is held to
+# the rule and a released entry cannot regain a count either.
 #
 # It matches PHRASING, never identifiers: the list of private names lives outside this repository,
 # and putting it here would publish it.
@@ -33,8 +34,6 @@ const _UPP_PATTERNS = [
   r"claude\.ai/code"i                                => "carries an agent-session link",
   r"\bClaude-Session:"i                              => "carries an agent-session link",
 ]
-
-const _UPP_UNRELEASED = r"(?m)^-[ \t]+\*\*Version\*\*:[ \t]*Unreleased[ \t]*$"
 
 # (line, reason, excerpt) for every pattern hit in `text`.
 function _upp_findings(text::AbstractString)
@@ -90,25 +89,20 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Real tree: every Unreleased entry under upgrading/ is clean.
+# Real tree: every entry under upgrading/ is clean.
 # A failure names file:line and the phrase, so the fix is to reword that sentence on its merits
 # (the call pattern, and the grep that finds it), not to loosen a pattern.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Unreleased upgrade entries carry no consuming-app details (#1089)" begin
+@testset "Upgrade entries carry no consuming-app details (#1089)" begin
   dir = joinpath(pkgdir(PormG), "upgrading")
   files = filter(f -> endswith(f, ".md"), readdir(dir))
-  versioned = 0
+  # An empty or misplaced log would make the loop below pass without reading anything.
+  @test !isempty(files)
   for f in files
-    text = read(joinpath(dir, f), String)
-    occursin(r"(?m)^-[ \t]+\*\*Version\*\*:", text) && (versioned += 1)
-    occursin(_UPP_UNRELEASED, text) || continue
-    for (line, why, excerpt) in _upp_findings(text)
+    findings = _upp_findings(read(joinpath(dir, f), String))
+    for (line, why, excerpt) in findings
       @error "upgrading/$f:$line $why" excerpt
     end
-    @test isempty(_upp_findings(text))
+    @test isempty(findings)
   end
-  # Right after a release cut no entry is Unreleased, so an empty scope is legitimate. A renamed
-  # `Version` bullet is not: it would make this file skip every entry and pass, so the bullet must
-  # still be recognized somewhere in the log.
-  @test versioned > 0
 end

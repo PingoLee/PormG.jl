@@ -41,7 +41,8 @@ mock.
 > that dropped only one never converged. A qualified call or a mock method needs the new name and the
 > vector form: `PormG.get_constraints_checks(::MyMock, t::String, f::String) = String[]`. A mock still
 > defined under an old name fails loudly, raising `UndefVarError` where it is defined. Recorded here
-> rather than as its own entry because no consuming app calls or extends either name (measured: 0 of 3).
+> rather than as its own entry because neither name is public API: both are introspection plumbing,
+> reached only by a qualified call or a backend mock.
 
 `names(PormG)` is unchanged (63), so nothing that only does `using PormG` is affected.
 

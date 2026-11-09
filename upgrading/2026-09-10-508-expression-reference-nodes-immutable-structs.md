@@ -26,7 +26,7 @@ Four types stay mutable deliberately, and none is an expression node: `SQLField`
 assembly is documented API — `push!` on a `Q` is unaffected).
 
 Seven hand-written `Base.deepcopy` methods were deleted with them. `deepcopy` on any of the seven now
-goes through Base, which is *deeper*, not shallower — no app edit is needed, and this is recorded
+goes through Base, which is *deeper*, not shallower — no source edit is needed, and this is recorded
 only so nobody re-adds one.
 
 ### How to find the calls to migrate
@@ -34,8 +34,6 @@ only so nobody re-adds one.
 ```bash
 grep -rnE '\.(operation|operand|field_name|column|custom_as|_as|aggregate|formatter|function_name|over|path|desc)[[:space:]]*=[^=]' --include='*.jl' .
 ```
-
-Measured across both consuming apps when this landed: **zero** hits.
 
 ### Migrate your app
 

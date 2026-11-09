@@ -308,8 +308,8 @@ _result_rule(::Val{:MIN}) = :operand
 # #444 — aggregates DO accept a CTE column handle, and this note records why there is no guard here.
 #
 # An earlier draft of #444 refused them, on the stated grounds that the shape "does not need to
-# compose on day one" — #444 measured class F (`Sum("<cte>__col")`) at ZERO call sites. That
-# measurement was of CALL SITES, not of CAPABILITY, and the two are different questions. Rendering
+# compose on day one" — the reasoning was that nothing called class F (`Sum("<cte>__col")`) yet.
+# That is a question about USAGE, not about CAPABILITY, and the two are different questions. Rendering
 # `Sum("ev__qty")` against `main` shows the capability was always there and always correct:
 #
 #     SELECT "R1"."note" as "note", SUM("R1_1"."qty") as "t"

@@ -14,7 +14,7 @@
 #
 #   The refusal is the one the bulk writers use since #672 (`_single_value`), and it runs AFTER the
 #   field's formatter, so a `JSONField` vector — serialized to one string — is still accepted. That
-#   is not hypothetical: a consuming app writes a vector into a JSONField through `create`.
+#   is a supported call: writing a vector into a JSONField through `create`.
 #
 #   `bulk_copy` (PostgreSQL only) had the same gap after #672 — CSV wrote the vector's `repr` as the
 #   column text — and is covered here too, beside the single-row writers.
@@ -190,8 +190,8 @@ end
     # ─────────────────────────────────────────────────────────────────────────────
     # Control: a JSONField vector is still ONE bound value, on every writer.
     # The formatter serializes the vector to a single JSON string, and the raw-value check (#716)
-    # exempts JSONField (`_takes_collection`). Refusing it would break a consuming app that stores a
-    # vector of regions into a JSONField through create().
+    # exempts JSONField (`_takes_collection`). Refusing it would break an app that stores a
+    # vector into a JSONField through create().
     # ─────────────────────────────────────────────────────────────────────────────
     @testset "a JSONField vector still binds as one JSON string" begin
         json = "[\"Magic\",\"Beco\"]"

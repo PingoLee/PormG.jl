@@ -45,5 +45,4 @@ query.values("t" => ToChar("start_at", "HH:MI"))      # both engines: "18:00"
 query.values("t" => ToChar("start_at", "HH12:MI AM"))
 ```
 
-`PormG.sqlite_date_format_map` no longer exists; it was never on the public surface and no consuming
-app referenced it.
+`PormG.sqlite_date_format_map` no longer exists; it was never on the public surface.

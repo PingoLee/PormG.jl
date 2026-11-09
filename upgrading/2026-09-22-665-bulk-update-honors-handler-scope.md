@@ -24,11 +24,6 @@
    now shared. A plain `values()` projection is ignored. A handler filter
    that traverses a relation raises `QueryBuildError`, like a joined column.
 
-Measured before the change: 3 of the 101 `bulk_update(` calls in the consuming apps passed a
-filtered handler, and one of those relied on the handler filter for its scope — which was being
-dropped. No production call passed a handler carrying the shapes in (3); one scratch script passed
-a paged (`page()`) handler, which now raises.
-
 ### How to find the calls to migrate
 
 List every call, then check where its first argument was built:

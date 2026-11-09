@@ -10,7 +10,7 @@ serialized again. The cost is therefore exponential in the schema's density, not
 
     this file's 2-model fixture      26 chars of row  →      2,359 chars
     the 14-model F1 fixture          26 chars of row  →  1,843,565 chars, 5.3s of CPU
-    a production application schema  one row          →  28.5 GB RSS, oom-kill
+    a larger, denser schema          one row          →  memory exhausted, oom-kill
 
 which is why the reported symptom is a dead process and an empty request log rather than a big
 string. The row itself was never the problem — `JSON.json(getfield(row, :_data))` was always instant.
@@ -27,7 +27,7 @@ revert here.
 
 **Nothing below calls `JSON.json` on a row until `HAS_LOWER` has been asserted.** That ordering is
 load-bearing rather than tidy: on unpatched code the call is a multi-second, multi-megabyte
-allocation storm, and on a real application schema it takes the process with it. A `Task` with a
+allocation storm, and on a larger schema it takes the process with it. A `Task` with a
 timeout — the obvious alternative — does not help, because a Julia task cannot be killed: the
 deadline would fire while the runaway serialization kept allocating underneath it.
 

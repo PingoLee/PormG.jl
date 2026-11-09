@@ -521,7 +521,7 @@ end
 # Resolve `@year`'s RHS to a calendar year, accepting every value shape the pre-#352 rendering
 # accepted via `Models.format_number_sql` — Integer, Decimal, and a whole-valued Float (an ETL
 # app pulling a year out of a Float64 DataFrame column is the common case), plus a numeric
-# String. Narrowing this would be a breaking change for consuming apps, not a tightening.
+# String. Narrowing this would be a breaking change for callers, not a tightening.
 #
 # What IS rejected, under every operator, because it is no year at all:
 #   - Bool (`Bool <: Integer` in Julia; format_number_sql carries a ::Bool overload for exactly

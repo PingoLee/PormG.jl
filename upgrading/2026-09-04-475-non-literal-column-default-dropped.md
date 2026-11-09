@@ -15,7 +15,7 @@ outcome: an expression default is no longer **dropped**. #496 added a `db_defaul
 column imports as `db_default=(postgres="now()",)` and round-trips. Substitute "described as a
 `db_default`" for "dropped" throughout; the advice to keep it out of `default=` is unchanged.
 
-#496 has no entry of its own, and that is the rule rather than an omission: it forces no app edit,
+#496 has no entry of its own, and that is the rule rather than an omission: it forces no source edit,
 because a model declaring nothing on such a column still converges by design.
 
 ### What changed

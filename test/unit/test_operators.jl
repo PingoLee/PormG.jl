@@ -1966,7 +1966,7 @@ end
   # A JSON PATH lookup is the arm where this was silent on PostgreSQL rather than loud: the PG branch
   # binds `string(v.values)`, which stringified the payload's Julia `repr` into
   # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error, on the engine most
-  # consuming apps run. A JSON value is never a byte payload.
+  # production deployments run. A JSON value is never a byte payload.
   # Its own model, because a JSON path lookup resolves a row-join and so needs `_module` — which the
   # shared `_In411Event` deliberately does not have (see its fixture note; ~15 testsets share it).
   _json596 = Model("json596", id = IDField(), payload = JSONField())

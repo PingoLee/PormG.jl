@@ -177,8 +177,8 @@ end
 # most likely means the sum — HAVING — and routing it to the column would filter rows before
 # aggregation: silently wrong totals. Routing it to the alias would silently stop the key meaning
 # the field. So the key is refused, as #492 refuses a `__` path whose first segment names both a CTE
-# and a model field: loud, never guessed. The DECLARATION stays legal — `values("casos" =>
-# Sum("casos"))` is common in consuming apps and harmless until something filters on the name —
+# and a model field: loud, never guessed. The DECLARATION stays legal — `values("points" =>
+# Sum("points"))` is a common shape and harmless until something filters on the name —
 # which is where this departs from Django, whose `annotate()` refuses the alias outright.
 #
 # A `__` path is a model name too. `values("driverid__surname" => Upper("driverid__forename"))`

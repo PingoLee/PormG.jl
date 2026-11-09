@@ -30,9 +30,9 @@ Each array is cast to the column type its **field** renders, the same cast `bulk
 3. **A `Vector` in a text-like cell (`CharField`, `TextField`, …) raises `InvalidValueError`**, naming the field, on both backends. It used to be stored on PostgreSQL as its array-literal text (`{"Senna","Prost"}`), and on SQLite it expanded into extra `?` placeholders. This does not touch `JSONField` values (a `Dict`, `Vector` or `NamedTuple` is serialized to one JSON string first) or `BinaryField` bytes. A `Tuple`, `Dict` or `NamedTuple` in a text cell already raised before this change.
 4. **`show_query` output differs on PostgreSQL.** It shows the SQL above, and `:params` returns one vector per column after any filter values. `chunk_size` is used as given (a non-positive one keeps the old cap), so a wide table or a large `chunk_size` now runs as fewer statements.
 
-Measured in the consuming apps on 2026-09-24:
-- One app has 30 `bulk_insert(` and 24 `bulk_update(` call sites. Two others have none.
-- That app's golden-SQL suite pins the old PostgreSQL SQL **and** parameter vectors for one `bulk_insert` and one `bulk_update`. Those two tests need re-baselining (see below). Its Model-direct-vs-`.objects` equality test keeps passing.
+Two checks before upgrading:
+
+- A golden-SQL suite that pins the old PostgreSQL SQL **and** parameter vectors of a `bulk_insert` or `bulk_update` needs re-baselining (see below). A test that compares a Model-direct call with its `.objects` twin keeps passing.
 - Whether any `bulk_insert` target has a column that fails case 1 depends on the **database**, not the source. The query below answers it per database.
 
 ### How to find the calls to migrate

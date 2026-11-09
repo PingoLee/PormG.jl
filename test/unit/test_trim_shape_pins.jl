@@ -143,6 +143,35 @@ end
     @test_throws PormG.InvalidConfigurationError build(:nodriver)
   end
 
+  # What: the refusal for a PostgreSQL driver no arm lists, and `_symbol_text`, which spells its names.
+  # Expected: the same text as before #1613's change, word for word (`unknown PostgreSQL driver :pgx;
+  #   expected one of :libpq, :postgres`); `_symbol_text(s) == repr(s)` for an identifier, a keyword, an
+  #   operator, a symbol Base parenthesizes, and symbols only `Symbol("…")` can spell (escapes included);
+  #   and no `repr(` left in the refusal's source.
+  # Why: Base shows a `Symbol` through `show_unquoted(::Any)`, which a trimmed build cannot resolve: one
+  #   `repr(driver::Symbol)` was 290 of the fixture's 1,132 verifier rows in round 4 of #1600. The
+  #   message is user-facing, so the spelling changes and the text does not.
+  @testset "the unknown-driver refusal spells Symbols without repr (#1613)" begin
+    CP = PormG.ConnectionPool
+    err = try
+      CP._unknown_postgres_driver(:pgx)
+    catch e
+      e
+    end
+    @test err isa PormG.InvalidConfigurationError
+    @test err.msg == "unknown PostgreSQL driver :pgx; expected one of :libpq, :postgres"
+    @test_throws PormG.InvalidConfigurationError CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :pgx)
+    for s in (:libpq, :postgres, :pgx, :x!, :α, :end, :var, :+, :*, :(==), :(:), :(=>), :(::), :(===),
+              Symbol(""), Symbol("lib pq"), Symbol("lib-pq"), Symbol("1x"), Symbol("a\"b"),
+              Symbol("a\$b"), Symbol("a\nb"), Symbol("'"), Symbol("'ᵀ"), Symbol("'²"), :.+, :∘, :≤)
+      @test (s, CP._symbol_text(s)) == (s, repr(s))
+    end
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    start = findfirst("_unknown_postgres_driver(driver::Symbol) =", src)[1]
+    body = src[start:findnext("\n\n", src, start)[1]]   # the definition, up to its blank line
+    @test !occursin("repr(", body)
+  end
+
   # What: `with_pool`, the closed dispatch over the pools PormG builds.
   # Expected: every concrete pool type PormG or a driver extension defines has an `isa` arm (a
   #   `PostgresConnectionPool{D}` per driver); `f` is called with the pool at its concrete type; a

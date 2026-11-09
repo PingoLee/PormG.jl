@@ -506,10 +506,25 @@ function PostgresConnectionPool(connection_string::String; pool_size::Int = 3, p
   return _unknown_postgres_driver(driver)
 end
 
-# The inner constructor's refusal, for a driver no arm above lists.
+# The inner constructor's refusal, for a driver no arm above lists. The names are spelled by
+# `_symbol_text`, not `repr`: Base shows a `Symbol` through `show_unquoted(::Any)`, which a
+# `juliac --trim` build cannot resolve; it was 290 of the trimmed fixture's verifier rows (#1613).
 @noinline _unknown_postgres_driver(driver::Symbol) = throw(InvalidConfigurationError(
-  "unknown PostgreSQL driver $(repr(driver)); expected one of " *
-  join((repr(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
+  "unknown PostgreSQL driver $(_symbol_text(driver)); expected one of " *
+  join((_symbol_text(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
+
+# `repr(s)` for a `Symbol`, written out: Base's three cases (`show(::IO, ::Symbol)` in base/show.jl),
+# so a message reads the same. A symbol Julia's parser must parenthesize (`:(==)`), an identifier or
+# an operator (`:libpq`, `:+`), and anything else as its constructor call (`Symbol("lib pq")`).
+# `test_trim_shape_pins.jl` compares it with `repr` over each case.
+function _symbol_text(s::Symbol)::String
+  str = String(s)
+  s in (:(:), :(::), :(:=), :(=), :(==), :(===), :(=>)) && return ":(" * str * ")"
+  # Base's test is `_isoperator`, which leaves out the postfix operators (`'`, `'ᵀ`): `isoperator` minus
+  # those is the same set, through public names.
+  (Base.isidentifier(s) || (Base.isoperator(s) && !Base.Meta.ispostfixoperator(s))) && return ":" * str
+  return "Symbol(\"" * escape_string(str, ('"', '$')) * "\")"
+end
 
 function SQLiteConnectionPool(connection_string::String; pool_size::Int = 3, split_read_write::Bool = false, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, fail_fast_on_connect::Bool = true)
   connections = Vector{Any}(nothing, pool_size)

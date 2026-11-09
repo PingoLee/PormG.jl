@@ -2217,8 +2217,8 @@ end
     content = read(joinpath(key, "automatic_models.jl"), String)
     for n in names
       # The marker line, then the model — captured apart, because the marker itself names
-      # `primary_key = true` as the fix.
-      block = match(Regex("(?m)^# PormG: generated from the view '$(n)'.*\\n(?:# PormG: .*\\n)?($(uppercasefirst(n)) = " *
+      # `primary_key = true` as the fix. The binding is typed (`Name::Models.ModelType = …`, #1672).
+      block = match(Regex("(?m)^# PormG: generated from the view '$(n)'.*\\n(?:# PormG: .*\\n)?($(uppercasefirst(n))::Models\\.ModelType = " *
                           "Models\\.Model\\(\"$(n)\", managed = false,\\n(?:  .*\\n?)+)"), content)
       @test block !== nothing
       block === nothing && continue

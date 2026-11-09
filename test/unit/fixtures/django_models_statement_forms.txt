@@ -11,7 +11,7 @@ class ImportBatch(models.Model):
     '''
 
     class Source(models.TextChoices):
-        UPLOAD = "UPLOAD", "Upload manual"
+        UPLOAD = "UPLOAD", "Manual upload"
         GSHEETS = "GSHEETS", "Google Sheets API"
 
     filename = models.CharField(max_length=255)
@@ -27,12 +27,12 @@ class ImportBatch(models.Model):
 
     # Choices as a LIST, not a tuple. The old option splitter tracked only ( and ),
     # so it split at the comma BETWEEN the two bracketed tuples and kept one choice.
-    origem = models.CharField(max_length=2, choices=[("UP", "Upload"), ("GS", "Sheets")], default="UP")
+    source_tag = models.CharField(max_length=2, choices=[("UP", "Upload"), ("GS", "Sheets")], default="UP")
 
     # Wrapped across three physical lines - what `black` produces, and what the
     # per-line regex dropped in silence.
     created_by = models.ForeignKey(
-        "CustomUser", on_delete=models.SET_NULL, null=True, blank=True
+        "TeamPrincipal", on_delete=models.SET_NULL, null=True, blank=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -45,7 +45,7 @@ class ImportBatch(models.Model):
     # predicate keyed on the "Field" suffix alone drops the most important field type
     # of all in silence.
     tags = HStoreField()
-    direct_fk = ForeignKey("CustomUser", on_delete=CASCADE)
+    direct_fk = ForeignKey("TeamPrincipal", on_delete=CASCADE)
 
     # A manager, not a field. Must NOT warn - it has no PormG equivalent, and noise
     # here is what buries the one real finding above.
@@ -61,7 +61,7 @@ class ImportBatch(models.Model):
         return cond
 
 
-class CustomUser(models.Model):
+class TeamPrincipal(models.Model):
     username = models.CharField(max_length=50)
 
 

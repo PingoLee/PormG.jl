@@ -141,9 +141,9 @@ import_models_from_django("/path/to/your/models.py")
   imports unprefixed; a `String` forces that label. See [The app prefix](#The-app-prefix) below.
 
   ```julia
-  # A foreign app staged in db_gal/, written to its own folder with its own label:
-  import_models_from_django("db_gal/models.py"; db="db", file="gal_models.jl",
-                            output_path="db_gal", django_prefix="estoque", force_replace=true)
+  # A foreign app staged in db_garage/, written to its own folder with its own label:
+  import_models_from_django("db_garage/models.py"; db="db", file="garage_models.jl",
+                            output_path="db_garage", django_prefix="garage", force_replace=true)
   ```
 
 - **`auth_user_model::Union{Nothing, String}`**: which model `settings.AUTH_USER_MODEL` refers to,
@@ -319,7 +319,7 @@ directory, because Django's `AppConfig.label` is frequently not the directory na
 Anything written **in front** of that name has to be where the app actually lives. A project laid
 out as `apps/core/` resolves `from apps.core.models import …`; the same import against an app at
 `server/core/` does not, and neither does `from wagtail.core.models import Page` — Wagtail is not
-your `core` app, however much the path looks alike. `from core.forms import Pedido` is refused too:
+your `core` app, however much the path looks alike. `from core.forms import SeasonTicket` is refused too:
 a sibling module is not the models module.
 
 A **single** leading dot is this app's own package and never names another app, so `from .core.models
@@ -369,7 +369,7 @@ a model's reverse accessor on its logical name — so one `Driver` would answer 
 to `driver2`, decided by list order. The rename is lossless because `db_table` still names the real
 table. A class name only one app declares is left alone.
 
-Names that differ only in **case** collide too — `Pessoa` and `PESSOA` derive different Julia bindings
+Names that differ only in **case** collide too — `Spectator` and `SPECTATOR` derive different Julia bindings
 but the same logical name — so both are qualified on the same rule.
 
 One residue is left, and it is reported rather than hidden: when two app-qualified names *still*
@@ -400,32 +400,32 @@ model's **`db_table`**, while the logical name stays the class name lowercased �
 derive from the binding:
 
 ```python
-# server/dash/models.py
-class Dim_uf(models.Model):
-    nome = models.CharField(max_length=50)
+# myapp/models.py
+class Pit_lane(models.Model):
+    full_name = models.CharField(max_length=50)
 
-class DimIbge(models.Model):
-    cidade = models.CharField(max_length=10)
-    ufs = models.ManyToManyField(Dim_uf)
+class PitWall(models.Model):
+    city = models.CharField(max_length=10)
+    lanes = models.ManyToManyField(Pit_lane)
 ```
 
-imported with `django_prefix = "dash"` becomes:
+imported with `django_prefix = "myapp"` becomes:
 
 ```julia
-Dim_uf::Models.ModelType = Models.Model(db_table = "dash_dim_uf",
+Pit_lane::Models.ModelType = Models.Model(db_table = "myapp_pit_lane",
   id = Models.IDField(),
-  nome = Models.CharField(max_length=50))
+  full_name = Models.CharField(max_length=50))
 
-DimIbge::Models.ModelType = Models.Model(db_table = "dash_dimibge",
+PitWall::Models.ModelType = Models.Model(db_table = "myapp_pitwall",
   id = Models.IDField(),
-  cidade = Models.CharField(max_length=10),
-  ufs = Models.ManyToManyField("Dim_uf", db_table="dash_dimibge_ufs"))
+  city = Models.CharField(max_length=10),
+  lanes = Models.ManyToManyField("Pit_lane", db_table="myapp_pitwall_lanes"))
 ```
 
 Three things to read off that output, and a fourth that shows up only when something is reported:
 
-- **The logical name is `class.__name__.lower()`** — Django's own derivation. `DimIbge` becomes
-  `"dimibge"`, with no underscore inserted, because that is what Django's table is called. Whichever
+- **The logical name is `class.__name__.lower()`** — Django's own derivation. `PitWall` becomes
+  `"pitwall"`, with no underscore inserted, because that is what Django's table is called. Whichever
   class-naming convention the project uses, the derived name matches. That is also exactly what
   loading derives from the binding when a model has no positional name, so the importer leaves it
   out — the [no-name form](models.md) the hand-written examples use. A renamed model (a collision,
@@ -438,11 +438,11 @@ Three things to read off that output, and a fourth that shows up only when somet
   `_Internal2` with a `# PormG:` line, whichever class is declared first. `inspectdb` output always writes
   the name, because that file is edited by hand afterwards and a renamed binding there must not
   rename the model.
-- **The Julia binding is the class name, unchanged.** It never carried the prefix, so `M.Dim_uf` in a
+- **The Julia binding is the class name, unchanged.** It never carried the prefix, so `M.Pit_lane` in a
   consuming app is unaffected.
 - **An auto-derived `ManyToManyField` gets its join table pinned** to Django's spelling, which is
-  `<the owning model's table>_<field>` — so `dash_dimibge_ufs` here, but
-  `rh_matricula_legado_setores` for a class declaring `Meta.db_table = "rh_matricula_legado"`.
+  `<the owning model's table>_<field>` — so `myapp_pitwall_lanes` here, but
+  `f1_enrolment_legacy_crews` for a class declaring `Meta.db_table = "f1_enrolment_legacy"`.
   PormG's own derivation is `<logical model>_<field>`, which addresses a table Django never created.
   A `db_table=` written on the field is left alone, and a field with `through=` is skipped entirely —
   Django ignores `db_table` there, because the join table *is* the through model's table.
@@ -452,7 +452,7 @@ Three things to read off that output, and a fourth that shows up only when somet
   So `"self"`, `"Driver"` on `Driver` and `"imports.Driver"` on `racing.Driver` are self-relations,
   while `ManyToManyField("DriverProxy")` on `Driver` is not, because a proxy keeps its own name. Its
   columns are `driver_id` / `driverproxy_id`.
-- **Anything the importer reports names the class `'dash.DimIbge'`**, not `'DimIbge'` — a
+- **Anything the importer reports names the class `'myapp.PitWall'`**, not `'PitWall'` — a
   `django_prefix` *is* the Django app label, so there is a label to qualify with. See
   [Meta Options](#Meta-Options).
 
@@ -477,9 +477,9 @@ leading-underscore class, as described above.
     short-form join paths (`"driver__forename"`) — those work on every connection.
 
 !!! note "Existing generated files keep working"
-    The older spelling, `Models.Model("dash_dim_uf", …)`, still addresses the table `dash_dim_uf`.
+    The older spelling, `Models.Model("myapp_pit_lane", …)`, still addresses the table `myapp_pit_lane`.
     The new form only appears when you regenerate — see the change log for the one case that forces
-    an edit. A file that writes the logical name out, `Models.Model("dim_uf", db_table = …)`, loads
+    an edit. A file that writes the logical name out, `Models.Model("pit_lane", db_table = …)`, loads
     the very same model as the short form; regenerating changes its text and nothing else.
 
 ## Supported Django Fields
@@ -657,7 +657,7 @@ An option value written as a bare name — `max_length=MAX_LEN`, `choices=STATUS
 
 ```python
 MAX_LEN = 10
-STATUS_CHOICES = (("A", "Ativo"), ("I", "Inativo"))
+STATUS_CHOICES = (("A", "Active"), ("I", "Inactive"))
 
 class Driver(models.Model):
     CODE_LEN = 3
@@ -698,11 +698,11 @@ names the field and the class.
 
 | Django `Meta` option | Outcome | Notes |
 |----------------------|---------|-------|
-| `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The logical name stays the derived one (`"matricula"`, from the binding) either way — see [The app prefix](#The-app-prefix). |
+| `db_table = "x"` | **imported** as `db_table = "x"` | The physical table. Absolute, as in Django: it overrides the derived name *and* a configured `django_prefix`. The logical name stays the derived one (`"enrolment"`, from the binding) either way — see [The app prefix](#The-app-prefix). |
 | `unique_together = ('a', 'b')` | **imported** as `constraints = [Models.UniqueConstraint(fields = ("a", "b"))]` | A tuple-of-tuples (several composite keys) becomes one `UniqueConstraint` per group. |
 | `constraints = [UniqueConstraint(fields=…, name=…)]` | **imported** | The modern spelling. See the acceptance rule below — it is narrower than Django's. |
 | `constraints = [UniqueConstraint(fields=…, condition=Q(…), name=…)]`, `UniqueConstraint(Lower('x'), name=…)` | **imported** as `Models.UniqueConstraint(fields = …, name = …, condition = "<SQL>")` / `Models.UniqueConstraint(expressions = (…,), name = …)` | A partial or functional unique constraint, translated exactly as a partial or functional `Index` is; the generated file notes it carries Django's SQL (see the note below the table). |
-| `constraints = [CheckConstraint(…)]` | **converted** when the `Q(...)` is simple; otherwise **reported**, as a stub | The condition becomes SQL over the table's physical columns, each written bare, so it names the column on PostgreSQL, SQLite and MySQL alike: `check=Q(laps__gte=0) & Q(grid__lte=F("laps"))` imports as `Models.CheckConstraint(condition = "laps >= 0 AND grid <= laps", name = "…")`. A column whose name some engine reserves (`user`, `order`) or that is not in lower case keeps Django's double quotes, which PostgreSQL and SQLite read as the column; on MySQL a double-quoted name is a string literal and such a name has no spelling every engine reads as the column, so `makemigrations` there refuses the model ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)) — give the column a plain lower-case name, with `db_column`. Converted: `exact` and `in` on text, number and boolean fields; `gt`, `gte`, `lt`, `lte` and `range` on number fields, with whole-number values on an integer field (Django runs `int()` on the value, so `laps__gt=1.5` there means `> 1`); `isnull=True/False` and `=None` on any field; `F("field")` against a field of the same kind; a boolean field compared to `True` / `False` is written as Django renders it, the bare column, `ativo` / `NOT ativo`; all combined with `&`, `|`, `~` and parentheses. Anything else stays a stub, because a mistranslated condition would accept or refuse the wrong rows without a word: ordering comparisons on text (the collation differs between engines), dates, times and decimals (SQLite stores them in more than one representation), other lookups (`regex`, `startswith`, …), a string with an escape such as `\x41` or `\u00e9`, traversal through a relation, `F()` arithmetic, and a name with a `%(class)s` placeholder. The stub's marker says why, names `Models.CheckConstraint(condition = "<SQL>", name = "…")` with the constraint's own name, and is followed by the original `Q(...)`; write the condition and add it to `constraints = [...]`. `violation_error_message` / `violation_error_code` are dropped with a marker — they only change Django's Python-side error. |
+| `constraints = [CheckConstraint(…)]` | **converted** when the `Q(...)` is simple; otherwise **reported**, as a stub | The condition becomes SQL over the table's physical columns, each written bare, so it names the column on PostgreSQL, SQLite and MySQL alike: `check=Q(laps__gte=0) & Q(grid__lte=F("laps"))` imports as `Models.CheckConstraint(condition = "laps >= 0 AND grid <= laps", name = "…")`. A column whose name some engine reserves (`user`, `order`) or that is not in lower case keeps Django's double quotes, which PostgreSQL and SQLite read as the column; on MySQL a double-quoted name is a string literal and such a name has no spelling every engine reads as the column, so `makemigrations` there refuses the model ([#1368](https://github.com/PingoLee/PormG.jl/issues/1368)) — give the column a plain lower-case name, with `db_column`. Converted: `exact` and `in` on text, number and boolean fields; `gt`, `gte`, `lt`, `lte` and `range` on number fields, with whole-number values on an integer field (Django runs `int()` on the value, so `laps__gt=1.5` there means `> 1`); `isnull=True/False` and `=None` on any field; `F("field")` against a field of the same kind; a boolean field compared to `True` / `False` is written as Django renders it, the bare column, `enabled` / `NOT enabled`; all combined with `&`, `|`, `~` and parentheses. Anything else stays a stub, because a mistranslated condition would accept or refuse the wrong rows without a word: ordering comparisons on text (the collation differs between engines), dates, times and decimals (SQLite stores them in more than one representation), other lookups (`regex`, `startswith`, …), a string with an escape such as `\x41` or `\u00e9`, traversal through a relation, `F()` arithmetic, and a name with a `%(class)s` placeholder. The stub's marker says why, names `Models.CheckConstraint(condition = "<SQL>", name = "…")` with the constraint's own name, and is followed by the original `Q(...)`; write the condition and add it to `constraints = [...]`. `violation_error_message` / `violation_error_code` are dropped with a marker — they only change Django's Python-side error. |
 | `abstract = True` | **no table** | The class becomes a base: its fields merge into every child. See [Model inheritance](#Model-inheritance). |
 | `proxy = True` | **no table** | A proxy shares its parent's table; emitting one would declare that table twice. A relation to the proxy addresses the parent's model, whether the base is written by its own name, through an import alias (`from racing.models import Driver as RacingDriver`), or through a module (`racing_models.Driver` after `from racing import models as racing_models`, `racing.models.Driver` after `import racing.models`). |
 | `managed = False` | **imported** as `managed = false` | A model PormG queries but never migrates — see [Unmanaged models](@ref). Inherited from an abstract base, as in Django. A value other than `True`/`False` (a setting, an expression) is reported and the model stays managed. A managed model's `ForeignKey` into an unmanaged one is imported with `db_constraint = false`, and reported: PormG refuses a constrained key into a table it does not migrate, which may be a view. |
@@ -721,14 +721,14 @@ names the field and the class.
 !!! note "A functional or partial index on a database Django already built"
     The SQL the importer writes is Django's own spelling, which is what Django sends to the database,
     with each plain lower-case column name written bare rather than double-quoted. A boolean field
-    compared to `True` or `False` is written the way Django renders it — the bare column, `ativo`, or
-    `NOT ativo` — never `= TRUE`, in a `CheckConstraint` and a partial index alike. SQLite stores
+    compared to `True` or `False` is written the way Django renders it — the bare column, `enabled`, or
+    `NOT enabled` — never `= TRUE`, in a `CheckConstraint` and a partial index alike. SQLite stores
     Django's text as it was sent, quotes included, and `makemigrations` compares a double-quoted plain
     name and the bare one as the same column, so on a SQLite database Django built, such a CHECK or
     partial index matches the imported declaration outright.
 
-    PostgreSQL, though, stores a rewritten form of the text (`lower(apelido::text)` for
-    `LOWER(apelido)`). Against a PostgreSQL database Django already built,
+    PostgreSQL, though, stores a rewritten form of the text (`lower(nickname::text)` for
+    `LOWER(nickname)`). Against a PostgreSQL database Django already built,
     `makemigrations` reads such an index as hand-made and refuses to take its name for the importer's
     text, with `InvalidMigrationError` — printing the declaration, in the database's own text, that
     adopts the index instead. Replace the imported declaration with that one, or generate the models
@@ -742,8 +742,8 @@ there when someone reads the file six months later.
 
 Both halves name the class **app-qualified** whenever an app label is known — `'imports.ImportBatch'`,
 the same `"<app_label>.<Class>"` spelling Django uses in a `Meta` reference. That is what lets a
-report be traced back to one model in a project where two apps declare a `Pessoa`: the generated file
-holds `Core_pessoa` and `Access_pessoa`, and nothing called `Pessoa`. An unlabelled single-app import
+report be traced back to one model in a project where two apps declare a `Spectator`: the generated file
+holds `Core_spectator` and `Access_spectator`, and nothing called `Spectator`. An unlabelled single-app import
 — no `django_prefix` — has no label and nothing to disambiguate against, so it uses the bare class
 name.
 
@@ -802,22 +802,22 @@ resolves each declared member — in `unique_together`, `constraints`, `indexes`
 alike — to its imported field name automatically:
 
 ```python
-class Dim_item_fabricante(models.Model):
-    item = models.ForeignKey(Dim_item, on_delete=models.CASCADE)
-    fabricante = models.ForeignKey(Dim_fabricante, on_delete=models.CASCADE)
+class Car_part_maker(models.Model):
+    item = models.ForeignKey(Car_part, on_delete=models.CASCADE)
+    maker = models.ForeignKey(Part_maker, on_delete=models.CASCADE)
 
     class Meta:
-        unique_together = ('item', 'fabricante')
+        unique_together = ('item', 'maker')
 ```
 
 imports as:
 
 ```julia
-Dim_item_fabricante::Models.ModelType = Models.Model(
+Car_part_maker::Models.ModelType = Models.Model(
   id = Models.IDField(),
-  fabricante_id = Models.ForeignKey("Dim_fabricante", pk_field="id", on_delete=CASCADE),
-  item_id = Models.ForeignKey("Dim_item", pk_field="id", on_delete=CASCADE),
-  constraints = [Models.UniqueConstraint(fields = ("item_id", "fabricante_id",))])
+  item_id = Models.ForeignKey("Car_part", pk_field="id", on_delete=CASCADE),
+  maker_id = Models.ForeignKey("Part_maker", pk_field="id", on_delete=CASCADE),
+  constraints = [Models.UniqueConstraint(fields = ("item_id", "maker_id",))])
 ```
 
 See [Composite Uniqueness](models.md#Composite-Uniqueness-(unique_together)) for how the
@@ -826,7 +826,7 @@ constraint is materialized.
 ### Model inheritance
 
 A class becomes a table when its base list **resolves** to one — not when it matches a fixed
-spelling. `class Pedido(TimeStampedModel):` is imported; so is `class User(AbstractUser, SomeMixin)`.
+spelling. `class SeasonTicket(TimeStampedModel):` is imported; so is `class User(AbstractUser, SomeMixin)`.
 
 | Shape | Outcome |
 |---|---|
@@ -848,15 +848,15 @@ at all inherits its abstract base's whole `Meta`. Two keys are withheld: `abstra
 too), and `db_table` — Django *does* inherit that one, and the result is every child of the base
 pointing at a single table, so PormG refuses it and says so on each affected child.
 
-**Multi-table inheritance is refused, not approximated.** For `class Pedido(Venda)` with a concrete
-`Venda`, Django creates a child table whose primary key is a `venda_ptr_id` one-to-one to the parent.
+**Multi-table inheritance is refused, not approximated.** For `class SeasonTicket(Ticket)` with a concrete
+`Ticket`, Django creates a child table whose primary key is a `ticket_ptr_id` one-to-one to the parent.
 PormG cannot express that. Merging the parent's fields would duplicate its columns; omitting them
 would lose the primary key. Both put a schema on disk that contradicts the live database, so the
 child is skipped and the generated file records why (markers are one line each; wrapped here to fit):
 
 ```julia
-# PormG: model 'Pedido' inherits the concrete model 'Venda' (Django multi-table inheritance) —
-#   not imported. Django keys the child table on a 'venda_ptr_id' one-to-one to the parent, which
+# PormG: model 'SeasonTicket' inherits the concrete model 'Ticket' (Django multi-table inheritance) —
+#   not imported. Django keys the child table on a 'ticket_ptr_id' one-to-one to the parent, which
 #   PormG cannot express.
 ```
 
@@ -866,19 +866,19 @@ says so. The walk covers abstract ancestors too — a base that is itself missin
 the same way, and it emits nothing of its own to carry the marker:
 
 ```julia
-# PormG: model 'Relatorio' inherits 'TimeStampedModel', not defined in this file — any fields
+# PormG: model 'RaceReport' inherits 'TimeStampedModel', not defined in this file — any fields
 #   declared there are MISSING below. Add them by hand, or pass every app of the project as
 #   "<app_label>" => "<models.py>" pairs so a base in another app is merged.
-Relatorio::Models.ModelType = Models.Model(
+RaceReport::Models.ModelType = Models.Model(
   id = Models.IDField(),
-  titulo = Models.CharField(max_length=80))
+  caption = Models.CharField(max_length=80))
 ```
 
 That is the **unlabelled** wording. Once the import carries an app label — a multi-app call, or a
 single-app one with a `django_prefix` — the same gap is reported as:
 
 ```julia
-# PormG: model 'imports.Relatorio' inherits 'TimeStampedModel', not defined in any app of this
+# PormG: model 'imports.RaceReport' inherits 'TimeStampedModel', not defined in any app of this
 #   import — any fields declared there are MISSING below. Add them by hand, or add the app that
 #   defines them to the pair list.
 ```
@@ -898,9 +898,9 @@ it produces no table — but saying nothing is how a real model disappears witho
 names the module the base was imported from, which is usually all it takes to tell the two apart:
 
 ```julia
-# PormG: class 'MeuManager' inherits 'InheritanceManager', imported from 'model_utils.managers',
+# PormG: class 'MyManager' inherits 'InheritanceManager', imported from 'model_utils.managers',
 #   which nothing in this import defines, and declares no field of its own — not imported. …
-# PormG: class 'Pedido' inherits 'TimeStampedModel', imported from 'core.models', which nothing in
+# PormG: class 'SeasonTicket' inherits 'TimeStampedModel', imported from 'core.models', which nothing in
 #   this import defines, and declares no field of its own — not imported. …
 ```
 
@@ -924,21 +924,21 @@ enumeration.
 ```python
 class ImportBatch(models.Model):
     class Status(models.TextChoices):
-        DRAFT = "DRAFT", "Em processamento"
-        APPLIED = "APPLIED", "Aplicado"
+        DRAFT = "DRAFT", "Processing"
+        APPLIED = "APPLIED", "Committed"
         IN_PROGRESS = "IN_PROGRESS"          # label derived: "In Progress"
 
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
-    canal  = models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets")))
+    conduit = models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets")))
 ```
 
-imports as (fields are emitted in sorted order, so `canal` precedes `status`):
+imports as (fields are emitted in sorted order, so `conduit` precedes `status`):
 
 ```julia
 ImportBatch::Models.ModelType = Models.Model(
   id = Models.IDField(),
-  canal = Models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets"))),
-  status = Models.CharField(max_length=20, default="DRAFT", choices=(("DRAFT", "Em processamento"), ("APPLIED", "Aplicado"), ("IN_PROGRESS", "In Progress"))))
+  conduit = Models.CharField(max_length=2, choices=(("UP", "Upload"), ("GS", "Sheets"))),
+  status = Models.CharField(max_length=20, default="DRAFT", choices=(("DRAFT", "Processing"), ("APPLIED", "Committed"), ("IN_PROGRESS", "In Progress"))))
 ```
 
 **Enumerations.** An enum is found whether it is nested inside the model, declared at module level,
@@ -956,7 +956,7 @@ class Status(models.TextChoices):
     DRAFT = "d", "Draft"
 
 class Base(models.Model):
-    situacao = models.CharField(max_length=1, choices=Status.choices)
+    phase = models.CharField(max_length=1, choices=Status.choices)
     class Meta:
         abstract = True
 
@@ -966,11 +966,11 @@ from core.models import Base
 class Status(models.TextChoices):      # a DIFFERENT Status
     OPEN = "o", "Open"
 
-class Pedido(Base):                    # inherits `situacao`
+class SeasonTicket(Base):             # inherits `phase`
     total = models.IntegerField()
 ```
 
-`Pedido.situacao` imports as `choices=(("d", "Draft"),)` — **core's** enumeration, because that is
+`SeasonTicket.phase` imports as `choices=(("d", "Draft"),)` — **core's** enumeration, because that is
 the module the statement was written in. `shop`'s `Status` is a different name in a different
 namespace and never applies to it (#402).
 
@@ -1017,26 +1017,26 @@ with its own nested `Status` and a child of either resolves to the right one.
 | `Status.MEMBER` | that member's value — typically what `default=` uses |
 | `Status.values` / `.labels` / `.names` | dropped and reported: a flat list, not `(value, label)` pairs |
 | a member the enum does not declare | dropped and reported |
-| an enum whose members are not literals (`CARRO = auto()`) | dropped and reported — the importer cannot know the value, and keeping `"auto()"` would give every member the same one |
-| a numeric member (`ALTO = 1_000`, `MEIO = 0x1F`) | imported as the value it **denotes** — `1000`, `31` — not as the source spelling, which would declare an enumeration no row can match |
+| an enum whose members are not literals (`CAR = auto()`) | dropped and reported — the importer cannot know the value, and keeping `"auto()"` would give every member the same one |
+| a numeric member (`THOUSAND = 1_000`, `THIRTYONE = 0x1F`) | imported as the value it **denotes** — `1000`, `31` — not as the source spelling, which would declare an enumeration no row can match |
 | a class reached through a name the module **imported** (`from core.models import Base as CoreBase` then `CoreBase.Status.choices`) | resolves, aliased or not, and whether or not the class is also used as a base. The name is looked up in the module that **wrote the statement** — so an abstract base's own alias keeps working when its field is merged into a child in another app, and a name some *other* module bound stays unresolvable, exactly as Python's `NameError` says |
 | a name the module that wrote the statement does not define or import (`from .enums import Status`) | the option naming it is dropped and reported |
 
 The dropped row is per option, not per field: if `choices=Status.choices` resolves and only
-`default=Externo.ATIVO` does not, the field keeps its enumeration and loses just the default.
+`default=External.ACTIVE` does not, the field keeps its enumeration and loses just the default.
 Dropping the resolvable half as well would throw away what the source did give you. The reason
-neither is ever passed through as a literal is that `default="Externo.ATIVO"` against an empty
+neither is ever passed through as a literal is that `default="External.ACTIVE"` against an empty
 `choices` is exactly what used to make `CharField` reject the field and abort the **entire** import.
 
-A member's own attributes work too: `Status.NOVO.value` resolves to the stored value, while
+A member's own attributes work too: `Status.NEW.value` resolves to the stored value, while
 `.label` and `.name` are display text and the member name rather than a value, so they are dropped
 and reported.
 
 The same rule catches a dotted name that is not an enum at all — a module constant such as
-`default=constants.MAX_QTD` — so the diagnostic says "this file does not define" rather than naming
+`default=constants.MAX_QTY` — so the diagnostic says "this file does not define" rather than naming
 an enumeration it cannot verify. The test is the attribute's *shape*: `.choices`, `.values`,
 `.labels`, `.names`, `.value`, `.label`, `.name`, or a `SHOUTY_CASE` member. Any other dotted
-`default` (`uuid.uuid4`, `timezone.now`, an unconventionally-spelled `Externo.ativo`) is **kept
+`default` (`uuid.uuid4`, `timezone.now`, an unconventionally-spelled `External.active`) is **kept
 verbatim as text**, exactly as before — and reported, because an expression landing in the schema as
 a literal default is not something to discover later.
 
@@ -1058,8 +1058,8 @@ is unaffected.
     import now produces the clean form.
 
 **Both containers, both pair styles.** `choices` may be a tuple or a list, and so may each pair —
-`[["A", "Alpha"]]` imports correctly. A comma inside a *label* (`("APPLIED", "Aplicado, com
-ressalvas")`) is content, not a separator. An entry that is not a `(value, label)` pair at all is
+`[["A", "Alpha"]]` imports correctly. A comma inside a *label* (`("APPLIED", "Committed, with
+caveats")`) is content, not a separator. An entry that is not a `(value, label)` pair at all is
 dropped and reported, and the well-formed entries beside it survive.
 
 **A label wrapped for translation is unwrapped.** `("A", _("Alpha"))` — and the `gettext`,
@@ -1068,20 +1068,20 @@ label does. The wrapper carries no schema meaning, and leaving it on put the sou
 into the generated file as the display string.
 
 **An entry whose value or label is not one literal is kept and reported.** A concatenation, an
-f-string or a call in either half — `('a' + 'b', 'Rotulo')` — has a value PormG cannot compute, so
+f-string or a call in either half — `('a' + 'b', 'Labelled')` — has a value PormG cannot compute, so
 the entry keeps the **source text** and earns a `# PormG:` marker saying exactly that:
 
 ```julia
-# PormG: field 'c' on 'Pedido' has a choices entry the importer cannot read as literals — kept as
-#   the source text, not the value it denotes: ('a' + 'b', 'Rotulo')
-c = Models.CharField(max_length=20, choices=(("'a' + 'b'", "Rotulo"), ("c", "Cee")))
+# PormG: field 'c' on 'SeasonTicket' has a choices entry the importer cannot read as literals — kept as
+#   the source text, not the value it denotes: ('a' + 'b', 'Labelled')
+c = Models.CharField(max_length=20, choices=(("'a' + 'b'", "Labelled"), ("c", "Cee")))
 ```
 
 That is a different report from the one above it, deliberately: this entry was **kept**, not dropped,
 and saying "not a `(value, label)` pair" about it would be a true sentence about a different problem.
 
 Numbers are literals, so an inline `[(1, "One")]` earns no report — and, like a numeric enum member,
-it is imported as the value it **denotes**: `[(0x1F, "Hex"), (1_000, "Mil")]` gives `"31"` and
+it is imported as the value it **denotes**: `[(0x1F, "Hex"), (1_000, "Thousand")]` gives `"31"` and
 `"1000"`. Carrying the source spelling instead would declare an enumeration no row can match, and
 would let one generated file hold two spellings of the same concept — `"0x1F"` from an inline list
 and `"31"` from the `IntegerChoices` version of it.
@@ -1096,15 +1096,15 @@ A quoted `default` is imported when it is **one Python string literal**, and onl
 non-Latin text is ordinary content and needs nothing special:
 
 ```python
-cidade  = models.CharField(max_length=60, default='São José')
-apelido = models.CharField(max_length=60, default='Räikkönen')
-cidade_jp = models.CharField(max_length=60, default='日本語')
+city     = models.CharField(max_length=60, default='São José')
+nickname = models.CharField(max_length=60, default='Räikkönen')
+city_jp  = models.CharField(max_length=60, default='日本語')
 ```
 
 ```julia
-cidade    = Models.CharField(max_length=60, default="São José")
-apelido   = Models.CharField(max_length=60, default="Räikkönen")
-cidade_jp = Models.CharField(max_length=60, default="日本語")
+city     = Models.CharField(max_length=60, default="São José")
+nickname = Models.CharField(max_length=60, default="Räikkönen")
+city_jp  = Models.CharField(max_length=60, default="日本語")
 ```
 
 **Escapes.** The literal's own escapes are decoded: `\\`, `\'`, `\"`, `\n`, `\r`, `\t`, `\a`, `\b`,
@@ -1119,21 +1119,21 @@ itself and there is nothing to decode.
 necessarily one string. None of these has a value PormG can compute:
 
 ```python
-codigo  = models.TextField(default='a' + 'b')       # explicit concatenation
-sigla   = models.TextField(default='it''s')         # ADJACENT literals — Python reads this as "its"
-rotulo  = models.TextField(default=f'{prefixo}-x')  # an f-string: its value lives at runtime
-caminho = models.TextField(default=r'C:\temp')      # raw and bytes literals escape differently
-bloco   = models.TextField(default="""tres""")      # triple-quoted
+ref_code   = models.TextField(default='a' + 'b')          # explicit concatenation
+acronym    = models.TextField(default='it''s')            # ADJACENT literals — Python reads this as "its"
+tag_line   = models.TextField(default=f'{tag_prefix}-x')  # an f-string: its value lives at runtime
+filepath   = models.TextField(default=r'C:\temp')         # raw and bytes literals escape differently
+block_text = models.TextField(default="""three""")         # triple-quoted
 ```
 
 Each is kept verbatim as text and reported, the same way `default=uuid.uuid4` is (markers are one
 line each; wrapped here to fit):
 
 ```julia
-# PormG: field 'codigo' on 'Piloto' has `default='a' + 'b'`, which the importer cannot read as
+# PormG: field 'ref_code' on 'Wheelman' has `default='a' + 'b'`, which the importer cannot read as
 #   one string literal — kept verbatim as text. The stored default is that source text, not the
 #   value it denotes.
-codigo = Models.TextField(default="'a' + 'b'")
+ref_code = Models.TextField(default="'a' + 'b'")
 ```
 
 This matters most on `CharField` without `choices` and on `TextField`, the two types that accept any
@@ -1145,7 +1145,7 @@ stored — and on the two types above that string is *accepted*, which makes
 `DEFAULT 'uuid.uuid4()'` what a later `migrate()` would write:
 
 ```julia
-# PormG: field 'x' on 'Pedido' has `default=uuid.uuid4()`, a call the importer cannot evaluate —
+# PormG: field 'x' on 'SeasonTicket' has `default=uuid.uuid4()`, a call the importer cannot evaluate —
 #   kept verbatim as text. The stored default is that source text, not the value the call returns.
 x = Models.TextField(default="uuid.uuid4()")
 ```
@@ -1155,7 +1155,7 @@ different words, because it is a different claim: a reference PormG cannot evalu
 call it cannot run. The two never both fire for one value.
 
 Note the asymmetry with `choices`: a translation wrapper is unwrapped in a choices **label**, but
-`default=_('Azul')` is reported as a call and kept verbatim. That is the same rule stated twice — a
+`default=_('Blue')` is reported as a call and kept verbatim. That is the same rule stated twice — a
 label is display text, a `default` is schema — and PormG will not guess at a value the column has to
 hold.
 
@@ -1167,11 +1167,11 @@ no such translation, so it is reported like any other call.
     Python joins the lines and drops the backslash, so
 
     ```python
-    n = models.CharField(max_length=60, default='linha1\
-    linha2')
+    n = models.CharField(max_length=60, default='line1\
+    line2')
     ```
 
-    imports as `default="linha1linha2"`.
+    imports as `default="line1line2"`.
 
     A **raw** literal is read by the same rule Python applies to it: `r'…'` has no line
     continuation, so the backslash *and* the newline are both content and both survive. The value is
@@ -1247,7 +1247,7 @@ match in the common case (`default=0, db_default=0`), and then nothing is report
   reported by a `@warn` and a `# PormG:` marker, with the consequences in the warning below
 - **AbstractUser**: For models inheriting from `AbstractUser`, additional fields like `date_joined` are added.
   `id` is **not** one of them: `AbstractUser` inherits Django's implicit `id` from `models.Model`
-  rather than owning it, so a user model keyed on its own field — `matricula = CharField(primary_key=True)`
+  rather than owning it, so a user model keyed on its own field — `enrolment = CharField(primary_key=True)`
   on a legacy table — has that one key and no `id`, like any other model
 
 !!! warning "Not every field type can be a primary key in PormG"
@@ -1258,7 +1258,7 @@ match in the common case (`default=0, db_default=0`), and then nothing is report
     which stops the import — re-declare that column as a `CharField` key in Django, or exclude it.
 
     On every other type the importer drops it before building the field (a PormG field refuses a
-    keyword it does not take, #1333), so `codigo = models.IntegerField(primary_key=True)` imports as
+    keyword it does not take, #1333), so `ref_code = models.IntegerField(primary_key=True)` imports as
     a plain `IntegerField` and the model ends up with **no** primary key at all.
 
     The importer does **not** paper over that with a synthetic `id`: the Django table has no such

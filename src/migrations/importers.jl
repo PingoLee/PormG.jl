@@ -715,10 +715,10 @@ function _py_logical_lines(src::AbstractString)::Vector{PyStmt}
       continue
     end
 
-    # A line continuation INSIDE a string literal (#501). Python's `'linha1\<newline>linha2'` is the
-    # single value `linha1linha2`: the backslash and the newline both denote nothing. Without this
+    # A line continuation INSIDE a string literal (#501). Python's `'line1\<newline>line2'` is the
+    # single value `line1line2`: the backslash and the newline both denote nothing. Without this
     # branch the backslash reaches the buffer through `_py_step!` and the newline is then folded to
-    # a space by the `st.depth > 0` arm above, storing `linha1\ linha2` — two characters that exist
+    # a space by the `st.depth > 0` arm above, storing `line1\ line2` — two characters that exist
     # neither in the source nor in the value it denotes. Worse, the result is a WELL-FORMED literal
     # (`\<space>` reads as an unknown escape), so `_py_quoted_literal` accepts it and the
     # "kept verbatim" report never fires: a silent wrong default, the one outcome this file exists
@@ -726,12 +726,12 @@ function _py_logical_lines(src::AbstractString)::Vector{PyStmt}
     #
     # Two further defects on the same lines go with it, both strictly worse than the filed one:
     #
-    #   * `default='linha1\<newline>'` — the newline arm below never hands its `\n` to `_py_step!`,
+    #   * `default='line1\<newline>'` — the newline arm below never hands its `\n` to `_py_step!`,
     #     so `st.escaped` (set at the backslash) survives and swallows the CLOSING QUOTE. The
     #     literal never terminates, `_in_string` stays true for the rest of the file, and the next
     #     field is merged into this statement and lost. Consuming both characters here means
     #     `escaped` is never set in the first place.
-    #   * `HELP = 'linha1\<newline>linha2'` at bracket depth 0 split into TWO statements, the second
+    #   * `HELP = 'line1\<newline>line2'` at bracket depth 0 split into TWO statements, the second
     #     at indent 0 — which closes the enclosing class, so every field declared after it was
     #     dropped without a word.
     #
@@ -1151,7 +1151,7 @@ end
 # A Django project splits its models across apps, and PormG is structurally one models file per
 # DATABASE, not per app: `planner.jl` resolves ONE `joinpath(db, settings.model_file)`, and
 # `_load_current_models` includes that ONE file into ONE temp module. So every app in a project is
-# emitted into a single module — which is also what makes a cross-app `ForeignKey("core.Pessoa")`
+# emitted into a single module — which is also what makes a cross-app `ForeignKey("core.Spectator")`
 # resolvable at all, since `_resolve_target_model` is a BINDING lookup in one module and nothing else.
 #
 # Definition order inside that module is irrelevant: `ForeignKey` stores `.to` as a String and only
@@ -1220,12 +1220,12 @@ mutable struct _DjangoClass
 end
 
 # How a class is spelled in a report — a `@warn`, an error, or a `# PormG:` marker — and in a
-# `Meta`-style reference: `core.Pessoa` when the app is known, the bare class name otherwise.
+# `Meta`-style reference: `core.Spectator` when the app is known, the bare class name otherwise.
 #
 # Split out of `_django_ref_label` for #371, because pass 2 reports on classes BEFORE it holds a
 # `_DjangoClass`: a duplicate declaration, a proxy and a multi-table-inheritance child are all
 # reported above the `index.by_ref` lookup, and those are the reports a reader has least other
-# context for — a bare 'Pessoa' in a project where two apps declare one traces back to neither.
+# context for — a bare 'Spectator' in a project where two apps declare one traces back to neither.
 # The two spellings agree by construction: `_django_ref_label` reads `e.class`, which is the same
 # verbatim Python class name pass 2 carries in `class_name`.
 _django_class_label(app::Union{Nothing, String}, class_name::AbstractString)::String =
@@ -1294,11 +1294,11 @@ is rendered, because a cross-app `ForeignKey` has to name a binding that may not
 
 Collision policy, in order:
 
-1. Start from the Python class name. Two classes that derive the same binding — `core.Pessoa` and
-   `access.Pessoa` — are BOTH re-derived as `<app>_<lowercase class>`, never just the second one.
+1. Start from the Python class name. Two classes that derive the same binding — `core.Spectator` and
+   `access.Spectator` — are BOTH re-derived as `<app>_<lowercase class>`, never just the second one.
    Renaming only the loser hides which is which, makes the output depend on the order the apps were
    listed, and — because `set_models` keys a reverse accessor on `lowercase(model.name)` — would give
-   one of them the accessor `pessoa` and the other `pessoa2`. `core_pessoa` / `access_pessoa` says
+   one of them the accessor `spectator` and the other `spectator2`. `core_spectator` / `access_spectator` says
    what it is.
 2. `binding_overrides` replaces the name outright, for a collision or not ("spell this one
    differently" is a legitimate ask).
@@ -1344,10 +1344,10 @@ function _build_class_index(apps::Vector{_DjangoApp},
   for e in entries
     key = (_django_app_key(e.app), lowercase(e.class))
     # `seen` above is case-SENSITIVE (it guards against the same name declared twice) while this key
-    # is lowercased, because Django's own model lookup is. So `class Pessoa` and `class pessoa` in
+    # is lowercased, because Django's own model lookup is. So `class Spectator` and `class spectator` in
     # one app reach here as two entries competing for one key: the second used to overwrite the
     # first, orphaning a binding that was still computed and emitted, and leaving two models pointing
-    # at the one table `<app>_pessoa`. Django rejects such a project outright ("Conflicting 'pessoa'
+    # at the one table `<app>_spectator`. Django rejects such a project outright ("Conflicting 'spectator'
     # models in application"), so there is nothing to disambiguate toward and erroring costs nothing
     # real.
     if haskey(by_ref, key)
@@ -1365,9 +1365,9 @@ function _build_class_index(apps::Vector{_DjangoApp},
   # 1. App-qualify EVERY member of a colliding group.
   #
   # TWO equivalences, not one. The Julia binding is `uppercasefirst(name)` and the POSITIONAL name is
-  # the coarser one `set_models` keys a reverse accessor on. So `core.Pessoa` and `legacy.PESSOA`
-  # derive DIFFERENT bindings (`Pessoa` / `PESSOA`) and pass this step untouched, then collide on the
-  # positional name downstream, where `Model_to_str`'s `taken_names` dedup renames one to `pessoa2`
+  # the coarser one `set_models` keys a reverse accessor on. So `core.Spectator` and `legacy.SPECTATOR`
+  # derive DIFFERENT bindings (`Spectator` / `SPECTATOR`) and pass this step untouched, then collide on the
+  # positional name downstream, where `Model_to_str`'s `taken_names` dedup renames one to `spectator2`
   # with no warning and no marker — order-dependent, and exactly the outcome app-qualification exists
   # to prevent. Counting both closes it.
   #
@@ -1417,8 +1417,8 @@ function _build_class_index(apps::Vector{_DjangoApp},
   # OVERRIDES CLAIM FIRST, in a pass of their own. Doing it in one pass made the outcome depend on
   # the order the apps were listed: an override colliding with a class LATER in `entries` won and
   # silently digit-suffixed that class, while the same override against an EARLIER class raised. So
-  # `binding_overrides = Dict("imports.Batch" => "Pessoa")` on a project that also has `core.Pessoa`
-  # errored with the apps listed one way and quietly renamed `core.Pessoa` to `Pessoa2` the other —
+  # `binding_overrides = Dict("imports.Batch" => "Spectator")` on a project that also has `core.Spectator`
+  # errored with the apps listed one way and quietly renamed `core.Spectator` to `Spectator2` the other —
   # renaming a model the user never mentioned, which is the order-dependence step 1 exists to avoid.
   # An explicit name is a claim on that name, so it is staked before anything can be derived onto it.
   # `taken` holds BOTH equivalences — the binding and `_django_positional_key` — because
@@ -1504,9 +1504,9 @@ function _build_class_index(apps::Vector{_DjangoApp},
       other = claimant(e, b)
       if other !== nothing && other.overridden
         # Name the equivalence that actually clashed. An override can collide two ways and only one
-        # of them is a binding: `"Circuit" => "Pessoa"` takes the BINDING `Pessoa`, while
-        # `"Circuit" => "PESSOA"` takes the MODEL NAME `pessoa` that `PESSOA` lowers to. Reporting
-        # both as "the Julia binding 'Pessoa'" sends the reader looking for a name nobody typed.
+        # of them is a binding: `"Circuit" => "Spectator"` takes the BINDING `Spectator`, while
+        # `"Circuit" => "SPECTATOR"` takes the MODEL NAME `spectator` that `SPECTATOR` lowers to. Reporting
+        # both as "the Julia binding 'Spectator'" sends the reader looking for a name nobody typed.
         took = b in taken ?
           "the Julia binding '$(b)', which is already the derived binding of" :
           "the model name '$(_django_positional_key(e))' — what '$(other.binding)' lowers to — " *
@@ -1606,7 +1606,7 @@ function _build_class_index(apps::Vector{_DjangoApp},
   # CANNOT TELL — no keyword and not exactly one `AbstractUser` subclass.
   auth_user = if auth_user_model !== nothing
     found = _lookup_class_ref(auth_user_model, nothing, by_ref, by_class; role = "auth_user_model")
-    # Deliberately external (`"auth.User"`) and a typo (`"access.Usuario"`) are indistinguishable
+    # Deliberately external (`"auth.User"`) and a typo (`"access.Subscriber"`) are indistinguishable
     # here — both name a model this import does not have. So it is not an error, and it is not
     # silent either: the console says it once, up front, and every relation it governs carries its
     # own `# PormG:` marker naming the model that was not found.
@@ -1633,7 +1633,7 @@ end
 # "no home app", which is the case for `auth_user_model` and for `binding_overrides` keys.
 #
 # Django's own rule for the two-part form: the app label matches as written and the MODEL name is
-# case-insensitive (`apps.get_model` lowercases it), so `"core.Pessoa"` and `"core.pessoa"` are the
+# case-insensitive (`apps.get_model` lowercases it), so `"core.Spectator"` and `"core.spectator"` are the
 # same reference. Matched case-insensitively on both halves here — app labels are lowercase by
 # Django convention, so the extra tolerance can only help.
 function _lookup_class_ref(ref::AbstractString, current_app::Union{Nothing, String},
@@ -1674,7 +1674,7 @@ function _apply_binding_overrides!(entries::Vector{_DjangoClass},
                                    by_class::Dict{String, Vector{_DjangoClass}},
                                    binding_overrides::Dict{String, String})
   isempty(binding_overrides) && return nothing
-  # Two keys can name ONE class — `"core.Pessoa"` and a bare `"Pessoa"` — and the second silently
+  # Two keys can name ONE class — `"core.Spectator"` and a bare `"Spectator"` — and the second silently
   # won, discarding the first with no diagnostic. That is the exact failure this function's own
   # contract says it exists to prevent.
   claimed = Dict{_DjangoClass, String}()
@@ -1809,8 +1809,8 @@ the two agree only while BOTH of these hold:
   whose positional name `Model_to_str` strips (`_Foo` loads as `foo`, so PormG derives `foo_id` where
   Django created `_foo_id`). Compared on `_django_positional_key`, the name the model loads under;
   comparing `model.name` missed the stripped case (#1095);
-- the model's primary key is called `id` — a legacy schema with `codigo = CharField(primary_key=True)`
-  breaks it, and then PormG addresses `driver_codigo` where Django created `driver_id`.
+- the model's primary key is called `id` — a legacy schema with `ref_code = CharField(primary_key=True)`
+  breaks it, and then PormG addresses `driver_ref_code` where Django created `driver_id`.
 
 Pinned exactly when one of those fails, never speculatively, so the common case stays clean. This
 runs as a separate pass because the target's primary key is only knowable once the target model is
@@ -2194,7 +2194,7 @@ end
 function _resolve_one_target(raw::AbstractString, owner::_DjangoClass, index::_DjangoClassIndex,
                              strict_relations::Bool, markers::Vector{String},
                              field_key::String, role::String)
-  # `parse_field_args` strips the quotes off a plain `"core.Pessoa"`, but a value that reached here
+  # `parse_field_args` strips the quotes off a plain `"core.Spectator"`, but a value that reached here
   # through another path may still carry them.
   ref = strip(_strip_py_quotes(strip(String(raw))))
 
@@ -2301,8 +2301,8 @@ end
 # That status quo holds only while the handle still IS the class name. `Model_to_str` renders the
 # positional slot as `lowercase(model.name)`, and `model.name` is `entry.name` — which pass 1 rewrites
 # for a `binding_overrides` entry or for the digit backstop. Once it differs from the class, the
-# derivation reproduces the RENAME rather than Django's table: `class Circuit` overridden to `Pista`
-# emitted `Models.Model("pista")` and silently moved the model to a table Django never created, and
+# derivation reproduces the RENAME rather than Django's table: `class Circuit` overridden to `Raceway`
+# emitted `Models.Model("raceway")` and silently moved the model to a table Django never created, and
 # `class CASCADE` emitted `Models.Model("cascade2")` where the pre-#346 importer correctly emitted
 # `Models.Model("cascade")`.
 #
@@ -2445,8 +2445,8 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
     for class in graph.classes
       class_name = class.name
       # Every report below NAMES this class with `class_label`, never `class_name` (#371). Two apps
-      # of one project may each declare `Pessoa`, and the generated file then holds `Core_pessoa`
-      # and `Access_pessoa` — so a marker saying `on 'Pessoa'` points at neither. Computed HERE,
+      # of one project may each declare `Spectator`, and the generated file then holds `Core_spectator`
+      # and `Access_spectator` — so a marker saying `on 'Spectator'` points at neither. Computed HERE,
       # before the index lookup, because the duplicate-declaration, proxy and MTI reports below all
       # `continue` before `entry` is bound.
       #
@@ -2611,17 +2611,17 @@ function _import_django_apps(apps::Vector{_DjangoApp}, render_settings::PormGSet
       # and no `id` either.
       #
       # BOTH readings are needed, and they disagree in opposite directions:
-      #   - the built field alone misses `codigo = models.IntegerField(primary_key=True)`, because
+      #   - the built field alone misses `ref_code = models.IntegerField(primary_key=True)`, because
       #     most PormG field types do not take `primary_key`, so it is dropped before they are built
       #     (#1333) and they construct with `false` — and injecting
       #     `id` there would name a column the Django table does not have;
-      #   - the declaration alone misses `codigo = models.AutoField()`, which declares nothing but
+      #   - the declaration alone misses `ref_code = models.AutoField()`, which declares nothing but
       #     builds a field that IS the key, because the `IDField` it maps to (DJANGO_AUTO_KEY_TYPES,
       #     below) defaults `primary_key = true`.
       # `get_model_pk_field`, which reads this model downstream, sees only the first.
       #
       # `unsupported_pk` is a THIRD reading, and it disagrees with both of the above in the same
-      # direction: a `codigo = models.FilePathField(primary_key=True)` builds nothing and
+      # direction: a `ref_code = models.FilePathField(primary_key=True)` builds nothing and
       # declares nothing this function can see, yet Django's table is keyed on that column all the
       # same. Substituting `id` there would name a column that table has not got — the very defect
       # the two readings above exist to prevent, reached through #410's new skip path.
@@ -3181,17 +3181,17 @@ pairs instead — see the [`Vector{Pair}` method](@ref import_models_from_django
   Its name without `.jl` becomes the module's name, so it must be a Julia identifier
   (`f1_models.jl`, not `f1-models.jl`) and not a name the file imports (`Models`, `CASCADE`, …);
   otherwise the call raises `ModelDefinitionError` and writes no models file (#1486).
-- `output_path::Union{Nothing, String}`: Directory to write the generated file into, overriding the resolved config's `db_def_folder`. Use this to stage a *foreign* Django app's models next to their copied `model.py` (e.g. `"db_gal"`) while still resolving `db` for its Settings. Defaults to `nothing` (use `db_def_folder`).
-- `django_prefix::Union{Nothing, String, Missing}`: The Django **app label** whose tables are being imported — in practice, the prefix Django puts on them. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"estoque"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
+- `output_path::Union{Nothing, String}`: Directory to write the generated file into, overriding the resolved config's `db_def_folder`. Use this to stage a *foreign* Django app's models next to their copied `model.py` (e.g. `"db_garage"`) while still resolving `db` for its Settings. Defaults to `nothing` (use `db_def_folder`).
+- `django_prefix::Union{Nothing, String, Missing}`: The Django **app label** whose tables are being imported — in practice, the prefix Django puts on them. `missing` inherits the resolved config's `django_prefix`; `nothing` emits unprefixed table names; a `String` (e.g. `"garage"`) forces `<prefix>_<table>`. Use this when the imported app uses a different Django `app_label` than the `db` config's. Defaults to `missing` (inherit).
 
   Since #345 the prefix is written into **`db_table`**, not into the positional model name:
-  `class Dim_ibge` under `django_prefix = "estoque"` emits
-  `Dim_ibge = Models.Model(db_table = "estoque_dim_ibge", …)` — the logical name `"dim_ibge"` is the
+  `class Pit_board` under `django_prefix = "garage"` emits
+  `Pit_board = Models.Model(db_table = "garage_pit_board", …)` — the logical name `"pit_board"` is the
   binding lowercased, so it is left for loading to derive (#1043). A `Meta.db_table` in the
   Django source still overrides it, exactly as in Django. An empty string is treated as no prefix.
 
   Each auto-derived `ManyToManyField` also gets its join table pinned to Django's spelling, which is
-  `<the owning model's table>_<field>` — so `estoque_dim_ibge_ufs` normally, but
+  `<the owning model's table>_<field>` — so `garage_pit_board_lanes` normally, but
   `<Meta.db_table>_<field>` when the class declares one. PormG's own derivation
   (`<logical model>_<field>`) reproduces neither. A field carrying its own `db_table`, or a
   `through=`, is left alone.
@@ -3215,9 +3215,9 @@ throwaway render-only `Settings` (no database connection) drives the output dire
 # Example
 import_models_from_django(django_to_string("/home/user/models.py"))
 
-# Stage a foreign Django app (its models.py copied into db_gal/) with its own folder and prefix:
-import_models_from_django("db_gal/models.py"; db="db", file="gal_models.jl",
-                          output_path="db_gal", django_prefix="estoque", force_replace=true)
+# Stage a foreign Django app (its models.py copied into db_garage/) with its own folder and prefix:
+import_models_from_django("db_garage/models.py"; db="db", file="garage_models.jl",
+                          output_path="db_garage", django_prefix="garage", force_replace=true)
 """
 function import_models_from_django(
     model_py_string::String;
@@ -3253,7 +3253,7 @@ function import_models_from_django(
 
   # One app, whose label is the configured/overridden `django_prefix`. `_django_app_label` rather
   # than the raw field: an EMPTY prefix is the absence of one, spelled badly (#345), and treating it
-  # as a label derives `_dim_uf` for a table called `dim_uf`.
+  # as a label derives `_pit_lane` for a table called `pit_lane`.
   apps = [_DjangoApp(Models._django_app_label(render_settings), graph)]
 
   _import_django_apps(apps, render_settings;
@@ -3277,7 +3277,7 @@ import_models_from_django(
   ["core"    => "server/core/models.py",
    "access"  => "server/access/models.py",
    "imports" => "server/imports/models.py"];
-  db = "sgrh", file = "models.jl", force_replace = true)
+  db = "f1_paddock", file = "models.jl", force_replace = true)
 ```
 
 # Why one module and not one per app
@@ -3294,9 +3294,9 @@ as `db_table`, so one file carries every app's tables. A `Meta.db_table` still o
 # Class-name collisions
 
 When two apps declare the same class name, **both** are renamed to `<app>_<class>` — binding
-`Core_pessoa` and `Access_pessoa`, never `Pessoa` and `Pessoa2`. Renaming only the second would make
+`Core_spectator` and `Access_spectator`, never `Spectator` and `Spectator2`. Renaming only the second would make
 the output depend on the order the apps were listed, and `set_models` keys reverse accessors on the
-logical name, so one model would answer to `pessoa` and the other to `pessoa2`. The rename is
+logical name, so one model would answer to `spectator` and the other to `spectator2`. The rename is
 lossless because `db_table` carries the real table either way. Use `binding_overrides` to choose a
 different spelling.
 
@@ -3304,9 +3304,9 @@ different spelling.
 
 Every keyword of the single-app method applies, except `django_prefix`: the app label now comes from
 each pair. A `django_prefix` on the resolved config is **rejected**, not ignored — `get_model_name`
-would strip that one prefix from *every* logical name, so `core_pessoa` would become `pessoa` while
-`access_pessoa` survived intact, and the reverse lookup would then want `Pessoa` while the binding is
-`Core_pessoa`. Cheap to detect here; near-impossible to diagnose at query time.
+would strip that one prefix from *every* logical name, so `core_spectator` would become `spectator` while
+`access_spectator` survived intact, and the reverse lookup would then want `Spectator` while the binding is
+`Core_spectator`. Cheap to detect here; near-impossible to diagnose at query time.
 
 # Relation targets
 
@@ -3355,7 +3355,7 @@ function import_models_from_django(
       "import: an app label is empty. Every pair needs the Django app_label its tables are prefixed " *
       "with, e.g. \"core\" => \"server/core/models.py\"."))
     # The label is composed straight into a table name, so its shape is not cosmetic: `"My.app"`
-    # yields `db_table = "My.app_pessoa"`, and `_lookup_class_ref` splits `"<app>.<Class>"` on the
+    # yields `db_table = "My.app_spectator"`, and `_lookup_class_ref` splits `"<app>.<Class>"` on the
     # dot, so every qualified reference into such an app silently fails to resolve and degrades.
     # Django's own rule is that an app_label is a Python identifier.
     Base.isidentifier(label) || throw(InvalidMigrationError(
@@ -3438,7 +3438,7 @@ end
 # ── Class classification and inheritance (#341) ─────────────────────────────────────────────────
 # Until #341 a class became a table iff its ENTIRE base list was one of two literals
 # (`\((models\.Model|AbstractUser)\)`). That is a silent-loss shape, and the worst one in this file:
-# `class Pedido(TimeStampedModel):` matched neither literal, so the model was not imported and
+# `class SeasonTicket(TimeStampedModel):` matched neither literal, so the model was not imported and
 # NOTHING said so — the same failure #340 exists to remove, one level up.
 #
 # Widening it to "any base list" is not safe either. A real models.py is full of QuerySet, Manager,
@@ -3541,7 +3541,7 @@ function _class_bases(cls::PyClass)::Vector{String}
 end
 
 # Namespaces a *database* field can be called through. `""` is the bare form
-# (`from django.db.models import CharField` → `titulo = CharField(...)`), which is ordinary Django
+# (`from django.db.models import CharField` → `caption = CharField(...)`), which is ordinary Django
 # and also how third-party fields arrive (`ArrayField`, django-mptt's `TreeForeignKey`).
 const _MODEL_FIELD_NAMESPACES = ("", "models", "db.models", "django.db.models")
 
@@ -3559,7 +3559,7 @@ end
 # unrecognised base list be treated as a model without a blacklist that has to be exhaustive.
 #
 # `models.X(...)` is not the only spelling — `from django.db.models import CharField` then
-# `titulo = CharField(...)` is ordinary Django, and #340 already added `_looks_like_a_field_call` to
+# `caption = CharField(...)` is ordinary Django, and #340 already added `_looks_like_a_field_call` to
 # recognise it. Matching only the dotted form made the gate and that reporter disagree, and the gate
 # won: such a model was dropped in silence.
 #
@@ -3679,7 +3679,7 @@ the same app does not. A key at position 1 needs no prefix to agree with, which 
 plain `core.models` spelling working — and what makes an app handed over as SOURCE TEXT (no path,
 so no `pkg_path`) reachable only by that plain spelling.
 
-`from core.forms import Pedido` is refused by the same rule: a sibling module is not the models
+`from core.forms import SeasonTicket` is refused by the same rule: a sibling module is not the models
 module, and binding a form to a model would be the same defect one file over.
 
 The prefix check is deliberately NOT total: position 1 has nothing in front of it, so a *top-level*
@@ -3815,7 +3815,7 @@ function _resolve_imported(scopes::Vector{_AppScope}, idx::Int, token::String,
 end
 
 # ── Custom field classes (#1041) ─────────────────────────────────────────────────────────────────
-# `class LoteField(models.CharField)` with `lote = LoteField(max_length=50)` used to take the
+# `class BatchField(models.CharField)` with `batch_no = BatchField(max_length=50)` used to take the
 # "field-shaped call the importer cannot read" path: the column was dropped, and the marker said the
 # next `makemigrations` would propose DROPPING it. The base type is in the source, so it is read.
 
@@ -4021,8 +4021,8 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
         (bapp, bcls) = r
         st.resolved[(app, b)] = r
         # Recursion carries the RESOLVED app, never the importing one. A base's own bases are names
-        # in ITS module, so classifying `core.Auditavel` in the importing app's namespace loses
-        # `TimeStampedModel`, makes `Auditavel` field-less and therefore `:not_a_model`, poisons the
+        # in ITS module, so classifying `core.Audited` in the importing app's namespace loses
+        # `TimeStampedModel`, makes `Audited` field-less and therefore `:not_a_model`, poisons the
         # child — and the child is then dropped with no marker at all, which is strictly worse than
         # the defect this change exists to remove.
         pk = _classify_class!(st, bapp, bcls).kind
@@ -4062,8 +4062,8 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
     :mti
   elseif is_root || !isempty(parents)
     # A recognised model root WINS over EVERY non-model base — both the blacklist (`non_model`) and
-    # an in-file helper (`poisoned`). `class Servidor(models.Model, ExportMixin)` is ordinary
-    # Django, and so is `class Servidor(models.Model, object)`, which is the only legal ordering
+    # an in-file helper (`poisoned`). `class CrewBase(models.Model, ExportMixin)` is ordinary
+    # Django, and so is `class Absence(models.Model, object)`, which is the only legal ordering
     # since `object` must come last. Testing either flag first dropped the whole model in SILENCE —
     # the shape this issue exists to close.
     #
@@ -4091,7 +4091,7 @@ function _classify_class!(st::_ClassifyState, app::Int, cls::PyClass)::_ClassInf
   # `serializers.Serializer` are dotted, so they name a module, and a dotted token still UNRESOLVED
   # here names one outside the import (one inside it resolved, #1197) — those are helpers,
   # definitively, and marking them would be pure noise on every `models.py` that also holds a
-  # ModelForm. A BARE `CustomUser` is the ambiguous one:
+  # ModelForm. A BARE `TeamPrincipal` is the ambiguous one:
   # it is exactly what an `import` would have bound, which is what makes it worth a line.
   #
   # Deliberately NOT narrowed further by "the name was imported from a module naming no app". That
@@ -4194,7 +4194,7 @@ function _django_graph_from_scopes(scopes::Vector{_AppScope}, self::Int)
   # Enum scope, keyed by `(app, scope)` — a class name, or `""` for module level.
   #
   # The app half is not bookkeeping. Keyed by bare scope name, two apps that each declare a `Base`
-  # with a nested `Situacao` collapse into one entry, and `core.Base`'s own field silently takes
+  # with a nested `Phase` collapse into one entry, and `core.Base`'s own field silently takes
   # `shop.Base`'s members — a wrong enumeration in the schema with no marker anywhere. The base
   # resolved perfectly; only the scope table could not tell the two classes apart. `_enum_scopes`
   # hands back the `(app, name)` pairs it already resolved, so the lookup asks the right app.
@@ -4505,7 +4505,7 @@ end
 
 # True when the text is a plain Python literal the importer can carry into PormG. Anything else —
 # `auto()`, `uuid.uuid4()`, a concatenation — is an expression whose VALUE this importer cannot know.
-# Keeping such a value verbatim is worse than dropping it: `CARRO = auto()` gives every member the
+# Keeping such a value verbatim is worse than dropping it: `CAR = auto()` gives every member the
 # string "auto()", which is duplicate values that then PASS validation because the default is
 # literally in the set.
 function _is_py_literal(v::AbstractString)::Bool
@@ -4522,8 +4522,8 @@ end
 
 The NUMBER a Python numeric literal denotes, or `nothing` if `t` is not one.
 
-Denotes, not spells. Django stores what the literal means: `ALTO = 1_000` is the integer 1000 and
-`MEIO = 0x1F` is 31, so carrying the source text into `choices` and `default` declares an
+Denotes, not spells. Django stores what the literal means: `THOUSAND = 1_000` is the integer 1000 and
+`THIRTYONE = 0x1F` is 31, so carrying the source text into `choices` and `default` declares an
 enumeration no row can ever match. Both halves are wrong identically, which is precisely why
 `CharField`'s default-in-choices validation passes and nothing is reported — a silent wrong value,
 the one outcome this importer exists to prevent.
@@ -4552,8 +4552,8 @@ function _py_scalar_text(v::AbstractString)::String
   return n === nothing ? _strip_py_quotes(v) : string(n)
 end
 
-# `_("Azul")` / `gettext_lazy("Azul")` — the standard i18n spelling for a label. The wrapper carries
-# no schema meaning, so the string inside it is the label; leaving it wrapped put `_("Azul")` into
+# `_("Blue")` / `gettext_lazy("Blue")` — the standard i18n spelling for a label. The wrapper carries
+# no schema meaning, so the string inside it is the label; leaving it wrapped put `_("Blue")` into
 # the generated file as the display text.
 const _GETTEXT_CALL_RE = r"^(?:_|gettext|gettext_lazy|ugettext|ugettext_lazy)\s*\(\s*(.*?)\s*,?\s*\)$"
 
@@ -4631,10 +4631,10 @@ end
 
 
 # Recursive, and each enum is registered under EXACTLY the name Python would bind it to: its path
-# relative to the model. A direct child is `Situacao`; one nested a level deeper is
-# `Grupo.Situacao`, and only that — because `Situacao` alone is not in the model body's namespace.
+# relative to the model. A direct child is `Phase`; one nested a level deeper is
+# `Cluster.Phase`, and only that — because `Phase` alone is not in the model body's namespace.
 #
-# Registering the bare name as well looked harmless and was not: a module-level `Situacao` is what
+# Registering the bare name as well looked harmless and was not: a module-level `Phase` is what
 # Python actually resolves in the model body, and an invented bare key for a deep enum SHADOWED it,
 # because `_lookup_enum` searches the class scope before the module scope. The field then imported
 # the wrong enumeration in complete silence, with a marker claiming the real member did not exist.
@@ -4698,7 +4698,7 @@ statement written in the CHILD must not see an ancestor's module at all — Pyth
 there, since the child never imported the name (#402, case (e)).
 
 Every entry carries the app it belongs to. Two apps may each declare a `Base` with a nested
-`Situacao`, and a scope list of bare names could not say which one a merged statement meant.
+`Phase`, and a scope list of bare names could not say which one a merged statement meant.
 
 Cheap to call but not free — it walks the ancestor graph — and a class's statements come from only a
 handful of owners, so `_import_django_apps` builds one list per distinct owner and hands
@@ -4777,10 +4777,10 @@ function _lookup_enum(enums, aliases, scopes::Vector{Tuple{Int, String}},
     # in the list. That order is Python's, and getting it wrong is a SILENT wrong enumeration rather
     # than a miss, which is why it is spelled out as three passes instead of one loop.
     #
-    # The case that fixes it: `shop` writes `from core.models import Base as Outra`, and `core` also
-    # DECLARES a class `Outra` with a different `Status`. `Outra` is a name in `shop`'s module bound
-    # to `Base`, so `Outra.Status` is `Base`'s. Consulting the bindings after the all-apps loop finds
-    # `core`'s real `Outra` first and imports the wrong members in silence — the exact failure the
+    # The case that fixes it: `shop` writes `from core.models import Base as Decoy`, and `core` also
+    # DECLARES a class `Decoy` with a different `Status`. `Decoy` is a name in `shop`'s module bound
+    # to `Base`, so `Decoy.Status` is `Base`'s. Consulting the bindings after the all-apps loop finds
+    # `core`'s real `Decoy` first and imports the wrong members in silence — the exact failure the
     # design check rejected during #425, reintroduced from the other side.
     for (a, _) in scopes
       a == self || continue
@@ -4943,12 +4943,12 @@ end
 Bases that neither `cls` nor any of its abstract ancestors could resolve, each with the index of the
 app whose `models.py` actually declares the class carrying that base.
 
-An abstract base with its own unresolvable base (`class Auditavel(TimeStampedModel)` with
+An abstract base with its own unresolvable base (`class Audited(TimeStampedModel)` with
 `abstract = True`) loses columns exactly as the child would, but the base emits nothing — so without
 walking the chain its gap reaches the generated file with no marker at all.
 
 The owning app travels with the token because the walk crosses apps: an unresolved base found on
-`core.Auditavel` while emitting `shop.Pedido` needs its `import` line in **`core`**, and advice
+`core.Audited` while emitting `shop.SeasonTicket` needs its `import` line in **`core`**, and advice
 pointing at `shop` would be advice that cannot work.
 """
 function _inherited_unresolved(graph, cls::PyClass)::Vector{Tuple{String, Int}}
@@ -5237,7 +5237,7 @@ end
 #     `TextChoices` in a labelled import, which is precisely what #342 exists to make work. Note the
 #     app is ALREADY carried, as the `Int`; spelling it again in the string would double-qualify.
 #   - `class_label` is what a `# PormG:` marker and a `@warn` NAME. That has to be app-qualified, or
-#     two apps' `Pessoa` produce reports the reader cannot tell apart.
+#     two apps' `Spectator` produce reports the reader cannot tell apart.
 #
 # They coincide exactly when the import carries no app label, which is why the default is safe.
 #
@@ -5270,7 +5270,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
                                # inheritance-cycle guard is keyed on `(app, cls.name)`, so it
                                # refuses a class inheriting from itself in the SAME app and says
                                # nothing about a same-named abstract base in another one —
-                               # `core.Pessoa` abstract, `rh.Pessoa` concrete is an ordinary Django
+                               # `core.Spectator` abstract, `archive.Spectator` concrete is an ordinary Django
                                # layout. Comparing the name alone called both owners "this class".
                                own_owner::Tuple{Int, String} = (1, String(class_name)),
                                # #948: every app's `_AppScope`, for bare-name option values. A
@@ -5292,7 +5292,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   # from `models.Model` rather than owning it, so a declared `primary_key=True` suppresses it here
   # exactly as on any other model — and the caller already applies that rule to every class it
   # emits. Injecting one here instead claimed the key before a single field had been read, so a
-  # legacy user table keyed on `matricula` came out with TWO primary keys and could never load.
+  # legacy user table keyed on `enrolment` came out with TWO primary keys and could never load.
   # Do not re-add it.
   #
   # Returns `(declared_pk, unsupported_pk, unsupported_fields, ignored_fields)`. Each answers a
@@ -5355,7 +5355,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
   #     `_inherited_statements` walks with a `seen` set, so one owner tuple cannot contribute a key
   #     twice through a diamond: same owner means same class body, structurally.
   #   * the two statements use DIFFERENT field names. An override always re-declares the same
-  #     attribute (`nome` over `nome`); two differently spelled attributes landing on one column is
+  #     attribute (`full_name` over `full_name`); two differently spelled attributes landing on one column is
   #     never an override in any arrangement, because only the `_id` suffix rule can make that
   #     happen. Owner alone missed it across the inheritance boundary:
   #
@@ -5414,8 +5414,8 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # Its informational marker, pushed only once the column is known to be IMPORTED — after the
     # `autofields_ignore` and #410 skips, either of which would make "imported as X" false.
     subclass_note = nothing
-    # A custom field class defined in this import's scope (#1041): `lote = LoteField(max_length=50)`
-    # over `class LoteField(models.CharField)`. Read as its base, with the call's own options — the
+    # A custom field class defined in this import's scope (#1041): `batch_no = BatchField(max_length=50)`
+    # over `class BatchField(models.CharField)`. Read as its base, with the call's own options — the
     # base is in the source, and the column type, length, nullability and default are all in the
     # call. Only a BARE target is looked up, as a base token is: a dotted one names a module this
     # file never had, and `_resolve_base` resolves names, not attribute paths.
@@ -5738,7 +5738,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
     # Whether DJANGO called this field the primary key — recorded beside the built field because it
     # cannot be read back off it (#369). Most PormG field types do not accept `primary_key` at all:
     # `_drop_unaccepted_django_options!` drops it before the constructor refuses it (#1333), so a
-    # legacy table keyed on `codigo = models.IntegerField(primary_key=True)` yields a field that
+    # legacy table keyed on `ref_code = models.IntegerField(primary_key=True)` yields a field that
     # denies being the key. Deciding the implicit `id` from the built fields ALONE would then invent
     # an `id` column the Django table has not got. Mirrors `fields_dict`'s last-write-wins, so a
     # child overriding an inherited key with a plain field drops the claim along with the value.
@@ -5784,7 +5784,7 @@ function process_class_fields!(fields_dict::Dict{Symbol, Any},
         ", or set strict_fields = false to import the model without it."))
       # The declaration WINS over whatever sits at this key, exactly as a buildable one would.
       # `class_content` merges abstract bases by concatenation and lets the last write win, so an
-      # inherited `codigo = CharField(primary_key=True)` overridden by an unimplemented type used to
+      # inherited `ref_code = CharField(primary_key=True)` overridden by an unimplemented type used to
       # leave the BASE's field standing — the model rendered a VARCHAR(10) primary key over a
       # SMALLINT column while the marker beside it said that column was not imported. A skip that
       # does not delete is not a skip; it is a silent fallback to the wrong type.
@@ -6325,7 +6325,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
             continue
           end
           # A DISTINCT sentinel, not `nothing`: `parse_value("None")` is `nothing`, so an enum
-          # member declared `NENHUM = None, "Nenhum"` resolved to `nothing` and was read here as
+          # member declared `VOID = None, "Void"` resolved to `nothing` and was read here as
           # "dropped" — the option vanished with no warn and no marker, which is the one thing this
           # importer promises never to do.
           resolved === _ENUM_DROP && continue       # dropped, and already reported
@@ -6434,7 +6434,7 @@ function parse_field_args(args_str::AbstractString, field_type::AbstractString, 
     names = join(("`$(e)`" for e in unique(last.(unresolved_enums))), ", ")
     opts = join(("`$(k)`" for k in unique(first.(unresolved_enums))), " and ")
     # "does not define", not "enum": the same shape catches a module constant
-    # (`default=constants.MAX_QTD`), and calling that an enumeration in the artifact is a lie the
+    # (`default=constants.MAX_QTY`), and calling that an enumeration in the artifact is a lie the
     # reader has no way to check.
     @warn "import: name is not defined in this file; option dropped" class=class_label field=field_name reference=unique(last.(unresolved_enums)) options=unique(first.(unresolved_enums))
     push!(markers, "# PormG: field '$(field_name)' on '$(class_label)' references $(names), which " *
@@ -6727,7 +6727,7 @@ function _resolve_py_constant(scopes::Vector{_AppScope}, owner::Tuple{Int, Strin
 end
 
 # Sentinels. Two distinct ones, because `nothing` is a legitimate RESOLVED value: an enum member
-# declared `NENHUM = None, "Nenhum"` parses to `nothing`, and conflating that with "drop" made the
+# declared `VOID = None, "Void"` parses to `nothing`, and conflating that with "drop" made the
 # option disappear with no warn and no marker.
 const _ENUM_NOT_A_REFERENCE = :_enum_not_a_reference   # not a reference — parse it normally
 const _ENUM_DROP = :_enum_drop                         # drop this option; already reported
@@ -6751,7 +6751,7 @@ _looks_like_enum_attr(attr::AbstractString)::Bool =
   attr == "choices" || attr in _ENUM_PLURAL_ATTRS || attr in _ENUM_MEMBER_ATTRS ||
   occursin(r"^[A-Z][A-Z0-9_]*$", attr)
 
-# Single-value attributes OF A MEMBER: `Status.NOVO.value`, `.label`, `.name`. Django's own
+# Single-value attributes OF A MEMBER: `Status.NEW.value`, `.label`, `.name`. Django's own
 # `TextChoices` exposes all three, and `.value` is an ordinary way to spell a default.
 const _ENUM_MEMBER_ATTRS = ("value", "label", "name")
 
@@ -6778,7 +6778,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_aliases,
   head = String(m.captures[1])
   attr = String(m.captures[2])
 
-  # `Status.NOVO.value` — a single-value attribute OF A MEMBER. Peel it so the rest of this
+  # `Status.NEW.value` — a single-value attribute OF A MEMBER. Peel it so the rest of this
   # function sees the member reference it already knows how to resolve. `.label` and `.name` have
   # no PormG equivalent as a column default, so they are reported like the plural attributes.
   if attr in _ENUM_MEMBER_ATTRS
@@ -6808,7 +6808,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_aliases,
     # `parse_value` exactly as before.
     (key == "choices" || key == "default") || return _ENUM_NOT_A_REFERENCE
     if !_looks_like_enum_attr(attr)
-      # Kept verbatim, as before this change — but REPORTED. `default=Externo.ativo` is an enum
+      # Kept verbatim, as before this change — but REPORTED. `default=External.active` is an enum
       # member spelled unconventionally, and it is indistinguishable from `default=uuid.uuid4` by
       # syntax alone. Guessing either way is wrong for the other, so the value is left untouched
       # and the reader is told a dotted expression landed in the schema as a literal.
@@ -6827,7 +6827,7 @@ function _resolve_enum_reference(value::AbstractString, enums, enum_aliases,
   if attr == "choices"
     bad = [n for (n, v, _) in enum.members if !_is_py_literal(v)]
     if !isempty(bad)
-      # `CARRO = auto()` is a documented Django idiom, and importing it verbatim gives every member
+      # `CAR = auto()` is a documented Django idiom, and importing it verbatim gives every member
       # the value "auto()" — duplicates that then PASS validation, because the default is literally
       # in the set. Wrong metadata kept in silence is the mirror of a silent drop.
       @warn "import: enum has members whose values are not literals; choices dropped" class=class_label field=field_name enum=head members=bad
@@ -7004,7 +7004,7 @@ and both bracket styles for the inner pairs.
 
 Rebased on the shared scanner (#342), which fixes an abort of exactly the kind this issue exists to
 remove. The old body found pairs with `r"\\(([^()]+)\\)"` and split them on EVERY comma, so an
-ordinary human label — `("APPLIED", "Aplicado, com ressalvas")` — produced three fragments and threw
+ordinary human label — `("APPLIED", "Committed, with caveats")` — produced three fragments and threw
 `InvalidMigrationError` from *outside* the field-construction `try`. Nothing caught it, no file was
 written, and every model in the file was lost. `split_field_options` does not split inside a string,
 so that label now parses correctly.
@@ -7016,7 +7016,7 @@ yield an empty `choices=()` with no warning.
 
 Two output channels, because they are two different problems and one message cannot state both.
 `skipped` takes an element that is not a `(value, label)` pair at all — it is DROPPED. `verbatim`
-takes a well-formed pair one of whose halves is not a single Python literal (`('a' + 'b', 'Rotulo')`)
+takes a well-formed pair one of whose halves is not a single Python literal (`('a' + 'b', 'Labelled')`)
 — that entry is KEPT, carrying source text rather than the value it denotes, and the caller reports
 it with that reason (#501).
 
@@ -7062,7 +7062,7 @@ function parse_choices(choices_str::AbstractString, skipped::Vector{String} = St
     value_raw = String(strip(parts[1]))
     # The LABEL is unwrapped from `_()` / `gettext_lazy()` first, exactly as `_parse_enum` does for
     # a `TextChoices` label (#501). Django's i18n spelling is the commonest label form there is, it
-    # carries no schema meaning, and leaving it wrapped put the source text `_("Azul")` into the
+    # carries no schema meaning, and leaving it wrapped put the source text `_("Blue")` into the
     # generated file as the display string. Only the label: a VALUE is schema, and unwrapping one
     # would silently change what a row has to contain to match.
     label_raw = _unwrap_gettext(parts[2])
@@ -7101,18 +7101,18 @@ A **trailing comma** yields no token (#346). Python allows one on every call, an
 on a wrapped argument list — which is exactly the shape this hit:
 
 ```python
-actor = models.ForeignKey(
-    CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
-    related_name='auditoria_acoes', db_constraint=False,
+driverid = models.ForeignKey(
+    Driver, on_delete=models.SET_NULL, null=True, blank=True,
+    related_name='results', db_constraint=False,
 )
 ```
 
 The whitespace between that last comma and the `)` left the buffer non-empty, so an all-blank token
 was pushed. `parse_field_args` reads a token with no `=` as the POSITIONAL argument, so that blank
 overwrote the relation target and emitted `Models.ForeignKey("", …)` — a declaration that throws at
-`set_models`. Found in a real 434-model project, on two fields, silently. An empty argument does not
-exist in Python, so dropping blank tokens is a correction with no legitimate case behind it; every
-caller (`_class_bases`, the constraint parsers) was mis-reading them the same way.
+`set_models`. An empty argument does not exist in Python, so dropping blank tokens is a correction
+with no legitimate case behind it; every caller (`_class_bases`, the constraint parsers) was
+mis-reading them the same way.
 """
 function split_field_options(field_options::AbstractString)
   tokens = String[]
@@ -7187,8 +7187,8 @@ end
 The value of a Meta option that must be a **literal** string, or `nothing`.
 
 The literal check is not decoration. `parse_value` returns anything it cannot classify verbatim, so
-a computed `db_table = f"{prefix}_matricula"` would otherwise be applied as the *text*
-`f"{prefix}_matricula"` — a declaration pointing at a table whose name contains a brace.
+a computed `db_table = f"{prefix}_enrolment"` would otherwise be applied as the *text*
+`f"{prefix}_enrolment"` — a declaration pointing at a table whose name contains a brace.
 """
 function _meta_string_literal(raw::AbstractString)::Union{String, Nothing}
   s = strip(raw)
@@ -7199,8 +7199,8 @@ function _meta_string_literal(raw::AbstractString)::Union{String, Nothing}
   # A residual quote or a newline means the text was not a well-formed single-line literal, whatever
   # produced it. The case this actually catches is the TRIPLE-quoted one, which passes a naive
   # starts-with-a-quote test and names a table no database has. Since #497 `parse_value` returns it
-  # untouched — `\"\"\"arq_legado\"\"\"` verbatim, quotes and all — rather than stripping one
-  # character per side into `\"\"arq_legado\"\"`; both forms carry a quote, so this gate is what
+  # untouched — `\"\"\"arch_legacy\"\"\"` verbatim, quotes and all — rather than stripping one
+  # character per side into `\"\"arch_legacy\"\"`; both forms carry a quote, so this gate is what
   # refuses it either way, and it is still the gate doing the work.
   (occursin('\n', v) || occursin('"', v) || occursin('\'', v)) && return nothing
   return String(v)
@@ -7683,7 +7683,7 @@ function _q_list(v::AbstractString, fields::Dict{Symbol, Any})
   inner = t[nextind(t, firstindex(t)):prevind(t, lastindex(t))]
   vals = [_q_value(e, fields) for e in split_field_options(inner)]
   isempty(vals) && _q_fail("`$(t)` is empty")
-  # `("ferias")` is the string itself in Python, not a one-element tuple — Django's `in` would iterate
+  # `("caution")` is the string itself in Python, not a one-element tuple — Django's `in` would iterate
   # its characters. Only the trailing comma makes it a tuple.
   first(t) == '(' && length(vals) == 1 && !endswith(rstrip(inner), ",") &&
     _q_fail("`$(t)` is a parenthesised value, not a tuple")
@@ -7729,7 +7729,7 @@ function _q_leaf_sql(k::AbstractString, v::AbstractString, fields::Dict{Symbol, 
     _q_admits(fam, val) ||
       _q_fail("`$(k)=` compares a field to a value it cannot be compared to exactly on both engines")
     # #934: Django's `Exact.as_sql` renders a boolean field against a literal True/False as the bare
-    # column (`WHERE "ativo"`) or its negation (`NOT "ativo"`), never `= TRUE`. Writing its shape
+    # column (`WHERE "enabled"`) or its negation (`NOT "enabled"`), never `= TRUE`. Writing its shape
     # (the name bare since #1368, which the planner compares as the quoted one) is what lets an imported
     # CHECK or partial index match the text a Django-built SQLite database stores, instead of being
     # replaced (a table rebuild, for a CHECK) or refused by name.
@@ -7918,8 +7918,8 @@ function _resolve_index_group(declared::Vector{String}, fields_dict::Dict{Symbol
 end
 
 # #29 part 2: the SQL an imported functional or partial index carries is Django's spelling, which a
-# database Django ALREADY built stores rewritten on PostgreSQL (`lower(apelido::text)`) — and a
-# partial predicate may differ on SQLite too (`WHERE "ativo"`). Such an index is hand-made to PormG,
+# database Django ALREADY built stores rewritten on PostgreSQL (`lower(nickname::text)`) — and a
+# partial predicate may differ on SQLite too (`WHERE "enabled"`). Such an index is hand-made to PormG,
 # and `makemigrations` refuses its name for this text, printing the declaration that adopts it. Say
 # so beside the declaration, where the reader will look.
 _note_django_text_index!(markers::Vector{String}, class_label::AbstractString, name::AbstractString, kind::Symbol) =
@@ -7966,7 +7966,7 @@ function _translate_index_expression(t::AbstractString, fields::Dict{Symbol, Any
     dir = m.captures[2] == "desc" ? " DESC" : " ASC"
   end
   try
-    # Django turns a positional STRING into `F(...)` (`Index.__init__`), so `Index("cpf", …)` names a column.
+    # Django turns a positional STRING into `F(...)` (`Index.__init__`), so `Index("licence_no", …)` names a column.
     _py_quoted_literal(s) && return _q_column(_py_unquote(s), fields).sql * dir
     fm = match(r"^(?:models\s*\.\s*)?F\s*\(\s*(.*?)\s*\)$"s, s)
     if fm !== nothing
@@ -8349,7 +8349,7 @@ function parse_meta_unique_together(raw::AbstractString, fields_dict::Dict{Symbo
                                     markers::Vector{String} = String[])
   inner = _balanced_group(raw)
   if inner === nothing
-    # `unique_together = CHAVE_EXTERNA` — a name, not a literal. This used to return an empty vector
+    # `unique_together = EXTERNAL_KEY` — a name, not a literal. This used to return an empty vector
     # and the composite key vanished without a word, while the SAME shape on `Meta.constraints` was
     # reported. Same loss, same report.
     @warn "import: Meta.unique_together is not a tuple or list literal; dropped" class=class_label value=_one_line(raw)
@@ -8369,7 +8369,7 @@ function parse_meta_unique_together(raw::AbstractString, fields_dict::Dict{Symbo
         # Whitespace collapsed before interpolation, like every other marker: a field name can
         # carry a real newline (a triple-quoted string survives `_py_logical_lines` intact), and a
         # marker that spans two lines breaks the generated module outright. Verified: without this,
-        # `unique_together = ("""nao\nexiste""", "a")` produces a file that will not parse.
+        # `unique_together = ("""not\nfound""", "a")` produces a file that will not parse.
         push!(markers, "# PormG: a unique_together group on '$(class_label)' was dropped — field " *
                        "'$(_one_line(name))' matches no imported field: " *
                        "($(_one_line(join(group, ", "))))")

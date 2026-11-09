@@ -1,6 +1,6 @@
 ## `using PormG` no longer loads `DataFrames` or `CSV`: add the one your app uses (#1344)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1344 (phase 6) ; `Project.toml`, `src/PormG.jl`, `src/QueryBuilder.jl`
 - **Recorded**: 2026-11-01
 - **Severity**: breaking, only for code that reached `DataFrames` or `CSV` through PormG's modules. Every PormG call returns what it returned before.

@@ -1,6 +1,6 @@
 ## A filter on an alias over a JSON key refuses the lookups the key lookup refuses (#1499)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1499 ; `src/querybuilder/filter_operators.jl` (`_json_key_operator_refusal`), `src/querybuilder/projection_types.jl` (`_render_alias_predicate_node`), `src/querybuilder/filter_nodes.jl`
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. A filter that built now raises `FilterError`; on PostgreSQL one of them (`@range`) returned the wrong rows.

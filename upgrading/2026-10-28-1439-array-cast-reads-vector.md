@@ -1,6 +1,6 @@
 ## A projected `Cast` to an array reads back as a `Vector`, as an `ArrayField` column does (#1439)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1439 ; `src/querybuilder/expression_kind.jl` (`_declared_kind`), `src/column_ir.jl` (`_ArrayElementKind`)
 - **Recorded**: 2026-10-28
 - **Severity**: behavior change, PostgreSQL only. A value projected through a cast to a text, boolean, date, timestamp or uuid array now reads back as a `Vector`, where LibPQ returned the `{…}` literal as a `String`. A cast to an integer, float or numeric array reads the same values as before, now as the 1-based `Vector{T}` an `ArrayField` column reads.

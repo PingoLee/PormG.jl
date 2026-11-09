@@ -1,6 +1,6 @@
 ## A delete whose `SET_NULL` / `SET_DEFAULT` keys form a cycle runs; deleting a `SET_DEFAULT` key's own default row raises `IntegrityError` (#1374)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1374 ; `src/querybuilder/deletion.jl`
 - **Recorded**: 2026-11-02
 - **Severity**: behavior. Deletes that raised now run on every engine. One shape still raises, with a different type: code that catches it as a `QueryBuildError` stops matching.

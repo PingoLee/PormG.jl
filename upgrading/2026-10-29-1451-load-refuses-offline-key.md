@@ -1,6 +1,6 @@
 ## `Configuration.load` of a key `register_offline` holds raises instead of replacing it (#1451)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1451 ; `src/Configuration.jl` (`load`, `_offline_load_error`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change, every engine. `load` of a key registered offline used to replace the offline entry with a live pool, with only a reload warning. It now raises `InvalidConfigurationError`, `force = true` included, and leaves the offline entry as it was.

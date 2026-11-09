@@ -1,6 +1,6 @@
 ## A column expression compared with an alias, CTE column or Subquery over a JSON key is refused as on the key (#1507)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1507 ; `src/querybuilder/projection_types.jl` (`_render_alias_predicate_node`), `src/querybuilder/filter_nodes.jl` (`_render_filter_oper`), `src/querybuilder/filter_operators.jl` (`_render_json_lookup_comparison`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. A filter that built now raises `FilterError`. On PostgreSQL it failed at the server. On SQLite it compared the values.

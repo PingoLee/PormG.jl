@@ -1,6 +1,6 @@
 ## `create_models_jl` and the models importers refuse a file name that cannot be a module name (#1486)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1486 ; `src/Generator.jl` (`_models_module_name`), `src/tools.jl` (`setup`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change. A models-file name that is not a Julia identifier once its `.jl` is

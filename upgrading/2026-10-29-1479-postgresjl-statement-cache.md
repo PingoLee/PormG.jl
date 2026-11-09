@@ -1,6 +1,6 @@
 ## Postgres.jl driver: statements run through the driver's prepared-statement cache (#1479)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1479 ; `ext/PormGPostgresExt.jl` (`_execute`, `_execute_prepared`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change. Under `postgres_driver: Postgres` only. Inside a transaction, a cached statement that a schema change or a `DEALLOCATE ALL` made stale now raises a `StatementError`. A hand-written `fetch` with the wrong number of parameters raises a `StatementError` where it raised an `OperationalError`. LibPQ is unchanged.

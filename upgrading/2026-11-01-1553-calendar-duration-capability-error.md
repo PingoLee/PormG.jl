@@ -1,6 +1,6 @@
 ## A month or a year beside an interval on SQLite or MySQL raises `BackendCapabilityError` (#1553)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1553, #1576, #1583 ; `src/capabilities.jl`, `src/querybuilder/expression_render.jl`
 - **Recorded**: 2026-11-01
 - **Severity**: behavior, only for SQLite or MySQL code that catches the error by its type. The same calls still raise; the type changed. Nothing that built before builds differently.

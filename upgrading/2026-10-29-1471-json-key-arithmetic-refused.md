@@ -1,6 +1,6 @@
 ## Arithmetic, `Sum`, `Avg`, `Max` and `Min` over an uncast JSON key are refused on every engine (#1471, #1482, #1483, #1491)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1471, #1482, #1483, #1491 ; `src/querybuilder/projection_types.jl` (`_json_number_side`, `_refuse_json_key_arithmetic`), `src/querybuilder/ctes.jl` (`CTEDivision.json_key`), `src/querybuilder/expression_render.jl` (`_render_expr_node`), `src/querybuilder/select_nodes.jl` (`Sum`/`Avg`/`Max`/`Min`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change on every engine. A query that built now raises `QueryBuildError` when it is built. On SQLite and MySQL some of these returned a value. On PostgreSQL most raised a server error when the query ran, and `Floor(key) / 2` returned a value. A `Max` or `Min` of a key returned a value on every engine: the text's order on PostgreSQL, the number's on SQLite.

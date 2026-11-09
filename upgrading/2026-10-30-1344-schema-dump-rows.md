@@ -1,6 +1,6 @@
 ## `PormG.Migrations.get_database_schema(conn)` on PostgreSQL returns rows, not a `DataFrame` (#1344)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1344 (phase 2) ; `src/migrations/introspection.jl` (`get_database_schema(::PormGPostgres)`, `convertSQLToModel(row)`)
 - **Recorded**: 2026-10-30
 - **Severity**: breaking, for one qualified call. `get_database_schema` is not exported, but the #274 entry names it as still reachable as `PormG.Migrations.get_database_schema(conn)`. `inspectdb`, `makemigrations`, `check()` and `convert_schema_to_models` read the same schema and return what they returned before.

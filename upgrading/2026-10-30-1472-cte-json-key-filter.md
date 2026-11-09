@@ -1,6 +1,6 @@
 ## A filter on a CTE column over a JSON key compares as the key lookup does (#1472)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1472 ; `src/querybuilder/filter_nodes.jl` (the key-value arm beside `_render_json_lookup_comparison`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. An ordering filter (`@gt`, `@gte`, `@lt`, `@lte`) on such a column returns different rows, and so does an equality with a number on SQLite; an equality on text that raised now builds.

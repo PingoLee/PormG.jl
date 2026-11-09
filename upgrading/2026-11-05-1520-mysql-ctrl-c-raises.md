@@ -1,6 +1,6 @@
 ## A Ctrl+C during a MySQL statement now raises and kills the statement; MySQL.jl 2.2.2 or newer is required (#1520, #1648)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1520, #1648 ; `Project.toml`, `docs/src/mysql.md`
 - **Recorded**: 2026-11-05
 - **Severity**: behavior change. On MySQL, a `Ctrl+C` during a query used to be lost; the query ran to its end and returned its rows. It now raises, and the statement is stopped on the server. An environment that holds MySQL.jl at 2.2.0 or 2.2.1 no longer resolves with this PormG.

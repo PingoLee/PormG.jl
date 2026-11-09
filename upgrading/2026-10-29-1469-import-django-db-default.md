@@ -1,6 +1,6 @@
 ## `import_models_from_django` translates Django's `db_default` instead of copying it (#1469)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1469 ; `src/migrations/importers.jl` (`_translate_django_db_default!`), `src/models/fields.jl` (`_db_default_kwarg`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change. A Django `db_default` written as a string is now text, never SQL: `db_default="CURRENT_DATE"` generates `default="CURRENT_DATE"` on a text field and no default on a date or datetime field, where it used to generate the SQL function. Imports that used to stop on a `db_default` now finish.

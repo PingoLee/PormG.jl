@@ -1,6 +1,6 @@
 ## MySQL retries a statement that never ran (errors 2006 and 4031); MySQL.jl 2.2 or newer is required (#1502, #1629)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1502, #1629 ; `ext/PormGMySQLExt.jl`, `Project.toml`
 - **Recorded**: 2026-11-03
 - **Severity**: behavior. On MySQL a statement that raised `OperationalError` with error 2006 or 4031 now runs again on a renewed connection and returns. An environment that holds MySQL.jl below 2.2 (a `Pkg.pin`, or a `~2.1` / `=2.1.0` bound) no longer resolves with this PormG.

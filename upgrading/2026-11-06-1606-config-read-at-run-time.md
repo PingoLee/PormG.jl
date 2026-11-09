@@ -1,6 +1,6 @@
 ## A built image reads its configuration at run time: `load` refuses while one is written (#1606)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1606, part of #1599 ; `src/Configuration.jl`, `src/ConnectionPool.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: behavior change, for an app built into a sysimage or a `juliac` executable that loads

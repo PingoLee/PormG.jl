@@ -1,6 +1,6 @@
 ## Every relation resolves to a model at `set_models`, or registration refuses (#1601)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1601, #1599, #354, #1689 ; `src/Models.jl`, `src/querybuilder/build_joins.jl`, `src/querybuilder/many_to_many.jl`, `src/querybuilder/execution_write.jl`
 - **Recorded**: 2026-11-06
 - **Severity**: breaking, for a models module with a relation whose target is not one of the models a registered module declares. A module whose `ForeignKey` / `OneToOneField` / `ManyToManyField` targets are models it declares (`Models.@models`, #1602), or models a module registered before it declares, is unaffected.

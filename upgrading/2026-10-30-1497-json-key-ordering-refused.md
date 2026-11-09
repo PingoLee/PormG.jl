@@ -1,6 +1,6 @@
 ## An ordering over an uncast JSON key is refused on every engine (#1497)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1497 ; `src/querybuilder/projection_types.jl` (`_refuse_json_key_ordering`), `src/querybuilder/build_select.jl` (`get_order_query`), `src/querybuilder/select_nodes.jl` (window ordering, `Greatest`/`Least`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. A query that built now raises `QueryBuildError` when it is built. On PostgreSQL and MySQL it ordered the key's text, on SQLite its numbers.

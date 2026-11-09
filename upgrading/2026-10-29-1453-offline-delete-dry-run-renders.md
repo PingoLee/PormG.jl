@@ -1,6 +1,6 @@
 ## A dry-run `delete()` on a `register_offline` key renders its cascade; past a `PROTECT` relation it raises `ProtectedError` (#1453)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1453 ; `src/querybuilder/deletion.jl` (`_is_live_pool`), `src/Configuration.jl` (`_is_offline_pool`)
 - **Recorded**: 2026-10-29
 - **Severity**: behavior change, every engine, offline keys only. `delete(show_query = …)` of a model that others reference raised `InvalidConfigurationError` on an offline key. Through `CASCADE`, `SET_NULL` or `SET_DEFAULT` relations it now returns the plan; past a `PROTECT` or `RESTRICT` relation it raises `ProtectedError` instead.

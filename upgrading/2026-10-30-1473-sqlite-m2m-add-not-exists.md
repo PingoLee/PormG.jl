@@ -1,6 +1,6 @@
 ## Many-to-many `add` on SQLite links a target once without a unique key on the through table (#1473)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1473 ; `src/querybuilder/many_to_many.jl` (`_m2m_add!(::PormGSQLite, …)`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change, SQLite only. On an explicit through model with no unique key over its two keys, a target linked already or given twice is now linked once, where it got a second row. A pair the through table rejects (a target with no key, a `CHECK`, two spellings of one key in one call on a table with a unique key) now raises `IntegrityError` and links none of the call's targets, where the pair was skipped without a word and the rest were linked.

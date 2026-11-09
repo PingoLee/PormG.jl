@@ -1,6 +1,6 @@
 ## A delete of a tree's node deletes its descendants; on MySQL, rows in a loop raise `BackendCapabilityError` (#1377)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1377 ; `src/querybuilder/deletion.jl`
 - **Recorded**: 2026-11-02
 - **Severity**: behavior. A delete that raised now deletes on every engine. One shape still raises on MySQL, with a different type: code that catches it as a `QueryBuildError` stops matching there.

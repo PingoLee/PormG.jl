@@ -1,6 +1,6 @@
 ## Revise reloads an edited models file, and `set_models` takes `source =` (#1487)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1487 ; `ext/PormGReviseExt.jl`, `src/Models.jl` (`set_models`), `src/Utils.jl`
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change, only in a session with Revise loaded. Without Revise, nothing changes.

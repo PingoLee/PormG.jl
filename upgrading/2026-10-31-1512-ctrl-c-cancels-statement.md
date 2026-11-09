@@ -1,6 +1,6 @@
 ## `Ctrl+C` during a query — cancels the statement under Postgres.jl and SQLite instead of waiting for it (#1512)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1512, #1534 ; `src/ConnectionPool.jl` (`_fetch_interruptible`, `_cancel_at_abandon!`), `src/AdvisoryLock.jl`
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change. The error raised is the same; what happens to the interrupted statement is not. LibPQ is unchanged.

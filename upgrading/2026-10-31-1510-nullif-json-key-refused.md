@@ -1,6 +1,6 @@
 ## `NullIf` over an uncast JSON key is refused on every engine (#1510)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1510 ; `src/querybuilder/select_nodes.jl` (the function render, beside the #1491/#1497 checks), `src/querybuilder/projection_types.jl` (`_refuse_json_key_operand`)
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change on every engine. A `NullIf` that built now raises `QueryBuildError`. On PostgreSQL a numeric second operand failed at the server. On SQLite it compared the value the document holds, and a key holding text compared correctly on both.

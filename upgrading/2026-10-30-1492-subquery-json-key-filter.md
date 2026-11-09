@@ -1,6 +1,6 @@
 ## A filter on a Subquery alias over a JSON key compares as the key lookup does (#1492)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1492 ; `src/querybuilder/projection_types.jl` (`_json_key_lookup_operand`, its `Subquery` arm)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change on every engine. An ordering filter (`@gt`, `@gte`, `@lt`, `@lte`) on such an alias returns different rows, and so does an equality with a number on SQLite; an equality on text that raised now builds.

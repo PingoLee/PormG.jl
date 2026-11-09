@@ -1,6 +1,6 @@
 ## A comparison with an aggregate on its right takes the mixed-grouping guard, as on its left (#1514)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1514 ; `src/querybuilder/operators.jl` (`_compare`, the `JoinedReference` comparisons)
 - **Recorded**: 2026-10-31
 - **Severity**: behavior change (narrow). A projection that rendered SQL the server rejects now raises `QueryBuildError` when it is built, on every engine.

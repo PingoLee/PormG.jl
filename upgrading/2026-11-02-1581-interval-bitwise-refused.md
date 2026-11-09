@@ -1,6 +1,6 @@
 ## A bitwise operator on an interval raises `QueryBuildError` at build on every engine (#1581)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1581 ; `src/querybuilder/expression_render.jl` (`_render_interval_left`, `_refuse_bitwise_interval`)
 - **Recorded**: 2026-11-02
 - **Severity**: behavior change on every engine. A bitwise operator with a `DurationField` column, a timestamp difference or any other interval on either side built. It now raises `QueryBuildError` when the query is built.

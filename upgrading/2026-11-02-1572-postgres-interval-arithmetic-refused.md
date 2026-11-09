@@ -1,6 +1,6 @@
 ## Interval arithmetic with no meaning raises `QueryBuildError` at build on PostgreSQL too (#1572)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1572 ; `src/querybuilder/expression_render.jl` (`_render_interval_left`, `_render_interval_right`)
 - **Recorded**: 2026-11-02
 - **Severity**: behavior change. On PostgreSQL, these shapes built and then failed when the statement ran, with a `StatementError`. They now raise `QueryBuildError` when the query is built, before any SQL is sent. On SQLite and MySQL, a date times or divided by a `DurationField` column now raises too, where it built.

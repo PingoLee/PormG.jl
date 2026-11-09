@@ -1,6 +1,6 @@
 ## `create` / `get_or_create` / `update_or_create`: the row a write returns carries the model's fields only (#1490)
 
-- **Version**: Unreleased
+- **Version**: 0.10.0
 - **PormG ref**: #1490 ; `src/querybuilder/execution_write.jl` (`_returned_columns`), `src/querybuilder/engine_facts.jl` (`_inserted_row_query`)
 - **Recorded**: 2026-10-30
 - **Severity**: behavior change. The SQL a write sends, and so what `show_query` shows, names the model's columns instead of `*`. The row it returns no longer carries a column the table has and the model does not declare: reading one raises `UnknownFieldError` where it returned the value.

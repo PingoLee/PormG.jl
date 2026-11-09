@@ -230,9 +230,22 @@ marker:
 
 That is load-bearing. An extension method typed on the abstract marker alone shadows this default
 for *every* pool of that flavor, including the behavioral mock pools the unit suite builds — which
-throw plain `ErrorException`s and rely on their own `backend_is_connection_error` overrides. Pinning
-the exception type means an extension only claims errors it actually understands. (PormG has been
-bitten by exactly this shadowing before; see the note in `test/unit/test_error_taxonomy.jl`.)
+throw plain `ErrorException`s and rely on their own `backend_is_connection_error` overrides. So an
+extension only claims errors it actually understands. (PormG has been bitten by exactly this
+shadowing before; see the note in `test/unit/test_error_taxonomy.jl`.)
+
+**How an extension claims them (#1696).** The exception reaches this from a `catch`, typed `Any`. A
+method per driver exception type made every call a dispatch on the exception's run-time type, and a
+`juliac --trim` image had compiled nothing for it: a failing statement raised a `MethodError` in
+place of the database error. So an extension defines **one** method for its pool type, takes the
+exception `@nospecialize`, tests the types it understands with `isa`, and hands anything else to
+`_default_classify_error`, the body of the default below. The call is then one compiled target
+per pool type, and an error the extension does not understand gets exactly the default's answer:
+
+    function PormG.backend_classify_error(pool::PormGSQLite, @nospecialize(e))
+      e isa SQLite.SQLiteException || return PormG._default_classify_error(pool, e)
+      …
+    end
 
 Precision differs by backend, on purpose:
 
@@ -246,7 +259,11 @@ Precision differs by backend, on purpose:
 """
 function backend_classify_error end
 
-function backend_classify_error(pool::PormGBackend, e)
+backend_classify_error(pool::PormGBackend, @nospecialize(e)) = _default_classify_error(pool, e)
+
+# The default answer, as a plain function an extension's method falls through to for an exception it
+# does not understand (see the docstring above).
+function _default_classify_error(pool::PormGBackend, @nospecialize(e))
   # `backend_is_connection_error` hits the throwing fallback above when no driver is loaded, and a
   # pool mock may not define it at all. Never let classification throw: the caller is mid-`catch`,
   # and the original failure is preserved on `.cause` regardless of how we label it.
@@ -275,17 +292,26 @@ the server saying so in a SQLSTATE (the backend is gone and the statement was no
 a failure raised before anything was written to the socket. A codeless "the socket went away"
 answers `false`, whatever the phrase.
 
+Like [`backend_classify_error`](@ref), an extension defines one method for its pool type that takes
+the exception `@nospecialize` and falls through to `_default_retry_safe` for the types it does not
+know (#1696).
+
 Not in the missing-driver loop above, for `backend_classify_error`'s reason: `fetch` calls it
 mid-`catch`, and a throw would replace the failure being reported. The default answers `false` —
 no retry — so a driver or mock pool that never defines it is safe. Extensions add methods typed on
-their **exception types**, never on the pool marker alone, so none shadows this default for the unit
-suite's mock pools:
+their exception types (with `isa`), falling through to the default for any other, so none changes
+this default's answer for the unit suite's mock pools:
 
-    PormG.backend_is_retry_safe(pool::PormGPostgres, e::LibPQ.Errors.LibPQException) = …
+    function PormG.backend_is_retry_safe(pool::PormGPostgres, @nospecialize(e))
+      e isa LibPQ.Errors.LibPQException || return PormG._default_retry_safe(pool, e)
+      …
+    end
 """
 function backend_is_retry_safe end
 
-function backend_is_retry_safe(pool::PormGBackend, e)
+backend_is_retry_safe(pool::PormGBackend, @nospecialize(e)) = _default_retry_safe(pool, e)
+
+function _default_retry_safe(pool::PormGBackend, @nospecialize(e))
   # A multi-result failure: one coded "never ran" among them is the server's own answer.
   e isa CompositeException && return any(inner -> backend_is_retry_safe(pool, inner), e.exceptions)
   return false
@@ -347,6 +373,20 @@ const _NO_ERROR_FIELDS = (sqlstate = nothing, constraint = nothing, table = noth
                           message = nothing)
 
 backend_error_fields(e) = _NO_ERROR_FIELDS
+
+"""
+    backend_error_fields(pool, e) -> NamedTuple
+
+The same fields, asked with the pool in hand: what `ConnectionPool._as_database_error` calls (#1696).
+The exception comes from a `catch`, typed `Any`, and the one-argument form dispatches on its type,
+which a `juliac --trim` image had compiled nothing for. Two extensions can be loaded together (LibPQ
+and Postgres.jl), so neither can take over the one-argument form for an untyped exception; keyed on
+the pool, each owns its own. An extension defines it for its CONCRETE pool type (never a marker, so a
+stand-in pool is not claimed), takes the exception `@nospecialize`, and answers its own exception
+types, `_NO_ERROR_FIELDS` otherwise. The default, for every other pool (the unit suite's stand-ins), is
+the one-argument form, so a stand-in's fields are read exactly as before.
+"""
+backend_error_fields(pool::PormGBackend, @nospecialize(e)) = backend_error_fields(e)
 
 # The server's primary message, or `nothing` when it is not safe to show. SQLSTATE class 22 (data
 # exception) is the class whose message PostgreSQL builds FROM THE INPUT —

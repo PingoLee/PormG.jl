@@ -72,6 +72,11 @@ end
 struct _TspOtherSettings <: PormG.PormGSettings end
 # A test's own stand-in pool, which `with_pool` hands on through its open arm.
 struct _TspStandInPool <: PormG.PormGSQLite end
+# A stand-in under the PostgreSQL marker, and a test's own error with a one-argument reader (#1696).
+struct _TspStandInPGPool <: PormG.PormGPostgres end
+struct _TspFakeError <: Exception end
+PormG.backend_error_fields(::_TspFakeError) =
+  (sqlstate = "XX000", constraint = "fake_c", table = "fake_t", column = nothing, message = "fake")
 # A typed-read row type, for the projection pin (#1695).
 struct _TspRaceRow
   raceid::Int64
@@ -521,6 +526,149 @@ end
     for x in (helpers..., reviewed...)
       @test (x, get(seen, x, 0)) == (x, 1)
     end
+  end
+
+  # What: the pool's error path, which receives the failure from a `catch e` (typed `Any`) and classifies
+  #   it: `_as_database_error` and the helpers it and `fetch`'s retry decision call, and the extension
+  #   classifiers they reach (`backend_classify_error`, `backend_is_connection_error`,
+  #   `backend_is_retry_safe`, `backend_is_permanent_connect_error`, `backend_error_fields(pool, e)`).
+  # Expected: a caller holding the exception as `Any` makes no dynamic call into any of them, on each
+  #   pool type PormG builds; and for a driver-shaped exception on each pool type, the error built is the
+  #   one built before #1696 — type, the five fields and the `showerror` text, recorded on the parent
+  #   commit — including an exception the extension does not know, the async envelope, the fields LibPQ
+  #   hands in itself (`SubString`s, stored as `String`), and a PormG error passed through.
+  # Why: each of these dispatched on the exception's run-time type, and a trimmed image had compiled
+  #   nothing for a driver's exception type, so a failing statement raised a `MethodError` in place of
+  #   the `IntegrityError` (#1696; 208 verifier rows at `fetch_async`'s and `fetch`'s catch sites on the
+  #   fixture). The classification itself must not move: apps `catch IntegrityError`.
+  @testset "a caught exception is classified without dispatching on its type (#1696)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    callers = (
+      ("_as_database_error", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._as_database_error(p, r[])),
+      ("_driver_cause", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._driver_cause(r[])),
+      ("_unwrap_async_exception", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._unwrap_async_exception(r[])),
+      ("_await_abandoned", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._await_abandoned(r[])),
+      ("_is_benign_rollback_error", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._is_benign_rollback_error(p, r[])),
+      ("_lost_connection_error", (p, r::Base.RefValue{Any}) -> PormG.ConnectionPool._lost_connection_error(p, r[])),
+      ("backend_classify_error", (p, r::Base.RefValue{Any}) -> PormG.backend_classify_error(p, r[])),
+      ("backend_is_connection_error", (p, r::Base.RefValue{Any}) -> PormG.backend_is_connection_error(p, r[])),
+      ("backend_is_retry_safe", (p, r::Base.RefValue{Any}) -> PormG.backend_is_retry_safe(p, r[])),
+      ("backend_is_permanent_connect_error", (p, r::Base.RefValue{Any}) -> PormG.backend_is_permanent_connect_error(p, r[])),
+      ("backend_error_fields", (p, r::Base.RefValue{Any}) -> PormG.backend_error_fields(p, r[])))
+    for P in pools, (name, caller) in callers
+      dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}))
+      @test (P, name, dyn) == (P, name, String[])
+    end
+
+    # The error built, before and after #1696 (recorded on the parent commit with the same inputs).
+    E = LibPQ.Errors
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    lp = CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :libpq)
+    pj = CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :postgres)
+    my = CP.MySQLConnectionPool("host='x'"; pool_size = 1)
+    pgjl(code, msg; constraint = nothing, table = nothing, column = nothing) = Postgres.Error("ERROR", code, msg,
+      "Key (code)=(x) already exists.", nothing, nothing, nothing, nothing, nothing, "public", table, column,
+      nothing, constraint, nothing, nothing, nothing)
+    task_failed(e) = try; fetch(Threads.@spawn throw(e)); catch t; t; end
+    tail = " (the driver's full text is in `.cause`)"
+    N = nothing
+    cases = (
+      (sl, SQLite.SQLiteException("UNIQUE constraint failed: driver.code"), PormG.IntegrityError,
+       (N, N, N, N, "UNIQUE constraint failed: driver.code"),
+       "IntegrityError: SQLite rejected the statement — a constraint was violated: UNIQUE constraint failed: driver.code" * tail),
+      (sl, SQLite.SQLiteException("no such table: circuit"), PormG.StatementError, (N, N, N, N, "no such table: circuit"),
+       "StatementError: the SQLite statement could not be executed: no such table: circuit" * tail),
+      (sl, SQLite.SQLiteException("database is locked"), PormG.OperationalError, (N, N, N, N, "database is locked"),
+       "OperationalError: the SQLite operation could not complete and may succeed on retry: database is locked" * tail),
+      (sl, SQLite.SQLiteException("integer overflow"), PormG.StatementError, ("22003", N, N, N, "integer overflow"),
+       "StatementError: the SQLite statement could not be executed (SQLSTATE 22003): integer overflow" * tail),
+      (sl, ErrorException("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the SQLite statement could not be executed: ErrorException" * tail),
+      (sl, task_failed(SQLite.SQLiteException("UNIQUE constraint failed: driver.code")), PormG.IntegrityError,
+       (N, N, N, N, "UNIQUE constraint failed: driver.code"),
+       "IntegrityError: SQLite rejected the statement — a constraint was violated: UNIQUE constraint failed: driver.code" * tail),
+      (lp, E.PQResultError{E.C23, E.E23505}("ERROR:  duplicate key value violates unique constraint \"driver_code_key\"\nDETAIL:  Key (code)=(x) already exists.\n"),
+       PormG.IntegrityError, ("23505", N, N, N, "duplicate key value violates unique constraint \"driver_code_key\""),
+       "IntegrityError: PostgreSQL rejected the statement — a constraint was violated (SQLSTATE 23505): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (lp, E.PQResultError{E.C42, E.E42703}("ERROR:  column \"nickname\" does not exist\nLINE 1: SELECT nickname\n"),
+       PormG.StatementError, ("42703", N, N, N, "column \"nickname\" does not exist"),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE 42703): column \"nickname\" does not exist" * tail),
+      (lp, E.PQResultError{E.CUN, E.EUNOWN}("server closed the connection unexpectedly"), PormG.OperationalError,
+       (N, N, N, N, N), "OperationalError: the PostgreSQL operation could not complete and may succeed on retry: PQResultError" * tail),
+      (lp, E.PQConnectionError("no connection to the server"), PormG.OperationalError, (N, N, N, N, N),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry: PQConnectionError" * tail),
+      (lp, ErrorException("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the PostgreSQL statement could not be executed: ErrorException" * tail),
+      (pj, pgjl("23505", "duplicate key value violates unique constraint \"driver_code_key\""; constraint = "driver_code_key",
+                table = "driver", column = "code"), PormG.IntegrityError,
+       ("23505", "driver_code_key", "driver", "code", "duplicate key value violates unique constraint \"driver_code_key\""),
+       "IntegrityError: PostgreSQL rejected the statement — a constraint was violated (SQLSTATE 23505, constraint \"driver_code_key\", table \"driver\", column \"code\"): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (pj, pgjl("40P01", "deadlock detected"), PormG.OperationalError, ("40P01", N, N, N, "deadlock detected"),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry (SQLSTATE 40P01): deadlock detected" * tail),
+      (pj, EOFError(), PormG.OperationalError, (N, N, N, N, N),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry: EOFError" * tail),
+      (pj, ArgumentError("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the PostgreSQL statement could not be executed: ArgumentError" * tail),
+      (my, EOFError(), PormG.OperationalError, (N, N, N, N, N),
+       "OperationalError: the MySQL operation could not complete and may succeed on retry: EOFError" * tail),
+      (my, ErrorException("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the MySQL statement could not be executed: ErrorException" * tail),
+      (my, ArgumentError("boom"), PormG.StatementError, (N, N, N, N, N),
+       "StatementError: the MySQL statement could not be executed: ArgumentError" * tail))
+    # Stand-in pools under the PostgreSQL and SQLite markers keep reading any driver's exception, and a
+    # test's own reader, through the one-argument form; MySQL's server errors; Postgres.jl's coded drop.
+    mockpg, mocksl = _TspStandInPGPool(), _TspStandInPool()
+    my_dup = MySQL.Protocol.Error(UInt32(1062), "Duplicate entry 'monaco' for key 'circuit.circuitref'", "23000")
+    my_syntax = MySQL.Protocol.Error(UInt32(1064), "You have an error in your SQL syntax near 'x'", "42000")
+    pgjl_shutdown = pgjl("57P01", "terminating connection due to administrator command")
+    more = (
+      (mockpg, cases[12][2], PormG.StatementError,
+       ("23505", "driver_code_key", "driver", "code", "duplicate key value violates unique constraint \"driver_code_key\""),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE 23505, constraint \"driver_code_key\", table \"driver\", column \"code\"): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (mockpg, SQLite.SQLiteException("integer overflow"), PormG.StatementError, ("22003", N, N, N, "integer overflow"),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE 22003): integer overflow" * tail),
+      (mockpg, _TspFakeError(), PormG.StatementError, ("XX000", "fake_c", "fake_t", N, "fake"),
+       "StatementError: the PostgreSQL statement could not be executed (SQLSTATE XX000, constraint \"fake_c\", table \"fake_t\"): fake" * tail),
+      (mocksl, cases[12][2], PormG.StatementError,
+       ("23505", "driver_code_key", "driver", "code", "duplicate key value violates unique constraint \"driver_code_key\""),
+       "StatementError: the SQLite statement could not be executed (SQLSTATE 23505, constraint \"driver_code_key\", table \"driver\", column \"code\"): duplicate key value violates unique constraint \"driver_code_key\"" * tail),
+      (mocksl, _TspFakeError(), PormG.StatementError, ("XX000", "fake_c", "fake_t", N, "fake"),
+       "StatementError: the SQLite statement could not be executed (SQLSTATE XX000, constraint \"fake_c\", table \"fake_t\"): fake" * tail),
+      (my, my_dup, PormG.IntegrityError, ("23000", "circuitref", "circuit", N, N),
+       "IntegrityError: MySQL rejected the statement — a constraint was violated (SQLSTATE 23000, constraint \"circuitref\", table \"circuit\"): Error" * tail),
+      (my, my_syntax, PormG.StatementError, ("42000", N, N, N, N),
+       "StatementError: the MySQL statement could not be executed (SQLSTATE 42000): Error" * tail),
+      (pj, pgjl_shutdown, PormG.OperationalError, ("57P01", N, N, N, "terminating connection due to administrator command"),
+       "OperationalError: the PostgreSQL operation could not complete and may succeed on retry (SQLSTATE 57P01): terminating connection due to administrator command" * tail))
+    for (pool, cause, T, fields, text) in (cases..., more...)
+      err = CP._as_database_error(pool, cause)
+      @test typeof(err) === T
+      @test (err.sqlstate, err.constraint, err.table, err.column, err.message) == fields
+      @test sprint(showerror, err) == text
+    end
+    refused = PormG.InvalidValueError("refused")
+    @test CP._as_database_error(sl, refused) === refused
+    # LibPQ reads the fields off the failed result itself and hands them in (#1000), as `SubString`s.
+    given = (sqlstate = SubString("23505x", 1, 5), constraint = "driver_code_key", table = "driver", column = nothing,
+             message = SubString("duplicate key!", 1, 13))
+    err = CP._as_database_error(lp, cases[7][2]; fields = given)
+    @test err isa PormG.IntegrityError
+    @test (err.sqlstate, err.constraint, err.table, err.column, err.message) == ("23505", "driver_code_key", "driver", N, "duplicate key")
+    @test err.sqlstate isa String && err.message isa String
+    # The retry gate keeps its answers: a codeless drop is not retried; a coded one in a composite is.
+    @test !PormG.backend_is_retry_safe(lp, cases[9][2])
+    @test !PormG.backend_is_retry_safe(lp, ErrorException("x"))
+    @test PormG.backend_is_retry_safe(lp, CompositeException([E.PQConnectionError("no connection to the server")]))
+    @test !PormG.backend_is_retry_safe(pj, EOFError())
+    @test !PormG.backend_is_retry_safe(sl, ErrorException("x"))
+    @test PormG.backend_is_retry_safe(pj, pgjl_shutdown)          # the server said the statement never ran
+    @test !PormG.backend_is_retry_safe(my, my_dup)
+    @test !PormG.backend_is_retry_safe(my, ErrorException("x"))
+    # A fields record that leaves a key out reads `nothing` for it, as the keyword constructors did.
+    short = CP._as_database_error(lp, cases[7][2]; fields = (sqlstate = "23505", message = "duplicate key"))
+    @test (short.sqlstate, short.constraint, short.table, short.column, short.message) == ("23505", N, N, N, "duplicate key")
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

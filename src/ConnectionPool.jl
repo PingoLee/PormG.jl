@@ -190,7 +190,7 @@ end
 # string it was handed — Julia's C-string conversion echoes the whole DSN on an embedded NUL — so the
 # text goes through `redact_secret`. The LibPQ extension refuses such strings before the driver sees
 # them; this is the backstop for any path or driver that does not.
-_redacted_cause(cause) = redact_secret(cause isa Exception ? sprint(showerror, cause) : string(cause))
+_redacted_cause(@nospecialize(cause)) = redact_secret(cause isa Exception ? sprint(showerror, cause) : string(cause))
 
 # The 2-arg `show` too, not only `showerror`: `"$e"`, `string(e)` and `repr(e)` go through it, and the
 # default method prints every field — the raw `cause` included. `@error "…: $e"` is an ordinary line to
@@ -217,7 +217,7 @@ function _run_before_connect!(pool::_SQLEngine)
   return nothing
 end
 
-function _unwrap_async_exception(exception)
+function _unwrap_async_exception(@nospecialize(exception))
   current = exception
   while true
     if current isa TaskFailedException
@@ -254,7 +254,7 @@ Deliberately **not** built on [`_unwrap_async_exception`](@ref). That helper sto
 recursion below finds it anywhere in the tree. It sees through a [`DatabaseError`](@ref) too, so a
 caller that already crossed the taxonomy seam can ask the same question.
 """
-function _await_abandoned(e, depth::Int = 0)::Bool
+function _await_abandoned(@nospecialize(e), depth::Int = 0)::Bool
   depth > 8 && return false                       # cheap guard against pathological nesting
   e isa InterruptException && return true
   if e isa TaskFailedException
@@ -311,12 +311,14 @@ That is not theoretical: LibPQ reports a connection dropped mid-query as `PQResu
 with an *empty* message, which `backend_is_connection_error` recognizes by exact type-and-string
 match. Wrapped, that branch never fires and `fetch`'s reconnect-retry (#138) dies silently.
 """
-_driver_cause(e::DatabaseError) = e.cause
-_driver_cause(e) = e
+_driver_cause(@nospecialize(e)) = e isa DatabaseError ? e.cause : e
+# One method with an `isa`, not two dispatched on the type, and `@nospecialize`: the exception arrives
+# from a `catch`, typed `Any`, and a call that dispatches on it has nothing compiled for the driver's
+# exception type in a `juliac --trim` image (#1696). The same holds for every helper below that takes
+# a caught exception.
 
 # The SQLSTATE of a wrapped failure, for a log line; a PormG error passed through has none.
-_err_sqlstate(e::DatabaseError) = e.sqlstate
-_err_sqlstate(e) = nothing
+_err_sqlstate(@nospecialize(e)) = e isa DatabaseError ? e.sqlstate : nothing
 
 """
     _as_database_error(pool, e; fields = nothing) -> Exception
@@ -351,7 +353,11 @@ of its text. Build the error in the `catch`, let the block end, then throw:
 `test/unit/test_error_text_no_value.jl` pins the pool's sites through a spawned task
 (`AdvisoryLock._await_lock_handle` follows the same rule).
 """
-function _as_database_error(pool, e; fields = nothing)
+function _as_database_error(pool, @nospecialize(e); fields = nothing)
+  # `@nospecialize(e)`: every caller hands it a `catch e`, typed `Any`. Specialized on it, the call
+  # dispatched on the exception's run-time type, and a trimmed image had compiled nothing for the
+  # driver's exception type: the failing statement raised a `MethodError` from inside the code that
+  # reports it (#1696). Compiled once, for `Any`, the classifiers below decide by `isa`.
   root = _unwrap_async_exception(e)
   root isa PormGError && return root
   adapter = _backend_name(pool)
@@ -359,19 +365,40 @@ function _as_database_error(pool, e; fields = nothing)
   # The reason as data (#987). The error renders from these fields alone, so the driver's text —
   # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
   # the failure being reported: a throw there degrades to no fields, a cancellation still propagates.
-  if fields === nothing
-    fields = try
-      backend_error_fields(root)
-    catch read_failure
-      read_failure isa InterruptException && rethrow()
-      _NO_ERROR_FIELDS
-    end
-  end
-  kind === :integrity   && return IntegrityError(adapter, root; fields...)
-  kind === :operational && return OperationalError(adapter, root; fields...)
+  read = fields === nothing ? _read_error_fields(pool, root) : fields
+  # One record type for every driver's reader, so the constructors below are static calls: each reader
+  # returns a `NamedTuple` of its own types (LibPQ's are `SubString`s).
+  f = _error_fields(read)
+  kind === :integrity   && return IntegrityError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
+  kind === :operational && return OperationalError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
   # `:statement` and anything unrecognized land here, so `catch DatabaseError` has no hole.
-  return StatementError(adapter, root; fields...)
+  return StatementError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
 end
+
+# The driver's fields for `root`, or none when the reader throws (see `_as_database_error`).
+function _read_error_fields(pool, @nospecialize(root))
+  try
+    return backend_error_fields(pool, root)
+  catch read_failure
+    read_failure isa InterruptException && rethrow()
+    return _NO_ERROR_FIELDS
+  end
+end
+
+# The fields a `DatabaseError` stores, `Union{Nothing,String}` each, from a reader's `NamedTuple`. The
+# conversion is the one the error types' constructors made before (`convert(Union{String,Nothing}, x)`),
+# done here once so they are called with their own field types.
+const _ErrorFields = NamedTuple{(:sqlstate, :constraint, :table, :column, :message), NTuple{5, Union{Nothing, String}}}
+# A key a reader leaves out reads `nothing`, the keyword constructors' default.
+_error_fields(f)::_ErrorFields = (sqlstate = _field_text(get(f, :sqlstate, nothing)),
+                                  constraint = _field_text(get(f, :constraint, nothing)),
+                                  table = _field_text(get(f, :table, nothing)),
+                                  column = _field_text(get(f, :column, nothing)),
+                                  message = _field_text(get(f, :message, nothing)))
+_field_text(::Nothing) = nothing
+_field_text(s::String) = s
+_field_text(s::SubString{String}) = String(s)
+_field_text(@nospecialize(x)) = convert(Union{Nothing, String}, x)
 
 """
     _await_tx_statement(pool, task)
@@ -581,7 +608,7 @@ _fail_fast_on_connect(pool) = true
 # classified permanent (auth / cantopen — see `backend_is_permanent_connect_error`) AND fast-fail is
 # enabled for the pool. `last_ref` persists the cause across acquire passes so the terminal branch can
 # raise a truthful `PoolConnectError`. Shared by both acquire twins so the PG/SQLite policy can't drift (#72).
-function _on_connect_failure!(pool, e, last_ref::Base.RefValue{Any})
+function _on_connect_failure!(pool, @nospecialize(e), last_ref::Base.RefValue{Any})
   last_ref[] = e
   return _fail_fast_on_connect(pool) && backend_is_permanent_connect_error(pool, e)
 end
@@ -2670,7 +2697,7 @@ have to see through a [`DatabaseError`](@ref) wrapper though: `finalize_transact
 is handed `rollback_error` values that already crossed a seam (`migrations/runner.jl`,
 `querybuilder/deletion.jl`), so `_driver_cause` is load-bearing here (#268).
 """
-_is_benign_rollback_error(pool::_SQLEngine, e) =
+_is_benign_rollback_error(pool::_SQLEngine, @nospecialize(e)) =
   pool isa PormGSQLite &&   # server-text-match-ok: SQLite only; it attaches no code here and never localizes
   occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
 
@@ -2714,7 +2741,7 @@ end
 # Is `e` (already crossed a seam, so possibly a `DatabaseError` around an async envelope) a lost
 # connection? The same probe `fetch`'s retry makes inline. Never throws: a pool without a driver hits Backend.jl's
 # throwing fallback, and the caller is a transaction's cleanup.
-function _lost_connection_error(pool::_SQLEngine, e)::Bool
+function _lost_connection_error(pool::_SQLEngine, @nospecialize(e))::Bool
   try
     return backend_is_connection_error(pool, _driver_cause(_unwrap_async_exception(e))) === true
   catch

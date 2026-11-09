@@ -158,7 +158,7 @@ function _render_on_conditions(instruc::SQLInstruction, value::JoinRow)::Vector{
   return out
 end
 
-function build(object::SQLObject;
+function build(object::SQLObjectQuery;   # #1698: the body stores it in `InstructionObject.object::SQLObjectQuery`
   table_alias::Union{Nothing,SQLTableAlias}=nothing,
   connection::Union{Nothing,_SQLEngine}=nothing,
   parameters::Union{Nothing,ParamCollector}=nothing,   # #1698: the closed collector set

@@ -897,7 +897,7 @@ _probe_limit(limit::Union{Nothing,Integer}, k::Integer)::Integer = limit === not
 # without the projection (Django inlines it the same way) gives the same rows with leaner SQL, but
 # alias resolution needs the memo entry only the printed SELECT creates. Keeping it was chosen for
 # cost and safety, not on concept.
-_projection_shapes_rows(object::SQLObject; distinct::Bool, clear_degenerate::Bool = true)::Bool =
+_projection_shapes_rows(object::SQLObjectQuery; distinct::Bool, clear_degenerate::Bool = true)::Bool =
   !isempty(object.values) && !(clear_degenerate && _degenerate_aggregate(object)) &&
   (distinct || _contains_agg(object.values) || _filters_name_alias(object))
 
@@ -936,7 +936,7 @@ end
 # An instruction over the declaration alone, for the pre-build questions above and below: `_resolved_agg`,
 # `_model_filter_key` and `_projected_source` read only `object` (its values, filters and model). Nothing
 # is built with it, so nothing binds.
-_declaration_instruction(object::SQLObject) =
+_declaration_instruction(object::SQLObjectQuery) =
   InstructionObject(text = "", table_alias = SQLTbAlias(), alias = "Tb", object = object)
 
 # #1082: is the projection an aggregate that the build will neither group nor filter with HAVING?
@@ -953,7 +953,7 @@ _declaration_instruction(object::SQLObject) =
 # (`SQLOrder(SQLField(Count("id"), "n"))`) never counts (#1138): the build renders what it holds,
 # whatever the label. The drift guard in `test_fluent_parity_208.jl` compares this answer with the built
 # instruction's.
-function _degenerate_aggregate(object::SQLObject)::Bool
+function _degenerate_aggregate(object::SQLObjectQuery)::Bool
   isempty(object.values) && return false
   _filters_name_alias(object) && return false
   instruc = _declaration_instruction(object)

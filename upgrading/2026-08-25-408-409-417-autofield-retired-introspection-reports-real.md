@@ -179,15 +179,15 @@ wrong, so the column has to be re-typed deliberately (with a `USING` clause on P
 than the model bent to match it.
 
 ```julia
-# generated before this change, over a `matricula varchar(20) PRIMARY KEY` column
-Funcionario = Models.Model("funcionario",
-    matricula = Models.IDField(),                                    # ← wrong, and now visibly so
-    nome      = Models.CharField(max_length = 120))
+# generated before this change, over a `driverref varchar(20) PRIMARY KEY` column
+Driver = Models.Model("driver",
+    driverref = Models.IDField(),                                    # ← wrong, and now visibly so
+    surname   = Models.CharField(max_length = 120))
 
 # corrected — describes the column that is really there
-Funcionario = Models.Model("funcionario",
-    matricula = Models.CharField(primary_key = true, max_length = 20),
-    nome      = Models.CharField(max_length = 120))
+Driver = Models.Model("driver",
+    driverref = Models.CharField(primary_key = true, max_length = 20),
+    surname   = Models.CharField(max_length = 120))
 ```
 
 Then `makemigrations()` again; the plan should be empty. That empty second plan is the whole point

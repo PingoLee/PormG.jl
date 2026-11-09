@@ -8,7 +8,7 @@ from django.db import models
 
 
 class User(AbstractUser):
-    matricula = models.CharField(max_length=20, unique=True)
+    enrolment = models.CharField(max_length=20, unique=True)
 
 
 class Driver(models.Model):

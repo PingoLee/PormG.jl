@@ -433,7 +433,7 @@ end
 # `values("points" => F("points"))` — gives the key one meaning, so the filter renders against the
 # column as it always did. A transform key names the field's transform, not the alias. The
 # declaration itself is never refused: `values("points" => Sum("points"))` with no filter on the
-# name renders unchanged — the shape consuming apps use.
+# name renders unchanged — the common shape of an aggregate projection.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#703 controls: an unambiguous key still renders" begin
   for (backend, Model_) in _Q_AGG_MODELS

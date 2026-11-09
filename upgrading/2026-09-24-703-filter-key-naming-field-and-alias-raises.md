@@ -40,12 +40,6 @@ names both a CTE and a field.
 `"points"` renders exactly as before. So does a projection that *is* the column:
 `values("points")`, `values("points" => "points")`, `values("points" => F("points"))`.
 
-Measured before the change, in the three consuming apps that use PormG: 0 queries both project and
-filter a colliding name. They do declare 270 aliases that are not the column itself, including
-`"casos" => Sum("casos")` and `"nu_competencia" => Max("nu_competencia")`. All of them stay legal. The
-one query that projects `"matricula" => "mat"` and filters `"matricula"` already fails, because `mat`
-is not a field.
-
 ### How to find the calls to migrate
 
 The error names the key, so the quickest check is to run the app's queries. To find candidates

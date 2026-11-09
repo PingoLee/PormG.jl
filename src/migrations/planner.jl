@@ -2116,7 +2116,7 @@ function _alter_table_fields(conn::_SQLEngine, migration_plan::OrderedDict{Symbo
   # `_resolve_table_fields` types this parameter `::AbstractDict{String, String}`, and
   # `OrderedDict(gen)` only infers `{String, String}` from OrderedCollections 1.3; on 1.0-1.2 it
   # yields `{Any, Any}` and the call is a MethodError. PormG declares `OrderedCollections = "1, 2"`
-  # and that floor is load-bearing for two consuming apps (#560), so the fix belongs here rather
+  # and that floor is load-bearing for an app capped at OC 1 (#560), so the fix belongs here rather
   # than in the bound — the #549 rule, and CI's floor-resolve job (#574) is what caught it.
   current_fields_map = OrderedDict{String, String}(Models.field_db_column(field, String(strip(String(key), '"'))) => String(key) for (key, field) in current_schema[model_name][:model].fields)
   stripped_current_fields = OrderedSet(keys(current_fields_map))

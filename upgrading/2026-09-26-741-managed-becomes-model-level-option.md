@@ -25,8 +25,7 @@ rg -n '\bmanaged\s*=\s*(Models\.)?(\w+Field|ForeignKey)\(' --glob '*.jl'
 ```
 
 It matches the keyword on a line of its own and inside a one-line `Models.Model(…)`, qualified or not.
-If it comes back empty, this entry does not apply to your app. None of the consuming apps measured for
-#741 declares such a column.
+If it comes back empty, this entry does not apply to your app.
 
 *Before → after:*
 
@@ -52,5 +51,4 @@ schema, is untouched, so no migration is generated.
 *The Django importer, for the record.* `import_models_from_django` now carries `Meta.managed = False`
 instead of dropping it, so re-importing such a project writes `managed = false` models, which
 `makemigrations` no longer creates or alters — and a managed model's `ForeignKey` into one is written
-with `db_constraint = false` and a `# PormG:` marker. Nothing to edit by hand, and the two Django
-sources the consuming apps import set `Meta.managed` nowhere (measured for #741).
+with `db_constraint = false` and a `# PormG:` marker. Nothing to edit by hand.

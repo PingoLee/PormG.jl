@@ -24,8 +24,8 @@ Two plans also **disappear** on SQLite, for tables PormG did write: a `UUIDField
 key, and any key declared `(primary_key = true, unique = true)`, used to re-plan a table rebuild on
 every run because the reader flattened every non-integer key to an `IDField`; they now converge.
 
-Also gone: the `PormG.sqlite_type_map` / `PormG.postgres_type_map` constants (never on `names(PormG)`;
-0 call sites in the consuming apps) and the `type_map` keyword of `convertSQLToModel`. Internal
+Also gone: the `PormG.sqlite_type_map` / `PormG.postgres_type_map` constants (never on `names(PormG)`)
+and the `type_map` keyword of `convertSQLToModel`. Internal
 signatures that moved, in case an app reached into them: `Dialect.alter_field` lost its `old_field`
 positional, and `convertSQLToModel(::DataFrameRow)` gained a `conn` keyword.
 

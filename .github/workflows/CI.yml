@@ -145,7 +145,7 @@ jobs:
   #     first environment to land there belongs to somebody else.
   #   * Floor removed  — #558 narrowed `Decimals` to "0.5"; every LibPQ release pins
   #     Decimals 0.4, so all four test jobs died before a testset ran. #560 narrowed
-  #     `OrderedCollections` to "2" and made 2 of the 5 consuming apps unresolvable.
+  #     `OrderedCollections` to "2" and made any app capped at OC 1 unresolvable.
   #
   # READ A RED RUN AGAINST `test/unit/test_compat_guards.jl` BEFORE MOVING ANY BOUND.
   # Red here has two readings with opposite fixes. Usually the floor is genuinely too

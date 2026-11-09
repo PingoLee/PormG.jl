@@ -11,8 +11,8 @@ isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 # `class DriverCodeField(models.CharField)` and then `code = DriverCodeField(max_length=3)` used to
 # take the "field-shaped call the importer cannot read" path. The column was dropped from the model,
 # and the marker beside it said the next `makemigrations` would propose DROPPING a populated column.
-# A consuming app regenerating its models with `force_replace = true` lost the hand declaration on
-# every sync. The base type is in the source, so the importer now reads it.
+# An app regenerating its models with `force_replace = true` lost the hand declaration on every
+# sync. The base type is in the source, so the importer now reads it.
 # ─────────────────────────────────────────────────────────────────────────────
 
 """

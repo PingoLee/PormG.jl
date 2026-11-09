@@ -139,8 +139,8 @@ _sdr_where(res) = strip(split(res[:sql_text], " WHERE ")[end])
   # =========================================================================
   # 1b. @year value contract — every shape the pre-#352 rendering accepted via
   #     Models.format_number_sql still works, so the rewrite is not a breaking change for
-  #     consuming apps (an ETL app reading a year out of a Float64 DataFrame column is the
-  #     common case). What IS rejected is what a single date bound cannot express.
+  #     callers (an ETL job reading a year out of a Float64 DataFrame column is the common
+  #     case). What IS rejected is what a single date bound cannot express.
   # =========================================================================
   @testset "@year accepts every numeric shape the old rendering accepted" begin
     # `Decimals.Decimal(1991)`, not `Decimals.decimal(1991)` — the lowercase helper was REMOVED in

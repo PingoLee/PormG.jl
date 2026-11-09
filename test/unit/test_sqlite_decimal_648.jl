@@ -41,8 +41,8 @@ _dec648_ledger(amount) = Models.Model("ledger648",
 # ─────────────────────────────────────────────────────────────────────────────
 # Renderers: 15 digits is the boundary, on every SQLite DDL path
 # `field_to_column` is the one site, and these are its three callers — so each is driven once, at
-# 15 (renders) and at 16 (refused). PostgreSQL's `numeric` is exact at any width, so a width the
-# consuming apps really declare (30) must still render there.
+# 15 (renders) and at 16 (refused). PostgreSQL's `numeric` is exact at any width, so a wider
+# width (30) must still render there.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite refuses a DecimalField wider than 15 digits on every DDL path (#648)" begin
     sl = Dec648MockSQLite()

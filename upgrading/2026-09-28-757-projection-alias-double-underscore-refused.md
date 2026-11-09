@@ -32,8 +32,8 @@ and `values("surname" => "driverid__surname")` are unchanged, and so is every fi
 
 ### How to find the calls to migrate
 
-Measured before the change: 7 aliases in 4 `values(...)` calls across the consuming apps, 3 of them
-built at runtime by string interpolation.
+An alias can be built at runtime by string interpolation, so a grep cannot find every one; the
+refusal at build time is the backstop.
 
 The first grep lists every `__` pair key that has no lookup suffix. Keep the ones that are the key
 of a `values(...)` or `aggregate(...)` argument, or that are pushed into a vector later splatted

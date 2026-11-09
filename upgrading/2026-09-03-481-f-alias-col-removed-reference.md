@@ -9,9 +9,6 @@
 - **Recorded**: 2026-09-03
 - **Severity**: **breaking** - a spelling that built now raises. Part of the `0.5.x` pre-publish wave.
 
-**Measured before adopting this**: `cjoin_on`, `.cjoin(`, `.on(` and `F("<alias>.` have **zero**
-call sites across the five consuming-app checkouts (re-measured on the current remotes).
-
 ### What changed
 
 A `cjoin_on` joined copy used to be referenced by a DOTTED STRING inside `F(...)`. That spelling is

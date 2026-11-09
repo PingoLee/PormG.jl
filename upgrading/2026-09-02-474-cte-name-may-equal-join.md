@@ -10,9 +10,6 @@
   join type, and three that built now raise. Every one of the last three produced invalid SQL or
   silently wrong rows. Part of the `0.5.x` pre-publish wave.
 
-**Measured before adopting these**: `cjoin_on`, `.cjoin(`, `.on(` and `.with(` have **zero** call
-sites across the five consuming-app checkouts.
-
 ### What changed
 
 **1. A CTE name may equal a join key.** `_build_row_join` set its `join_path` to the first path

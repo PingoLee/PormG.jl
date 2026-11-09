@@ -10,10 +10,10 @@
 # never stored anywhere to recover.
 #
 # The result was that any binding like `Dim_CNES`, `CustomUser` or `Cust_adminHOD` was unreachable
-# in reverse and raised `UndefVarError: Dim_cnes` — ten of 668 models across the consuming apps,
-# including a central dimension table. Forward FKs were unaffected (`.to` carries the class name),
-# which is why it went unnoticed: every binding in `test/integration/db_*/models.jl` is spelled
-# exactly `uppercasefirst(lowercase(name))`, so no existing fixture could reproduce it.
+# in reverse and raised `UndefVarError: Dim_cnes`.
+# Forward FKs were unaffected (`.to` carries the class name), which is why it went unnoticed:
+# every binding in `test/integration/db_*/models.jl` is spelled exactly
+# `uppercasefirst(lowercase(name))`, so no existing fixture could reproduce it.
 #
 # The fixture below is the shape the Django importer actually emits — a lowercase positional name
 # (#300-legal) under a mixed-case binding — pinned by test_import_django_models.jl's

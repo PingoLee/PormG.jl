@@ -504,7 +504,7 @@ JSON.json(M.Driver.objects)              # => {"pormg_query":"driver"}
 
 That is a deliberate floor, not an export format. The model graph is cyclic and densely
 cross-referenced, so serializing it by reflection re-walks every path through it — on the F1
-schema these docs use, one model produced 2,175,304 characters, and a real application schema
+schema these docs use, one model produced 2,175,304 characters, and a larger schema
 exhausted memory. The marker makes that unrepresentable: nothing PormG hands a serializer can contain
 another PormG value.
 

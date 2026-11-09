@@ -35,11 +35,6 @@ the SELECT side.
 - a condition on a key that names **no** field, such as `When("doubled" => 4)` over
   `"doubled" => F("points") * 2`. That is a plain alias read, and it still reads the projection.
 
-Measured before the change, across the three consuming apps that use PormG: 0 of 241 `values(...)`
-calls have a condition on another projection's field-named alias. The six `When` calls there
-either condition on their own projection's column or sit beside aliases spelled with `__`, which
-cannot equal a plain column key.
-
 ### How to find the calls to migrate
 
 The error names the key and the projection, so the quickest check is to run the app's queries. To

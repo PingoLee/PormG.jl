@@ -4,7 +4,7 @@
 # Nothing in PormG answered "does this database match the declared models?" without side effects.
 # `status()` never compared schemas, and `makemigrations` writes a file, refuses under
 # `change_db: false` — the setting a production connection usually carries — and swallows a failed
-# read. A consuming app had built the gate itself out of `get_migration_plan`.
+# read. An app that wanted the gate had to build it itself out of `get_migration_plan`.
 #
 # `check(...; kinds = [:schema_drift])` is that gate. Each step the next `makemigrations` would plan
 # becomes one `SchemaCheckFinding`, whose `detail` is the step's label. It never writes, never

@@ -117,3 +117,57 @@ end
     end
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PormG's own workload: the offline PostgreSQL step leaves nothing in the cache image
+# Step 6 of src/precompile.jl registers two offline keys (the entry `register_offline` builds, on a
+# LibPQ pool and on a Postgres.jl pool) and models in `PormG._PrecompilePgLibPQ` / `_PrecompilePgPostgres`,
+# submodules that ARE serialized (#1702). Its `finally` removes both keys from `config`, clears each
+# module's registration record and model set (#1607, #1606) and resets the model bindings to
+# `nothing`. An entry left behind would ship a key named `__pormg_precompile_pg_*` in every
+# application's `config`, and a model left behind would ship a Model object bound to a key that no
+# longer exists; neither shows in any other test, because the image is only read here.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PormG image carries no offline PostgreSQL workload state (#1702)" begin
+  # A key left in `config` does not survive to here: `Configuration.__init__` drops every entry an
+  # image carries, and warns. The warning, printed when a fresh process loads PormG, is the trace a
+  # leaked key leaves, so that is what is checked (reading `PormG.config` here passed with the
+  # workload's `delete!` removed).
+  err = IOBuffer()
+  cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) -e "using PormG"`
+  @test success(pipeline(cmd; stderr = err))
+  @test !occursin("PormG dropped the connections", String(take!(err)))
+  for pm in (PormG._PrecompilePgLibPQ, PormG._PrecompilePgPostgres)
+    record = PormG.Models._model_set(pm)
+    @test record isa PormG.Models.ModelSet
+    @test record.key === nothing && record.load_root === nothing && record.folder === nothing
+    @test isempty(record.models) && isempty(record.bindings)
+    for n in (:Driver, :Constructor, :Result)
+      @test isdefined(pm, n) && getglobal(pm, n) === nothing
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PormG's own workload: step 3 and step 6 run without a catch-all
+# Step 3's `show_query` sat in `try … catch e end` and had been failing on every build: its
+# `"points__gte"` filter predates the `__@` operator spelling, so it warmed only the error path
+# (#348's shape, found while measuring #1702). Without the `try`, a throwing step fails PormG's
+# precompile, which every test reports. This pins that no catch-all comes back around them.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PormG workload: the query-building steps are not wrapped in a catch-all (#1702)" begin
+  i3 = findfirst("# 3. Precompile Query Building", _PRECOMPILE_SRC)
+  i5 = findfirst("# 5. Precompile Dict{Symbol,String}", _PRECOMPILE_SRC)
+  @test i3 !== nothing && i5 !== nothing
+  if i3 !== nothing && i5 !== nothing
+    step3 = _PRECOMPILE_SRC[first(i3):first(i5)]
+    @test !occursin(r"^\s*catch\b"m, step3)
+  end
+  i6 = findfirst("# 6. The terminals on an offline PostgreSQL key", _PRECOMPILE_SRC)
+  @test i6 !== nothing
+  if i6 !== nothing
+    step6 = _PRECOMPILE_SRC[first(i6):end]
+    # Its one `try` is the cleanup's `try … finally`; no `catch` swallows a failed render.
+    @test !occursin(r"^\s*catch\b"m, split(step6, "# ── Snoop-generated precompile hints")[1])
+  end
+end

@@ -1,5 +1,12 @@
 using PrecompileTools
 
+# Where step 6 of the workload registers its models, one module per offline PostgreSQL key:
+# `set_models` binds a module's models to one key, and it is what wires the reverse relations that
+# `delete()`'s collector walks. Emptied at the end of the step, so no model and no registration record
+# reaches the cache image (#1607), as in `ext/PormGSQLiteExt.jl`.
+module _PrecompilePgLibPQ end
+module _PrecompilePgPostgres end
+
 @setup_workload begin
   # Mock settings to allow Model and QueryBuilder compilation Without actual DB connection
   # We use a dummy PostgresConnectionPool as it's a common target
@@ -90,13 +97,16 @@ using PrecompileTools
         end
 
         # 3. Precompile Query Building (Expressive API)
-        for model in [PrecompileDriver, PrecompileResult]
+        # `PrecompileDriver` only: the chain filters on `forename`, which `PrecompileResult` has not,
+        # so its pass only ever reached the "unknown field" error inside a catch-all (#1702). The joined
+        # reads over `Result` are step 6's.
+        for model in [PrecompileDriver]
           # Handler creation
           q = object(model)
 
           # Filtering with various operators
           q.filter("forename" => "Ayrton")
-          q.filter("points__gte" => 10.0)
+          q.filter("points__@gte" => 10.0)
           q.filter(Qor("surname" => "Senna", "surname" => "Prost"))
 
           # Selection and Aggregation
@@ -108,13 +118,9 @@ using PrecompileTools
           q.order_by("-points")
           q.limit(5).offset(10)
 
-          # 4. Precompile SQL Generation (Internal build calls)
-          try
-            # This triggers the core SQL generation logic
-            q |> show_query
-          catch e
-            # Fallback if internal state is too mocked
-          end
+          # 4. Precompile SQL Generation (Internal build calls). Not in a `try`: a catch-all here
+          # would keep the build green while this step warmed only an error path (#348).
+          q |> show_query
         end
 
         # 5. Precompile Dict{Symbol,String} display path + F() expression types
@@ -123,6 +129,97 @@ using PrecompileTools
         show(devnull, Dict{Symbol, String}(:name => "precompile"))
         F("points")
         F("points") * 1.0
+
+        # 6. The terminals on an offline PostgreSQL key, once per driver's pool type (#1702).
+        #
+        # Since #1693 a terminal infers its body once per concrete pool, and before this step nothing
+        # compiled a PostgreSQL pool's terminals. The SQLite extension's workload compiles SQLite's, but
+        # only while SQLite is loaded, so a PostgreSQL session ran its first `create`/`update`/
+        # `delete` on run-time inference. An offline key opens no connection and needs no driver:
+        # `show_query = :sql` renders the statement and stops, so this runs in PormG's own precompile
+        # with no driver loaded. Each entry is the `Settings` `register_offline` builds, written out
+        # because `register_offline` builds the LibPQ pool only and refuses to run while a
+        # non-incremental image (a sysimage, a `juliac` build) is being built, which also runs this
+        # workload.
+        #
+        # test/performance/offline_first_calls.jl measures the first calls this step is for, and
+        # the share that loading a driver invalidates, which this step cannot win back.
+        for (pg_key, pg_driver, pg_mod) in (("__pormg_precompile_pg_libpq", :libpq, _PrecompilePgLibPQ),
+                                            ("__pormg_precompile_pg_postgres", :postgres, _PrecompilePgPostgres))
+          config[pg_key] = Configuration.Settings(
+            app_env = Configuration.DEV, db_def_folder = pg_key,
+            db_config_settings = Configuration._offline_config_settings(:postgres, nothing),
+            change_data = true,
+            connections = ConnectionPool.PostgresConnectionPool(Configuration._OFFLINE_CONNECTION;
+                                                                pool_size = 1, driver = pg_driver))
+          try
+            # Plain globals, unlike an application's typed ones (#1650): the `finally` resets them to
+            # `nothing`, and `set_models` does not warn while output is being generated.
+            Core.eval(pg_mod, quote
+              import PormG.Models
+              Driver = Models.Model("driver",
+                driverid = Models.IDField(),
+                code = Models.CharField(max_length = 3, null = true),
+                forename = Models.CharField(max_length = 255),
+                surname = Models.CharField(max_length = 255),
+                dob = Models.DateField(null = true))
+              Constructor = Models.Model("constructor",
+                constructorid = Models.IDField(),
+                name = Models.CharField(max_length = 255))
+              Result = Models.Model("result",
+                resultid = Models.IDField(),
+                driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"),
+                constructorid = Models.ForeignKey(Constructor, pk_field = "constructorid", on_delete = "RESTRICT"),
+                grid = Models.IntegerField(),
+                points = Models.FloatField())
+              # #1602: the set `set_models` reads, interpolated (the block's macros expand before its
+              # `import` runs).
+              $(Models._model_set_declaration([:Driver, :Constructor, :Result]))
+            end)
+            # `invokelatest`: the bindings are newer than this code's world (#211).
+            Base.invokelatest(Models.set_models, pg_mod, pg_key)
+            Driver, Result = (Base.invokelatest(getglobal, pg_mod, n) for n in (:Driver, :Result))
+
+            joined = Result.objects.filter("driverid__surname" => "Senna", "points__@gte" => 1.0).
+              values("resultid", "driverid__forename", "driverid__dob", "constructorid__name", "points")
+            rendered = (
+              Driver.objects.create("driverid" => 1, "code" => "SEN", "forename" => "Ayrton",
+                                    "surname" => "Senna", "dob" => Dates.Date(1960, 3, 21); show_query = :sql),
+              Result.objects.create("resultid" => 1, "driverid" => 1, "constructorid" => 1, "grid" => 1,
+                                    "points" => 9.0; show_query = :sql),
+              Driver.objects.filter("driverid" => 1).update("code" => "PRO"; show_query = :sql),
+              Result.objects.filter("resultid" => 1).update("points" => F("points") + 1; show_query = :sql),
+              # Through the collector: `Result` cascades from `Driver`.
+              Driver.objects.filter("driverid" => 2).delete(; show_query = :sql),
+              Driver.objects.get_or_create("code" => "HAM";
+                defaults = ["forename" => "Lewis", "surname" => "Hamilton"], show_query = :sql),
+              inspect_query(joined),
+              Driver.objects.filter(Qor("code" => "SEN", "code__@isnull" => true)).order_by("-dob").list(; show_query = :sql),
+              joined.list(; show_query = :sql),
+              Result.objects.values("constructorid__name", "total" => Functions.Sum("points"),
+                                    "n" => Functions.Count("resultid")).list(; show_query = :sql),
+              Driver.objects.filter("forename__@icontains" => "ayr").count(; show_query = :sql),
+              Result.objects.exists(; show_query = :sql),
+            )
+            # Checked, not just called: a step that rendered nothing warmed nothing (#348).
+            for r in rendered
+              r isa Union{String, Dict, Vector} || throw(AssertionError(
+                "PormG precompile workload: a show_query = :sql call on $(pg_key) rendered a $(typeof(r))"))
+            end
+          finally
+            # No model, no registration record and no offline entry reaches the cache image (#1607).
+            Core.eval(pg_mod, :(Driver = Constructor = Result = nothing))
+            record = Base.invokelatest(Models._model_set, pg_mod)
+            if record !== nothing
+              record.key = record.load_root = record.folder = nothing
+              empty!(record.models)
+              empty!(record.bindings)
+            end
+            s = get(config, pg_key, nothing)
+            s === nothing || close_pool!(s.connections)
+            delete!(config, pg_key)
+          end
+        end
       end
     end
   end

@@ -212,16 +212,16 @@ end
 end
 
 @testset "Django importer maps Meta.unique_together" begin
-  # FK fields gain an `_id` suffix at import, so Django `item`/`fabricante` become
-  # PormG `item_id`/`fabricante_id`; the importer must resolve the declared names.
+  # FK fields gain an `_id` suffix at import, so Django `item`/`maker` become
+  # PormG `item_id`/`maker_id`; the importer must resolve the declared names.
   django = """
-  class Dim_item_fab(models.Model):
-      item = models.ForeignKey(Dim_item, on_delete=models.CASCADE)
-      fabricante = models.ForeignKey(Dim_fab, on_delete=models.CASCADE)
-      validade = models.IntegerField(null=True, blank=True)
+  class Car_part_maker(models.Model):
+      item = models.ForeignKey(Car_part, on_delete=models.CASCADE)
+      maker = models.ForeignKey(Part_maker, on_delete=models.CASCADE)
+      valid_until = models.IntegerField(null=True, blank=True)
 
       class Meta:
-          unique_together = ('item', 'fabricante')
+          unique_together = ('item', 'maker')
   """
 
   config_key = mktempdir()
@@ -230,7 +230,7 @@ end
   try
     import_models_from_django(django; db = config_key, file = "uc_import_unit.jl", force_replace = true)
     generated = read(joinpath(config_key, "uc_import_unit.jl"), String)
-    @test occursin("constraints = [Models.UniqueConstraint(fields = (\"item_id\", \"fabricante_id\",))", generated)
+    @test occursin("constraints = [Models.UniqueConstraint(fields = (\"item_id\", \"maker_id\",))", generated)
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)

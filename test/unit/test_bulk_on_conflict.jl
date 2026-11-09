@@ -15,19 +15,19 @@ import PormG.ConnectionPool: fetch
 
 # The use case from issue #123: a code/name lookup table, with a db_column-mapped field to prove
 # the clause renders physical names.
-ConflictCbo = Model("dash_dim_cbo",
+ConflictConstructor = Model("constructor",
   id = IDField(),
-  co_cbo = CharField(),
-  no_cbo = CharField(db_column = "nome_cbo"),
+  constructorref = CharField(),
+  team = CharField(db_column = "team_name"),
 )
-ConflictCbo.connect_key = "on_conflict_pg"
+ConflictConstructor.connect_key = "on_conflict_pg"
 
-ConflictCboSl = Model("dash_dim_cbo",
+ConflictConstructorSl = Model("constructor",
   id = IDField(),
-  co_cbo = CharField(),
-  no_cbo = CharField(db_column = "nome_cbo"),
+  constructorref = CharField(),
+  team = CharField(db_column = "team_name"),
 )
-ConflictCboSl.connect_key = "on_conflict_sqlite"
+ConflictConstructorSl.connect_key = "on_conflict_sqlite"
 
 struct MockPgConflict <: PormG.PormGPostgres end
 struct MockSqliteConflict <: PormG.PormGSQLite end
@@ -44,57 +44,57 @@ PormG.config["on_conflict_sqlite"] = PormG.Configuration.Settings(
   change_data = true,
 )
 
-const CBO_DF_123 = DataFrame(
+const CONSTRUCTOR_DF_123 = DataFrame(
   id = [1, 2],
-  co_cbo = ["225125", "225130"],
-  no_cbo = ["Cardiologista", "Neurologista"],
+  constructorref = ["mclaren", "williams"],
+  team = ["McLaren", "Williams"],
 )
 
-_cbo_sql(on_conflict; model = ConflictCbo, kwargs...) =
-  PormG.QueryBuilder.bulk_insert(model, CBO_DF_123;
+_constructor_sql(on_conflict; model = ConflictConstructor, kwargs...) =
+  PormG.QueryBuilder.bulk_insert(model, CONSTRUCTOR_DF_123;
     show_query = :dict, on_conflict = on_conflict, kwargs...)[:sql_text]
 
 @testset "on_conflict SQL rendering (PostgreSQL mock)" begin
   # Default stays a bare INSERT — regression guard for existing callers.
-  @test !occursin("ON CONFLICT", _cbo_sql(nothing))
+  @test !occursin("ON CONFLICT", _constructor_sql(nothing))
 
   # Untargeted DO NOTHING via the Symbol shorthand.
-  sql_nothing = _cbo_sql(:nothing)
+  sql_nothing = _constructor_sql(:nothing)
   @test occursin("ON CONFLICT DO NOTHING", sql_nothing)
   @test !occursin("ON CONFLICT (", sql_nothing)
 
   # Targeted DO NOTHING.
   @test occursin("ON CONFLICT (\"id\") DO NOTHING",
-    _cbo_sql((action = :nothing, target = ["id"])))
+    _constructor_sql((action = :nothing, target = ["id"])))
 
   # Upsert: multi-column set, db_column field rendered by its physical name.
-  sql_update = _cbo_sql((action = :update, target = ["id"], set = ["co_cbo", "no_cbo"]))
+  sql_update = _constructor_sql((action = :update, target = ["id"], set = ["constructorref", "team"]))
   @test occursin("ON CONFLICT (\"id\") DO UPDATE SET " *
-    "\"co_cbo\" = EXCLUDED.\"co_cbo\", \"nome_cbo\" = EXCLUDED.\"nome_cbo\"", sql_update)
-  @test !occursin("no_cbo\" = EXCLUDED", sql_update)   # logical name must not leak
+    "\"constructorref\" = EXCLUDED.\"constructorref\", \"team_name\" = EXCLUDED.\"team_name\"", sql_update)
+  @test !occursin("team\" = EXCLUDED", sql_update)   # logical name must not leak
 
   # db_column field as the conflict target resolves to the physical column too.
-  @test occursin("ON CONFLICT (\"nome_cbo\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\"",
-    _cbo_sql((action = :update, target = ["no_cbo"], set = ["co_cbo"])))
+  @test occursin("ON CONFLICT (\"team_name\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\"",
+    _constructor_sql((action = :update, target = ["team"], set = ["constructorref"])))
 
   # Documented allowance: `set` may overlap `target` (harmless self-assignment; PG/SQLite permit it).
-  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"id\" = EXCLUDED.\"id\", \"co_cbo\" = EXCLUDED.\"co_cbo\"",
-    _cbo_sql((action = :update, target = ["id"], set = ["id", "co_cbo"])))
+  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"id\" = EXCLUDED.\"id\", \"constructorref\" = EXCLUDED.\"constructorref\"",
+    _constructor_sql((action = :update, target = ["id"], set = ["id", "constructorref"])))
 
   # Documented allowance: a `target` column need NOT participate in the INSERT — only `set` must.
-  # Here `columns=` drops no_cbo from the insert, yet it is a valid conflict target (existence-only).
-  @test occursin("ON CONFLICT (\"nome_cbo\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\"",
-    _cbo_sql((action = :update, target = ["no_cbo"], set = ["co_cbo"]); columns = ["id", "co_cbo"]))
+  # Here `columns=` drops team from the insert, yet it is a valid conflict target (existence-only).
+  @test occursin("ON CONFLICT (\"team_name\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\"",
+    _constructor_sql((action = :update, target = ["team"], set = ["constructorref"]); columns = ["id", "constructorref"]))
 end
 
 @testset "on_conflict binds no parameters and reaches every chunk" begin
-  res_plain = PormG.QueryBuilder.bulk_insert(ConflictCbo, CBO_DF_123; show_query = :dict)
-  res_clause = PormG.QueryBuilder.bulk_insert(ConflictCbo, CBO_DF_123;
-    show_query = :dict, on_conflict = (action = :update, target = ["id"], set = ["no_cbo"]))
+  res_plain = PormG.QueryBuilder.bulk_insert(ConflictConstructor, CONSTRUCTOR_DF_123; show_query = :dict)
+  res_clause = PormG.QueryBuilder.bulk_insert(ConflictConstructor, CONSTRUCTOR_DF_123;
+    show_query = :dict, on_conflict = (action = :update, target = ["id"], set = ["team"]))
   @test res_clause[:parameters] == res_plain[:parameters]
 
   # chunk_size=1 splits the 2-row frame into 2 statements — each carries the clause.
-  chunked = PormG.QueryBuilder.bulk_insert(ConflictCbo, CBO_DF_123;
+  chunked = PormG.QueryBuilder.bulk_insert(ConflictConstructor, CONSTRUCTOR_DF_123;
     show_query = :dict, chunk_size = 1, on_conflict = :nothing)
   @test chunked isa Vector
   @test length(chunked) == 2
@@ -103,15 +103,15 @@ end
 
 @testset "on_conflict SQLite end-to-end and shared renderer" begin
   # Same clause through the SQLite mock end-to-end (syntax is shared, SQLite ≥3.24).
-  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\"",
-    _cbo_sql((action = :update, target = ["id"], set = ["co_cbo"]); model = ConflictCboSl))
+  @test occursin("ON CONFLICT (\"id\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\"",
+    _constructor_sql((action = :update, target = ["id"], set = ["constructorref"]); model = ConflictConstructorSl))
 
   # The Dialect renderer is one Union method: identical output for both backends.
   for (action, target, set, expected) in (
     (:nothing, String[], String[], "ON CONFLICT DO NOTHING"),
     (:nothing, ["\"id\""], String[], "ON CONFLICT (\"id\") DO NOTHING"),
-    (:update, ["\"id\""], ["\"co_cbo\"", "\"nome_cbo\""],
-      "ON CONFLICT (\"id\") DO UPDATE SET \"co_cbo\" = EXCLUDED.\"co_cbo\", \"nome_cbo\" = EXCLUDED.\"nome_cbo\""),
+    (:update, ["\"id\""], ["\"constructorref\"", "\"team_name\""],
+      "ON CONFLICT (\"id\") DO UPDATE SET \"constructorref\" = EXCLUDED.\"constructorref\", \"team_name\" = EXCLUDED.\"team_name\""),
   )
     pg_clause = PormG.Dialect.on_conflict_clause(action, target, set, MockPgConflict())
     sl_clause = PormG.Dialect.on_conflict_clause(action, target, set, MockSqliteConflict())
@@ -122,15 +122,15 @@ end
   # Renderer guards (PR 2 will call it directly, so they must hold without the
   # bulk_insert normalization in front).
   @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:merge, ["\"id\""], String[], MockPgConflict())
-  @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:update, String[], ["\"co_cbo\""], MockPgConflict())
+  @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:update, String[], ["\"constructorref\""], MockPgConflict())
   @test_throws PormG.QueryBuildError PormG.Dialect.on_conflict_clause(:update, ["\"id\""], String[], MockPgConflict())
 end
 
 # Runs bulk_insert with :dict (validation fires before any DB call) and hands
 # back the QueryBuildError message for assertion.
-function _cbo_error(on_conflict; kwargs...)
+function _constructor_error(on_conflict; kwargs...)
   err = try
-    PormG.QueryBuilder.bulk_insert(ConflictCbo, CBO_DF_123;
+    PormG.QueryBuilder.bulk_insert(ConflictConstructor, CONSTRUCTOR_DF_123;
       show_query = :dict, on_conflict = on_conflict, kwargs...)
     nothing
   catch e
@@ -141,23 +141,23 @@ function _cbo_error(on_conflict; kwargs...)
 end
 
 @testset "on_conflict validation errors" begin
-  @test occursin("only accepts :nothing", _cbo_error(:ignore))
-  @test occursin("must be nothing, :nothing or a NamedTuple", _cbo_error(42))
-  @test occursin("requires an action key", _cbo_error((target = ["id"],)))
-  @test occursin("unknown key", _cbo_error((action = :nothing, taget = ["id"])))
-  @test occursin("must be :nothing or :update", _cbo_error((action = :merge, target = ["id"], set = ["co_cbo"])))
-  @test occursin("non-empty target", _cbo_error((action = :update, set = ["co_cbo"])))
-  @test occursin("non-empty target", _cbo_error((action = :update, target = String[], set = ["co_cbo"])))
-  @test occursin("non-empty set", _cbo_error((action = :update, target = ["id"])))
-  @test occursin("only valid with action :update", _cbo_error((action = :nothing, target = ["id"], set = ["co_cbo"])))
-  @test occursin("must be a vector of field-name strings", _cbo_error((action = :nothing, target = "id")))
-  @test occursin("duplicate column entries", _cbo_error((action = :update, target = ["id", "id"], set = ["co_cbo"])))
-  @test occursin("is not a field", _cbo_error((action = :nothing, target = ["not_a_field"])))
-  @test occursin("is not a field", _cbo_error((action = :update, target = ["id"], set = ["not_a_field"])))
+  @test occursin("only accepts :nothing", _constructor_error(:ignore))
+  @test occursin("must be nothing, :nothing or a NamedTuple", _constructor_error(42))
+  @test occursin("requires an action key", _constructor_error((target = ["id"],)))
+  @test occursin("unknown key", _constructor_error((action = :nothing, taget = ["id"])))
+  @test occursin("must be :nothing or :update", _constructor_error((action = :merge, target = ["id"], set = ["constructorref"])))
+  @test occursin("non-empty target", _constructor_error((action = :update, set = ["constructorref"])))
+  @test occursin("non-empty target", _constructor_error((action = :update, target = String[], set = ["constructorref"])))
+  @test occursin("non-empty set", _constructor_error((action = :update, target = ["id"])))
+  @test occursin("only valid with action :update", _constructor_error((action = :nothing, target = ["id"], set = ["constructorref"])))
+  @test occursin("must be a vector of field-name strings", _constructor_error((action = :nothing, target = "id")))
+  @test occursin("duplicate column entries", _constructor_error((action = :update, target = ["id", "id"], set = ["constructorref"])))
+  @test occursin("is not a field", _constructor_error((action = :nothing, target = ["not_a_field"])))
+  @test occursin("is not a field", _constructor_error((action = :update, target = ["id"], set = ["not_a_field"])))
   # `set` must participate in the INSERT: EXCLUDED.col for a non-inserted column
   # would silently write the column default instead of a caller value.
   @test occursin("does not participate",
-    _cbo_error((action = :update, target = ["id"], set = ["no_cbo"]); columns = ["id", "co_cbo"]))
+    _constructor_error((action = :update, target = ["id"], set = ["team"]); columns = ["id", "constructorref"]))
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,9 +183,9 @@ function fetch(connection::MockPgConflictRetry, sql::String;
     # A 23505 the way the pool hands it over (#987): the SQLSTATE is what would trigger the resync
     # (#1001), so only the on_conflict gate can be what stops it here.
     throw(PormG.IntegrityError("PostgreSQL", ErrorException("mock"); sqlstate = "23505",
-      message = "duplicate key value violates unique constraint \"dash_dim_cbo_co_cbo_key\""))
+      message = "duplicate key value violates unique constraint \"constructor_constructorref_key\""))
   elseif occursin("pg_get_serial_sequence", sql)
-    return DataFrame(pg_get_serial_sequence = ["public.dash_dim_cbo_id_seq"])
+    return DataFrame(pg_get_serial_sequence = ["public.constructor_id_seq"])
   elseif occursin("setval", sql)
     return DataFrame(setval = [3])
   end
@@ -206,13 +206,13 @@ end
   # One row, bound as PostgreSQL binds a chunk: one array per column (#672).
   params = PormG.QueryBuilder.PgParameterizedQuery("", Any[], 0)
   PormG.QueryBuilder.add_parameter!(params, Any[1]; sql_type = "bigint[]")
-  PormG.QueryBuilder.add_parameter!(params, Any["225125"]; sql_type = "varchar[]")
+  PormG.QueryBuilder.add_parameter!(params, Any["mclaren"]; sql_type = "varchar[]")
 
   err = try
     PormG.QueryBuilder._bulk_insert(
-      ConflictCbo,
+      ConflictConstructor,
       settings.connections,
-      ["id", "co_cbo"],
+      ["id", "constructorref"],
       "SELECT * FROM unnest(\$1::bigint[], \$2::varchar[])",
       ["id"],
       settings,

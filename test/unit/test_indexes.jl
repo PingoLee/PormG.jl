@@ -912,14 +912,14 @@ end
   class Lap(models.Model):
       race = models.ForeignKey(Race, on_delete=models.CASCADE)
       lap = models.IntegerField()
-      apelido = models.CharField(max_length=30)
+      nickname = models.CharField(max_length=30)
 
       class Meta:
           indexes = [
               models.Index(fields=['race', 'lap'], name='lap_race_lap_idx'),
-              models.Index(fields=['apelido']),
+              models.Index(fields=['nickname']),
           ]
-          index_together = (('lap', 'apelido'),)
+          index_together = (('lap', 'nickname'),)
   """
   config_key = mktempdir()
   PormG.config[config_key] = PormG.Configuration.Settings(
@@ -930,10 +930,10 @@ end
     # Multi-column, FK resolved to the imported `race_id` column, explicit name carried through.
     @test occursin("Models.Index(fields = (\"race_id\", \"lap\",), name = \"lap_race_lap_idx\")", generated)
     # index_together, which has no names, derives one at migration time.
-    @test occursin("Models.Index(fields = (\"lap\", \"apelido\",))", generated)
+    @test occursin("Models.Index(fields = (\"lap\", \"nickname\",))", generated)
     # The single-column entry became db_index on the field, NOT a one-field Index.
-    @test occursin("apelido = Models.CharField(max_length=30, db_index=true)", generated)
-    @test !occursin("Models.Index(fields = (\"apelido\",))", generated)
+    @test occursin("nickname = Models.CharField(max_length=30, db_index=true)", generated)
+    @test !occursin("Models.Index(fields = (\"nickname\",))", generated)
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)
@@ -952,28 +952,28 @@ end
   # CheckConstraint translator reads; what is left refused is what changes the index into one PormG
   # cannot declare.
   django = """
-  class Servidor(models.Model):
-      cpf = models.CharField(max_length=11)
-      ativo = models.BooleanField(default=True)
-      apelido = models.CharField(max_length=30)
+  class Engineer(models.Model):
+      licence_no = models.CharField(max_length=11)
+      enabled = models.BooleanField(default=True)
+      nickname = models.CharField(max_length=30)
 
       class Meta:
           indexes = [
-              models.Index(fields=['cpf', 'apelido'], name='ok_idx'),
-              models.Index(Collate('apelido', 'C'), name='expr_idx'),
-              models.Index(fields=['cpf', 'ativo'], condition=Q(apelido__startswith='A'), name='partial_idx'),
-              models.Index(Lower('apelido'), name='lower_idx'),
-              models.Index(Lower('apelido'), name='lower_idx'),
-              models.Index('cpf', Lower('apelido').desc(), name='str_idx'),
-              models.Index(F('cpf'), F('ativo').desc(), name='f_idx'),
-              models.Index(fields=['cpf', 'ativo'], condition=Q(ativo=True), name='ativo_idx'),
-              models.Index(Lower('apelido'), fields=['cpf'], name='mixed_idx'),
-              models.Index(Lower('cpf'), name='%(class)s_cpf_lower'),
-              models.Index(Lower('apelido')),
-              BloomIndex(fields=['cpf', 'apelido'], name='bloom_idx'),
-              GinIndex(fields=['apelido'], fastupdate=False, name='slow_gin_idx'),
-              models.Index(fields=['cpf'], include=['apelido'], name='covering_idx'),
-              models.Index(fields=['cpf', 'ativo'], include=['apelido']),
+              models.Index(fields=['licence_no', 'nickname'], name='ok_idx'),
+              models.Index(Collate('nickname', 'C'), name='expr_idx'),
+              models.Index(fields=['licence_no', 'enabled'], condition=Q(nickname__startswith='A'), name='partial_idx'),
+              models.Index(Lower('nickname'), name='lower_idx'),
+              models.Index(Lower('nickname'), name='lower_idx'),
+              models.Index('licence_no', Lower('nickname').desc(), name='str_idx'),
+              models.Index(F('licence_no'), F('enabled').desc(), name='f_idx'),
+              models.Index(fields=['licence_no', 'enabled'], condition=Q(enabled=True), name='enabled_idx'),
+              models.Index(Lower('nickname'), fields=['licence_no'], name='mixed_idx'),
+              models.Index(Lower('licence_no'), name='%(class)s_licence_lower'),
+              models.Index(Lower('nickname')),
+              BloomIndex(fields=['licence_no', 'nickname'], name='bloom_idx'),
+              GinIndex(fields=['nickname'], fastupdate=False, name='slow_gin_idx'),
+              models.Index(fields=['licence_no'], include=['nickname'], name='covering_idx'),
+              models.Index(fields=['licence_no', 'enabled'], include=['nickname']),
           ]
   """
   config_key = mktempdir()
@@ -985,25 +985,25 @@ end
 
     # The three PormG can express survive, and they are the ONLY Indexes emitted: the functional
     # one in Django's own spelling (the column bare, #1368), the partial one's Q() through the CheckConstraint translator.
-    @test occursin("Models.Index(fields = (\"cpf\", \"apelido\",), name = \"ok_idx\")", generated)
-    @test occursin("Models.Index(expressions = (\"LOWER(apelido)\",), name = \"lower_idx\")", generated)
-    @test occursin("Models.Index(fields = (\"cpf\", \"ativo\",), name = \"ativo_idx\", condition = \"ativo\")", generated)
+    @test occursin("Models.Index(fields = (\"licence_no\", \"nickname\",), name = \"ok_idx\")", generated)
+    @test occursin("Models.Index(expressions = (\"LOWER(nickname)\",), name = \"lower_idx\")", generated)
+    @test occursin("Models.Index(fields = (\"licence_no\", \"enabled\",), name = \"enabled_idx\", condition = \"enabled\")", generated)
     # A bare positional string is Django's shorthand for F().
-    @test occursin("Models.Index(expressions = (\"cpf\", \"LOWER(apelido) DESC\",), name = \"str_idx\")", generated)
+    @test occursin("Models.Index(expressions = (\"licence_no\", \"LOWER(nickname) DESC\",), name = \"str_idx\")", generated)
     # Members that are only fields — `F()` or a bare string — are a column index: `fields`, exactly.
-    @test occursin("Models.Index(fields = (\"cpf\", \"-ativo\",), name = \"f_idx\")", generated)
+    @test occursin("Models.Index(fields = (\"licence_no\", \"-enabled\",), name = \"f_idx\")", generated)
     # #934: a covering index carries its payload — one field is fine, since `include` makes it advanced.
-    @test occursin("Models.Index(fields = (\"cpf\",), name = \"covering_idx\", include = (\"apelido\",))", generated)
+    @test occursin("Models.Index(fields = (\"licence_no\",), name = \"covering_idx\", include = (\"nickname\",))", generated)
     @test count(r"Models\.Index\((fields|expressions) = \(", generated) == 6   # declarations, not the hint in a marker
     # Each translated text index carries a note: its SQL is Django's, which a database Django already
     # built may store rewritten — so makemigrations may refuse it there and print the adopting text.
     # One per index that LANDED: the repeated `lower_idx` collapses, and so does its note.
     @test count("carries Django's SQL", generated) == 3
-    @test count("index 'lower_idx' on 'Servidor' is functional", generated) == 1
-    @test occursin("# PormG: index 'ativo_idx' on 'Servidor' is partial and carries Django's SQL", generated)
+    @test count("index 'lower_idx' on 'Engineer' is functional", generated) == 1
+    @test occursin("# PormG: index 'enabled_idx' on 'Engineer' is partial and carries Django's SQL", generated)
 
     # Each refusal is named in the file, with the reason that makes it a refusal.
-    @test occursin("its expression `Collate('apelido', 'C')` is not translated", generated)
+    @test occursin("its expression `Collate('nickname', 'C')` is not translated", generated)
     @test occursin("Models.Index(expressions = …)", generated)
     @test occursin("its `condition=` is not translated", generated)
     @test occursin("it mixes expressions with `fields=`", generated)
@@ -1013,7 +1013,7 @@ end
     @test occursin("`fastupdate=` changes what the index means", generated)
     @test occursin("a covering index needs a `name=`", generated)   # Django's rule; a named one translates (#934)
     # Eight dropped indexes, eight markers — a blanket "report something" would pass a count of 1.
-    @test count("an index on 'Servidor' was dropped", generated) == 8
+    @test count("an index on 'Engineer' was dropped", generated) == 8
   finally
     delete!(PormG.config, config_key)
     isdir(config_key) && rm(config_key; recursive = true)
@@ -1028,24 +1028,24 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "Django importer translates GinIndex, opclasses= and -field (#29)" begin
   django = """
-  class Piloto(models.Model):
-      sobrenome = models.CharField(max_length=60)
-      pontos = models.FloatField()
-      corrida = models.IntegerField()
-      data = models.DateField()
+  class Wheelman(models.Model):
+      family_name = models.CharField(max_length=60)
+      score = models.FloatField()
+      race_no = models.IntegerField()
+      dob = models.DateField()
 
       class Meta:
           indexes = [
-              models.Index(fields=['corrida', '-pontos'], name='piloto_corrida_pontos_idx'),
-              models.Index(fields=['-pontos']),
-              GinIndex(fields=['sobrenome'], name='piloto_sobrenome_gin', opclasses=['gin_trgm_ops']),
-              BrinIndex(fields=['data'], name='piloto_data_brin'),
-              HashIndex(fields=['sobrenome'], name='piloto_sobrenome_hash'),
-              models.Index(fields=['sobrenome'], name='piloto_sobrenome_pattern',
+              models.Index(fields=['race_no', '-score'], name='wheelman_race_no_score_idx'),
+              models.Index(fields=['-score']),
+              GinIndex(fields=['family_name'], name='wheelman_family_name_gin', opclasses=['gin_trgm_ops']),
+              BrinIndex(fields=['dob'], name='wheelman_dob_brin'),
+              HashIndex(fields=['family_name'], name='wheelman_family_name_hash'),
+              models.Index(fields=['family_name'], name='wheelman_family_name_pattern',
                            opclasses=['varchar_pattern_ops']),
-              models.Index(fields=['corrida']),
+              models.Index(fields=['race_no']),
           ]
-          index_together = [('-corrida', 'pontos')]
+          index_together = [('-race_no', 'score')]
   """
   config_key = mktempdir()
   PormG.config[config_key] = PormG.Configuration.Settings(
@@ -1054,17 +1054,17 @@ end
     import_models_from_django(django; db = config_key, file = "ix_pg_unit.jl", force_replace = true)
     generated = read(joinpath(config_key, "ix_pg_unit.jl"), String)
 
-    @test occursin("Models.Index(fields = (\"corrida\", \"-pontos\",), name = \"piloto_corrida_pontos_idx\")", generated)
-    @test occursin("Models.Index(fields = (\"-pontos\",))", generated)
-    @test occursin("Models.Index(fields = (\"sobrenome\",), name = \"piloto_sobrenome_gin\", method = \"gin\", " *
+    @test occursin("Models.Index(fields = (\"race_no\", \"-score\",), name = \"wheelman_race_no_score_idx\")", generated)
+    @test occursin("Models.Index(fields = (\"-score\",))", generated)
+    @test occursin("Models.Index(fields = (\"family_name\",), name = \"wheelman_family_name_gin\", method = \"gin\", " *
                    "opclasses = (\"gin_trgm_ops\",))", generated)
-    @test occursin("Models.Index(fields = (\"data\",), name = \"piloto_data_brin\", method = \"brin\")", generated)
-    @test occursin("Models.Index(fields = (\"sobrenome\",), name = \"piloto_sobrenome_hash\", method = \"hash\")", generated)
-    @test occursin("Models.Index(fields = (\"sobrenome\",), name = \"piloto_sobrenome_pattern\", " *
+    @test occursin("Models.Index(fields = (\"dob\",), name = \"wheelman_dob_brin\", method = \"brin\")", generated)
+    @test occursin("Models.Index(fields = (\"family_name\",), name = \"wheelman_family_name_hash\", method = \"hash\")", generated)
+    @test occursin("Models.Index(fields = (\"family_name\",), name = \"wheelman_family_name_pattern\", " *
                    "opclasses = (\"varchar_pattern_ops\",))", generated)
     @test count("Models.Index(", generated) == 6
     # The one plain single-field entry is still the field's db_index.
-    @test occursin(r"corrida\s*=\s*Models\.IntegerField\(db_index\s*=\s*true", generated)
+    @test occursin(r"race_no\s*=\s*Models\.IntegerField\(db_index\s*=\s*true", generated)
     # `index_together` has no descending spelling in PormG's sense; it stays refused.
     @test occursin("DESCENDING column, which index_together cannot declare", generated)
   finally
@@ -1093,36 +1093,36 @@ end
     #     aborted the entire import. A primary key is already indexed, so this is redundant, not
     #     lost: it must be skipped in silence, and the model must still be generated.
     pk = gen("""
-    class Volta(models.Model):
+    class Circuit_lap(models.Model):
         lap = models.IntegerField()
         class Meta:
             indexes = [models.Index(fields=['id'])]
     """, "ix_pk.jl")
-    @test occursin("\nVolta::Models.ModelType = Models.Model(", pk)
+    @test occursin("\nCircuit_lap::Models.ModelType = Models.Model(", pk)
     @test !occursin("Models.Index(", pk)
     @test !occursin("was dropped", pk)      # redundant, not lost — reporting it would be noise
 
     pk2 = gen("""
-    class Volta1b(models.Model):
+    class Circuit_lap1b(models.Model):
         lap = models.IntegerField()
         class Meta:
             index_together = (('id',),)
     """, "ix_pk2.jl")
-    @test occursin("\nVolta1b::Models.ModelType = Models.Model(", pk2)   # the index_together path too
+    @test occursin("\nCircuit_lap1b::Models.ModelType = Models.Model(", pk2)   # the index_together path too
 
     # (2) An `index_together` group whose members collapse to ONE imported column. Both spellings of
     #     a foreign key resolve to `race_id`, so the Index constructor rejects the duplicate — and
     #     the throw escaped, because this path lacked the per-entry try/catch its `Meta.indexes`
     #     sibling has. The model must survive, with the bad group reported.
     dup = gen("""
-    class Volta2(models.Model):
+    class Circuit_lap2(models.Model):
         lap = models.IntegerField()
         race = models.ForeignKey(Race, on_delete=models.CASCADE)
         class Meta:
             index_together = (('race','race_id'),)
     """, "ix_dupfield.jl")
-    @test occursin("\nVolta2::Models.ModelType = Models.Model(", dup)
-    @test occursin("an index on 'Volta2' was dropped", dup)
+    @test occursin("\nCircuit_lap2::Models.ModelType = Models.Model(", dup)
+    @test occursin("an index on 'Circuit_lap2' was dropped", dup)
     @test occursin("Index has duplicate fields", dup)
     @test !occursin("Models.Index(", dup)
 
@@ -1132,15 +1132,15 @@ end
     #     with advice ("give each a distinct name") that cannot be followed. The generated file
     #     loaded and was unmigratable; the duplicate must collapse at import time instead.
     both = gen("""
-    class Volta3(models.Model):
+    class Circuit_lap3(models.Model):
         lap = models.IntegerField()
-        apelido = models.CharField(max_length=10)
+        nickname = models.CharField(max_length=10)
         class Meta:
-            indexes = [models.Index(fields=['lap','apelido'])]
-            index_together = (('lap','apelido'),)
+            indexes = [models.Index(fields=['lap','nickname'])]
+            index_together = (('lap','nickname'),)
     """, "ix_dupdecl.jl")
     @test count("Models.Index(", both) == 1
-    @test occursin("a duplicate index over (lap, apelido) on 'Volta3' was dropped", both)
+    @test occursin("a duplicate index over (lap, nickname) on 'Circuit_lap3' was dropped", both)
     # …and it is genuinely migratable now, which is the property that was broken. Evaluating the
     # WHOLE generated file (not a regex-extracted slice) is deliberate: it also proves the file
     # parses and loads, markers and all. The generated file IS a module named after the output
@@ -1148,12 +1148,12 @@ end
     # `Core.eval` rather than `getfield`.
     sandbox = Module()
     Core.eval(sandbox, Meta.parse(both))
-    v3 = Core.eval(sandbox, :(ix_dupdecl.Volta3))
+    v3 = Core.eval(sandbox, :(ix_dupdecl.Circuit_lap3))
     settings = PormG.Configuration.Settings(connections = IXMockPostgres(), change_data = true)
     schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
-      :volta3 => Dict{Symbol, Union{Bool, PormGModel}}(:model => v3, :exist => false))
+      :circuit_lap3 => Dict{Symbol, Union{Bool, PormGModel}}(:model => v3, :exist => false))
     plan = Migrations.get_migration_plan(PormGModel[], schema, IXMockPostgres(), settings, interactive = false)
-    @test occursin("CREATE INDEX", join(values(plan[:volta3]), "\n"))
+    @test occursin("CREATE INDEX", join(values(plan[:circuit_lap3]), "\n"))
 
     # (4) An abstract base's NAMED index, inherited by two children. Django installs the base's whole
     #     Meta on every child declaring none of its own, so both tables asked for one index name —
@@ -1161,43 +1161,43 @@ end
     #     no-op. Keep the index on both, surrender the duplicated name, and say so.
     inherited = gen("""
     class Base(models.Model):
-        criado = models.IntegerField()
-        ativo = models.BooleanField(default=True)
+        made_at = models.IntegerField()
+        enabled = models.BooleanField(default=True)
         class Meta:
             abstract = True
-            indexes = [models.Index(fields=['criado','ativo'], name='base_criado_ativo')]
+            indexes = [models.Index(fields=['made_at','enabled'], name='base_made_at_enabled')]
 
-    class Piloto(Base):
-        nome = models.CharField(max_length=10)
+    class Wheelman(Base):
+        full_name = models.CharField(max_length=10)
 
-    class Equipe(Base):
-        sede = models.CharField(max_length=10)
+    class Crew(Base):
+        hq = models.CharField(max_length=10)
     """, "ix_inherited.jl")
     @test count("Models.Index(", inherited) == 2                       # both children keep an index
-    @test count("name = \"base_criado_ativo\"", inherited) == 1        # …but only one keeps the name
-    @test occursin("LOST its name 'base_criado_ativo'", inherited)
+    @test count("name = \"base_made_at_enabled\"", inherited) == 1        # …but only one keeps the name
+    @test occursin("LOST its name 'base_made_at_enabled'", inherited)
 
     # (5) The same duplicate-declaration collapse on the UNIQUE side. `unique_together` repeating a
     #     group is a plain copy-paste in a real models.py, and two identical constraints derive ONE
     #     index name — the same unmigratable-file outcome as (3), but losing a uniqueness GUARANTEE
     #     rather than a performance hint, so it matters more.
     dup_uq = gen("""
-    class Volta5(models.Model):
+    class Circuit_lap5(models.Model):
         lap = models.IntegerField()
-        apelido = models.CharField(max_length=10)
+        nickname = models.CharField(max_length=10)
         class Meta:
-            unique_together = (('lap','apelido'), ('lap','apelido'))
+            unique_together = (('lap','nickname'), ('lap','nickname'))
     """, "uq_dupdecl.jl")
     @test count("Models.UniqueConstraint(", dup_uq) == 1
-    @test occursin("a duplicate constraint over (lap, apelido) on 'Volta5' was dropped", dup_uq)
+    @test occursin("a duplicate constraint over (lap, nickname) on 'Circuit_lap5' was dropped", dup_uq)
     uq_sandbox = Module()
     Core.eval(uq_sandbox, Meta.parse(dup_uq))
-    v5 = Core.eval(uq_sandbox, :(uq_dupdecl.Volta5))
+    v5 = Core.eval(uq_sandbox, :(uq_dupdecl.Circuit_lap5))
     uq_settings = PormG.Configuration.Settings(connections = IXMockPostgres(), change_data = true)
     uq_schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
-      :volta5 => Dict{Symbol, Union{Bool, PormGModel}}(:model => v5, :exist => false))
+      :circuit_lap5 => Dict{Symbol, Union{Bool, PormGModel}}(:model => v5, :exist => false))
     uq_plan = Migrations.get_migration_plan(PormGModel[], uq_schema, IXMockPostgres(), uq_settings, interactive = false)
-    @test occursin("CREATE UNIQUE INDEX", join(values(uq_plan[:volta5]), "\n"))
+    @test occursin("CREATE UNIQUE INDEX", join(values(uq_plan[:circuit_lap5]), "\n"))
 
     # (6) A UniqueConstraint name reused across models loses the name, not the guarantee — the same
     #     rule as (4), on the side where a silently-skipped CREATE UNIQUE INDEX is a data-integrity
@@ -1210,10 +1210,10 @@ end
             abstract = True
             constraints = [models.UniqueConstraint(fields=['a','b'], name='base_ab_uq')]
 
-    class Um(BaseU):
+    class Sprint(BaseU):
         x = models.IntegerField()
 
-    class Dois(BaseU):
+    class Feature(BaseU):
         y = models.IntegerField()
     """, "uq_inherited.jl")
     @test count("Models.UniqueConstraint(", shared_uq) == 2            # both children keep the rule

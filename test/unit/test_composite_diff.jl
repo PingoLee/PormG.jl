@@ -1028,37 +1028,37 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite: an imported Q(bool=True) partial index matches the one Django built (#934)
 # Django's `Exact.as_sql` renders a boolean field against True as the bare column, so a Django-built
-# SQLite database stores `WHERE "ativo"`. The importer's translator wrote `"ativo" = TRUE`, which no
+# SQLite database stores `WHERE "enabled"`. The importer's translator wrote `"enabled" = TRUE`, which no
 # canonical comparison equates with it, so `makemigrations` refused the index's name as hand-made.
 # Now the translator writes Django's shape and the imported declaration simply matches — no
-# statement, no refusal. Since #1368 it writes the name bare (`ativo`), as a double-quoted name is a
-# string on MySQL, and the planner compares `"ativo"` and `ativo` as one column
+# statement, no refusal. Since #1368 it writes the name bare (`enabled`), as a double-quoted name is a
+# string on MySQL, and the planner compares `"enabled"` and `enabled` as one column
 # (`_comparable_sql_text`), so the index Django built with the quotes still matches. PostgreSQL stores
-# its own deparse of anything else (`lower(apelido::text)`); that half stays the documented adoption hint.
+# its own deparse of anything else (`lower(nickname::text)`); that half stays the documented adoption hint.
 # Mutation gate: restore `"col = TRUE"` in `_q_leaf_sql`, or compare with `canonical_check_condition`
 # in `_composite_text_matches`, and the plan is an InvalidMigrationError.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "SQLite: an imported Q(bool=True) partial index matches the one Django built (#934)" begin
-  fields = Dict{Symbol, Any}(:raceid => Models.IntegerField(), :ativo => Models.BooleanField())
-  cond_true = PormG.Migrations._q_expression("Q(ativo=True)", fields).sql
-  cond_false = PormG.Migrations._q_expression("Q(ativo=False)", fields).sql
-  @test cond_true == "ativo"
-  @test cond_false == "NOT ativo"
+  fields = Dict{Symbol, Any}(:raceid => Models.IntegerField(), :enabled => Models.BooleanField())
+  cond_true = PormG.Migrations._q_expression("Q(enabled=True)", fields).sql
+  cond_false = PormG.Migrations._q_expression("Q(enabled=False)", fields).sql
+  @test cond_true == "enabled"
+  @test cond_false == "NOT enabled"
   # What Django's schema editor sends for each: the column double-quoted.
-  django = Dict("True" => "\"ativo\"", "False" => "NOT \"ativo\"")
+  django = Dict("True" => "\"enabled\"", "False" => "NOT \"enabled\"")
   for (label, cond) in (("True", cond_true), ("False", cond_false))
-    @testset "Q(ativo=$label)" begin
+    @testset "Q(enabled=$label)" begin
       mktempdir() do dir
         pool = SQLiteConnectionPool(joinpath(dir, "cd_934_django_$(label).sqlite"); pool_size = 1)
         try
-          declared = _cd_result(ativo = Models.BooleanField(default = true),
-                                indexes = [Models.Index(fields = ("raceid", "grid"), condition = cond, name = "idx_ativos")])
+          declared = _cd_result(enabled = Models.BooleanField(default = true),
+                                indexes = [Models.Index(fields = ("raceid", "grid"), condition = cond, name = "idx_enabled")])
           # The table as PormG would make it, minus the index — then the index exactly as Django's
           # SQLite schema editor writes it, so it carries no PormG marker.
-          plan = _cd_plan(pool, LiveTable[], _cd_result(ativo = Models.BooleanField(default = true)))
+          plan = _cd_plan(pool, LiveTable[], _cd_result(enabled = Models.BooleanField(default = true)))
           _cd_apply!(pool, plan)
-          fetch(pool, "CREATE INDEX \"idx_ativos\" ON \"result\" (\"raceid\", \"grid\") WHERE $(django[label]);")
-          live = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "idx_ativos")
+          fetch(pool, "CREATE INDEX \"idx_enabled\" ON \"result\" (\"raceid\", \"grid\") WHERE $(django[label]);")
+          live = only(c for c in only(_cd_live(pool, "result")).composites if c.name == "idx_enabled")
           @test live.marker === nothing && live.condition == django[label]
           @test _cd_converged(pool, ("result",), declared)
         finally

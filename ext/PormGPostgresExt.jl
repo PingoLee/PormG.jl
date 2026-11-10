@@ -972,4 +972,27 @@ function PormG.backend_copy_in!(pool::_Pool, conn::Postgres.Connection, sql::Str
   return _csv_record_count(String(payload))
 end
 
+# ── Precompile workload: the terminals on an offline `PostgresConnectionPool{:postgres}` key (#1732)
+#
+# `PormG._offline_postgres_workload` (src/precompile.jl, where the why is written down) renders the
+# terminals with `show_query = :sql` on an offline key: no connection is opened and no database is
+# needed. It runs HERE, not in PormG's own workload, so it compiles after Postgres.jl and its
+# dependencies have loaded, and the code lands in this extension's image, valid against the final
+# method table. Compiled in PormG's image it was invalidated by `using Postgres` (#1732);
+# `PormGSQLiteExt` runs its own workload the same way. A throwing step blocks this extension from
+# loading; `test/unit/test_precompile_hints.jl` asserts it loaded.
+#
+# The module name is imported with the macros, for the reason `ext/PormGSQLiteExt.jl` gives (#574).
+using PrecompileTools: PrecompileTools, @setup_workload, @compile_workload
+
+# Where the workload registers its models; left inert by the workload's `finally` (#1607).
+module _PrecompileModels
+end
+
+@setup_workload begin
+  @compile_workload begin
+    PormG._offline_postgres_workload(_PrecompileModels, "__pormg_precompile_pg_postgres", :postgres)
+  end
+end
+
 end # module PormGPostgresExt

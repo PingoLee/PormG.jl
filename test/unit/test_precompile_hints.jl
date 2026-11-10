@@ -1,5 +1,7 @@
-# Guards for PormG's precompilation: the directives in src/precompile.jl, and the SQLite
-# extension's end-to-end workload (the end of ext/PormGSQLiteExt.jl).
+# Guards for PormG's precompilation: the directives in src/precompile.jl, the SQLite extension's
+# end-to-end workload (the end of ext/PormGSQLiteExt.jl), and the PostgreSQL extensions' offline
+# terminal workload (`_offline_postgres_workload` in src/precompile.jl, run by PormGPostgresExt and
+# PormGLibPQExt, #1732).
 #
 # Both halves fail QUIETLY without this file. `Base.precompile` returns `false` on a signature that
 # no longer matches rather than throwing, so a stale directive costs nothing at build time and
@@ -112,47 +114,78 @@ end
     @test record.key === nothing && record.load_root === nothing && record.folder === nothing
     @test isempty(record.models) && isempty(record.bindings)
     @test !isdefined(pm, :__pormg_init_path__) && !isdefined(pm, :__pormg_binding__)
-    for n in (:Driver, :Constructor, :Result)
+    for n in (:Driver, :Constructor, :Race, :Result)
       @test isdefined(pm, n) && getglobal(pm, n) === nothing
     end
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PormG's own workload: the offline PostgreSQL step leaves nothing in the cache image
-# Step 6 of src/precompile.jl registers two offline keys (the entry `register_offline` builds, on a
-# LibPQ pool and on a Postgres.jl pool) and models in `PormG._PrecompilePgLibPQ` / `_PrecompilePgPostgres`,
-# submodules that ARE serialized (#1702). Its `finally` removes both keys from `config`, clears each
-# module's registration record and model set (#1607, #1606) and resets the model bindings to
-# `nothing`. An entry left behind would ship a key named `__pormg_precompile_pg_*` in every
-# application's `config`, and a model left behind would ship a Model object bound to a key that no
-# longer exists; neither shows in any other test, because the image is only read here.
+# PormG's own workload leaves no connection in the cache image
+# The workload registers "precompile", "db" and "db_myapp" in `config` and removes them at the end. A
+# key left in `config` does not survive to here: `Configuration.__init__` drops every entry an image
+# carries, and warns. The warning, printed when a fresh process loads PormG, is the trace a leaked key
+# leaves, so that is what is checked (reading `PormG.config` here passed with a `delete!` removed).
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "PormG image carries no offline PostgreSQL workload state (#1702)" begin
-  # A key left in `config` does not survive to here: `Configuration.__init__` drops every entry an
-  # image carries, and warns. The warning, printed when a fresh process loads PormG, is the trace a
-  # leaked key leaves, so that is what is checked (reading `PormG.config` here passed with the
-  # workload's `delete!` removed).
+@testset "PormG image carries no workload connection" begin
   err = IOBuffer()
   cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) -e "using PormG"`
   @test success(pipeline(cmd; stderr = err))
   @test !occursin("PormG dropped the connections", String(take!(err)))
-  for pm in (PormG._PrecompilePgLibPQ, PormG._PrecompilePgPostgres)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The PostgreSQL extensions: their workload ran, and left nothing in their images (#1732)
+# `PormGPostgresExt` and `PormGLibPQExt` each call `PormG._offline_postgres_workload` from their
+# workload, with an offline key and their submodule `_PrecompileModels`, which IS serialized. A
+# throwing step blocks the extension from loading, quietly (`using Postgres` still succeeds), so the
+# lookup is the check. The `finally` clears the module's registration record and model set (#1607,
+# #1606) and resets the model bindings to `nothing`; a model left behind would ship a Model object
+# bound to a key that no longer exists, which no other test reads.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PostgreSQL extension $name loaded, and its image carries no workload state (#1732)" for name in
+    (:PormGPostgresExt, :PormGLibPQExt)
+  ext = Base.get_extension(PormG, name)
+  @test ext !== nothing
+  if ext !== nothing
+    pm = ext._PrecompileModels
     record = PormG.Models._model_set(pm)
     @test record isa PormG.Models.ModelSet
     @test record.key === nothing && record.load_root === nothing && record.folder === nothing
     @test isempty(record.models) && isempty(record.bindings)
-    for n in (:Driver, :Constructor, :Result)
+    for n in (:Driver, :Constructor, :Race, :Result)
       @test isdefined(pm, n) && getglobal(pm, n) === nothing
     end
   end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PormG's own workload: step 3 and step 6 run without a catch-all
+# The PostgreSQL terminal workload stays out of PormG's own workload (#1732)
+# Run from PormG's workload (#1712's step 6), it compiled before any driver loaded, and `using
+# Postgres` / `using LibPQ` invalidated it: a Nitro app's first `list` cost 17.9 s, tagged
+# `# recompile`. It belongs to the extensions' workloads, which compile after the driver.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "PormG workload does not run the PostgreSQL terminal workload (#1732)" begin
+  # Nothing in src/ calls it: the one occurrence of the call spelling is its own definition.
+  calls = String[]
+  for (root, _, files) in walkdir(joinpath(pkgdir(PormG), "src")), f in files
+    endswith(f, ".jl") || continue
+    for (n, line) in enumerate(eachline(joinpath(root, f)))
+      occursin("_offline_postgres_workload(", line) && push!(calls, "$(f):$(n): $(strip(line))")
+    end
+  end
+  @test length(calls) == 1 && occursin("function _offline_postgres_workload(", only(calls))
+  for ext in ("PormGPostgresExt.jl", "PormGLibPQExt.jl")
+    src = read(joinpath(pkgdir(PormG), "ext", ext), String)
+    @test occursin("PormG._offline_postgres_workload(_PrecompileModels", src)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PormG's workload: step 3 and the PostgreSQL terminal workload run without a catch-all
 # Step 3's `show_query` sat in `try … catch e end` and had been failing on every build: its
 # `"points__gte"` filter predates the `__@` operator spelling, so it warmed only the error path
-# (#348's shape, found while measuring #1702). Without the `try`, a throwing step fails PormG's
+# (#348's shape, found while measuring #1702). Without the `try`, a throwing step fails the
 # precompile, which every test reports. This pins that no catch-all comes back around them.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "PormG workload: the query-building steps are not wrapped in a catch-all (#1702)" begin
@@ -163,11 +196,94 @@ end
     step3 = _PRECOMPILE_SRC[first(i3):first(i5)]
     @test !occursin(r"^\s*catch\b"m, step3)
   end
-  i6 = findfirst("# 6. The terminals on an offline PostgreSQL key", _PRECOMPILE_SRC)
+  i6 = findfirst("function _offline_postgres_workload", _PRECOMPILE_SRC)
   @test i6 !== nothing
   if i6 !== nothing
-    step6 = _PRECOMPILE_SRC[first(i6):end]
+    body = split(_PRECOMPILE_SRC[first(i6):end], "# ── Snoop-generated precompile hints")[1]
     # Its one `try` is the cleanup's `try … finally`; no `catch` swallows a failed render.
-    @test !occursin(r"^\s*catch\b"m, split(step6, "# ── Snoop-generated precompile hints")[1])
+    @test !occursin(r"^\s*catch\b"m, body)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A PostgreSQL session's first calls run on the driver extension's image (#1732)
+# A fresh process loads PormG and one PostgreSQL driver, binds F1 models it declares itself (not the
+# workload's) to an offline key on that driver's pool, and makes the first calls #1732 measured, under
+# `--trace-compile`, which prints every method compiled at run time and tags `# recompile` on one
+# whose cached code was invalidated. None of these may appear:
+#   - `list` and `validate_field_data(…, ::String, …)`, tagged `# recompile` when the terminal
+#     workload ran in PormG's image and `using Postgres` invalidated it (17.9 s and 0.5 s in a Nitro
+#     app's boot);
+#   - `get_or_create(…; defaults::Vector{Pair{String,Any}})`, the form a caller makes when it builds
+#     `defaults` at run time, and `validate_field_data(…, ::DateTime, …)`, a `DateTimeField` value:
+#     no workload compiled either (3.7 s and 0.5 s);
+#   - any query-builder method tagged `# recompile`: a LibPQ session's `update`/`delete` recompiled
+#     `_render_filter_oper` and `_get_filter_query` until `_open_connection` called `LibPQ.Connection`
+#     through an inference barrier (ext/PormGLibPQExt.jl says why).
+# Against the code before #1732 the first four are printed, on both drivers.
+#
+# Skipped under code coverage, which is how CI runs `Pkg.test()` (julia-runtest's `coverage`
+# default): a process tracking PormG's coverage does not run the package images' native code, so
+# everything is compiled at run time and every line is printed whatever the workloads did. It is also
+# red where workloads do not run (PrecompileTools' `precompile_workloads = false` preference,
+# `--compiled-modules=no`). It runs in a local `Pkg.test()` without coverage and when this file is
+# run on its own.
+# ─────────────────────────────────────────────────────────────────────────────
+const _FIRST_CALLS_1732 = raw"""
+using PormG, __PKG__
+const M = Module(:FirstCalls1732)
+Core.eval(M, quote
+  import PormG.Models
+  Circuit::Models.ModelType = Models.Model("circuit", circuitid = Models.IDField(),
+    circuitref = Models.CharField(max_length = 255), name = Models.CharField(max_length = 255),
+    country = Models.CharField(max_length = 255))
+  Race::Models.ModelType = Models.Model("race", raceid = Models.IDField(), year = Models.IntegerField(),
+    name = Models.CharField(max_length = 255), start_at = Models.DateTimeField(null = true),
+    circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "CASCADE"))
+  $(PormG.Models._model_set_declaration([:Circuit, :Race]))
+end)
+const C = PormG.Configuration
+PormG.config["first_calls_1732"] = C.Settings(app_env = C.DEV, db_def_folder = "first_calls_1732",
+  db_config_settings = C._offline_config_settings(:postgres, nothing), change_data = true,
+  connections = PormG.ConnectionPool.PostgresConnectionPool(C._OFFLINE_CONNECTION; pool_size = 1, driver = :__DRIVER__))
+Base.invokelatest(PormG.Models.set_models, M, "first_calls_1732")
+const Circuit = Base.invokelatest(getglobal, M, :Circuit)
+const Race = Base.invokelatest(getglobal, M, :Race)
+defaults = Pair{String, Any}["name" => "Spa-Francorchamps", "country" => "Belgium"]
+Base.invokelatest(Circuit.objects.get_or_create, "circuitref" => "spa"; defaults = defaults, show_query = :sql)
+Base.invokelatest(Circuit.objects.get_or_create, "circuitid" => 13;
+  defaults = vcat(defaults, Pair{String, Any}["circuitref" => "spa"]), show_query = :sql)
+Base.invokelatest(() -> Race.objects.create("raceid" => 1, "year" => 2008, "name" => "Australian Grand Prix",
+  "start_at" => PormG.Dates.DateTime(2008, 3, 16, 5, 30), "circuitid" => 1; show_query = :sql))
+Base.invokelatest(() -> Race.objects.filter("year__@gte" => 2020, "circuitid__country" => "Italy").
+  values("raceid", "name", "circuitid__name").list(; show_query = :sql))
+Base.invokelatest(() -> Race.objects.filter("raceid" => 1).update("name" => "Gran Premio d'Italia"; show_query = :sql))
+Base.invokelatest(() -> Circuit.objects.filter("circuitid" => 13).delete(; show_query = :sql))
+"""
+
+@testset "$pkg session: first calls compile nothing the workload covers (#1732)" for (pkg, driver) in
+    (("Postgres", "postgres"), ("LibPQ", "libpq"))
+  if Base.JLOptions().code_coverage != 0
+    @test_skip "the trace needs the package images' native code, which coverage turns off"
+  else
+    script = tempname() * ".jl"
+    write(script, replace(_FIRST_CALLS_1732, "__PKG__" => pkg, "__DRIVER__" => driver))
+    err = IOBuffer()
+    cmd = `$(Base.julia_cmd()) --startup-file=no --trace-compile=stderr --project=$(Base.active_project()) $script`
+    ok = success(pipeline(cmd; stdout = devnull, stderr = err))
+    rm(script; force = true)
+    @test ok
+    trace = filter(l -> occursin("precompile(", l), split(String(take!(err)), '\n'))
+    compiled(pat) = filter(l -> occursin(pat, l), trace)
+    # Printed on a failure, so the red run names the methods that were compiled.
+    @test compiled(r"typeof\(PormG\.QueryBuilder\.list\)") == String[]
+    @test compiled(r"typeof\(PormG\.QueryBuilder\.validate_field_data\)") == String[]
+    # The callee is the `get_or_create` chain method, not `invokelatest`'s own keyword sorter.
+    @test compiled(r"NamedTuple\{\(:defaults, :show_query\), Tuple\{Array\{Pair\{String, Any\}, 1\}, Symbol\}\}, PormG\.") == String[]
+    @test compiled(r"_where_node!") == String[]
+    # No query-builder method recompiled. `update` and `delete` are compiled inside the calls above, not
+    # as roots of their own; what a LibPQ session printed for them, until `_open_connection`'s inference
+    # barrier, was `_render_filter_oper` and `_get_filter_query` tagged `# recompile`.
+    @test filter(l -> occursin("# recompile", l), compiled(r"PormG\.QueryBuilder\.")) == String[]
   end
 end

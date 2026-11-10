@@ -83,9 +83,12 @@ end
 # The integration testset is what proves the read end to end, and no CI job runs it. So the wiring is
 # pinned here from the source: every `LibPQ.Connection(…)` call in the extension passes the override.
 # Without this, deleting the keyword left this file green.
+# The construction is called through an inference barrier since #1732,
+# `Base.inferencebarrier(LibPQ.Connection)(…)`, which is the same call to the scan.
+_is_connection_callee(f) = f == :(LibPQ.Connection) || f == :(Base.inferencebarrier(LibPQ.Connection))
 function _connection_calls(ex, found = Expr[])
   if ex isa Expr
-    ex.head === :call && ex.args[1] == :(LibPQ.Connection) && push!(found, ex)
+    ex.head === :call && _is_connection_callee(ex.args[1]) && push!(found, ex)
     foreach(a -> _connection_calls(a, found), ex.args)
   end
   return found

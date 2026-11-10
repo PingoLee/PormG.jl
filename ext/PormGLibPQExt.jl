@@ -219,7 +219,17 @@ function _open_connection(pool::PormGPostgres)
   PormG.postgres_driver(pool) === :libpq ||
     throw(PormG.InvalidConfigurationError(PormG._pg_driver_hint(pool)))
   _preflight_conninfo(pool.connection_string)
-  return LibPQ.Connection(pool.connection_string; conversions = _CONNECTION_CONVERSIONS)
+  # An inference barrier (#1732). Without it, inferring any terminal on a LibPQ pool walks from the
+  # capability check's server-version probe through this call into LibPQ's connect and on to
+  # Memento's logging, which reaches `Memento._format_datetime`: methods Memento defines in its
+  # `__init__` (`@require TimeZones … include("tz.jl")`), which no package image holds. Code inferred
+  # against them cannot be kept in this extension's image, so the workload below warmed nothing on
+  # those paths and a LibPQ session's first `update` ran on run-time inference. One dynamic call per
+  # connection opened, beside a network handshake; the assertion keeps the result concrete. Not a
+  # `juliac --trim` concern: LibPQ's dependencies load code at `__init__` (Memento's `@require`), so
+  # this path was never a trimmed build's; Postgres.jl's is (#1599).
+  return Base.inferencebarrier(LibPQ.Connection)(pool.connection_string;
+                                                 conversions = _CONNECTION_CONVERSIONS)::LibPQ.Connection
 end
 
 # ── The interval read (#1568) ────────────────────────────────────────────────
@@ -867,6 +877,29 @@ function PormG.backend_copy_in!(pool::PormGPostgres, conn::LibPQ.Connection, sql
     catch
     end
     rethrow(e)
+  end
+end
+
+# ── Precompile workload: the terminals on an offline `PostgresConnectionPool{:libpq}` key (#1732)
+#
+# `PormG._offline_postgres_workload` (src/precompile.jl, where the why is written down) renders the
+# terminals with `show_query = :sql` on an offline key: no connection is opened and no database is
+# needed. It runs HERE, not in PormG's own workload, so it compiles after LibPQ and its
+# dependencies have loaded, and the code lands in this extension's image, valid against the final
+# method table. Compiled in PormG's image it was invalidated by `using LibPQ` (#1732);
+# `PormGSQLiteExt` runs its own workload the same way. A throwing step blocks this extension from
+# loading; `test/unit/test_precompile_hints.jl` asserts it loaded.
+#
+# The module name is imported with the macros, for the reason `ext/PormGSQLiteExt.jl` gives (#574).
+using PrecompileTools: PrecompileTools, @setup_workload, @compile_workload
+
+# Where the workload registers its models; left inert by the workload's `finally` (#1607).
+module _PrecompileModels
+end
+
+@setup_workload begin
+  @compile_workload begin
+    PormG._offline_postgres_workload(_PrecompileModels, "__pormg_precompile_pg_libpq", :libpq)
   end
 end
 

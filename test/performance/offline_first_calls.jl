@@ -1,6 +1,8 @@
 ## First calls on an offline key, per driver session (#1702)
 ##
-## One `show_query = :sql` call each to `create`, `update`, `delete`, `inspect_query` and `list`, on
+## One `show_query = :sql` call each to `create`, `update`, `delete`, `inspect_query` and `list`, plus
+## the two shapes #1732 added (`get_or_create` with `defaults::Vector{Pair{String,Any}}`, and a
+## `DateTime` value through `create`), on
 ## F1 models declared at run time and bound to a `register_offline` key, in a FRESH process. No
 ## database is involved: an offline key renders SQL and never opens a connection. What it measures
 ## is how much of a first call runs on the package image and how much on run-time inference.
@@ -9,7 +11,8 @@
 ##
 ##   nodriver  `using PormG` alone, an offline :postgres key. The PostgreSQL pool path with no driver
 ##             extension loaded: nothing can invalidate the image, so what is slow here is what no
-##             workload compiled.
+##             workload compiled. Since #1732 the PostgreSQL terminals are compiled by the driver
+##             extensions' workloads, so this session runs them on run-time inference.
 ##   libpq     `using PormG, LibPQ`, an offline :postgres key (`PostgresConnectionPool{:libpq}`).
 ##   postgres  `using PormG, Postgres`, an offline-shaped key on `PostgresConnectionPool{:postgres}`
 ##             (`register_offline` builds the LibPQ pool only, so this one is assembled the way it
@@ -71,9 +74,10 @@ end
 # ── Model + key ───────────────────────────────────────────────────────────────
 const KEY = "fc1702"
 const FcModels = Module(:FcModels)
-# Not the models a precompile workload defines (`ext/PormGSQLiteExt.jl` and `src/precompile.jl` use
-# Driver/Constructor/Result), so the numbers are what carries over to an application's own models
-# rather than what a workload replayed; `time_to_first_query.jl` makes the same choice.
+# Not the models a precompile workload defines (`ext/PormGSQLiteExt.jl` and
+# `_offline_postgres_workload` in `src/precompile.jl` declare their own, in their own modules), so the
+# numbers are what carries over to an application's own models rather than what a workload replayed;
+# `time_to_first_query.jl` makes the same choice.
 t_model = @elapsed Core.eval(FcModels, quote
   import PormG, PormG.Models
   Circuit::Models.ModelType = Models.Model("circuit",
@@ -86,6 +90,7 @@ t_model = @elapsed Core.eval(FcModels, quote
     year = Models.IntegerField(),
     name = Models.CharField(max_length = 255),
     date = Models.DateField(null = true),
+    start_at = Models.DateTimeField(null = true),
     circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "CASCADE"))
   $(Base.invokelatest(PormG.Models._model_set_declaration, [:Circuit, :Race]))
 end)
@@ -118,6 +123,14 @@ calls = Pair{String, Function}[
   "inspect_query" => () -> inspect_query(Race.objects.filter("circuitid__country" => "Italy").values("name", "circuitid__name")),
   "list" => () -> Race.objects.filter("year__@gte" => 2020, "circuitid__country" => "Italy").
     values("raceid", "name", "date", "circuitid__name").list(; show_query = :sql),
+  # #1732: `defaults` built at run time is a `Vector{Pair{String,Any}}`, not the
+  # `Vector{Pair{String,String}}` a literal of strings makes.
+  "get_or_create" => () -> Circuit.objects.get_or_create("circuitid" => 2;
+    defaults = Pair{String, Any}["name" => "Spa-Francorchamps", "country" => "Belgium", "lat" => 50.44], show_query = :sql),
+  # #1732: a `DateTime` value through `validate_field_data` (a `DateTimeField`, the fixture's `start_at`).
+  "create datetime" => () -> Race.objects.create("raceid" => 1, "year" => 2008, "name" => "Australian Grand Prix",
+    "date" => PormG.Dates.Date(2008, 3, 16), "start_at" => PormG.Dates.DateTime(2008, 3, 16, 5, 30),
+    "circuitid" => 1; show_query = :sql),
 ]
 
 pool_type = string(typeof(PormG.config[KEY].connections))

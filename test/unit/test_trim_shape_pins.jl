@@ -128,6 +128,37 @@ function _slot_element_calls(@nospecialize(tt))::Vector{String}
   return found
 end
 
+# Every statement of the optimized `f(argtypes...)` that calls `with_scope` (#1711), with whether the
+# compiler resolved it, its result type and its argument types. A resolved call is an `:invoke` whose
+# method instance takes `typeof(with_scope)`: the keyword wrapper (`Core.kwcall`), or the keyword body
+# `#with_scope#N` once the wrapper is inlined. An unresolved one is a `:call` with `with_scope` among its
+# arguments.
+function _with_scope_stmts(f, argtypes::Tuple)
+  ws = PormG.QueryBuilder.with_scope
+  ci, _ = only(code_typed(f, argtypes; optimize = true))
+  argtype(a) = a isa Core.SSAValue ? Core.Compiler.widenconst(ci.ssavaluetypes[a.id]) :
+               a isa Core.Argument ? Core.Compiler.widenconst(ci.slottypes[a.n]) :
+               a isa GlobalRef ? (isdefined(a.mod, a.name) ? Core.Typeof(getglobal(a.mod, a.name)) : Any) :
+               a isa QuoteNode ? Core.Typeof(a.value) : Core.Typeof(a)
+  found = @NamedTuple{stmt::String, resolved::Bool, result::Type, args::Vector{Any}}[]
+  for (i, stmt) in enumerate(ci.code)
+    stmt isa Expr || continue
+    result = Core.Compiler.widenconst(ci.ssavaluetypes[i])
+    if stmt.head === :invoke
+      mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      mi isa Core.MethodInstance || continue
+      args = collect(Any, Base.unwrap_unionall(mi.specTypes).parameters)
+      any(T -> T === typeof(ws), args) || continue
+      push!(found, (stmt = "$(i): $(stmt)", resolved = true, result = result, args = args))
+    elseif stmt.head === :call
+      args = Any[argtype(a) for a in stmt.args]
+      any(T -> T === typeof(ws), args) || continue
+      push!(found, (stmt = "$(i): $(stmt)", resolved = false, result = result, args = args))
+    end
+  end
+  return found
+end
+
 # Every struct PormG or one of its loaded driver extensions defines below one of `roots`, found by walking
 # `subtypes` down from each root (#1698): the concrete ones, and the ones a type parameter leaves open
 # (`struct Foo{T} <: SQLTypeF`), which no closed union can list and which the pin therefore refuses. A
@@ -626,6 +657,57 @@ end
     # Measured, not vacuous: green on CI run 42505770103 (ubuntu and windows), and the reader pin above
     # finds calls in 7 of its readers on main 7c02952.
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
+  end
+
+  # What: the `with_scope` calls in the SELECT list's and the ORDER BY's builders (`get_select_query`,
+  #   `get_order_query`): each renders a clause under a changed `RenderScope`, in a closure.
+  # Expected: no call takes its closure as a `Function`, every keyword set is a concrete type, and every
+  #   call in `get_select_query` is resolved. What remains is the reviewed residue below, counted exactly
+  #   (a fall fails as well as a rise, so the change that removes an entry records it). `with_scope` and
+  #   `_join_scope` take the closure at a type parameter.
+  # Why: `with_scope`'s keyword wrapper only passes `f` on, so Julia compiled it for `f::Function`; and
+  #   `get_select_query`'s label is `Union{Nothing,String}`, which made its keyword `NamedTuple` abstract
+  #   and the call fully dynamic. The trimmed fixture's `list(RaceRow)` aborted there, in a run-time type
+  #   inference of that `kwcall`, once #1698 phase 1 had closed the query-state slots (#1711).
+  @testset "with_scope is specialized on its closure, with a concrete keyword set (#1711)" begin
+    QB = PormG.QueryBuilder
+    # (unresolved calls, calls whose result is `Any`), reviewed; `with_scope` itself adds none.
+    residue = Dict(
+      # `build_select.jl`, the projection render (both arms of the split on the label): the closure
+      # returns `_read_kind(original)`, and `original` is the projection's `SQLField.field::FieldPart`,
+      # the field #1698 phase 2 closes (`_read_kind(::FieldPart)` infers `Any`).
+      "get_select_query" => (0, 2),
+      # the ORDER BY term's two renders (`_render_interval_operand`, `_get_select_query`). Every argument
+      # of both keyword calls is concrete, and the same call inferred on its own resolves, so the
+      # compiler leaves them unresolved because of where they sit; not attributed (likely inference
+      # cutting short the recursion through a subquery's `build`; rebinding `order_node` in a `let`
+      # changes nothing). The closures hold `order_node` in an `Any` field, so the
+      # `_get_select_query(order_node, …)` render also returns `Any`.
+      "get_order_query" => (2, 1),
+    )
+    for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
+                     (QB.get_order_query, (QB.SQLObjectQuery, QB.InstructionObject)))
+      name = string(nameof(f))
+      stmts = _with_scope_stmts(f, sig)
+      @test !isempty(stmts)
+      takes_function = filter(s -> any(T -> T === Function, s.args), stmts)
+      abstract_kw = filter(s -> any(T -> T isa Type && (T <: NamedTuple || T <: Base.Pairs) &&
+                                         !isconcretetype(T), s.args), stmts)
+      @test isempty(takes_function)
+      @test isempty(abstract_kw)
+      name == "get_select_query" && @test all(s -> s.resolved, stmts)
+      measured = (count(s -> !s.resolved, stmts), count(s -> s.result === Any, stmts))
+      @test measured == residue[name]
+      (isempty(takes_function) && isempty(abstract_kw) && measured == residue[name]) ||
+        @info "with_scope statements in $(name)" measured stmts = [s.stmt for s in stmts]
+    end
+    # The signatures: `with_scope` and the one wrapper that only passes `f` on to it (`_join_scope`)
+    # take the closure at a type parameter, so each compiles per closure type. A wrapper that calls
+    # `f()` in a branch (`_on_join_right`, `_or_arm`, `_in_clause_phase`) is specialized by Julia anyway.
+    for g in (QB.with_scope, QB._join_scope)
+      sig = Base.unwrap_unionall(only(methods(g)).sig)
+      @test sig.parameters[2] isa TypeVar
+    end
   end
 
   # What: the calls that hand a driver handle, read from a pool's untyped `Vector{Any}` slot, to the

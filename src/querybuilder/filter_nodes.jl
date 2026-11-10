@@ -404,7 +404,7 @@ function _get_filter_query(v::SQLTypeField, instruc::SQLInstruction)
     # the discarded second render was the one passing `_as`, and `_get_select_query(::String)`
     # reads it to refresh the base-model `memo_field` entry under that key.
     # #1004: under the memo name, which for a transform keeps its `@` — see `get_select_query`.
-    v_copy.field = _get_select_query(v_copy.field, instruc, _as=memo_name(v))
+    v_copy.field = with_field_part(_select_field_part, v_copy.field, instruc, memo_name(v))   # #1698 phase 2
     # Never overwrite an existing entry (#404): the first render is the one every other reader
     # memoized against, and a fresh render of a binding node is not a better selector, only a
     # second binding.

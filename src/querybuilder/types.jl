@@ -2046,6 +2046,37 @@ end
   _as::OptionalString = nothing
   kwargs::Dict{String,Any} = Dict{String,Any}()
 end
+
+# #1698 phase 2, first slice (#1599 round 6, row 27): `SQLField.field`. The slot stays `FieldPart`, a
+# union over the abstract node families, because most of its members are defined after `SQLField` and a
+# field cannot name a struct defined later. What it can hold is closed all the same: these ten concrete
+# types, every struct PormG defines under those families (`test/unit/test_trim_shape_pins.jl` fails on
+# one that is missing). It is read through one `isa` walk, defined here after the last of them, the
+# shape of #1707's slots. A call on a `FieldPart` that does not go through here dispatches at run time,
+# and in a trimmed image finds nothing compiled for the member it meets: the typed read stopped at
+# `_get_select_query(original::FieldPart; _as)` with a `String` (round 6, row 27).
+const FieldPartNode = Union{String,SQLText,FObject,WindowFunction,FExpression,OuterRefObject,
+                            SubqueryObject,ExistsObject,CTEReference,JoinedReference}
+
+"""
+    with_field_part(f, part, args...) -> f(part, args...)
+
+`f(part, args...)` with `part` at its concrete type, for an `SQLField.field` value (`FieldPartNode`).
+Any other value raises a `MethodError` naming `f` and the value (`_unlisted_node`).
+"""
+function with_field_part(f::F, @nospecialize(part), args::Vararg{Any,N}) where {F,N}
+  part isa String && return f(part, args...)
+  part isa SQLText && return f(part, args...)
+  part isa FObject && return f(part, args...)
+  part isa WindowFunction && return f(part, args...)
+  part isa FExpression && return f(part, args...)
+  part isa OuterRefObject && return f(part, args...)
+  part isa SubqueryObject && return f(part, args...)
+  part isa ExistsObject && return f(part, args...)
+  part isa CTEReference && return f(part, args...)
+  part isa JoinedReference && return f(part, args...)
+  return _unlisted_node(f, part, args...)
+end
 _is_agg(::WindowFunction) = false
 _is_window_expr(::WindowFunction) = true
 _is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_expr(f.operand)

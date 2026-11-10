@@ -1744,7 +1744,7 @@ set_models(_module::Module; key::String, source::Union{Nothing, String} = nothin
 function set_models(set::ModelSet; key::String, source::Union{Nothing, String} = nothing)::Nothing
   _module = set.mod
   Configuration._resolve_lazily!(key)
-  haskey(config, key) || throw(InvalidConfigurationError(
+  haskey(config, key) || throw(InvalidConfigurationError(   # refusal-value-ok: a connection key, not a configured value
     "Cannot register the models in $(_module) under \"$(key)\": no connection is registered under " *
     "that key. Register it first — `PormG.Configuration.register_connection($(repr(key)), …)` or " *
     "`PormG.Configuration.load($(repr(key)); env = \"…\")` — PormG does not load it for you."))
@@ -2010,7 +2010,7 @@ function bind!(model::PormGModel, key::String)
   Configuration._resolve_lazily!(key)
   resolver = Configuration._CONNECTION_RESOLVER[] === nothing ? "" :
     " The connection resolver did not resolve it either."
-  haskey(config, key) || throw(InvalidConfigurationError(
+  haskey(config, key) || throw(InvalidConfigurationError(   # refusal-value-ok: a connection key, not a configured value
     "Cannot bind the model \"$(model.name)\" to \"$(key)\": no configuration is loaded under that " *
     "key.$(resolver) Load it first — `PormG.Configuration.load($(repr(key)); env = \"…\")` — PormG " *
     "does not load it for you."))
@@ -2052,7 +2052,7 @@ function _rebind_from_record(mod::Module)::Bool
     return true
   end
   root_kw = root === nothing ? "" : "root = $(repr(root)), "
-  throw(InvalidConfigurationError(
+  throw(InvalidConfigurationError(   # refusal-value-ok: a connection key, not a configured value
     "The models in $(mod) were bound to the configuration \"$(key)\" when they were imported, and " *
     "\"$(key)\" is not loaded in this session. Load it before the first query — " *
     "`PormG.Configuration.load($(repr(key)); $(root_kw)env = \"…\")`, in a package from `__init__`. " *
@@ -2067,7 +2067,7 @@ function _unloaded_folder_error(path::AbstractString, config)::InvalidConfigurat
   static = sort!([k for (k, v) in config if !v.dynamic])
   loaded = isempty(static) ? "none" : join(("\"" * k * "\"" for k in static), ", ")
   folder = _canonical_folder_path(path)
-  hint = "PormG.Configuration.load($(repr(basename(folder))); root = $(repr(dirname(folder))), env = \"…\")"
+  hint = "PormG.Configuration.load($(repr(basename(folder))); root = $(repr(dirname(folder))), env = \"…\")"   # refusal-value-ok: the models folder, a path
   return InvalidConfigurationError(
     "No loaded configuration matches the models folder \"$(path)\", so its models cannot be bound to " *
     "a connection. PormG does not load it for you: that load would choose the environment " *

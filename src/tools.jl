@@ -28,7 +28,7 @@ keep the macro: it resolves the path against the calling file and precompiles wi
 function import_models(path::AbstractString; into::Module = Main)::Module
     resolved = abspath(path)
     mod = Base.include(Models._with_model_set, into, resolved)   # #1602: declares the model set
-    mod isa Module || throw(InvalidConfigurationError(
+    mod isa Module || throw(InvalidConfigurationError(   # refusal-value-ok: the path the caller passed
         "import_models: $(repr(path)) must define a models module (`module models … end`)."))
     Base.invokelatest(Utils._setup_imported_models!, mod, resolved)
     return mod

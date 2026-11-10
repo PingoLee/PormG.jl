@@ -4425,7 +4425,7 @@ lock that serializes it is released.
 """
 function ensure_table!(model::PormGModel, key::String; indexes::Bool = true, force::Bool = false,
                        config::Dict{String,Settings} = config)::Symbol
-  haskey(config, key) || throw(InvalidConfigurationError(
+  haskey(config, key) || throw(InvalidConfigurationError(   # refusal-value-ok: a connection key, not a configured value
     "ensure_table!: no configuration is loaded under \"$(key)\". Load it first — " *
     "`PormG.Configuration.load($(repr(key)); env = \"…\")`."))
   settings = config[key]

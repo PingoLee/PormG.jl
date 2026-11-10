@@ -9,8 +9,10 @@ refusal's text to locate it.
 
 Pinned here, with no server:
 
-  1. **The source scan** — no `InvalidValueError(`, `FilterError(` or `QueryBuildError(` in `src/` or `ext/`
-     interpolates a value-shaped name (`value`, `v`, `x`, `raw`, `operand`, `row[…]`, …), a
+  1. **The source scan** — no `InvalidValueError(`, `FilterError(`, `QueryBuildError(` or
+     `InvalidConfigurationError(` (#1691) in `src/` or `ext/` interpolates a value-shaped name (`value`,
+     `v`, `x`, `raw`, `operand`, `row[…]`, …) or a configured value's key name (`adapter`, `url`,
+     `password`, …), a
      `repr(…)`, an exception's own text (`\$(e)`, `sprint(showerror, e)`, `e.msg`). A reviewed
      exception carries `# refusal-value-ok: <why>` on its line. The **label builders** — a function
      named `_…textless…`, `_…divergent…` or `_…_label…`, which writes a refusal's text outside its
@@ -23,6 +25,8 @@ Pinned here, with no server:
   3. **Every path, end to end** — a filter, a write, a bulk write and `sqlite_bind_value`, each fed a
      value carrying a marker, raise `InvalidValueError` with the field (and row) set and no marker
      in `msg` or `error_message`.
+  4. **Configuration refusals** (#1691) — a connection URL under `adapter:` (and under `postgres_driver`)
+     is refused naming the environment, the file and the accepted values, never the URL's password.
 
 julia --project=test/integration test/unit/test_refusal_no_value.jl
 """
@@ -72,8 +76,14 @@ function _interpolations971(src::AbstractString)
   return out
 end
 
+# #1691: a configuration refusal's value goes by the name of the key it was read from. `load` printed
+# `adapter:` back, and a connection URL pasted one key too high carried its password into the
+# message. These are the names that hold a configured value, or a connection string built from one.
+const CONFIG_VALUE_NAMES1691 = Set(["adapter", "url", "password", "conninfo", "dsn", "connection_string"])
+
 function _leaks971(expr::AbstractString)
   expr in VALUE_NAMES971 && return true
+  expr in CONFIG_VALUE_NAMES1691 && return true
   occursin(r"^row\[", expr) && return true
   occursin(r"\brepr\(", expr) && return true
   occursin(r"showerror", expr) && return true
@@ -86,7 +96,7 @@ end
 function _refusal_sites971(path)
   text = read(path, String)
   sites = Tuple{Int, String}[]
-  for m in eachmatch(r"\b(?:InvalidValueError|FilterError|QueryBuildError)\(", text)
+  for m in eachmatch(r"\b(?:InvalidValueError|FilterError|QueryBuildError|InvalidConfigurationError)\(", text)
     start = m.offset + ncodeunits(m.match)
     depth, i = 1, start
     while i <= ncodeunits(text) && depth > 0
@@ -101,7 +111,7 @@ function _refusal_sites971(path)
   return sites, split(text, '\n')
 end
 
-@testset "#971: no refusal in src/ or ext/ interpolates a value" begin   # InvalidValueError, FilterError, QueryBuildError
+@testset "#971: no refusal in src/ or ext/ interpolates a value" begin   # InvalidValueError, FilterError, QueryBuildError, InvalidConfigurationError (#1691)
   root = pkgdir(PormG)
   offenders = String[]
   nsites = 0
@@ -195,7 +205,7 @@ end
 # `$(hint)`. So every name a refusal interpolates (or `*`-joins) is followed to its assignments in the
 # same function, transitively, and each one's text is held to the label-builder rule. A reviewed
 # assignment carries `# refusal-value-ok: <why>` on its first line, a refusal on its statement's.
-const REFUSALS1092 = (:InvalidValueError, :FilterError, :QueryBuildError)
+const REFUSALS1092 = (:InvalidValueError, :FilterError, :QueryBuildError, :InvalidConfigurationError)
 
 # Every top-level definition, long and short form, as `(line, definition)`. A closure is scanned with
 # the function that holds it, so a refusal inside it sees that function's locals too.
@@ -297,8 +307,13 @@ end
                "\"failed: \$(e)\"", "\"(\$(e.msg))\"", "\"cell \$(row[col_name])\"")
     @test any(_leaks971, _interpolations971(leak))
   end
+  # #1691: a configured value goes by its key's name; the environment and the file it came from do not.
+  for leak in ("\"Unsupported adapter: \$(adapter)\"", "\"cannot reach \$url\"", "\"bad \$(conninfo)\"")
+    @test any(_leaks971, _interpolations971(leak))
+  end
   for fine in ("\"got a \$(typeof(value))\"", "\"field `\$field`\"", "\"row \$(index)\"", "\"\$(e.reason)\"",
-               "\"at most \$(length(text))\"")
+               "\"at most \$(length(text))\"",
+               "\"environment \\\"\$(settings.app_env)\\\" in \$(db_settings_file): unsupported `adapter`\"")
     @test !any(_leaks971, _interpolations971(fine))
   end
   # The label-builder scan, on #1057's own defect in both definition forms, the spellings it would
@@ -508,5 +523,66 @@ end
     e isa PormG.QueryBuildError || return
     @test !occursin(SECRET971, PormG.error_message(e))
     @test occursin("Invalid argument: a Dict{String, Int64}", PormG.error_message(e))
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Configuration refusals (#1691)
+# ─────────────────────────────────────────────────────────────────────────────
+# What it tests: a connection URL written under `adapter:` (a misplaced line, or `url:` pasted one key
+#   too high) is refused by `load` as
+#   `environment "dev" in <folder>/connection.yml: unsupported `adapter`; expected "PostgreSQL",
+#   "SQLite" or "MySQL".` — naming the environment, the file and the accepted adapters, and never the
+#   value. So do the two refusals kept for settings built without `load`
+#   (`_builtin_ignores_for_adapter`, `_build_connection_pool!`), and the `postgres_driver` refusal,
+#   whose value comes from the same file or from `PORMG_POSTGRES_DRIVER`. No warning logged on the way
+#   carries the value either.
+# Why it matters: the refusal used to read `Unsupported adapter: <value>`, so the URL's password was in
+#   the message, and an app may log `e.msg` or hand it to an HTTP client. No database: every refusal
+#   is raised before a pool connects.
+const SECRET1691 = "MARKER1691_pw"
+const URL1691 = "postgresql://f1_user:$(SECRET1691)@db.example/f1"
+
+function no_secret1691(e)
+  @test e isa PormG.InvalidConfigurationError
+  @test !occursin(SECRET1691, PormG.error_message(e))
+  @test !occursin(SECRET1691, sprint(showerror, e))
+end
+
+@testset "#1691: an unknown adapter is refused by name, never by its value" begin
+  mktempdir() do temp_root
+    db_dir = joinpath(temp_root, "db")
+    mkpath(db_dir)
+    write(joinpath(db_dir, "connection.yml"), "dev:\n  adapter: $(URL1691)\n  database: f1\n")
+    try
+      logs, e = Test.collect_test_logs() do
+        refusal971(() -> PormG.Configuration.load(db_dir; env = "dev"))
+      end
+      no_secret1691(e)
+      @test all(r -> !occursin(SECRET1691, sprint(show, r.message)) && !occursin(SECRET1691, sprint(show, r.kwargs)), logs)
+      msg = PormG.error_message(e)
+      @test occursin("environment \"dev\"", msg)
+      @test occursin(joinpath(db_dir, "connection.yml"), msg)
+      @test occursin("unsupported `adapter`; expected \"PostgreSQL\", \"SQLite\" or \"MySQL\".", msg)
+    finally
+      pop!(PormG.config, db_dir, nothing)
+    end
+
+    # The refusals for settings built without `load`: the ignore-list pick and the pool builder.
+    no_secret1691(refusal971(() -> PormG.Configuration._builtin_ignores_for_adapter(URL1691)))
+    settings = PormG.Configuration.Settings(app_env = "dev", db_def_folder = db_dir)
+    settings.db_config_settings = Dict{String,Any}("adapter" => URL1691, "database" => "f1")
+    e = refusal971(() -> PormG.Configuration._build_connection_pool!(settings, db_dir))
+    no_secret1691(e)
+    @test occursin("environment \"dev\"", PormG.error_message(e))
+  end
+
+  # `postgres_driver`, from the file and from the environment variable.
+  resolve = PormG.Configuration._resolve_postgres_driver
+  withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => nothing) do
+    no_secret1691(refusal971(() -> resolve(URL1691; source = "connection.yml")))
+  end
+  withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => URL1691) do
+    no_secret1691(refusal971(() -> resolve(nothing; source = "connection.yml")))
   end
 end

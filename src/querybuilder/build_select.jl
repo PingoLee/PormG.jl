@@ -235,11 +235,17 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
       # subquery inside it is evaluated per input row to form the key and needs no grouped column.
       # Only while the position is TRUE: a `"*"` projection ahead of it expands to the model's columns
       # before the ordinals resolve, so `GROUP BY 3` would name some other column (review of #932).
-      kind = with_scope(instruc; label = _projection_output_name(v_copy),
-                        group_key = string(i) in instruc.group &&
-                                    !any(_is_wildcard_projection, view(values, 1:i-1))) do
+      # #1711: the closure is named and the call splits on the label, because the label is an
+      # `OptionalString` and a `Union` value in a keyword call makes its `NamedTuple` abstract, so the
+      # call was fully dynamic: in a trimmed image, a run-time type inference that aborted the typed
+      # read. The `nothing` arm passes `label = nothing` explicitly: omitting it would keep the
+      # enclosing scope's label, which the #194 message would then name. `local kind`: the closure
+      # has its own, so it does not reassign the loop's `kind`, which made that one a `Core.Box`.
+      label = _projection_output_name(v_copy)
+      group_key = string(i) in instruc.group && !any(_is_wildcard_projection, view(values, 1:i-1))
+      render = () -> begin
         original = v_copy.field
-        kind = nothing
+        local kind = nothing
         if original isa FExpression
           # #881: one of the renderer's two doors out — an interval it held in milliseconds on SQLite
           # arrives here as the stored text, typed `CInterval`. Date arithmetic is typed by the render,
@@ -285,6 +291,8 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
         end
         kind
       end
+      kind = label === nothing ? with_scope(render, instruc; label = nothing, group_key) :
+                                 with_scope(render, instruc; label, group_key)
       instruc.select[i] = v_copy
       if v_copy._as === nothing
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))

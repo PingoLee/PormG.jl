@@ -155,7 +155,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 const _TPB_REVIEWED_BOXES = Dict(
   "build_query.jl" => 2,       # a closure in build_row_join_sql_text; _check_mixed_grouping
-  "build_select.jl" => 2,      # get_select_query; get_order_query
+  "build_select.jl" => 1,      # get_order_query; #1711 removed get_select_query's (`local kind` in its render closure)
   "deletion.jl" => 4,          # delete's body (2); topological_sort; _collector_predicate
   "execution_bulk.jl" => 7,    # bulk_insert (4: keyword body, body, its insert loop); _bulk_update (3)
   "execution_read.jl" => 1,    # a closure in _filters_name_alias (`mkey`); #1698 removed the `hit` box (a RefValue now)

@@ -635,7 +635,9 @@ end
 # only itself, and so may a column no comparison has marked yet (`:none`, #993). A `cjoin_on` row
 # has no hop to bind a side to, so both sides may name the base row and every row emitted before it
 # — binding built every row it names there (#982) — and itself.
-function _join_scope(f, instruc::SQLInstruction, idx::Int, value::JoinRow)
+# `f::F` (#1711): `f` is only passed on to `with_scope`, never called here, so without it Julia compiles
+# this for `f::Function` and `with_scope` receives a `Function` again.
+function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) where {F}
   hop = value.alias_b
   if value isa AnchorlessJoin
     rows = (instruc.alias, (r.alias_b for r in instruc.row_join[1:idx-1])..., hop)

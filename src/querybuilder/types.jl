@@ -597,13 +597,19 @@ _with_scope(s::RenderScope; phase = s.phase, label = s.label, group_key = s.grou
               introducer, outer, having, set_reads)
 
 """
-    with_scope(f, instruc; kw...)
+    with_scope(f::F, instruc; kw...) where {F}
 
 Run `f()` with `instruc.scope` updated by the keyword fields `kw`, then restore the previous scope —
 on return and on throw, so a render that throws (the one-column rule, the nested-CTE guard, an inner
 build) never leaves its state behind for the next one. The only writer of `scope`.
+
+`f::F` forces a specialization per closure type (#1711), as `with_pool` does (#1622). The keyword
+wrapper only passes `f` on to the body, so Julia's heuristic compiled it for `f::Function`, and every
+call site then made a dynamic call to its closure from inside it. A caller also keeps each keyword value
+concrete: a `Union` value (an `OptionalString` label) makes the keyword `NamedTuple` abstract and the
+whole call dynamic, so such a caller splits on the value instead (`get_select_query`).
 """
-function with_scope(f, instruc::SQLInstruction; kw...)
+function with_scope(f::F, instruc::SQLInstruction; kw...) where {F}
   prev = instruc.scope
   instruc.scope = _with_scope(prev; kw...)
   try

@@ -3,19 +3,21 @@ Render-scope interface guard (#932).
 
 The #194 grouped-correlation guard reads one piece of dynamic state while a query renders: which
 clause, and so which **evaluation phase**, a correlated subquery sits in. That state lives in one
-immutable `RenderScope` on `InstructionObject.scope`, and `with_scope` is its only writer: it saves
-the previous scope, installs the new one, and **restores** it in a `finally`.
+immutable `RenderScope` on `InstructionObject.scope`, and two twin methods are its only writers:
+`with_scope` for the clause level (`build`'s clauses, `update`'s SET) and `_with_render_scope` for a scope
+a render opens inside a clause (#1728). Each saves the previous scope, installs the new one, and
+**restores** it in a `finally`.
 
 The state used to be two mutable fields, each with its own save/restore discipline. A reset is right
 only while nothing nests. The moment a render inside a render returns, a reset puts the outer render
 in the wrong clause, and here that means a correlated subquery read as evaluated before GROUP BY when
 it is not: wrong rows on SQLite, no error. So the rule is mechanical:
 
-1. **No `src/` or `ext/` line outside `with_scope` assigns `.scope`**, by dot assignment or by
+1. **No `src/` or `ext/` line outside the two writers assigns `.scope`**, by dot assignment or by
    `setfield!`/`setproperty!`.
 2. **The retired fields stay retired.** `correlated_projection` and `post_group_predicate` were the
    two flags `RenderScope` replaced; a line of code naming either is a second copy of the state.
-3. **`with_scope` restores on return, on throw, and when nested.**
+3. **Both writers restore on return, on throw, and when nested**, in each other too.
 
 The SQLite parameter bucket (`current_context`) is the second piece of render state, and it had the
 same disease: three `get_filter_query` branches reset it to a hard-coded `:where`, `build()` and the
@@ -36,7 +38,7 @@ Static text scan plus a live check — no database.
 using Test
 using PormG
 using PormG.Models: Model, IDField, IntegerField
-import PormG.QueryBuilder: RenderScope, with_scope, InstructionObject, SQLTbAlias,
+import PormG.QueryBuilder: RenderScope, with_scope, _with_render_scope, InstructionObject, SQLTbAlias,
     with_bucket, SQLiteParameterizedQuery, PgParameterizedQuery
 
 const RSCOPE_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
@@ -69,11 +71,12 @@ end
 # An ASSIGNMENT to a `scope` field (`x.scope = …`, never `x.scope == …`), or one through reflection.
 const RSCOPE_WRITE = r"\.scope\s*=(?!=)|set(field|property)!\s*\([^,]+,\s*:scope\b"
 
-# The two writes `with_scope` itself makes — pinned by EXPRESSION, not by file, so a second write
-# added to `types.jl` is still caught.
+# The writes `with_scope` and `_with_render_scope` make, two each — pinned by EXPRESSION, not by file, so
+# another write added to `types.jl` is still caught. Two methods, not one shared body (#1728): a shared
+# helper would be re-entered across the clause/render boundary again, which #1728 removes there.
 const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc.scope = prev"])
 
-@testset "RenderScope: only with_scope writes the scope (#932)" begin
+@testset "RenderScope: only with_scope and _with_render_scope write the scope (#932, #1728)" begin
     offenders = Tuple{String,Int,String}[]
     allowed_hits = 0
     for dir in (joinpath(RSCOPE_REPO_ROOT, "src"), joinpath(RSCOPE_REPO_ROOT, "ext"))
@@ -88,12 +91,13 @@ const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc
         end
     end
     isempty(offenders) ||
-        @error "A RenderScope is written outside with_scope (#932). Wrap the render in " *
-               "with_scope(f, instruc; kw...) instead, so the previous scope is restored." offenders
+        @error "A RenderScope is written outside with_scope/_with_render_scope (#932). Wrap the render in " *
+               "_with_render_scope(f, instruc; kw...) instead (with_scope is the clause level, #1728), so " *
+               "the previous scope is restored." offenders
     @test isempty(offenders)
-    # The allow-list must still match the real code: if `with_scope` is rewritten, the two pinned
-    # expressions stop matching and this scan would pass vacuously.
-    @test allowed_hits == 2
+    # The allow-list must still match the real code: if either method is rewritten, the pinned
+    # expressions stop matching and this scan would pass vacuously. Two writes in each of the two.
+    @test allowed_hits == 4
 end
 
 @testset "RenderScope: the retired flags stay retired (#932)" begin
@@ -160,6 +164,38 @@ end
             @test instruc.scope.label == "kept"
         end
     end
+end
+
+# What: `_with_render_scope`, the render-level twin of `with_scope` (#1728), alone and nested inside a
+#   clause-level `with_scope`, which is how every render reaches it.
+# Expected: it installs the keywords for `f()`, keeps the fields it is not given, and restores the
+#   enclosing scope on return and on throw; nested in `with_scope`, the clause scope comes back after it.
+# Why: #1728 split the one writer in two so the clause-level method is never re-entered from its own
+#   closures (which a trimmed image cannot compile); the split must not change what a render sees.
+@testset "RenderScope: _with_render_scope restores on return, throw and nesting (#1728)" begin
+    instruc = InstructionObject(text = "", table_alias = SQLTbAlias(), alias = "Tb",
+                                object = RScopeLap.objects.object)
+    base = instruc.scope
+    @test _with_render_scope(() -> instruc.scope.label, instruc; label = "x") == "x"
+    @test instruc.scope === base
+    @test_throws ErrorException _with_render_scope(() -> error("boom"), instruc; label = "x")
+    @test instruc.scope === base
+
+    seen = String[]
+    with_scope(instruc; phase = :row, label = "clause") do
+        _with_render_scope(instruc; join_side = :right) do
+            push!(seen, string(instruc.scope.phase, " ", instruc.scope.label, " ", instruc.scope.join_side))
+            _with_render_scope(instruc; label = "inner") do
+                push!(seen, string(instruc.scope.label, " ", instruc.scope.join_side))
+            end
+            push!(seen, string(instruc.scope.label))
+        end
+        push!(seen, string(instruc.scope.label, " ", instruc.scope.join_side))
+        @test_throws ErrorException _with_render_scope(() -> error("boom"), instruc; label = "y")
+        push!(seen, string(instruc.scope.label))
+    end
+    @test seen == ["row clause right", "inner right", "clause", "clause none", "clause"]
+    @test instruc.scope === base
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

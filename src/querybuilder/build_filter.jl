@@ -123,7 +123,7 @@ function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
     where_part === nothing || push!(instruc._where, _get_where_query(where_part, instruc))
     if having_part !== nothing
       with_bucket(instruc, :having) do
-        push!(instruc.having, with_scope(() -> _get_having_query(having_part, instruc), instruc;
+        push!(instruc.having, _with_render_scope(() -> _get_having_query(having_part, instruc), instruc;
                                          phase = :group, having = true,   # #1367: promotes nothing
                                          label = _having_subquery_label(string(_having_leaf_label(having_part)))))
       end
@@ -662,7 +662,7 @@ function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
   if _compared_operand(v)
     # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `RenderScope`. The
     # caller set the `:group` phase; this names the alias the predicate compares.
-    return with_scope(() -> _get_filter_query(v, instruc), instruc;
+    return _with_render_scope(() -> _get_filter_query(v, instruc), instruc;
                       phase = :group, having = true, label = _having_subquery_label(something(_plain_filter_key(v.column), "?")))
   end
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
@@ -673,7 +673,7 @@ _having_subquery_label(alias::AbstractString) = "Subquery(…) in the HAVING fil
 # #932: an alias predicate renders in the phase of the clause it was routed to — HAVING is evaluated
 # after GROUP BY, a row alias's WHERE before it (the caller's `:row` phase stands).
 _in_clause_phase(f, instruc::SQLInstruction, clause::Symbol, alias::AbstractString) =
-  clause === :having ? with_scope(f, instruc; phase = :group, having = true, label = _having_subquery_label(alias)) : f()
+  clause === :having ? _with_render_scope(f, instruc; phase = :group, having = true, label = _having_subquery_label(alias)) : f()
 _get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
   "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
 _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =

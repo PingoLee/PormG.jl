@@ -291,8 +291,8 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
         end
         kind
       end
-      kind = label === nothing ? with_scope(render, instruc; label = nothing, group_key) :
-                                 with_scope(render, instruc; label, group_key)
+      kind = label === nothing ? _with_render_scope(render, instruc; label = nothing, group_key) :
+                                 _with_render_scope(render, instruc; label, group_key)
       instruc.select[i] = v_copy
       if v_copy._as === nothing
         throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
@@ -654,12 +654,12 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # ORDER BY prints the milliseconds. Not a `Value` literal: one constant orders nothing, and its
       # millisecond form would change the text the #76 guard matches against its projection.
       if _interval_as_ms(instruc.connection) && !(order_node isa SQLText) && _interval_ms_candidate(order_node)
-        text, ms, _ = with_scope(() -> _render_interval_operand(order_node, instruc), instruc;
+        text, ms, _ = _with_render_scope(() -> _render_interval_operand(order_node, instruc), instruc;
                                  group_key = groups_term)
         v_field_copy.field = text
         ms === nothing || (order_expr = ms; interval_node = order_node)
       else
-        v_field_copy.field = with_scope(() -> _get_select_query(order_node, instruc), instruc;
+        v_field_copy.field = _with_render_scope(() -> _get_select_query(order_node, instruc), instruc;
                                         group_key = groups_term)
       end
       order_params = bound_since(mark)
@@ -695,7 +695,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
       # #1313: a term's expression is rendered again for its flag, as an alias's projection is. Its
       # GROUP BY copy holds the first render's values (`order_params`), so this one is the flag's alone.
       interval_node === nothing ||
-        (null_flag = with_scope(() -> first(_render_interval_ms(interval_node, instruc)), instruc;
+        (null_flag = _with_render_scope(() -> first(_render_interval_ms(interval_node, instruc)), instruc;
                                 group_key = groups_term))
     end
     # #1130: the flag of a term printed as its alias, where a table the query reads has a column of

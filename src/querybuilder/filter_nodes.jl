@@ -310,7 +310,7 @@ function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   # a right-side column — whichever side of its comparison the subquery sits on (#962's rule). The
   # subquery's own columns render on its own instruction, outside the ON clause's scope.
   # #1002: a `__` path here joins the OUTER query to evaluate a correlation — not a join it asked for.
-  sql = with_scope(() -> _on_join_right(() -> _get_filter_query(column, outer), outer), outer; introducer = :outer_ref)
+  sql = _with_render_scope(() -> _on_join_right(() -> _get_filter_query(column, outer), outer), outer; introducer = :outer_ref)
   # #194: this is the ONE place an OuterRef becomes SQL — `_resolve_outer_ref_field_name` has a
   # single caller and `_get_select_query(::OuterRefObject)` delegates straight here — so recording
   # the reference here cannot miss one that renders. Resolving against `outer` is also what makes
@@ -1126,14 +1126,14 @@ _isnull_true_filter(v::SQLTypeOper, instruc::SQLInstruction)::Bool =
 # #1367: one arm of an OR, under `outer` in a WHERE filter: the other arm may match the parent with no
 # row across a relation this arm reads. Every OR renderer goes through it — the WHERE walk's, and the
 # `Qor` inside a `When` or a `Q`-valued expression, which renders through the select and filter walks.
-_or_arm(f, instruc::SQLInstruction) = _in_where_filter(instruc) ? with_scope(f, instruc; outer = true) : f()
+_or_arm(f, instruc::SQLInstruction) = _in_where_filter(instruc) ? _with_render_scope(f, instruc; outer = true) : f()
 
 function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #985: inside an ON clause a comparison renders its column as the LEFT side and its value, below,
   # through `_on_join_right`. Re-entered once under the new side; a no-op everywhere else.
   side = _join_side_change(instruc, :left)
-  side === nothing || return with_scope(() -> _get_filter_query(v, instruc), instruc; join_side = side)
+  side === nothing || return _with_render_scope(() -> _get_filter_query(v, instruc), instruc; join_side = side)
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
   # plain range/comparison directly on the column, so an index on the column — and the planner's
   # selectivity estimate — both apply. Covers joined paths as well as bare ones; see
@@ -1156,7 +1156,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # the column resolves under `outer` and the hop it reaches is joined LEFT (`_promote_outer_joins!`).
   # A WHERE filter only: a `When` in a projection and an ON clause keep their join types.
   column = _isnull_true_filter(v, instruc) ?
-    with_scope(() -> _get_filter_query(v.column, instruc), instruc; outer = true) :
+    _with_render_scope(() -> _get_filter_query(v.column, instruc), instruc; outer = true) :
     _get_filter_query(v.column, instruc)
   # #972: set by the three transform arms below, from the NODE they matched — the licence
   # `_render_predicate` needs to put a transform's call text under `IS [NOT] NULL` (#197 refuses

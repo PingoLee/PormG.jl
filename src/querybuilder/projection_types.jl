@@ -1832,10 +1832,15 @@ _text_cast_on_sqlite(field::PormGField) = _is_uuid_field(field) || _is_network_f
 # runs — the same entry the WHERE path's joined-path arm reads. A `CTEReference`/`JoinedReference`
 # column is what `_retag_cte_field!`/`_retag_joined_field!` leave behind, and `memo_key(ref)` names
 # its namespace. Anything else names no single column, and `_expression_formatter` decides it.
-_alias_column_field(column::String, instruc::SQLInstruction) =
+# #1599 round 7, row 30: both sources hold #1604's closed field set (`ModelType.fields`, and the field memo
+# since row 30), so the answer is `AnyField`, never the abstract `PormGField`. A call on it whose callee has
+# one method (`_column_kind`) is split over the union statically; answered as `PormGField`, the kind
+# lookup's `_column_kind(field, policy)` dispatched at run time, and a trimmed image found nothing compiled
+# for the field it met.
+_alias_column_field(column::String, instruc::SQLInstruction)::Union{Nothing,Models.AnyField} =
   haskey(instruc.object.model.fields, column) ? instruc.object.model.fields[column] :
                                                 memo_field(instruc, memo_key(:base, column))
-_alias_column_field(column::Union{CTEReference,JoinedReference}, instruc::SQLInstruction) =
+_alias_column_field(column::Union{CTEReference,JoinedReference}, instruc::SQLInstruction)::Union{Nothing,Models.AnyField} =
   memo_field(instruc, memo_key(column))
 _alias_column_field(::Any, ::SQLInstruction) = nothing
 

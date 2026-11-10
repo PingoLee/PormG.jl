@@ -690,6 +690,38 @@ end
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
   end
 
+  # What: the model field as the query builder reads it (#1599 round 7, row 30): the field memo's value
+  #   type, what `_alias_column_field` answers, and the kind lookup's three readers of that answer.
+  # Expected: the memo holds #1604's closed `AnyField`; `_alias_column_field` infers
+  #   `Union{Nothing, AnyField}`; and `_infer_kind(::String)`, `_infer_kind(::JoinedReference)` and
+  #   `_cte_column_kind` make no dynamic call to the field's kind (`_column_kind`, `_json_key_value`,
+  #   `_field_kind`).
+  # Why: the memo was typed with the abstract `PormGField`, so `_alias_column_field` answered it and the kind
+  #   lookup's `_column_kind(field, policy)` dispatched at run time: the trimmed typed read stopped at a
+  #   `MethodError` on `_column_kind(::sIDField, ::_MeaningKinds)` (round 7, row 30). Typed `AnyField`, the
+  #   call is split over the union statically, because `_column_kind` has one method: union splitting is
+  #   bounded by the callee's methods, not the union's 29 members, so no walk is needed here (measured: a
+  #   walk gave the same trimmed build). Measured on main 6a41f54b5, the reader detector finds the dynamic
+  #   call in each of the three, and the two type checks fail.
+  @testset "the query builder reads a model field as AnyField, never PormGField (#1599 round 7, row 30)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    @test fieldtype(QB.InstructionObject, :tab_field_cache) === Union{Nothing, Dict{QB.MemoKey, M.AnyField}}
+    @test only(Base.return_types(QB._alias_column_field, (String, QB.InstructionObject))) ==
+          Union{Nothing, M.AnyField}
+    @test only(Base.return_types(QB._alias_column_field, (QB.CTEReference, QB.InstructionObject))) ==
+          Union{Nothing, M.AnyField}
+    I = QB.InstructionObject
+    for tt in (Tuple{typeof(QB._infer_kind), String, I, QB._MeaningKinds},
+               Tuple{typeof(QB._infer_kind), String, I, QB._AllKinds},
+               Tuple{typeof(QB._infer_kind), QB.JoinedReference, I, QB._MeaningKinds},
+               Tuple{typeof(QB._cte_column_kind), QB.CTEReference, I, QB._AllKinds})
+      calls = _named_dynamic_calls(tt, ("_column_kind", "_json_key_value", "_field_kind"))
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic field-kind calls" tt calls
+    end
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

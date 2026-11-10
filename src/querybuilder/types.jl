@@ -1601,7 +1601,7 @@ end
   cjoin_on_rendered::Union{Nothing,Dict{String,Vector{String}}} = nothing
   # array_join::Array{String, 2} = Array{String, 2}(undef, 30, 8) # array to be used in join query (meaby the best way to do this)
   # The three memos (#474) are `nothing` until their first write (#1593), through `memos.jl` only.
-  tab_field_cache::Union{Nothing,Dict{MemoKey,PormGField}} = nothing # cache to be used in join query (#474: keyed by MemoKey)
+  tab_field_cache::Union{Nothing,Dict{MemoKey,Models.AnyField}} = nothing # cache to be used in join query (#474: keyed by MemoKey; #1599 round 7, row 30: #1604's closed field set, so a read is never the abstract `PormGField`)
   # #27: the membership set of resolved JSON-lookup paths (e.g. "payload__driver"). Added when the
   # JSON-path gate renders an extraction; tested by the filter-render branch to bind the RHS as
   # plain text (not through the JSON formatter) and to reject containment operators on a nested key

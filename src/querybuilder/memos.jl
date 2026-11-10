@@ -123,14 +123,14 @@ _projection_memo!(instruc::SQLInstruction)::Dict{MemoKey,SQLField} =
 # path, and a transform by a spelling with `@` in it — so the message now reads the declaration
 # instead, `_declared_alias_names` in `build_filter.jl`.)
 
-memo_field(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,PormGField} =
+memo_field(instruc::SQLInstruction, key::MemoKey)::Union{Nothing,Models.AnyField} =
   (memo = instruc.tab_field_cache; memo === nothing ? nothing : get(memo, key, nothing))
 memo_field(::SQLInstruction, ::Nothing)::Nothing = nothing
 
-memo_field!(instruc::SQLInstruction, key::MemoKey, f::PormGField)::PormGField =
+memo_field!(instruc::SQLInstruction, key::MemoKey, f::PormGField)::Models.AnyField =
   _field_memo!(instruc)[key] = f
-_field_memo!(instruc::SQLInstruction)::Dict{MemoKey,PormGField} =
-  (memo = instruc.tab_field_cache; memo === nothing ? (instruc.tab_field_cache = Dict{MemoKey,PormGField}()) : memo)
+_field_memo!(instruc::SQLInstruction)::Dict{MemoKey,Models.AnyField} =
+  (memo = instruc.tab_field_cache; memo === nothing ? (instruc.tab_field_cache = Dict{MemoKey,Models.AnyField}()) : memo)
 
 memo_json_lookup(instruc::SQLInstruction, key::MemoKey)::Bool =
   (memo = instruc.json_lookup_paths; memo !== nothing && key in memo)

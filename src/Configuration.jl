@@ -768,7 +768,7 @@ function _effective_env(env::Union{Nothing, String}, file_default::Union{Nothing
   stated !== nothing && return stated
   if !fallback
     root_kw = root === nothing ? "" : "root = $(repr(String(root))), "
-    throw(InvalidConfigurationError(
+    throw(InvalidConfigurationError(   # refusal-value-ok: the folder and path the caller passed, not a configured value
       "No environment was selected for the configuration folder \"$(folder)\". Pass it — " *
       "`PormG.Configuration.load($(repr(path)); $(root_kw)env = \"…\")` — or set `PORMG_ENV`. Outside an " *
       "interactive session PormG does not fall back to the file's `default_env:` or to `$(DEV)`: " *
@@ -949,7 +949,7 @@ function _resolve_postgres_driver(@nospecialize(raw); source::AbstractString)::S
   end
   throw(InvalidConfigurationError(
     "$(source): `postgres_driver` must be one of $(join(values(_PG_DRIVER_PACKAGES), " or ")) " *
-    "(case-insensitive); got $(repr(text))"))
+    "(case-insensitive)."))   # #1691: never the value it read
 end
 
 # Enforce the pool_timeout policy: `<= 0` ("never wait") is a cross-framework footgun, so fall back to
@@ -1102,7 +1102,10 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
                            fail_fast_on_connect=fail_fast_on_connect)
 
   else
-    throw(InvalidConfigurationError("Unsupported adapter: $(something(adapter, "nothing"))"))
+    # #1691: never the value; `read_db_connection_data` refuses it first for a `load`.
+    throw(InvalidConfigurationError(
+      "environment \"$(settings.app_env)\" (folder $(path)): unsupported `adapter`; " *
+      "expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))
   end
   settings.connections = pool
 
@@ -1202,7 +1205,7 @@ function _configured_prefix_list(settings::PormGSettings, key::String; what::Str
   for value in values
     (value === nothing || value === missing) && continue   # a bare `- ` item, as `extensions:` skips it
     value isa AbstractString || throw(InvalidConfigurationError(
-      "Every '$(key)' entry must be a string ($(what)), got $(repr(value))"))
+      "Every '$(key)' entry must be a string ($(what)), got a value of type $(typeof(value))"))
     name = String(strip(value))
     isempty(name) && throw(InvalidConfigurationError(
       "An '$(key)' entry is blank. $(blank); remove it"))
@@ -1246,7 +1249,7 @@ function _configured_unignore_defaults(settings::PormGSettings, builtin::Vector{
     end
     allowed = isempty(removable) ?
       "This backend's built-in list holds no removable entry: it names only PormG's and the engine's own tables." :
-      "Removable entries: $(join(("\"$(e)\"" for e in removable), ", ")). An entry must match one exactly; use `ignore_tables:` to hide more tables."
+      "Removable entries: $(join(("\"$(name)\"" for name in removable), ", ")). An entry must match one exactly; use `ignore_tables:` to hide more tables."
     throw(InvalidConfigurationError("Invalid 'unignore_defaults' entry: $(reason). $(allowed)"))
   end
   return entries
@@ -1261,7 +1264,7 @@ function _builtin_ignores_for_adapter(adapter)::Vector{String}
   adapter == "PostgreSQL" && return postgres_ignore_table
   adapter == "SQLite" && return sqlite_ignore_schema
   adapter == "MySQL" && return mysql_ignore_table
-  throw(InvalidConfigurationError("Unsupported adapter: $(adapter)"))
+  throw(InvalidConfigurationError("unsupported `adapter`; expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))   # #1691: never the value
 end
 
 # Detection-only check run at load() time. Installing extensions is DDL and is
@@ -1341,7 +1344,7 @@ function _install_postgres_extension!(settings::PormGSettings, extension::String
   try
     CP.fetch(settings, sql)
   catch e
-    throw(InvalidConfigurationError(
+    throw(InvalidConfigurationError(   # refusal-value-ok: the database's refusal of fixed DDL; a connect failure is a PoolConnectError, which redacts
       "Could not install PostgreSQL extension '$(extension)' for $(settings.db_def_folder). " *
       "Run this once as the database owner: $(sql) Original error: $(sprint(showerror, e))"
     ))
@@ -1364,7 +1367,7 @@ function _install_immutable_unaccent!(settings::PormGSettings)::Nothing
   try
     CP.fetch(settings, sql)
   catch e
-    throw(InvalidConfigurationError(
+    throw(InvalidConfigurationError(   # refusal-value-ok: the database's refusal of fixed DDL; a connect failure is a PoolConnectError, which redacts
       "Could not create helper function public.immutable_unaccent for $(settings.db_def_folder). " *
       "Run this once as the database owner: $(sql) Original error: $(sprint(showerror, e))"
     ))
@@ -1621,6 +1624,13 @@ function read_db_connection_data(path::String, settings::PormGSettings) :: Dict{
         "environment \"$(settings.app_env)\" in $(db_settings_file) has no `adapter:`. " *
         "Set `adapter: PostgreSQL`, `adapter: SQLite` or `adapter: MySQL`."))
     end
+    # #1691: an unknown adapter is refused here too, where the environment and the file can be named,
+    # and the value is not printed: a connection URL pasted one key too high would carry its password
+    # into the message. `_builtin_ignores_for_adapter` and `_build_connection_pool!` keep a refusal for
+    # settings built without `load`.
+    adapter in ("PostgreSQL", "SQLite", "MySQL") || throw(InvalidConfigurationError(
+      "environment \"$(settings.app_env)\" in $(db_settings_file): unsupported `adapter`; " *
+      "expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))
 
     # `url:` is honoured only by the PostgreSQL branch of `_build_connection_pool!`. Under SQLite
     # it is dropped and the pool silently falls back to `host:`/`database:` — or, with neither, to
@@ -2127,7 +2137,7 @@ function _registered_env(env::Union{Nothing, AbstractString}, key::String)::Stri
   stated = _pormg_env()
   stated !== nothing && return stated
   if !_is_interactive()
-    throw(InvalidConfigurationError(
+    throw(InvalidConfigurationError(   # refusal-value-ok: a connection key, not a configured value
       "No environment was selected for the dynamic connection \"$(key)\". Pass it — " *
       "`PormG.Configuration.register_connection($(repr(key)), url; env = \"…\")`, or an \"env\" entry " *
       "in the resolver's Dict — or set `PORMG_ENV`. Outside an interactive session PormG does not " *
@@ -2353,7 +2363,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
                           change_data::Bool = true)::String
   _refuse_while_building("PormG.Configuration.register_offline")   # #1606
   adapter in (:postgres, :sqlite) || throw(InvalidConfigurationError(
-    "register_offline: `adapter` must be :postgres or :sqlite, got $(repr(adapter))."))
+    "register_offline: `adapter` must be :postgres or :sqlite."))
   # #1452: the version an offline SQLite key renders for. Checked before anything is replaced.
   if server_version !== nothing
     adapter === :sqlite || throw(InvalidConfigurationError(
@@ -2364,7 +2374,7 @@ function register_offline(key::String; adapter::Symbol = :postgres,
       "(`3_045_000` for SQLite 3.45.0)."))
   end
   if haskey(config, key)
-    _is_offline(config[key]) || throw(InvalidConfigurationError(
+    _is_offline(config[key]) || throw(InvalidConfigurationError(   # refusal-value-ok: a connection key, not a configured value
       "Cannot register \"$(key)\" offline: that key is already registered as a live connection. " *
       "Pick another key, or `unregister_connection($(repr(key)))` first."))
     close_pool!(key)

@@ -1458,7 +1458,7 @@ end
                 "  database: \":memory:\"\n")
 
             # Assert the message, not just the type: a blank adapter reaches
-            # `_build_connection_pool!` and raises InvalidConfigurationError("Unsupported adapter:")
+            # the unsupported-adapter refusal (InvalidConfigurationError("…unsupported `adapter`…"))
             # on its own, so a bare @test_throws stays green with this guard deleted.
             err = try
                 PormG.Configuration.load(db_dir; env="dev"); nothing

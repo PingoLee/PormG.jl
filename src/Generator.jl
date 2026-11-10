@@ -30,7 +30,7 @@ function create_db_folder_and_yml(;
     if postgres_driver !== nothing && lowercase(adapter) != "postgresql"
         throw(InvalidConfigurationError(
             "create_db_folder_and_yml: `postgres_driver` picks the driver of a PostgreSQL adapter; " *
-            "remove it for adapter = \"$(adapter)\"."))
+            "remove it for a non-PostgreSQL adapter."))
     end
     # Written only when given, so a file without it is byte-identical to one written before #1676. A
     # given value is checked by the resolver `load` uses — refused here rather than at the first `load`

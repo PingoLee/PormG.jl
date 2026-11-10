@@ -390,7 +390,7 @@ function _parse_failure(e)::InvalidConfigurationError
   # quotes the user info it rejected — is reduced to its type.
   e isa ArgumentError || e isa Postgres.PostgresInterfaceError ||
     return InvalidConfigurationError("$(base) ($(nameof(typeof(e))))")
-  return InvalidConfigurationError("$(base): $(_mask_quoted(e.msg))")
+  return InvalidConfigurationError("$(base): $(_mask_quoted(e.msg))")   # refusal-value-ok: masked by `_mask_quoted` (#1235)
 end
 
 # Case-insensitive, as `Postgres.parse_dsn` decides it: `POSTGRESQL://…` is parsed as a URL too.

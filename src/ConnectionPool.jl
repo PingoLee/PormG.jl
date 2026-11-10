@@ -440,7 +440,7 @@ mutable struct PostgresConnectionPool{D} <: PormGPostgres
 
   function PostgresConnectionPool{D}(connections, available, connection_string, pool_size, pool_timeout,
                                      fail_fast_on_connect, lock) where {D}
-    (D isa Symbol && haskey(_PG_DRIVER_PACKAGES, D)) || throw(InvalidConfigurationError(
+    (D isa Symbol && haskey(_PG_DRIVER_PACKAGES, D)) || throw(InvalidConfigurationError(   # refusal-value-ok: a driver tag Symbol, not a configured value
       "unknown PostgreSQL driver $(repr(D)); expected one of " *
       join((repr(k) for k in keys(_PG_DRIVER_PACKAGES)), ", ")))
     return new{D}(connections, available, connection_string, pool_size, pool_timeout,

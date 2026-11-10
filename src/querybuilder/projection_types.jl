@@ -207,7 +207,7 @@ function _alias_lhs(alias::MemoKey, cached, instruc::SQLInstruction; fresh::Bool
   # literal again, so it binds in the clause it prints in (`WHERE ? = ?`, two values for two markers).
   source isa SQLTypeText && return _get_select_query(source, instruc)
   !fresh && source.field isa Union{String,SQLTypeCTE,SQLTypeJoined,OuterRefObject} && return cached.field
-  return _get_select_query(source.field, instruc, _as = source._as)
+  return with_field_part(_select_field_part, source.field, instruc, source._as)   # #1698 phase 2
 end
 
 # `_guard_vector_equality`'s alias twin (#596, #28). Same decision, different evidence: a projection

@@ -8,6 +8,24 @@
 _projection_output_name(v::SQLTypeField) = v.custom_as !== nothing ? v.custom_as : v._as
 _projection_output_name(v::SQLTypeText) = v.custom_as !== nothing ? v.custom_as : v._as
 
+# #1698 phase 2 (round 6, row 27): the two calls on an `SQLField.field` value, as positional functions for
+# `with_field_part`. Each splits on `nothing` rather than pass a `Union` value as a keyword, which would
+# make the keyword `NamedTuple` abstract and the call dynamic again (#1711); `nothing` is each keyword's
+# default, so both arms mean what the one keyword call meant.
+_select_field_part(part, instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _as === nothing ? _get_select_query(part, instruc) : _get_select_query(part, instruc; _as = _as)
+_read_kind_field_part(part, instruc::SQLInstruction, rendered) =
+  rendered === nothing ? _read_kind(part, instruc) : _read_kind(part, instruc; rendered = rendered)
+# An ORDER BY term's render under its scope, with the term at its concrete type: the walk runs BEFORE the
+# closure is built, so the closure captures a concrete value. A closure capturing the `FieldPart` itself
+# has its type built at run time, and the scope call on it stays dynamic (review of #1698 phase 2).
+_order_term_select(part, instruc::SQLInstruction, group_key::Bool) =
+  _with_render_scope(() -> _select_field_part(part, instruc, nothing), instruc; group_key = group_key)
+# A barrier, so the walk's ten arms are not inlined into `get_order_query`: inlined, they grew its body
+# and the build allocated more on every query, ordered or not (`alloc_baseline.jl`).
+@noinline _render_order_term(order_node, instruc::SQLInstruction, group_key::Bool) =
+  with_field_part(_order_term_select, order_node, instruc, group_key)
+
 # #564 — the SELECT-`*` half of the projection-kind map.
 #
 # `get_select_query` records a kind per PROJECTION, so a query whose result carries columns it never
@@ -212,7 +230,7 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
       # column under the same key, and recording nothing here left the column reading raw on SQLite
       # (a 0/1 for a boolean, the stored text for a date). The memo already holds the resolution the
       # kind is read from, so the answer is the one the render branch gives (`_read_kind`, as below).
-      kind = _read_kind(v_copy.field, instruc)
+      kind = with_field_part(_read_kind_field_part, v_copy.field, instruc, nothing)
       kind === nothing || (instruc.projection_kinds[Symbol(_projection_output_name(cached))] = kind)
     else
       @pormg_debug false
@@ -281,13 +299,13 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
             sql, interval_ms, interval_kind = _render_function_typed(original, instruc; _as = memo_name(v_copy))
             v_copy.field = interval_ms ? _interval_ms_as_text(sql, instruc.connection) : sql
           else
-            v_copy.field = _get_select_query(original, instruc, _as=memo_name(v_copy))   # #1004, as above
+            v_copy.field = with_field_part(_select_field_part, original, instruc, memo_name(v_copy))   # #1004, as above
           end
           # Render first (above), THEN type — the memo ordering `_render_left_typed` documents. A
           # dotted join key cannot be typed before it has been resolved. A path or a handle reads by the
           # same rule in the reuse branch above (#979); a `Subquery(...)` reads as its one column, which
           # rendering it recorded (#888).
-          kind = _read_kind(original, instruc; rendered = interval_kind)
+          kind = with_field_part(_read_kind_field_part, original, instruc, interval_kind)
         end
         kind
       end
@@ -659,8 +677,7 @@ function get_order_query(object::SQLObject, instruc::SQLInstruction)
         v_field_copy.field = text
         ms === nothing || (order_expr = ms; interval_node = order_node)
       else
-        v_field_copy.field = _with_render_scope(() -> _get_select_query(order_node, instruc), instruc;
-                                        group_key = groups_term)
+        v_field_copy.field = _render_order_term(order_node, instruc, groups_term)
       end
       order_params = bound_since(mark)
       # #1311 (review): a term rendered here orders by the expression itself (a labelled

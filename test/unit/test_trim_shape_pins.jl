@@ -159,6 +159,37 @@ function _with_scope_stmts(f, argtypes::Tuple; scope = PormG.QueryBuilder.with_s
   return found
 end
 
+# The dynamic calls (non-builtin `:call`s) to one of `names` in the optimized code of `tt` (a signature
+# type), following the `:invoke`s into the function's own keyword body and closures and into the scope
+# methods' bodies (`#with_scope#N`, `#_with_render_scope#N`), `depth` levels down (#1698 phase 2): two of
+# the reads it pins sit inside a render closure that a scope method calls.
+function _named_dynamic_calls(@nospecialize(tt), names; depth::Int = 4)
+  F1 = Base.unwrap_unionall(tt).parameters[1]
+  fname = isdefined(F1, :instance) ? string(nameof(F1.instance)) : ""
+  follow(n) = startswith(n, "#$(fname)#") || startswith(n, "#_with_render_scope#") ||
+              startswith(n, "#with_scope#")
+  found = String[]
+  seen = Set{Any}()
+  walk(tt, d) = begin
+    tt in seen && return
+    push!(seen, tt)
+    for (ci, _) in Base.code_typed_by_type(tt; optimize = true), (i, stmt) in enumerate(ci.code)
+      stmt isa Expr || continue
+      if stmt.head === :call
+        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        str = string(stmt)
+        any(n -> occursin(n, str), names) && push!(found, "$(i): $(str)")
+      elseif stmt.head === :invoke && d > 0
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        (mi isa Core.MethodInstance && mi.def isa Method) || continue
+        follow(string(mi.def.name)) && walk(mi.specTypes, d - 1)
+      end
+    end
+  end
+  walk(tt, depth)
+  return found
+end
+
 # Every struct PormG or one of its loaded driver extensions defines below one of `roots`, found by walking
 # `subtypes` down from each root (#1698): the concrete ones, and the ones a type parameter leaves open
 # (`struct Foo{T} <: SQLTypeF`), which no closed union can list and which the pin therefore refuses. A
@@ -659,6 +690,65 @@ end
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
   end
 
+  # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
+  #   and the walk it is read through (`with_field_part`).
+  # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every
+  #   concrete struct PormG defines under `FieldPart`'s abstract families, plus `String`, is a member of
+  #   `FieldPartNode` and has an `isa` arm in the walk, which has no other arm; the walk routes each member
+  #   at its concrete type, refuses anything else with a `MethodError`, and makes no dynamic call itself.
+  # Why: a call on a `FieldPart` value dispatches at run time, and in a trimmed image finds nothing
+  #   compiled for the member it meets: the typed read stopped at `_get_select_query(original; _as)` with a
+  #   `String` (#1599 round 6, row 27). A node struct added later that joins neither the set nor the walk
+  #   would bring that back; one missing from the walk would raise on every query that holds it.
+  @testset "SQLField.field is a closed set read through one walk (#1698 phase 2)" begin
+    QB = PormG.QueryBuilder
+    @test fieldtype(QB.SQLField, :field) === QB.FieldPart
+    members = Set{Any}(Base.uniontypes(QB.FieldPartNode))
+    @test all(T -> T <: QB.FieldPart && isconcretetype(T), members)
+    roots = Tuple(T for T in Base.uniontypes(QB.FieldPart) if T !== String)
+    concrete, open = _node_subtypes(roots)
+    @test union(Set{Any}(concrete), Set{Any}([String])) == members
+    @test isempty(open)
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "types.jl"), String)
+    start = findfirst("function with_field_part(", src)[1]
+    body = join(filter(l -> !startswith(lstrip(l), "#"),
+                       split(src[start:findnext("\nend", src, start)[end]], '\n')), '\n')
+    for T in members
+      @test occursin("part isa $(nameof(T)) && return f(part, args...)", body)
+    end
+    @test count("part isa ", body) == length(members)
+    @test QB.with_field_part(typeof, "raceid") === String
+    @test QB.with_field_part(typeof, QB.SQLText(1)) === QB.SQLText
+    @test QB.with_field_part((p, x) -> (typeof(p), x), "raceid", 7) === (String, 7)
+    @test_throws MethodError QB.with_field_part(typeof, QB.SQLField("raceid"))
+    @test isempty(_dynamic_calls(QB.with_field_part, (typeof(_tsp_visit), Any)))
+    @test isempty(_dynamic_calls(QB.with_field_part, (typeof(_tsp_visit), Any, Int)))
+  end
+
+  # What: the readers that hand an `SQLField.field` value to `_get_select_query` or `_read_kind`: the
+  #   projection render and its reuse branch (`get_select_query`), the ORDER BY term's render
+  #   (`get_order_query`), `_get_select_query(::SQLField)`, the predicate's left side
+  #   (`_get_filter_query(::SQLField)`) and the alias left side (`_alias_lhs`).
+  # Expected: no dynamic call to either function in their optimized code, their closures, keyword bodies
+  #   and the scope bodies that run them (`_named_dynamic_calls`): each goes through `with_field_part`.
+  # Why: those were dynamic calls on the abstract `FieldPart` (#1599 round 6, row 27, the first of them
+  #   at run time). Measured on main fc3e2e918, the detector finds them in four of these readers. The
+  #   fifth, `get_order_query`, passed there only because its render sits behind an unresolved keyword
+  #   call the detector cannot follow (the #1711 residue), so its row guards rather than proves.
+  @testset "the SQLField.field readers call _get_select_query and _read_kind statically (#1698 phase 2)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    for tt in (Tuple{typeof(QB.get_select_query), Vector{QB.ProjectionNode}, I},
+               Tuple{typeof(QB.get_order_query), QB.SQLObjectQuery, I},
+               Tuple{typeof(QB._get_select_query), QB.SQLField, I},
+               Tuple{typeof(QB._get_filter_query), QB.SQLField, I},
+               Tuple{typeof(QB._alias_lhs), QB.MemoKey, QB.SQLField, I})
+      calls = _named_dynamic_calls(tt, ("_get_select_query", "_read_kind", "with_field_part", "_order_term_select"))
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic _get_select_query/_read_kind calls" tt calls
+    end
+  end
+
   # What: the scope calls in the SELECT list's and the ORDER BY's builders (`get_select_query`,
   #   `get_order_query`): each renders a term under a changed `RenderScope`, in a closure, through the
   #   render scopes' `_with_render_scope` since #1728.
@@ -678,13 +768,12 @@ end
       # returns `_read_kind(original)`, and `original` is the projection's `SQLField.field::FieldPart`,
       # the field #1698 phase 2 closes (`_read_kind(::FieldPart)` infers `Any`).
       "get_select_query" => (0, 2),
-      # the ORDER BY term's two renders (`_render_interval_operand`, `_get_select_query`). Every argument
-      # of both keyword calls is concrete, and the same call inferred on its own resolves, so the
-      # compiler leaves them unresolved because of where they sit; not attributed (likely inference
-      # cutting short the recursion through a subquery's `build`; rebinding `order_node` in a `let`
-      # changes nothing). The closures hold `order_node` in an `Any` field, so the
-      # `_get_select_query(order_node, …)` render also returns `Any`.
-      "get_order_query" => (2, 1),
+      # the ORDER BY term's interval render (`_render_interval_operand`): its closure captures
+      # `order_node`, a `FieldPart`, so the scope call is left unresolved (not attributed further; a
+      # `let` rebinding changes nothing). The term's plain render walks `order_node` before its closure
+      # is built, behind a `@noinline` barrier (`_render_order_term`, #1698 phase 2), so its scope calls
+      # are not in this function's code.
+      "get_order_query" => (1, 0),
     )
     for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
                      (QB.get_order_query, (QB.SQLObjectQuery, QB.InstructionObject)))

@@ -39,8 +39,7 @@ function _get_select_query(v::String, instruc::SQLInstruction; _as::Union{Nothin
   end
 end
 function _get_select_query(v::SQLField, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
-  return _get_select_query(v.field, instruc, _as=_as)
-  # return v.field
+  return with_field_part(_select_field_part, v.field, instruc, _as)   # #1698 phase 2
 end
 function _get_select_query(v::SQLTypeOper, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   # use logic to when funtion

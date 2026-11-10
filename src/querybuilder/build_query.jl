@@ -310,7 +310,7 @@ function build(object::SQLObjectQuery;   # #1698: the body stores it in `Instruc
               _declare_join_key!(instruct, key)
               continue
             end
-            with_scope(() -> _build_row_join(_join_path_columns(object, path, config), instruct), instruct;
+            _with_render_scope(() -> _build_row_join(_join_path_columns(object, path, config), instruct), instruct;
                        introducer = :join_path)
           end
 
@@ -331,7 +331,7 @@ function build(object::SQLObjectQuery;   # #1698: the body stores it in `Instruc
           # the same `_build_row_join` call its column's render makes, so that render finds the row and adds
           # none.
           for segments in something(instruct.cjoin_on_paths, ())
-            with_scope(() -> _build_row_join(segments, instruct, as = false), instruct; introducer = :cjoin_on)
+            _with_render_scope(() -> _build_row_join(segments, instruct, as = false), instruct; introducer = :cjoin_on)
           end
           for user_alias in something(instruct.cjoin_on_order, ())
             _build_cjoin_on_row_join(object.alias_join[user_alias], user_alias, instruct)

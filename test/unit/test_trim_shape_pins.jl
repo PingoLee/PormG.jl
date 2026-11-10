@@ -128,13 +128,13 @@ function _slot_element_calls(@nospecialize(tt))::Vector{String}
   return found
 end
 
-# Every statement of the optimized `f(argtypes...)` that calls `with_scope` (#1711), with whether the
-# compiler resolved it, its result type and its argument types. A resolved call is an `:invoke` whose
-# method instance takes `typeof(with_scope)`: the keyword wrapper (`Core.kwcall`), or the keyword body
-# `#with_scope#N` once the wrapper is inlined. An unresolved one is a `:call` with `with_scope` among its
-# arguments.
-function _with_scope_stmts(f, argtypes::Tuple)
-  ws = PormG.QueryBuilder.with_scope
+# Every statement of the optimized `f(argtypes...)` that calls `scope` (#1711): `with_scope`, or the
+# render scopes' `_with_render_scope` (#1728). Each comes with whether the compiler resolved it, its result
+# type and its argument types. A resolved call is an `:invoke` whose method instance takes `typeof(scope)`:
+# the keyword wrapper (`Core.kwcall`), or the keyword body (`#with_scope#N`) once the wrapper is inlined.
+# An unresolved one is a `:call` with `scope` among its arguments.
+function _with_scope_stmts(f, argtypes::Tuple; scope = PormG.QueryBuilder.with_scope)
+  ws = scope
   ci, _ = only(code_typed(f, argtypes; optimize = true))
   argtype(a) = a isa Core.SSAValue ? Core.Compiler.widenconst(ci.ssavaluetypes[a.id]) :
                a isa Core.Argument ? Core.Compiler.widenconst(ci.slottypes[a.n]) :
@@ -659,19 +659,20 @@ end
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
   end
 
-  # What: the `with_scope` calls in the SELECT list's and the ORDER BY's builders (`get_select_query`,
-  #   `get_order_query`): each renders a clause under a changed `RenderScope`, in a closure.
+  # What: the scope calls in the SELECT list's and the ORDER BY's builders (`get_select_query`,
+  #   `get_order_query`): each renders a term under a changed `RenderScope`, in a closure, through the
+  #   render scopes' `_with_render_scope` since #1728.
   # Expected: no call takes its closure as a `Function`, every keyword set is a concrete type, and every
   #   call in `get_select_query` is resolved. What remains is the reviewed residue below, counted exactly
-  #   (a fall fails as well as a rise, so the change that removes an entry records it). `with_scope` and
-  #   `_join_scope` take the closure at a type parameter.
+  #   (a fall fails as well as a rise, so the change that removes an entry records it). `with_scope`,
+  #   `_with_render_scope` and `_join_scope` take the closure at a type parameter.
   # Why: `with_scope`'s keyword wrapper only passes `f` on, so Julia compiled it for `f::Function`; and
   #   `get_select_query`'s label is `Union{Nothing,String}`, which made its keyword `NamedTuple` abstract
   #   and the call fully dynamic. The trimmed fixture's `list(RaceRow)` aborted there, in a run-time type
   #   inference of that `kwcall`, once #1698 phase 1 had closed the query-state slots (#1711).
   @testset "with_scope is specialized on its closure, with a concrete keyword set (#1711)" begin
     QB = PormG.QueryBuilder
-    # (unresolved calls, calls whose result is `Any`), reviewed; `with_scope` itself adds none.
+    # (unresolved calls, calls whose result is `Any`), reviewed; the scope method itself adds none.
     residue = Dict(
       # `build_select.jl`, the projection render (both arms of the split on the label): the closure
       # returns `_read_kind(original)`, and `original` is the projection's `SQLField.field::FieldPart`,
@@ -688,7 +689,7 @@ end
     for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
                      (QB.get_order_query, (QB.SQLObjectQuery, QB.InstructionObject)))
       name = string(nameof(f))
-      stmts = _with_scope_stmts(f, sig)
+      stmts = _with_scope_stmts(f, sig; scope = QB._with_render_scope)
       @test !isempty(stmts)
       takes_function = filter(s -> any(T -> T === Function, s.args), stmts)
       abstract_kw = filter(s -> any(T -> T isa Type && (T <: NamedTuple || T <: Base.Pairs) &&
@@ -701,12 +702,45 @@ end
       (isempty(takes_function) && isempty(abstract_kw) && measured == residue[name]) ||
         @info "with_scope statements in $(name)" measured stmts = [s.stmt for s in stmts]
     end
-    # The signatures: `with_scope` and the one wrapper that only passes `f` on to it (`_join_scope`)
+    # The signatures: the two scope methods and the one wrapper that only passes `f` on (`_join_scope`)
     # take the closure at a type parameter, so each compiles per closure type. A wrapper that calls
     # `f()` in a branch (`_on_join_right`, `_or_arm`, `_in_clause_phase`) is specialized by Julia anyway.
-    for g in (QB.with_scope, QB._join_scope)
+    for g in (QB.with_scope, QB._with_render_scope, QB._join_scope)
       sig = Base.unwrap_unionall(only(methods(g)).sig)
       @test sig.parameters[2] isa TypeVar
+    end
+  end
+
+  # What: where the clause-level `with_scope` is called: the clauses `build` and `update` open, and not a
+  #   render below them, which opens its scopes through `_with_render_scope`.
+  # Expected: in `src/` and `ext/`, `with_scope(` appears only at the reviewed clause sites (`build`'s
+  #   SELECT, WHERE, ORDER BY and join-condition scopes; `update`'s SET clause) and at its own docstring
+  #   and definition; the optimized code of `get_select_query` and `get_order_query`, each run inside a
+  #   clause scope, makes no call to it. A nested `build()` (a `Subquery`) entering `with_scope` from
+  #   inside a render is NOT covered here: it is open (#1599 round 6).
+  # Why: specialized on its closure (#1711), `with_scope` re-entered from inside one of its own closures
+  #   with another closure type is treated by inference as recursion and limited, and the limited result
+  #   is never compiled: the trimmed read aborted in a run-time type inference of `get_select_query`, which
+  #   the verifier listed as an unresolved invoke, with 49 `#with_scope#11` bodies (#1728, the class #1693
+  #   measured with `with_pool`). A render that opens its scope through `with_scope` brings that back.
+  @testset "the clause-level with_scope is not called by a render function (#1728)" begin
+    QB = PormG.QueryBuilder
+    clause_sites = Dict("src/querybuilder/build_query.jl" => 4, "src/querybuilder/execution_write.jl" => 1,
+                        # its docstring's signature line and its definition
+                        "src/querybuilder/types.jl" => 2)
+    root = pkgdir(PormG)
+    found = Dict{String,Int}()
+    for top in ("src", "ext"), (dir, _, files) in walkdir(joinpath(root, top)), f in files
+      endswith(f, ".jl") || continue
+      path = joinpath(dir, f)
+      n = count(m -> true, eachmatch(r"(?<![\w_])with_scope\(", read(path, String)))
+      n > 0 && (found[replace(relpath(path, root), '\\' => '/')] = n)
+    end
+    @test found == clause_sites
+    found == clause_sites || @info "with_scope( call sites outside types.jl" found
+    for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
+                     (QB.get_order_query, (QB.SQLObjectQuery, QB.InstructionObject)))
+      @test isempty(_with_scope_stmts(f, sig))
     end
   end
 

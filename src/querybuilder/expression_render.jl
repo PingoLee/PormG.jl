@@ -335,7 +335,7 @@ _difference_result_kind(_, _) = nothing
 function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   # #985: a comparison's left side, inside an ON clause; arithmetic inherits the side it sits on.
   if operation in _COMPARISON_OPERATIONS && (side = _join_side_change(instruc, :left)) !== nothing
-    return with_scope(() -> _render_left_typed(value, operation, instruc), instruc; join_side = side)
+    return _with_render_scope(() -> _render_left_typed(value, operation, instruc), instruc; join_side = side)
   end
   value isa FExpression && return _render_expr_typed(value, instruc)
   value isa FObject && return _render_function_operand_typed(value, instruc)

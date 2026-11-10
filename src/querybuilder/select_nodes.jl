@@ -553,7 +553,7 @@ function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
   v.function_name == "WHEN" && throw(_bare_when_refusal())
   _check_fts_render(v, instruc)
   _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
-  return with_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
+  return _with_render_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
 end
 # #955: which column types a date or time part reads. Before it nothing checked, so
 # `"surname__@month"` built and failed (or matched nothing) only at the database, and `@hour` on a

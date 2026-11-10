@@ -627,7 +627,7 @@ end
 function _on_join_right(f, instruc::SQLInstruction)
   side = _join_side_change(instruc, :right)
   side === nothing && return f()
-  return with_scope(f, instruc; join_side = side)
+  return _with_render_scope(f, instruc; join_side = side)
 end
 
 # The scope one row's ON clause renders under: the hop, and the aliases each side may name. A path
@@ -635,13 +635,13 @@ end
 # only itself, and so may a column no comparison has marked yet (`:none`, #993). A `cjoin_on` row
 # has no hop to bind a side to, so both sides may name the base row and every row emitted before it
 # — binding built every row it names there (#982) — and itself.
-# `f::F` (#1711): `f` is only passed on to `with_scope`, never called here, so without it Julia compiles
-# this for `f::Function` and `with_scope` receives a `Function` again.
+# `f::F` (#1711): `f` is only passed on to `_with_render_scope`, never called here, so without it Julia compiles
+# this for `f::Function` and the scope receives a `Function` again.
 function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) where {F}
   hop = value.alias_b
   if value isa AnchorlessJoin
     rows = (instruc.alias, (r.alias_b for r in instruc.row_join[1:idx-1])..., hop)
-    return with_scope(f, instruc; join_hop = hop, join_side = :none, join_left = rows, join_right = rows)
+    return _with_render_scope(f, instruc; join_hop = hop, join_side = :none, join_left = rows, join_right = rows)
   end
   path = String[instruc.alias, hop]
   parent = value.alias_a
@@ -652,7 +652,7 @@ function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) wh
     i === nothing && break
     parent = instruc.row_join[i].alias_a
   end
-  return with_scope(f, instruc; join_hop = hop, join_side = :none, join_left = (hop,), join_right = Tuple(path))
+  return _with_render_scope(f, instruc; join_hop = hop, join_side = :none, join_left = (hop,), join_right = Tuple(path))
 end
 
 # ── Prefixing a condition key; the handles a condition may not hold (#444, #481) ──────────────────

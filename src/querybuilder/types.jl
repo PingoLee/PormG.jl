@@ -537,7 +537,8 @@ growing (`Coalesce(Subquery)`, `F(...) == Subquery`, a `When` condition, …), a
 Prior art: PostgreSQL's parser tracks the same thing (`ParseState.p_expr_kind`), and its
 `check_ungrouped_columns` does not descend into same-level aggregate arguments.
 
-**Change it only through `with_scope`**, which restores the previous value on return and on
+**Change it only through `with_scope`** (a clause `build` or `update` opens) **or `_with_render_scope`**
+(a scope a render opens inside a clause, #1728). Both restore the previous value on return and on
 throw. A writer that resets to a constant instead of restoring is right only until two renders nest.
 
 Per instruction, not per task, which is why this is not a `Base.ScopedValue`: a subquery runs its own
@@ -601,7 +602,16 @@ _with_scope(s::RenderScope; phase = s.phase, label = s.label, group_key = s.grou
 
 Run `f()` with `instruc.scope` updated by the keyword fields `kw`, then restore the previous scope —
 on return and on throw, so a render that throws (the one-column rule, the nested-CTE guard, an inner
-build) never leaves its state behind for the next one. The only writer of `scope`.
+build) never leaves its state behind for the next one. With `_with_render_scope`, the only writer of
+`scope`.
+
+Clause level only: the SELECT, WHERE, ORDER BY and join-condition scopes `build` opens, and `update`'s
+SET clause. A scope a render opens inside one of those goes through `_with_render_scope` instead
+(#1728), so a render does not re-enter this method from inside a clause's closure with another closure
+type, which inference treats as recursion and limits (a trimmed image then has no code for the limited
+calls). Not covered yet: a nested `build()` (a `Subquery` or `Exists` rendered inside a clause) still
+enters this method with its own clause closures while the outer clause's closure is on the stack.
+`test_trim_shape_pins.jl` holds the list of call sites.
 
 `f::F` forces a specialization per closure type (#1711), as `with_pool` does (#1622). The keyword
 wrapper only passes `f` on to the body, so Julia's heuristic compiled it for `f::Function`, and every
@@ -610,6 +620,24 @@ concrete: a `Union` value (an `OptionalString` label) makes the keyword `NamedTu
 whole call dynamic, so such a caller splits on the value instead (`get_select_query`).
 """
 function with_scope(f::F, instruc::SQLInstruction; kw...) where {F}
+  prev = instruc.scope
+  instruc.scope = _with_scope(prev; kw...)
+  try
+    return f()
+  finally
+    instruc.scope = prev
+  end
+end
+
+# #1728: the scopes a clause render opens inside itself (a projection's label, a join side, an OR arm, a
+# function's row phase) enter here, never through `with_scope`. Specialized on its closure (#1711),
+# `with_scope` re-entered from inside one of its own closures with another closure type is what inference
+# treats as recursion and limits, so the limited result is never compiled (#1693's measurement with
+# `with_pool`). The clause-level scopes `build` and `update` open stay on `with_scope`, and every render
+# below them on this method. This moves the boundary, it does not remove the class: render scopes nest
+# in each other, so this method is re-entered from its own closures in turn (59 unresolved
+# `#_with_render_scope#` bodies in the trimmed fixture's verifier after #1728; open in #1599).
+function _with_render_scope(f::F, instruc::SQLInstruction; kw...) where {F}
   prev = instruc.scope
   instruc.scope = _with_scope(prev; kw...)
   try

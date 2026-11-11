@@ -2058,6 +2058,15 @@ end
 const FieldPartNode = Union{String,SQLText,FObject,WindowFunction,FExpression,OuterRefObject,
                             SubqueryObject,ExistsObject,CTEReference,JoinedReference}
 
+# #1698 phase 2 (#1599 round 9, row 32): `OperObject.column` is `ColumnPart`, a union of two abstract
+# families, because `OperObject` is defined before `FObject` and `WindowFunction`. What it holds is these
+# three concrete structs (`test/unit/test_trim_shape_pins.jl` checks it against the families). A call on the
+# abstract slot is never a compileable signature and dispatched at run time: the trimmed read stopped at
+# `_model_filter_key(::SQLField, …)` in the WHERE clause. Read through `_oper_column`, the reader sees a
+# union of three concrete types, which a call splits statically; no walk.
+const ColumnPartNode = Union{SQLField,FObject,WindowFunction}
+_oper_column(o::OperObject)::ColumnPartNode = o.column
+
 """
     with_field_part(f, part, args...) -> f(part, args...)
 

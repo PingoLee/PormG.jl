@@ -26,6 +26,7 @@ using Test
 using PormG
 using Dates, TimeZones
 using PormG.Models: Model, IDField, DateTimeField, format_timezone_sql
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The one canonical string every "2020-01-01 10:00:00 UTC" spelling must collapse to.
 const _CANON79 = "2020-01-01T10:00:00.000+00:00"

@@ -15,6 +15,7 @@
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # DB-free SQL generation against both dialects.
 struct MockPGConv <: PormG.PormGPostgres end

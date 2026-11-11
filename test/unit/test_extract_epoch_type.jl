@@ -3,6 +3,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField, DateTimeField, DurationField, DateField, TimeField
 using PormG.QueryBuilder: inspect_query, F, Sum
 using PormG.Functions: Extract
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1457: `Extract(x, "EPOCH")` is a decimal, on every engine that has the part.

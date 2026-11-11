@@ -23,6 +23,7 @@ using PormG
 using PormG.Models
 using PormG.QueryBuilder: inspect_query, F
 import PormG: QueryBuildError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct ZsaMockSQLite <: PormG.PormGSQLite end
 struct ZsaMockPostgres <: PormG.PormGPostgres end

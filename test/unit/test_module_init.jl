@@ -14,6 +14,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A closeable sentinel so the cleanup's close()+nil-out of a *live* handle is observable — otherwise the
 # connections assertion is vacuously green on a fresh (all-nothing) pool. Own type → not type piracy.

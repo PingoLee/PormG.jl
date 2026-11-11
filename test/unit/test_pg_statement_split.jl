@@ -26,6 +26,7 @@ using PormG
 using PormG.Models
 import PormG: PormGPostgres, InvalidMigrationError, check_marker
 import PormG.Migrations: _split_pg_statements, _execute_statements_pg
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # PostgreSQL stand-in for the Dialect renderers: they dispatch on the marker type only.
 struct SplitMockPg841 <: PormGPostgres end

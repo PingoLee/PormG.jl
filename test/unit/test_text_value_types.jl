@@ -27,6 +27,7 @@ using Dates: Date, DateTime, Time
 using PormG.QueryBuilder: inspect_query, F, ToChar
 using PormG.Functions: Lower
 import DataFrames   # a test-only dependency: PormG does not depend on DataFrames (#1344)
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mocks and config keys, so this file shares nothing with the other unit files in Main.
 struct TextVal860MockPg <: PormG.PormGPostgres end

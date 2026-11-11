@@ -20,6 +20,7 @@ using Test
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: object, Q, Qor, _with
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB = PormG.QueryBuilder
 

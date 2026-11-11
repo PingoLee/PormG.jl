@@ -13,6 +13,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DateTimeField
 using PormG.QueryBuilder: Q, Qor, F, Exists, OuterRef, Subquery, Count, inspect_query, list, update, delete, bulk_insert, bulk_update
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Initialize test models
 DriverModel = Model("drivers",

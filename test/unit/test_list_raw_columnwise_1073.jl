@@ -19,6 +19,7 @@ julia --project=test/integration test/unit/test_list_raw_columnwise_1073.jl
 using Test
 using PormG
 using Dates
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 const Tables = PormG.QueryBuilder.Tables
 
 const _CW_QB = PormG.QueryBuilder

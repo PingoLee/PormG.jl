@@ -13,6 +13,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _CT_ROOT = pkgdir(PormG)
 struct _CtPg <: PormG.PormGPostgres end

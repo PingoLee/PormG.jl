@@ -17,6 +17,7 @@ using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, OP, Joined, Exists, OuterRef
 using PormG.Functions: Count, Max, Lower, Rank, WindowOver, Case, When
 using PormG: QueryBuildError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct JoinAggMockPostgres <: PormG.PormGPostgres end
 struct JoinAggMockSQLite <: PormG.PormGSQLite end

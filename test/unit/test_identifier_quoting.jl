@@ -28,6 +28,7 @@ import OrderedCollections
 using PormG.QueryBuilder: inspect_query, quote_identifier, safe_table_identifier,
                           safe_column_identifier, _escape_identifier, _validate_identifier,
                           _sql_literal
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct MockPostgresIdent <: PormG.PormGPostgres end
 struct MockSQLiteIdent <: PormG.PormGSQLite end

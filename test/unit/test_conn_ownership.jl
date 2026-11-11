@@ -23,6 +23,7 @@ julia --project=test/integration test/unit/test_conn_ownership.jl
 using Test
 using Logging
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 const CP = PormG.ConnectionPool
 
 const NUL970 = "SEN\0hidden"

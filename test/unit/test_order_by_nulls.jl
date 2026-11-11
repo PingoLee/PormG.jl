@@ -20,6 +20,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, CharField, IntegerField
 using PormG.QueryBuilder: SQLField, SQLOrder
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Internal helpers live in the QueryBuilder submodule (build_select.jl), unexported.
 const _nulls_placement = PormG.QueryBuilder._nulls_placement

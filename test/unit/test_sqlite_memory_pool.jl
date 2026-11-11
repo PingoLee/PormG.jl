@@ -27,6 +27,7 @@ real in-memory SQLite handles, which cost nothing and leave nothing behind.
 using Test
 using PormG
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const CP = PormG.ConnectionPool
 

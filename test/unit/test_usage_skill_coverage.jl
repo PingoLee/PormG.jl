@@ -25,6 +25,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const USAGE_SKILL_DIR = joinpath(pkgdir(PormG), ".github", "skills", "pormg-usage")
 

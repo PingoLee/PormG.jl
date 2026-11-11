@@ -2,6 +2,7 @@ using Test
 using PormG
 using Logging
 using Dates
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock SQLite Settings
 struct MockSQLite <: PormG.PormGSQLite end

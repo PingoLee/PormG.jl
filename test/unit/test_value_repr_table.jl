@@ -35,6 +35,7 @@ using PormG.Models
 using Dates
 import TimeZones
 import InteractiveUtils: subtypes
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock backends: the table dispatches on the abstract `PormGPostgres` / `PormGSQLite`, so a bare
 # subtype is enough and no driver is loaded. Named for this file, since `runtests.jl` includes every

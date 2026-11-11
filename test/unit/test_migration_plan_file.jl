@@ -25,6 +25,7 @@ using PormG.Migrations
 import PormG: PormGPostgres
 import PormG.ConnectionPool: fetch
 import OrderedCollections: OrderedDict
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The payload every hostile string carries. It lives in `Main` because a plan file loaded with
 # `include` evaluated in a module of its own, and `Main.` is the one name every module resolves.

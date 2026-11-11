@@ -46,6 +46,7 @@ using PormG
 using PormG.Models
 import PormG.QueryBuilder
 using PormG.QueryBuilder: SQLField, SQLOrder
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── Fixture ──────────────────────────────────────────────────────────────────
 #

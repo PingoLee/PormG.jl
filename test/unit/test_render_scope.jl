@@ -40,6 +40,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField
 import PormG.QueryBuilder: RenderScope, with_scope, _with_render_scope, InstructionObject, SQLTbAlias,
     with_bucket, SQLiteParameterizedQuery, PgParameterizedQuery
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const RSCOPE_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const RSCOPE_DECLARATION_FILE = joinpath(RSCOPE_REPO_ROOT, "src", "querybuilder", "types.jl")

@@ -29,6 +29,7 @@ using DataFrames
 using PormG
 using PormG.Models
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

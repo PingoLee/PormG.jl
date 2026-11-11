@@ -23,6 +23,7 @@
 using Test
 using PormG
 using Dates, UUIDs
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const KEYS_1239 = (postgres = "pormg1239_offline_pg", sqlite = "pormg1239_offline_sl")
 PormG.Configuration.register_offline(KEYS_1239.postgres; adapter = :postgres)

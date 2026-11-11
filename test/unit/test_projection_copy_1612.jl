@@ -17,6 +17,7 @@
 using Test
 using PormG
 import PormG: Configuration, Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _PC_QB = PormG.QueryBuilder
 const _PC_KEY = normpath(joinpath(@__DIR__, "pormg1612_copy"))

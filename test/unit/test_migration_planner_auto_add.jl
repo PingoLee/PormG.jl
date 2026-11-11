@@ -34,6 +34,7 @@ using PormG
 using PormG.Models
 using PormG.Migrations
 import PormG: PormGModel, PormGPostgres
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct MigrationPlannerAutoAddMockPg <: PormGPostgres end
 

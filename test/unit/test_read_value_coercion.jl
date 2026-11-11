@@ -32,6 +32,7 @@ using PormG
 using PormG.Models
 using Dates
 import TimeZones
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct RvcMockSQLite <: PormG.PormGSQLite end
 struct RvcMockPostgres <: PormG.PormGPostgres end

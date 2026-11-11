@@ -18,6 +18,7 @@ No SQL, no database.
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Suffixed names: `runtests.jl` includes every unit file into one module.
 _is_joinpath_callee_1649(f) = f === :joinpath ||

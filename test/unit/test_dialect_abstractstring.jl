@@ -51,6 +51,7 @@ using Dates
 using PormG
 using PormG.QueryBuilder: SQLTypeField, SQLTypeText
 using PormG.QueryBuilder: Power, Mod, NullIf, Coalesce, Greatest, Least, Replace, Value
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const Mo602 = PormG.Models
 const Di602 = PormG.Dialect

@@ -20,6 +20,7 @@ using Dates
 using Decimals
 using TimeZones
 using DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB = PormG.QueryBuilder
 const Models = PormG.Models

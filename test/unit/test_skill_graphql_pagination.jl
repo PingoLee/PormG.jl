@@ -31,6 +31,7 @@
 # ============================================================
 
 using Test
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The rulesets no longer live in this repository: they moved to the maintainer's private
 # agent-config checkout (`pormg/skills/`, `pormg/instructions/`), which a fresh clone and CI cannot

@@ -24,6 +24,7 @@ No SQL, no database.
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _JIT_ROOT = pkgdir(PormG)
 

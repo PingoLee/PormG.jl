@@ -22,6 +22,7 @@ using PormG
 using PormG.Models
 using OrderedCollections
 import MySQL
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _MM = PormG.Migrations
 const _MD = PormG.Dialect

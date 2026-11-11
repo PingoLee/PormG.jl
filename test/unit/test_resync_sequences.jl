@@ -18,6 +18,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
 using PormG: resync_sequences
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PostgreSQL mock: records every SQL statement so a test can assert resync

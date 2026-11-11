@@ -22,6 +22,7 @@
 using Test
 using PormG
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Suffixed names on purpose: bare `MockSQLite` / `MockPostgres` already exist in
 # several unit files, and runtests.jl includes them all into ONE session, so a

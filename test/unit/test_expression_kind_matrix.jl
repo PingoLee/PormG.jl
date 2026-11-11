@@ -74,6 +74,7 @@ using Test
 using PormG
 using PormG.Models
 using Dates
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _EKM_QB = PormG.QueryBuilder
 

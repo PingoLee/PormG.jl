@@ -22,6 +22,7 @@ using PormG.Models
 using Dates, UUIDs, Decimals, TimeZones
 import MySQL   # loads PormGMySQLExt, whose statement routing is tested at the end
 import PormG.QueryBuilder: Sum, Avg, Count, Max, Min, Joined, F, CTE
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include(joinpath(@__DIR__, "helper_marker_alignment.jl"))
 

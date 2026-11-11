@@ -16,6 +16,7 @@ using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export li
 using PormG
 using PormG.Models
 using PormG.QueryBuilder: object, Q, Qor
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB = PormG.QueryBuilder
 

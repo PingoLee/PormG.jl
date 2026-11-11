@@ -17,6 +17,7 @@ using Test
 using PormG
 using PormG.Migrations
 using OrderedCollections
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connection singletons for the dialect dispatch (defined at module scope — `include` evaluates
 # this file into the test module's global scope, where struct definitions are valid).

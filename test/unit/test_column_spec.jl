@@ -47,6 +47,7 @@ using PormG.Migrations: ColumnSpec, ForeignKeyRef, ColumnIdentity,
 import PormG: ColumnDelta, COLUMN_DELTA_SLOTS, COLUMN_DELTA_COMPARATORS
 using InteractiveUtils: subtypes
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct MockPgSpec507 <: PormG.PormGPostgres end
 struct MockSlSpec507 <: PormG.PormGSQLite end

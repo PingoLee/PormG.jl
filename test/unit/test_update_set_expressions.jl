@@ -26,6 +26,7 @@ using DataFrames
 using PormG
 using PormG.Models
 import PormG: QueryBuildError, InvalidValueError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`.
 struct UseMockSQLite <: PormG.PormGSQLite end

@@ -16,6 +16,7 @@
 using Test
 using PormG
 using PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct RelTermMockSQLite <: PormG.PormGSQLite end
 PormG.backend_sqlite_version(::RelTermMockSQLite) = 3045000

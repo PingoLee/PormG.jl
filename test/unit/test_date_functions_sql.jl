@@ -23,6 +23,7 @@ using PormG
 import PormG.Dialect
 using PormG.QueryBuilder: inspect_query
 using PormG.Functions: Extract, Cast
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connections — only their type matters (dispatch selects the PG vs SQLite body).
 struct _PgDateFnConn <: PormG.PormGPostgres end

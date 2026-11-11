@@ -15,6 +15,7 @@ mis-aliased the third hop would otherwise pass every existing unit test.
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ---------------------------------------------------------------------------
 # A 4-table FK chain: Visit → person → city → country.

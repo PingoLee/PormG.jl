@@ -20,6 +20,7 @@ using Test
 using Logging
 using PormG
 using PormG.Models: CharField, ArrayField, IntegerField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A field whose RENDERING throws. Model_to_str derives a constructor name from a struct name by
 # stripping its first character (sCharField → CharField); a type outside PormG resolves to a name with

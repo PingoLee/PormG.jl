@@ -33,6 +33,7 @@ DB-free: no connection, no fixture.
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Uniquely-named aliases rather than `import PormG.Models`. Every unit file is `include`d into
 # `Main`, so a top-level `import` binds the name there for the WHOLE run — and

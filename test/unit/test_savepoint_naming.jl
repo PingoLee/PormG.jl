@@ -11,6 +11,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 @testset "Savepoint naming (#26)" begin
     # Exact format for representative depths.

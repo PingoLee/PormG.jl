@@ -20,6 +20,7 @@ documented scenario — that is the check a plausible-but-wrong type would slip 
 # julia --project=test/integration test/unit/test_docs_error_type_drift.jl
 
 using Test
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const DRIFT_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const DRIFT_DOCS_SRC = joinpath(DRIFT_REPO_ROOT, "docs", "src")

@@ -16,6 +16,7 @@
 using Test
 using PormG
 import PormG: Configuration, Dialect, Models, QueryBuildError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _ND_QB = PormG.QueryBuilder
 const _ND_KEY = normpath(joinpath(@__DIR__, "pormg1611_named"))

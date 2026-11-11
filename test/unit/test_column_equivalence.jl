@@ -35,6 +35,7 @@ using PormG
 using PormG.Models
 using PormG.Dialect: _get_column_type
 using PormG.Migrations: column_spec, column_delta
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # `PormGPostgres`/`PormGSQLite` are abstract backend markers (src/Kernel.jl); dialect rendering
 # dispatches on them alone. Same mock pattern as test/unit/test_alter_field_constraint_drops.jl.

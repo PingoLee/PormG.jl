@@ -1,5 +1,6 @@
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A blank value is unset (#1228), so it gets the default too.
 if isempty(strip(get(ENV, "PORMG_ENV", "")))

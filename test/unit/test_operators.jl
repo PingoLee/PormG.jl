@@ -19,6 +19,7 @@ using PormG.Models: Model, CharField, IDField, IntegerField, DateField, DateTime
 using PormG.QueryBuilder: Q
 using Dates
 import Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ---------------------------------------------------------------------------
 # Minimal test models — same shape as test_complex_queries.jl so both files

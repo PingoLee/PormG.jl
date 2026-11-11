@@ -14,6 +14,7 @@
 using Test
 using PormG
 import PormG: Dialect, InvalidValueError, CInt32
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _FO_BOOL_KEYS = ("distinct", "bigint", "integer", "boolean", "decimal_operand", "empty_fill",
                        "propagate_null", "cover_density")

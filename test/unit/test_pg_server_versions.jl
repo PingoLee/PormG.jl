@@ -27,6 +27,7 @@ import PormG.ConnectionPool: fetch
 using DataFrames
 using JSON
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A PostgreSQL server at `server_version_num` `v`. It answers the version probe, records every other
 # statement, and — like the server — refuses one that names a catalog column its version does not have

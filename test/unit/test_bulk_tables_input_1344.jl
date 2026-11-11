@@ -27,6 +27,7 @@ using PormG
 using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update, allocate_primary_keys
 import DataFrames
 import Dates: Date
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _BT_QB = PormG.QueryBuilder
 const _BT_Tables = _BT_QB.Tables

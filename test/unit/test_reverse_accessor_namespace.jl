@@ -4,6 +4,7 @@ using PormG
 using PormG.Models
 
 import PormG: PormGModel
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # #396 — the reverse-accessor namespace: derivation, determinism, and its guards

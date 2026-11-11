@@ -22,6 +22,7 @@ using PormG.Models: Model, IDField, IntegerField, CharField
 using PormG.QueryBuilder: bulk_update
 import DataFrames
 import Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB73 = PormG.QueryBuilder
 

@@ -29,6 +29,7 @@ using PormG.Migrations
 
 import PormG: PormGModel
 import PormG.Migrations: _attach_composite_indexes!, LiveComposite
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── DB-free mock backends ─────────────────────────────────────────────────────
 struct IXMockPostgres <: PormG.PormGPostgres end

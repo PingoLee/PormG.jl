@@ -3,6 +3,7 @@ using PormG: object, Q, PormGError, WritesDisabledError
 using PormG.Models: Model, CharField, IDField
 import PormG
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Initialize a dummy model for testing
 TestDriver = Model("drivers",

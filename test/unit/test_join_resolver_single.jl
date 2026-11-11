@@ -25,6 +25,7 @@ Static text scan plus a live check — no database.
 using Test
 using PormG
 using PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const JRS_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const JRS_RESOLVER_FILE = joinpath(JRS_REPO_ROOT, "src", "querybuilder", "join_conditions.jl")

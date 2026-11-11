@@ -67,6 +67,7 @@ using Dates
 using TimeZones
 using PormG.Models: DateField, DateTimeField, UUIDField, JSONField, IntegerField, CharField,
                     BinaryField, TimeField, BooleanField, FloatField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const Mo631 = PormG.Models
 const Mi631 = PormG.Migrations

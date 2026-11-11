@@ -61,6 +61,7 @@ using Decimals
 using PormG.Models: IDField, ForeignKey, OneToOneField, IntegerField, PositiveSmallIntegerField,
                     PositiveIntegerField, BigIntegerField, FloatField, DecimalField, CharField,
                     URLField, SlugField, PasswordField, BinaryField, TextField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const Mo614 = PormG.Models
 

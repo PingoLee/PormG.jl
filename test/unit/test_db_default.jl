@@ -52,6 +52,7 @@ using Logging
 using SQLite      # loads the weakdep extension the temp-file cases below need
 using DataFrames  # a synthetic PostgreSQL catalog row (#1037)
 using JSON
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct MockPg496 <: PormG.PormGPostgres end
 struct MockSl496 <: PormG.PormGSQLite end

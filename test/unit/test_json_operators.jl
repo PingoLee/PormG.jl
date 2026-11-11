@@ -13,6 +13,7 @@ Sibling coverage: `test_json_lookups.jl` (both-dialect path lookups); `test/inte
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct JsonOpMockSQLite <: PormG.PormGSQLite end
 struct JsonOpMockPostgres <: PormG.PormGPostgres end

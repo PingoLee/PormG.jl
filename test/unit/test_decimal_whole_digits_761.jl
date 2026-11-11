@@ -21,6 +21,7 @@ using Decimals
 using PormG
 import PormG: Models, InvalidValueError
 import PormG.QueryBuilder: validate_field_data, bulk_insert, bulk_update
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct Mock761Postgres <: PormG.PormGPostgres end
 PormG.config["mock761"] = PormG.Configuration.Settings(connections = Mock761Postgres(), change_data = true)

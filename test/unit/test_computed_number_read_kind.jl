@@ -23,6 +23,7 @@ using Test
 using PormG
 using PormG.Models
 import Decimals
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _CN_QB = PormG.QueryBuilder
 

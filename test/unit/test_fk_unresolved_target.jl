@@ -29,6 +29,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, CharField, IntegerField, ForeignKey, fk_target_table
 using PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct MockPgFkUnres <: PormG.PormGPostgres end
 struct MockSlFkUnres <: PormG.PormGSQLite end

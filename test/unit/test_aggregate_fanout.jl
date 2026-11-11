@@ -6,6 +6,7 @@
 using Test
 using PormG
 import PormG.QueryBuilder: _extract_leading_alias
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 @testset "_extract_leading_alias (#74)" begin
     # Logic: a bare "alias"."col" reference yields its (unquoted) alias.

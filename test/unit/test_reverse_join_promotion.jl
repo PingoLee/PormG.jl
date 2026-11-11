@@ -19,7 +19,7 @@ and a join type stated with `on(path, join_type = …)` is kept as stated. Djang
 The SQL is read on SQLite and PostgreSQL mocks; the rows are executed on a temp SQLite file. The defect is
 in the join type, decided before rendering, so it is the same on every engine.
 """
-# julia --project=test/integration -e 'include("test/load_drivers.jl"); include("test/unit/test_reverse_join_promotion.jl")'
+# julia --project=test/integration test/unit/test_reverse_join_promotion.jl
 
 using Test
 using PormG
@@ -27,6 +27,7 @@ using PormG.Models
 using PormG.QueryBuilder: inspect_query, Q, Qor, Case, When
 using PormG.Functions: Max
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct RjMockSQLite <: PormG.PormGSQLite end
 struct RjMockPostgres <: PormG.PormGPostgres end

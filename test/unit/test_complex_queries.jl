@@ -11,6 +11,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey
 using PormG.QueryBuilder: Q, Qor, F
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Initialize test models - kept simple to focus on query generation
 DriverModel = Model("drivers",

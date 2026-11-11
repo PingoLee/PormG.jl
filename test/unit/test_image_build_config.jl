@@ -14,6 +14,7 @@
 using Test
 using PormG
 using PormG: Configuration, ConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 @testset "Configuration is read at run time (#1606)" begin
 

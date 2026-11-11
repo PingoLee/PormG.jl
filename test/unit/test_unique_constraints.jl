@@ -21,6 +21,7 @@ using PormG.Models
 using PormG.Migrations
 
 import PormG: PormGModel
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── DB-free mock backends ─────────────────────────────────────────────────────
 struct UCMockPostgres <: PormG.PormGPostgres end

@@ -36,6 +36,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # No DB drivers needed: every backend_* call in these flows dispatches to the mock methods below.
 const CP = PormG.ConnectionPool

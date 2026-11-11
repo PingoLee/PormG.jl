@@ -30,6 +30,7 @@ using PormG
 using PormG.Models: Model, IDField, FloatField, CharField, DateField, BooleanField
 using PormG.QueryBuilder: inspect_query, _is_agg
 using PormG.Functions: Coalesce, Greatest, Least, NullIf, Power, Mod, Replace, Concat, Sum, Value, LPad, RPad
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

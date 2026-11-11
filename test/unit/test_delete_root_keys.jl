@@ -19,13 +19,14 @@ The shapes use mock pools; the rows are executed on a temp SQLite file, where th
 (it is not PostgreSQL-specific: the order of the statements is the same on every engine). The
 PostgreSQL lock shape is pinned in test_mutation_fence_shape.jl.
 """
-# julia --project=test/integration -e 'include("test/load_drivers.jl"); include("test/unit/test_delete_root_keys.jl")'
+# julia --project=test/integration test/unit/test_delete_root_keys.jl
 
 using Test
 using DataFrames
 using PormG
 using PormG.Models
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB = PormG.QueryBuilder
 

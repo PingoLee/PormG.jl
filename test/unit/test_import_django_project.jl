@@ -2,6 +2,7 @@ using Test
 using Logging
 using PormG
 using PormG.Migrations
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Django Importer (#346): multi-app projects

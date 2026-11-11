@@ -17,6 +17,7 @@ using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, OneToOn
                     field_db_column, fk_target_column, model_column, model_has_db_column
 using PormG.QueryBuilder: inspect_query, Count
 using InteractiveUtils: subtypes   # #376: walk every field TYPE, not a hand-maintained list
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connections — uniquely named so they never clash with other unit files'
 # mock structs when runtests.jl includes them into the same module.

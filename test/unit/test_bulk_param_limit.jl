@@ -25,6 +25,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Internal helpers live in the QueryBuilder submodule (execution_bulk.jl), unexported.
 const _sqlite_param_limit    = PormG.QueryBuilder._sqlite_param_limit

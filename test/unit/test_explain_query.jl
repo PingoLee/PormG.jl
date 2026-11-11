@@ -4,6 +4,7 @@ using PormG
 import PormG.ConnectionPool: fetch
 using PormG.QueryBuilder: explain_query, inspect_query
 import PormG.QueryBuilder: _explain_facts_postgres, _explain_facts_sqlite, _explain_facts_mysql
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # explain_query / .explain() (#48)

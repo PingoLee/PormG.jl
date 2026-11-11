@@ -14,6 +14,7 @@ using Test
 using PormG
 import PormG: Configuration, Models, Migrations
 import DataFrames: DataFrame
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 _host1230_timing(; indexes = []) = Models.Model("live_timing",
   id    = Models.IDField(),

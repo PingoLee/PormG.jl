@@ -31,6 +31,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Case, When, Exists, OuterRef, Joined
 using PormG.Functions: Abs
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const JCR_QB = PormG.QueryBuilder
 const JCR_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))

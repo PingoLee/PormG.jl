@@ -42,6 +42,7 @@ using PormG.Models
 using PormG.QueryBuilder: inspect_query, OP
 using PormG.Functions: Sum, Count, Lower, Abs, Extract, Rank, WindowOver, Case, When, ToChar
 import PormG.QueryBuilder as QB
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`, so a
 # shared key would let another file's settings decide this file's dialect.

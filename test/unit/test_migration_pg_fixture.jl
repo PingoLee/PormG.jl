@@ -17,6 +17,7 @@
 
 using Test
 import YAML
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The fixture lives beside the integration suite; resolve it relative to this unit test file.
 const PG_FIXTURE_PATH = normpath(joinpath(@__DIR__, "..", "integration",

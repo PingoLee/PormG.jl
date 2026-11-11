@@ -16,6 +16,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 @testset "install_ai_skills copies the full skill bundle with resolving links" begin
     src_dir = joinpath(pkgdir(PormG), ".github", "skills", "pormg-usage")

@@ -18,6 +18,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The fourteen entries written before the `- **Version**:` policy existed. They parse at
 # `_UNSTAMPED_VERSION` and sort below `0.2.0`; testset E pins the population to exactly this set,

@@ -17,6 +17,7 @@ using Test
 using PormG
 import PormG: Configuration
 using PormG.Models: Model, IDField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 @testset "Self-heal key inference (_infer_self_heal_key)" begin
   m     = Model("heal_tbl",  id = IDField())

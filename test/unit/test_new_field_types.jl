@@ -16,6 +16,7 @@ using PormG.Models
 using PormG.QueryBuilder: validate_field_data
 using UUIDs
 using JSON
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB = PormG.QueryBuilder
 

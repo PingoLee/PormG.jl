@@ -24,6 +24,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField, DecimalField, DateTimeField, BigIntegerField
 using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ------------------------------------------------------------------
 # The model shape this file exercises:

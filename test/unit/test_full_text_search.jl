@@ -29,6 +29,7 @@ import PormG.QueryBuilder: inspect_query
 using PormG.Functions: SearchQuery, SearchVector, SearchRank, SearchHeadline, Lower, Concat, Coalesce,
                        Value, When, Case, Cast
 using DataFrames: DataFrame
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

@@ -31,6 +31,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: SQLOrder, SQLField, inspect_query, Max, Count, Sum
 using PormG.Functions: Case, When
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connections + config keys: `runtests.jl` includes every unit file into one `Main`.
 struct OrderNamedExprMockPostgres <: PormG.PormGPostgres end

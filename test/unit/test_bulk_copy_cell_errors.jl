@@ -27,6 +27,7 @@ using DataFrames
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
 using PormG.QueryBuilder: bulk_copy
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct BulkCopyCellErrorsMockPg <: PormG.PormGPostgres end
 PormG.config["bcce869_pg"] = PormG.Configuration.Settings(

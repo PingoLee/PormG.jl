@@ -27,6 +27,7 @@ julia --project=test/integration test/unit/test_expression_kind_rules.jl
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _EKR_QB = PormG.QueryBuilder
 

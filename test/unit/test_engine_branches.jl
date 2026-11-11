@@ -24,6 +24,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # `x isa PormGSQLite`, `x isa Union{PormGPostgres, …}`, `isa(x, PormGSQLite)`, and an adapter string compare.
 # MySQL (#1130) counts like the other two: a branch naming it is one more engine decided by name.

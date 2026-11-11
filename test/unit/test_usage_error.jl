@@ -16,6 +16,7 @@ using Test
 using InteractiveUtils: subtypes
 using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 _usage_concrete(T, acc = Set{Any}()) =
   (foreach(S -> isabstracttype(S) ? _usage_concrete(S, acc) : push!(acc, S), subtypes(T)); acc)

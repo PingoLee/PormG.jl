@@ -27,6 +27,7 @@ using PormG
 using PormG.Models
 using PormG.QueryBuilder: F, inspect_query, CTE, Max
 using Dates
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`.
 struct Ib1581MockSQLite <: PormG.PormGSQLite end

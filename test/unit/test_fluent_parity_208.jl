@@ -4,6 +4,7 @@ using PormG.Models: Model, CharField, IDField, IntegerField
 using PormG.Functions: Sum, Count, Avg, Max, Min, Lower, Coalesce, Value, Rank, WindowOver, Case, When
 using PormG.QueryBuilder: SQLOrder, SQLField
 import Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fluent parity gaps (#208, #272): get_or_create, last(), aggregate(), page()

@@ -40,6 +40,7 @@ user-visible default moved.
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const FKE_M = PormG.Models
 const FKE_FIXTURE = joinpath(@__DIR__, "fixtures", "field_kwargs_snapshot.txt")

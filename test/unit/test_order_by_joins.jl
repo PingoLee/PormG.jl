@@ -75,6 +75,7 @@ Sibling coverage:
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connections + config key: `runtests.jl` includes ~50 files into one `Main`, so a
 # shared name would let another file's settings decide this file's dialect. Only the connection TYPE

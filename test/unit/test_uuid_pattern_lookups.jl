@@ -25,6 +25,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, UUIDField, CharField, ForeignKey
 using PormG.Functions: Case, When
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct _MockPgUuid902 <: PormG.PormGPostgres end
 struct _MockSlUuid902 <: PormG.PormGSQLite end

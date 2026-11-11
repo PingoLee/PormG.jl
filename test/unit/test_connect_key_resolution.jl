@@ -29,6 +29,7 @@ using Logging
 using PormG
 import PormG: Configuration
 using PormG.Models: Model, IDField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _S550 = Configuration.Settings
 

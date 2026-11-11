@@ -34,6 +34,7 @@ import PormG.Migrations: LiveTable, live_table, get_migration_plan, is_destructi
 using DataFrames
 using JSON
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # PostgreSQL stand-in: no catalog, so every planner lookup answers "nothing there".
 struct GenMockPg1032 <: PormG.PormGPostgres end

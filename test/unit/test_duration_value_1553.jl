@@ -34,6 +34,7 @@ using PormG.QueryBuilder: F, inspect_query
 using PormG: Interval
 using Dates
 import PormG.QueryBuilder as QB
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`.
 struct Dv1553MockSQLite <: PormG.PormGSQLite end

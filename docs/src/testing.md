@@ -58,6 +58,11 @@ PormG.Configuration.register_offline("db"; adapter = :sqlite, server_version = 3
 # BackendCapabilityError: A window function needs SQLite 3.25.0 or newer, for window functions (`OVER (…)`); the offline connection "db" renders for SQLite 3.24.0, the version `register_offline` was given (`server_version = 3024000`).
 ```
 
+The SQL needs no driver, but the first calls are faster with one. Since #1732 the PostgreSQL
+terminals are precompiled in the driver extensions, so an offline `:postgres` key with no driver
+loaded runs its first calls on run-time inference; load `LibPQ` or `Postgres` in the test
+environment to get the precompiled path.
+
 ### Load the model files after it
 
 ```julia

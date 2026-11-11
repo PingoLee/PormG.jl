@@ -124,8 +124,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # Invariant 1b: `cache` is NOT a unique name
 #
-# `PormGModel.cache` is a real field holding migration metadata ("unique_constraints",
-# "composite_indexes", "many_to_many"), used across `src/Models.jl` and `src/migrations/`. So the
+# `PormGModel.cache` is a real field holding migration metadata (a `ModelCache` since #1687: its
+# `unique_constraints`, `composite_indexes`, `many_to_many`, …), used across `src/Models.jl` and `src/migrations/`. So the
 # instruction's memo cannot be found by the bare word, and two complementary patterns are needed:
 #
 #   - a NAMED-RECEIVER scan over all of `src/` + `ext/`, because the instruction is bound to
@@ -144,7 +144,7 @@ end
 
     # `_cte_body_model`'s read of the MODEL's own migration metadata (`ctes.jl`) — a different field
     # on a different type that merely shares a name.
-    allowed = r"get\(m\.cache, \"many_to_many\""
+    allowed = r"\bm\.cache\.many_to_many\b"
     named_receiver = r"\b(instruc|instruct)\.cache\b"
     bare_dot = r"\.cache\b"
     indirect = r"(getfield|getproperty|hasproperty)\([^)]*:(cache|tab_field_cache|json_lookup_paths)\b"

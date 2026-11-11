@@ -33,3 +33,28 @@ the end of the verifier report, which a spinner line overwrote (#1599 round 1). 
 `--trim=unsafe-warn` the verifier lists every dynamic call it cannot resolve ("Error #N"), and the
 binary still links; a call with no compiled target then raises a catchable `MethodError` at run
 time, which `main` prints with the function it missed.
+
+## Reading the build log
+
+Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only
+Python 3; run them with `-I`, as in the commands below. They are what the round comments on #1599
+report:
+
+```
+python3 -I test/trim/tools/rows.py build/build.log          # totals, checked against the summary line
+python3 -I test/trim/tools/classify.py build/build.log --layers
+```
+
+- **`rows.py`** splits the log into rows and prints the totals. The verifier prints its warnings as
+  `Error #N` too, on their own counter, so the script tells them apart by counter and checks the
+  result against the `Trim verify finished` line. It also counts the rows whose innermost PormG frame is
+  in the query builder, the rows naming an abstract node type, and the scope-helper rows.
+- **`classify.py`** puts each row into one class, A to I, first match wins: the remaining-work map of
+  #1599 rounds 9 and 10. With `--layers` it also prints the rows by the track's layers (the table in
+  #1599's body), in two views:
+  - *where the row sits*: the innermost PormG file;
+  - *by cause*: the layer that owns the class's fix.
+
+  The two views disagree on purpose: a read of an abstract layer-4 slot sits in layer-5 code. The rules
+  and the file → layer table are in the script's docstring. Change them in a PR of their own, so that
+  one round's counts stay comparable with the next.

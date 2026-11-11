@@ -5332,9 +5332,15 @@ end
 # on that shape, and pinning is the documented rescue for exactly that (`docs/src/many_to_many.md`).
 # So verify what can be verified and take the human's word otherwise. The E338 half still fires, and
 # it is the half that catches the common slip — a `db_column` written where a field name belongs.
-_through_fk_for(f, target_model::PormGModel)::Bool =
-  f isa sRelationalColumn &&
-  (!(f.to isa PormGModel) || _same_model_reference(f.to, target_model))
+#
+# `to` is read once (#1690): the field is mutable, so a second `f.to` after the `isa` test is not
+# narrowed, and the call took the slot's whole union, `Nothing` included, which no method accepts —
+# a dynamic call, and a `juliac --trim` verifier row. `ModelType` is the only concrete `PormGModel`.
+function _through_fk_for(f, target_model::PormGModel)::Bool
+  f isa sRelationalColumn || return false
+  to = f.to
+  return !(to isa ModelType) || _same_model_reference(to, target_model)
+end
 
 # Is `pin` a usable `source_field` / `target_field` for the end that points at `target_model` (#377)?
 #
@@ -5384,7 +5390,10 @@ end
 function _infer_through_field(through_model::PormGModel, target_model::PormGModel, role::String)::String
   matches = String[]
   for (field_name, field) in through_model.fields
-    if field isa sRelationalColumn && _same_model_reference(field.to, target_model)
+    field isa sRelationalColumn || continue
+    # A resolved target or a binding name; the assertion takes `Nothing` out of the slot's type so
+    # the call resolves (#1690). A foreign key always has a target, so it cannot fail.
+    if _same_model_reference(field.to::Union{String, ModelType}, target_model)
       push!(matches, field_name)
     end
   end
@@ -5437,14 +5446,22 @@ function _relation_from_many_to_many(
   # #1207: derived on the AUTO path only. The `through` branch below takes all four names from the
   # through model, so a `<model>_<pk>` derived for it was dead work that could only fail: on a model
   # named `Driver_` the derivation is `driver__id`, which `format_fild_name` refuses.
-  if field.through === nothing
+  #
+  # #1690: the two pins and `through` are read ONCE. `sManyToManyField` is mutable, so the second
+  # read in `field.source_field === nothing ? … : field.source_field` is not narrowed by the first:
+  # it stayed `Union{Nothing, String}`, and every call that took the result dispatched at run time
+  # (`juliac --trim` verifier rows, #1599). A local is narrowed by the test.
+  source_pin = field.source_field
+  target_pin = field.target_field
+  through_ref = field.through
+  if through_ref === nothing
     self_relation = _same_model_reference(owner_model, related_model)
-    if self_relation && field.source_field === nothing && field.target_field === nothing
+    if self_relation && source_pin === nothing && target_pin === nothing
       owner_column = _many_to_many_column_name(owner_model, owner_pk; prefix = "from_")
       related_column = _many_to_many_column_name(related_model, related_pk; prefix = "to_")
     else
-      owner_column = field.source_field === nothing ? _many_to_many_column_name(owner_model, owner_pk) : field.source_field
-      related_column = field.target_field === nothing ? _many_to_many_column_name(related_model, related_pk) : field.target_field
+      owner_column = source_pin === nothing ? _many_to_many_column_name(owner_model, owner_pk) : source_pin
+      related_column = target_pin === nothing ? _many_to_many_column_name(related_model, related_pk) : target_pin
     end
     # #377: on the AUTO path the field name and the physical column are the same string by
     # construction — `synthesize_many_to_many_through_models` builds the join table FROM these very
@@ -5452,14 +5469,19 @@ function _relation_from_many_to_many(
     owner_field = owner_column
     related_field = related_column
   else
-    through_model = if field.through isa PormGModel
-      field.through
-    elseif _module !== nothing
-      _declared_target(_module, field.through, owner_model, field_name, "ManyToManyField's through")
-    elseif model_map !== nothing
-      _schema_model(model_map, field.through)
+    # `ModelType` at every arm (#1690): registration resolves `through` to the model itself (#1601),
+    # `ModelType` is the only concrete `PormGModel`, and the planner's schema map holds models. Typed
+    # `PormGModel` (or the slot's whole union), every call below on it dispatched at run time. What is
+    # not a model is a binding or table name, a `String`; testing for it is what narrows the argument
+    # the two resolvers take, since `isa ModelType` cannot take an abstract type out of the slot's union.
+    through_model::ModelType = if through_ref isa ModelType
+      through_ref
+    elseif through_ref isa String && _module !== nothing
+      _declared_target(_module, through_ref, owner_model, field_name, "ManyToManyField's through")
+    elseif through_ref isa String && model_map !== nothing
+      _schema_model(model_map, through_ref)::ModelType
     else
-      throw(ModelDefinitionError("Cannot resolve explicit through model $(field.through) for $(owner_model.name).$(field_name)"))
+      throw(ModelDefinitionError("Cannot resolve explicit through model $(_target_label(through_ref)) for $(owner_model.name).$(field_name)"))
     end
 
     # The through model's PHYSICAL table (#363), not its logical `.name`. Same rule — and the same
@@ -5472,8 +5494,8 @@ function _relation_from_many_to_many(
     # FIELD names, both arms (#377). That is what `_infer_through_field` returns, and what
     # `source_field` / `target_field` are documented to take — the same contract as Django's
     # `through_fields`, which `_get_m2m_attr` matches against the through FK's `name`.
-    owner_field = field.source_field === nothing ? _infer_through_field(through_model, owner_model, "source") : field.source_field
-    related_field = field.target_field === nothing ? _infer_through_field(through_model, related_model, "target") : field.target_field
+    owner_field = source_pin === nothing ? _infer_through_field(through_model, owner_model, "source") : source_pin
+    related_field = target_pin === nothing ? _infer_through_field(through_model, related_model, "target") : target_pin
     # A bad pin used to die in the `getindex` below with a bare `KeyError` — or, when it named a
     # non-FK field, one line further on with a `FieldError` about `.pk_field` — naming neither model
     # nor field, and in neither case a `PormGError`. A pin naming the WRONG foreign key did not fail
@@ -5490,8 +5512,11 @@ function _relation_from_many_to_many(
     _is_through_pin_for(through_model, related_field, related_model) || throw(_through_pin_invalid(
       through_model, related_field, field_name, "target_field";
       target_model = related_model, owner_model = owner_model))
-    owner_fk = through_model.fields[owner_field]
-    related_fk = through_model.fields[related_field]
+    # A foreign key or a one-to-one: `_is_through_pin_for` has just tested exactly that
+    # (`_through_fk_for`), so the assertion cannot fail; it lets `.pk_field` be read statically
+    # rather than across the field set's 29 members (#1690).
+    owner_fk = through_model.fields[owner_field]::sRelationalColumn
+    related_fk = through_model.fields[related_field]::sRelationalColumn
     owner_pk = owner_fk.pk_field === nothing ? owner_pk : String(owner_fk.pk_field)
     related_pk = related_fk.pk_field === nothing ? related_pk : String(related_fk.pk_field)
     # #377: the through side's PHYSICAL columns, resolved ONCE — the column-axis mirror of the

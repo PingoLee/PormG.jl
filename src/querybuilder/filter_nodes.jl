@@ -661,9 +661,10 @@ end
 # flat `Vector{UInt8}`, and an `ArrayField` given any vector — and refuses the vector everywhere else,
 # with the message the parse ladder gave before. Renamed from `_guard_scalar_bytes` for that reason.
 function _guard_vector_equality(v::SQLTypeOper, f_meta, label::AbstractString)
-  (v.operator == "=" && v.values isa AbstractVector) || return nothing
+  values = _oper_literal(v)
+  (v.operator == "=" && values isa AbstractVector) || return nothing
   (f_meta !== nothing && _is_array_field(f_meta)) && return nothing
-  (v.values isa Vector{UInt8} && f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
+  (values isa Vector{UInt8} && f_meta !== nothing && _is_binary_field(f_meta)) && return nothing
   _raise_invalid_filter_operator([String(label)], "vector", _VECTOR_VALUE_OPERATORS)
 end
 # Label-deriving form, for the arms that have no field name of their own to pass (the JSON-path
@@ -673,9 +674,10 @@ _guard_vector_equality(v::SQLTypeOper, f_meta) = _guard_vector_equality(v, f_met
 # The path the user wrote, for an error message on an arm that has no field name of its own (the
 # JSON-path lookup). Best effort: falls back to the rendered column.
 function _filter_path_label(v::SQLTypeOper)
-  isa(v.column, SQLTypeField) && isa(v.column.field, String) && return v.column.field
-  k = memo_key(v.column)
-  return k === nothing ? string(v.column) : k[2]
+  col = _oper_column(v)
+  isa(col, SQLField) && isa(col.field, String) && return col.field
+  k = memo_key(col)
+  return k === nothing ? string(col) : k[2]
 end
 
 # Bind an already-FORMATTED value in the shape `_render_predicate` expects for `operator` (#654).
@@ -719,10 +721,10 @@ function _bind_transform_value(instruc::SQLInstruction, v::SQLTypeOper, node::SQ
     node.function_name == "COUNT" && throw(FilterError(
       "The \e[31m@isnull\e[0m lookup can never match COUNT($(label)): COUNT never returns NULL — an empty " *
       "group counts 0. Compare it with 0 instead."))
-    return v.values
+    return _oper_literal(v)
   end
   # #1086: through `_lookup_formatter`, so a pattern lookup over a transform takes a text fragment.
-  formatted = _guarded_format(_lookup_formatter(formatter, v.operator), v.values, v.operator, label, type;
+  formatted = _guarded_format(_lookup_formatter(formatter, v.operator), _oper_literal(v), v.operator, label, type;
                               subject = subject)
   return _bind_predicate_value(instruc, v.operator, formatted)
 end
@@ -797,7 +799,9 @@ end
 # #1528: every column-RHS filter ends here, once its right has rendered, so a JSON key (or a value
 # carrying one) on the right is refused here, once, as in the expression spelling.
 function _render_column_rhs(column::AbstractString, v::SQLTypeOper, rhs, instruc::SQLInstruction)::String
-  _refuse_json_key_right_operand(v.values, instruc)
+  # Every caller reaches here with a node on the right (a column expression, a subquery, a CTE column).
+  rhs_node = _oper_value_node(v)
+  rhs_node === nothing || _refuse_json_key_right_operand(rhs_node, instruc)
   operator = v.operator
   operator in VERBATIM_PATTERN_OPERATORS &&
     return _render_predicate(column, operator, rhs, instruc)
@@ -833,8 +837,9 @@ end
 # Whether the filter's column is a `DurationField`: a model column, a joined path's terminal field, or
 # a CTE column holding one. Read after the column renders, which fills the memo a path is read from.
 function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
-  v.column isa SQLField || return false
-  column = v.column.field
+  col = _oper_column(v)
+  col isa SQLField || return false
+  column = col.field
   if column isa CTEReference
     occursin("__@", column.path) && return false
     return memo_field(instruc, memo_key(column)) isa Models.sDurationField
@@ -842,7 +847,7 @@ function _is_duration_column(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   (column isa String && _is_bare_column(column)) || return false
   field = get(instruc.object.model.fields, column, nothing)
   if field === nothing
-    key = memo_key(v.column)   # a joined path's terminal field (#474); `nothing` for no name
+    key = memo_key(col)   # a joined path's terminal field (#474); `nothing` for no name
     key === nothing || (field = memo_field(instruc, key))
   end
   return field isa Models.sDurationField
@@ -856,7 +861,9 @@ end
 function _refuse_duration_mismatch(v::SQLTypeOper, instruc::SQLInstruction)
   _stores_interval_as_units(instruc.connection) || return nothing
   v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES || return nothing
-  _is_interval_operand_side(v, instruc) == (_expression_kind(v.values, instruc) isa CInterval) && return nothing
+  # Reached from the column-expression arms only, so the right-hand side is a node.
+  rhs_kind = with_oper_value_node(_expression_kind, v, nothing, instruc)
+  _is_interval_operand_side(v, instruc) == (rhs_kind isa CInterval) && return nothing
   _refuse_interval_against_number(v.operator, instruc)
 end
 # Whether the filter's column is an interval: a `DurationField` (a model column, a joined path, a CTE
@@ -864,13 +871,14 @@ end
 # `"v" => F("lap") * 2`, a `Sum` alias in HAVING), or anything the type walk names an interval.
 function _is_interval_operand_side(v::SQLTypeOper, instruc::SQLInstruction)::Bool
   _is_duration_column(v, instruc) && return true
-  alias = _alias_filter_key(v.column, instruc)
+  col = _oper_column(v)
+  alias = _alias_filter_key(col, instruc)
   alias === nothing || return get(instruc.projection_kinds, Symbol(alias), nothing) isa CInterval
-  return v.column isa SQLField && _expression_kind(v.column.field, instruc) isa CInterval
+  return col isa SQLField && _expression_kind(col.field, instruc) isa CInterval
 end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
-  return _predicate_duration_units(v.operator, v.values, instruc.connection)
+  return _predicate_duration_units(v.operator, _oper_literal(v), instruc.connection)
 end
 
 # #894 — `filter("gap__@gt" => F("start_at") - F("date") - Hour(1))` over `"gap" => <interval>`: an
@@ -881,16 +889,18 @@ end
 # once. `nothing` for every other filter, which renders as before.
 function _sqlite_interval_alias_comparison(v::SQLTypeOper, instruc::SQLInstruction)
   _interval_as_ms(instruc.connection) || return nothing
-  (v.values isa Union{FExpression,FObject} && v.operator in _INTERVAL_MS_PREDICATES) || return nothing
+  rhs_node = _oper_value_node(v)
+  (rhs_node isa Union{FExpression,FObject} && v.operator in _INTERVAL_MS_PREDICATES) || return nothing
+  rhs_expr = rhs_node::Union{FExpression,FObject}   # narrowed before the closure below captures it (#1731)
   # An ALIAS only: a model column projected under its own name (`values("lap")`) is a column, and
   # `_alias_filter_key` refuses model fields and every `__` path. A column's comparison stays in the
   # field-path arms below, which keep `==` on the stored text and the column-vs-column text compare.
-  name = _alias_filter_key(v.column, instruc)
+  name = _alias_filter_key(_oper_column(v), instruc)
   name === nothing && return nothing
   source = _projected_interval_source(name, instruc)
   source === nothing && return nothing
   lhs, lhs_ms = _render_interval_source_ms(source, instruc)
-  rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)   # #985: the right side
+  rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(rhs_expr, instruc), instruc)   # #985: the right side
   # #1130: where every interval is its integer (MySQL), a side with no integer form is no interval.
   lhs_ms == rhs_ms || _refuse_interval_against_number(v.operator, instruc)
   if !(lhs_ms && rhs_ms)
@@ -904,12 +914,13 @@ end
 # fields, or the terminal field of a joined path from the #474 memo. `(nothing, "")` when the operand
 # is not a field. Read AFTER the column is rendered: rendering is what fills the memo.
 function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)
-  v.column isa SQLField || return nothing, ""
-  if v.column.field isa String && haskey(instruc.object.model.fields, v.column.field)
-    return instruc.object.model.fields[v.column.field], v.column.field
+  col = _oper_column(v)
+  col isa SQLField || return nothing, ""
+  if col.field isa String && haskey(instruc.object.model.fields, col.field)
+    return instruc.object.model.fields[col.field], col.field
   end
-  f = memo_field(instruc, memo_key(v.column))
-  return f === nothing ? (nothing, "") : (f, memo_key(v.column)[2])
+  f = memo_field(instruc, memo_key(col))
+  return f === nothing ? (nothing, "") : (f, memo_key(col)[2])
 end
 
 # #28/#903: the kind of column a pattern lookup must read as TEXT, or `nothing` for one it reads as it
@@ -982,8 +993,9 @@ const _PATTERN_REFUSED_KINDS = (:array, :tsvector, :inexact_number, :timestamp, 
 # the operand for an `Avg`, so a CTE's `Avg("grid")` — a numeric — would read as an integer's digits
 # on PostgreSQL.
 function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQLInstruction)
-  v.column isa CTEReference && return _expression_kind(v.column, instruc)
-  key = v.column isa SQLField ? memo_key(v.column) : nothing
+  col = _oper_column(v)
+  col isa CTEReference && return _expression_kind(col, instruc)
+  key = col isa SQLField ? memo_key(col) : nothing
   if key !== nothing && key[1] === :cte
     # The memo name is `<cte>__<path>`, and a CTE name may hold `__` itself (`CTE("my__cte", …)`), which
     # only the handle can address, while the string spelling resolves the text before the first `__`.
@@ -996,13 +1008,13 @@ function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQ
   end
   operand_field !== nothing && return _field_kind(operand_field)
   alias !== nothing && return _having_alias_kind(memo_key(:base, alias), instruc)
-  return _expression_kind(v.column, instruc)
+  return _expression_kind(col, instruc)
 end
 
 # The label a refused pattern lookup names: the path the user wrote, where the operand has one.
 # `_filter_path_label` asks `memo_key`, which has no method for every operand (an `F` expression).
 _pattern_refusal_label(v::SQLTypeOper, column::AbstractString) =
-  v.column isa Union{SQLField,CTEReference,JoinedReference} ? _filter_path_label(v) : String(column)
+  _oper_column(v) isa Union{SQLField,CTEReference,JoinedReference} ? _filter_path_label(v) : String(column)
 
 # What such a column needs before its predicate renders. A pattern lookup reads the column's printed
 # text (`Dialect._pattern_text_operand`), because PostgreSQL has no `LIKE` for `inet`, `cidr` or
@@ -1100,7 +1112,7 @@ function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
   return _checking_unnamed_temporal(instruc) do pending
     sql = _render_filter_oper(v, instruc)
     pending === nothing ||
-      _queue_unnamed_temporal!(pending, _filter_column_node(v.column, instruc), _filter_value_node(v.values), v.operator)
+      _queue_unnamed_temporal!(pending, _filter_column_node(_oper_column(v), instruc), _oper_value_check_node(v), v.operator)
     return sql
   end
 end
@@ -1109,6 +1121,13 @@ end
 _filter_value_node(x::AbstractString) = SQLText(x)
 _filter_value_node(x::Union{AbstractVector,Tuple}) = map(_filter_value_node, x)
 _filter_value_node(x) = x
+# The right-hand side as `_filter_value_node` gives it, through the slot's accessors (#1599 round 10): a node
+# is itself; only a literal, or a vector, takes the untyped walk.
+function _oper_value_check_node(v::OperObject)
+  node = _oper_value_node(v)
+  node isa OperValueNode && return node
+  return _filter_value_node(_oper_literal(v))
+end
 function _filter_column_node(col, instruc::SQLInstruction)
   alias = _alias_filter_key(col, instruc)
   return alias === nothing ? col : _projected_source(memo_key(:base, alias), instruc).field
@@ -1121,7 +1140,7 @@ _in_where_filter(instruc::SQLInstruction)::Bool =
   instruc.scope.introducer === :filter && !instruc.scope.having && instruc.scope.join_hop === nothing
 
 _isnull_true_filter(v::SQLTypeOper, instruc::SQLInstruction)::Bool =
-  v.operator == "ISNULL" && v.values === true && _in_where_filter(instruc)
+  v.operator == "ISNULL" && _oper_literal(v) === true && _in_where_filter(instruc)
 
 # #1367: one arm of an OR, under `outer` in a WHERE filter: the other arm may match the parent with no
 # row across a relation this arm reads. Every OR renderer goes through it — the WHERE walk's, and the
@@ -1134,6 +1153,10 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # through `_on_join_right`. Re-entered once under the new side; a no-op everywhere else.
   side = _join_side_change(instruc, :left)
   side === nothing || return _with_render_scope(() -> _get_filter_query(v, instruc), instruc; join_side = side)
+  # #1599 round 10: both slots read once, at their concrete types. `col` is the column (`ColumnPartNode`);
+  # `value_node` the right-hand side when it is a node, `nothing` when it is a literal (`_oper_literal`).
+  col = _oper_column(v)
+  value_node = _oper_value_node(v)
   # #352/#373: rewrite a non-sargable date-bucket comparison (to_char/EXTRACT on the column) into a
   # plain range/comparison directly on the column, so an index on the column — and the planner's
   # selectivity estimate — both apply. Covers joined paths as well as bare ones; see
@@ -1146,7 +1169,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   interval_comparison === nothing || return interval_comparison
   # #907: the same alias compared with a duration VALUE, where only a `When` condition gets here — every
   # filter on an alias takes `_render_alias_predicate` first, which asks the same question.
-  alias = _alias_filter_key(v.column, instruc)
+  alias = _alias_filter_key(col, instruc)
   if alias !== nothing
     interval_comparison = _render_interval_alias_predicate(v, memo_key(:base, alias), instruc)
     interval_comparison === nothing || return interval_comparison
@@ -1156,8 +1179,8 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # the column resolves under `outer` and the hop it reaches is joined LEFT (`_promote_outer_joins!`).
   # A WHERE filter only: a `When` in a projection and an ON clause keep their join types.
   column = _isnull_true_filter(v, instruc) ?
-    _with_render_scope(() -> _get_filter_query(v.column, instruc), instruc; outer = true) :
-    _get_filter_query(v.column, instruc)
+    _with_render_scope(() -> _get_filter_query(col, instruc), instruc; outer = true) :
+    _get_filter_query(col, instruc)
   # #972: set by the three transform arms below, from the NODE they matched — the licence
   # `_render_predicate` needs to put a transform's call text under `IS [NOT] NULL` (#197 refuses
   # any `(` otherwise). Never inferred from `column`'s text.
@@ -1179,7 +1202,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # the JSON formatter on the RHS and throw on plain strings) and applies the PG numeric cast for </>.
   # The `_as !== nothing` test this used to carry was redundant — `memo_key` answers `nothing` for an
   # unnamed expression and `memo_json_lookup` answers `false` for a `nothing` key.
-  if isa(v.column, SQLTypeField) && memo_json_lookup(instruc, memo_key(v.column))
+  if isa(col, SQLTypeField) && memo_json_lookup(instruc, memo_key(col))
     return _render_json_lookup_comparison(v, column, instruc)
   end
   # #1472: a column that holds a key lookup's value without being one — a CTE column whose body
@@ -1190,8 +1213,8 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # key lookup above is: the ones it refuses (a membership list, a range, a pattern) are refused here.
   # #1507: and with a column expression on the right, which the key lookup refuses (#811) — a CTE
   # column or a `Subquery` over the key rendered it as a column comparison, `text > bigint` on PostgreSQL.
-  isa(v.column, SQLTypeField) &&
-    _json_key_lookup_operand(v.column.field, instruc) && return _render_json_lookup_comparison(v, column, instruc)
+  isa(col, SQLTypeField) &&
+    _json_key_lookup_operand(col.field, instruc) && return _render_json_lookup_comparison(v, column, instruc)
   # #1381: a `When` condition on a projection alias — every filter on one takes `_render_alias_predicate`
   # first, so only a `When` gets here. `alias_key` is set when the alias is projected; its value binds
   # as the alias's own filter binds it (`_bind_alias_value`, below), and a comparison on an alias over a
@@ -1219,7 +1242,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # that kind does. Without it `"seen__@date__@startswith"` was a `LIKE` on a `date` on PostgreSQL.
   operand_formatter = operand_field !== nothing ? operand_field.formatter :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
-                      v.column isa SQLTypeField && v.column.field isa SQLTypeFunction ? v.column.field.formatter :
+                      col isa SQLTypeField && col.field isa SQLTypeFunction ? col.field.formatter :
                       nothing
   # #1168/#1183: the operand's kind, which its formatter may not carry (a number's width, a time, an
   # alias with no formatter) — read only for a pattern lookup, the one place it decides something.
@@ -1233,49 +1256,53 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   column = _pattern_operand(column, operand_formatter, v.operator, instruc;
                             label = refuses ? _pattern_refusal_label(v, column) : column,
                             operand_kind = operand_kind)
-  if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
+  if isa(value_node, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
+    rhs_ref = value_node::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}   # narrowed before a closure captures it
     @pormg_debug false
     # #894: a `DurationField` ordered against an `F` interval — another `DurationField`, a timestamp
     # difference — compares milliseconds on SQLite, as `F("time") < F(...)` does. The right side is
     # rendered once either way, to the same SQL `_get_filter_query` gives it when it has no
     # millisecond form, so the fallback keeps the text comparison with the same bindings.
     # #1287: so is a CTE column on the right, which leaves the CTE body as its text.
-    if v.values isa Union{FExpression,CTEReference} && v.operator in _ORDERING_OPERATIONS &&
+    if rhs_ref isa Union{FExpression,CTEReference} && v.operator in _ORDERING_OPERATIONS &&
        _is_sqlite_duration_column(v, instruc)
-      rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      rhs_ms_node = rhs_ref::Union{FExpression,CTEReference}
+      rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(rhs_ms_node, instruc), instruc)
       _refuse_duration_mismatch(v, instruc)
       return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v, rhs, instruc)
     end
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
-    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    placeholders = _on_join_right(() -> _get_filter_query(rhs_ref, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v, placeholders, instruc)
-  elseif isa(v.values, SQLTypeFunction)
+  elseif isa(value_node, SQLTypeFunction)
     # Case/When and other SQL function expressions as filter RHS
-    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    rhs_fn = value_node::Union{FObject,WindowFunction}
+    placeholders = _on_join_right(() -> _get_filter_query(rhs_fn, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v, placeholders, instruc)
-  elseif isa(v.values, SubqueryObject)
+  elseif isa(value_node, SubqueryObject)
+    rhs_sub = value_node::SubqueryObject
     # #926: a scalar subquery, `"grid" => Subquery(…)`. `column` rendered first, so its markers number
     # ahead of the subquery's — the text order (#586). The filter-position render: no #194 recording.
     # #1287: a `DurationField` ordered against a `Subquery` that holds a duration compares
     # milliseconds, as against an `F` interval above; the subquery renders once either way.
     if v.operator in _ORDERING_OPERATIONS && _is_sqlite_duration_column(v, instruc)
-      rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(v.values, instruc), instruc)
+      rhs, rhs_ms = _on_join_right(() -> _render_interval_ms(rhs_sub, instruc), instruc)
       _refuse_duration_mismatch(v, instruc)
       return _render_column_rhs(rhs_ms ? _interval_text_as_ms(column, instruc.connection) : column, v, rhs, instruc)
     end
-    placeholders = _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)
+    placeholders = _on_join_right(() -> _get_filter_query(rhs_sub, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v, placeholders, instruc)
-  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && v.column.field.formatter !== nothing
+  elseif isa(col, SQLTypeField) && isa(col.field, SQLTypeFunction) && col.field.formatter !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite
     # above has declined it, and it formatted outside any guard, so it reported the write path's
     # `InvalidValueError` on a read. Guarded now, like every sibling.
-    _label, _type, _subject = _transform_filter_labels(v.column, v.column.field.formatter)
+    _label, _type, _subject = _transform_filter_labels(col, col.field.formatter)
     # #596: a transform column is a bare path, so `date__@year => UInt8[1, 2]` reaches here as an
     # equality. No transform yields bytes, so this is always the refusal.
     #
@@ -1289,19 +1316,19 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # pattern lookup over a transform column got no `%` and no `escape_like_pattern`. That is the same
     # bind half as the HAVING/alias branch, so all three arms here take the two kwargs too — now
     # through `_bind_transform_value`, which also gives them `@isnull` and `@range` (#972).
-    placeholders = _bind_transform_value(instruc, v, v.column.field, v.column.field.formatter, _label, _type, _subject)
+    placeholders = _bind_transform_value(instruc, v, col.field, col.field.formatter, _label, _type, _subject)
     transform_lhs = true
-  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) && haskey(PormGTypeField, v.column.field.function_name)
+  elseif isa(col, SQLTypeField) && isa(col.field, SQLTypeFunction) && haskey(PormGTypeField, col.field.function_name)
     # Through the same helper as the other sites (#411). These work today only because
     # `PormGTypeField` maps to `format_number_sql` / `format_text_sql` — the two formatters that
     # happen to carry an `AbstractArray` method, which is precisely the coincidence this issue is
     # about. Leaving them raw would keep that coincidence load-bearing.
-    _fmt = getfield(Models, PormGTypeField[v.column.field.function_name])
-    _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
+    _fmt = getfield(Models, PormGTypeField[col.field.function_name])
+    _label, _type, _subject = _transform_filter_labels(col, _fmt)   # #576
     _guard_vector_equality(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
-    placeholders = _bind_transform_value(instruc, v, v.column.field, _fmt, _label, _type, _subject)   # #618, #972
+    placeholders = _bind_transform_value(instruc, v, col.field, _fmt, _label, _type, _subject)   # #618, #972
     transform_lhs = true
-  elseif isa(v.column, SQLTypeFunction) && haskey(PormGTypeField, v.column.function_name)
+  elseif isa(col, SQLTypeFunction) && haskey(PormGTypeField, col.function_name)
     # Function with formatter
     @pormg_debug false
     # Through the same helper as the other sites (#411). These work today only because
@@ -1314,13 +1341,13 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # `ToChar` never got here — but `ToChar(x, "YYYY-MM", formatter = format_yyyy_mm)` is `Y_M`, and
     # the table's `format_text_sql` would accept a value that formatter refuses. `MONTH(x)`, the one
     # internal caller (`Y_Q`/`Y_QUAD`), carries `format_number_sql`, the same as the table.
-    _own = v.column isa FObject ? v.column.formatter : nothing
-    _fmt = _own !== nothing ? _own : getfield(Models, PormGTypeField[v.column.function_name])
-    _label, _type, _subject = _transform_filter_labels(v.column, _fmt)   # #576
+    _own = col isa FObject ? col.formatter : nothing
+    _fmt = _own !== nothing ? _own : getfield(Models, PormGTypeField[col.function_name])
+    _label, _type, _subject = _transform_filter_labels(col, _fmt)   # #576
     _guard_vector_equality(v, nothing, _label)   # #596 — fail-safe; no public spelling reaches this arm
-    placeholders = _bind_transform_value(instruc, v, v.column, _fmt, _label, _type, _subject)   # #618, #972
+    placeholders = _bind_transform_value(instruc, v, col, _fmt, _label, _type, _subject)   # #618, #972
     transform_lhs = true
-  elseif isa(v.column, SQLTypeFunction)
+  elseif isa(col, SQLTypeFunction)
     # #537 — a function column none of the branches above can bind. `OP(::SQLTypeFunction, …)` is a
     # constructor arm PormG itself relies on — `When(OP(MONTH(x), "<=", N))` builds `Y_Q` / `Y_QUAD`,
     # the `@yyyy_q` / `@yyyy_quad` labels (functions.jl; #579 moved that expansion off `@quarter` /
@@ -1335,16 +1362,17 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # reaches this branch is a scalar function — or a SELECT-side `When(OP(Sum(…)))`, which took the
     # same raw `FieldError` and now takes the same typed refusal.
     throw(QueryBuildError(
-      "\e[4m\e[31mOP($(v.column.function_name)(…), …)\e[0m cannot bind a literal: only " *
+      "\e[4m\e[31mOP($(col.function_name)(…), …)\e[0m cannot bind a literal: only " *
       "$(join(sort!(collect(keys(PormGTypeField))), " / ")) function columns render through OP, in a " *
       "filter or inside a CASE/WHEN. For a filter on any other function, project it under an alias and " *
       "filter on the alias — \e[4m\e[32mvalues(\"total\" => Sum(\"qty\")); filter(\"total__@gt\" => 1)\e[0m " *
       "— or use the transform-suffix spelling \e[4m\e[32m\"seen__@month__@lte\" => 4\e[0m (#537)."))
-  elseif isa(v.values, SQLObjectHandler)
+  elseif isa(value_node, ObjectHandler)
+    rhs_qs = value_node::ObjectHandler
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
       @pormg_debug
-      throw(FilterError("Invalid subquery filter on \"$(v.column.field)\": a queryset value requires a membership operator — use \"$(v.column.field)__@in\" => subquery or __@nin."))
+      throw(FilterError("Invalid subquery filter on \"$(col.field)\": a queryset value requires a membership operator — use \"$(col.field)__@in\" => subquery or __@nin."))
     end
     _validate_membership_subquery(v)
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
@@ -1353,9 +1381,9 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # #1130: the queryset's one column, typed by its own build, for the interval check below.
     inner_kind = Ref{Any}(nothing)
     correlated_before = _lazy_length(instruc.outer_refs)
-    placeholders = query(v.values, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
-                         semi_join = !_is_sliced(getfield(v.values, :object)),
-                         built = inner -> (inner_kind[] = _subquery_projection_kind(v.values, inner)))
+    placeholders = query(rhs_qs, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
+                         semi_join = !_is_sliced(getfield(rhs_qs, :object)),
+                         built = inner -> (inner_kind[] = _subquery_projection_kind(rhs_qs, inner)))
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     # Where an interval is its integer (MySQL), membership of an interval column in a queryset of
     # numbers, or of a number in a queryset of intervals, compares a count with microseconds. A column
@@ -1399,12 +1427,12 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
                                _bind_predicate_value(instruc, v.operator, ms_values), instruc)
     end
     if v.operator == "ISNULL"
-      placeholders = v.values   # the `Bool` polarity; `IS [NOT] NULL` binds nothing
+      placeholders = _oper_literal(v)   # the `Bool` polarity; `IS [NOT] NULL` binds nothing
       # #997: the year-qualified labels reach this arm rather than the transform arms above, because
       # their `Concat` node carries no formatter. They take the same `ISNULL` licence as the other
       # transform columns (#972), granted from the node and never from the text: only a label
       # built NULL-propagating (`Y_Q` / `Y_QUAD`) is NULL exactly when its date is.
-      transform_lhs = _is_null_propagating_label(v.column)
+      transform_lhs = _is_null_propagating_label(col)
     elseif v.operator in ("BETWEEN", "NOT BETWEEN")
       # #467: both operands format in ONE guard and neither binds until both succeed — the
       # iterable-lookup arm of `_format_filter_value` is what does that now.
@@ -1418,22 +1446,22 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       if range_field === nothing && alias_key !== nothing
         placeholders = _bind_alias_value(v, alias_key, instruc)   # #1381
       else
-        formatted = range_field === nothing ? v.values :
-          _guarded_format(range_field.formatter, v.values, v.operator, range_label, range_field.type)
+        formatted = range_field === nothing ? _oper_literal(v) :
+          _guarded_format(range_field.formatter, _oper_literal(v), v.operator, range_label, range_field.type)
         placeholders = _bind_predicate_value(instruc, v.operator, formatted)
       end
-    elseif haskey(instruc.object.model.fields, v.column.field)
+    elseif haskey(instruc.object.model.fields, col.field)
       # Does this operator take `%` decoration? `add_parameter!` then routes the value through
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-      _f_meta = instruc.object.model.fields[v.column.field]
-      _guard_vector_equality(v, _f_meta, v.column.field)   # #596
+      _f_meta = instruc.object.model.fields[col.field]
+      _guard_vector_equality(v, _f_meta, col.field)   # #596
       # #576: was a hand-written `try` whose `catch` carried the note below; it is now the shared
       # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
       # above already does — only the operand formatting is being converted, never the binding.
       placeholders = add_parameter!(instruc,
-        _guarded_format(_lookup_formatter(_f_meta, v.operator), v.values, v.operator, v.column.field, _f_meta.type),
+        _guarded_format(_lookup_formatter(_f_meta, v.operator), _oper_literal(v), v.operator, col.field, _f_meta.type),
         contains=is_like_op, operator=v.operator)
       # A whole JSON document is compared as JSON, on every engine (`_json_document_marker`); a pattern
       # lookup's value is text (`@contains`, `@iexact`), and stays a bare marker.
@@ -1455,10 +1483,10 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # #467 brought `BETWEEN`/`NOT BETWEEN` onto the same helper; #576 brought the remaining 12
       # `_format_filter_value` sites, so every formatter call on the read path now reaches one
       # re-raise instead of one in thirteen doing so.
-    elseif (_vc_field = memo_field(instruc, memo_key(v.column))) !== nothing # #474
+    elseif (_vc_field = memo_field(instruc, memo_key(col))) !== nothing # #474
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
-      _guard_vector_equality(v, _vc_field, memo_key(v.column)[2])   # #596: the joined-path twin
+      _guard_vector_equality(v, _vc_field, memo_key(col)[2])   # #596: the joined-path twin
       # #576: unguarded, and CONFIRMED — this is the ordinary joined-path filter, not an exotic
       # one. Any FK traversal lands here, because `"driverid__dob"` is not a key of `model.fields`,
       # so `filter("driverid__dob" => "not-a-date")` reported `InvalidValueError` on what is
@@ -1470,26 +1498,26 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # probe was wrong, not the arm. `_vc_field` is a real field, so no label is synthesised —
       # the memo key's second half is the path the user wrote.
       placeholders = add_parameter!(instruc,
-        _guarded_format(_lookup_formatter(_vc_field, v.operator), v.values, v.operator,
-                        memo_key(v.column)[2], _vc_field.type),
+        _guarded_format(_lookup_formatter(_vc_field, v.operator), _oper_literal(v), v.operator,
+                        memo_key(col)[2], _vc_field.type),
         contains=is_like_op, operator=v.operator)
       !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_vc_field) &&
         (placeholders = _json_document_marker(instruc.connection, placeholders))
-    elseif isa(v.column, SQLTypeField)
+    elseif isa(col, SQLTypeField)
       @pormg_debug false
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       # #596: this arm resolves no field, so it cannot prove the column holds bytes. Fail closed by
       # passing no field: a byte payload is refused rather than expanded into one marker per byte.
-      _guard_vector_equality(v, nothing, string(v.column.field))
+      _guard_vector_equality(v, nothing, string(col.field))
       # #1381: a `When` condition on a projection alias is the spelling that reaches this arm — the
       # comment here once said no test did, and `When("total__@gte" => 100)` over a `Sum` alias always
       # had. It bound the value raw: no check of the alias's type, and on MySQL no JSON marker for a
       # whole document. It binds as the alias's own filter binds it now; anything else stays raw.
       placeholders = alias_key !== nothing ? _bind_alias_value(v, alias_key, instruc) :
-        add_parameter!(instruc, v.values, contains=is_like_op, operator=v.operator)
+        add_parameter!(instruc, _oper_literal(v), contains=is_like_op, operator=v.operator)
     else
       @pormg_debug false
-      throw(UnknownFieldError("Field \"$(v.column.field)\" not found in model $(instruc.object.model.name)"))
+      throw(UnknownFieldError("Field \"$(col.field)\" not found in model $(instruc.object.model.name)"))
     end
   end
 

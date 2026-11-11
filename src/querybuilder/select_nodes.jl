@@ -225,8 +225,10 @@ _order_cte_names!(out::Set{String}, x::FObject) =
 _order_cte_names!(out::Set{String}, x::WindowFunction) =
   (_order_cte_names!(out, x.column); _order_cte_names!(out, x.over.partition_by);
    _order_cte_names!(out, x.over.order_by))
+# A literal right-hand side names no CTE (the `::Any` arm), so only the node view is walked (#1599 round 10).
 _order_cte_names!(out::Set{String}, x::OperObject) =
-  (_order_cte_names!(out, x.column); _order_cte_names!(out, x.values))
+  (_order_cte_names!(out, _oper_column(x)); with_oper_value_node(_order_cte_names_rhs!, x, out, out))
+_order_cte_names_rhs!(x, out::Set{String}) = _order_cte_names!(out, x)
 _order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, x.filters)
 _order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, x.or)
 _order_cte_names!(out::Set{String}, x::AbstractVector) = (foreach(v -> _order_cte_names!(out, v), x); out)

@@ -125,10 +125,10 @@ function _reads_alias(pred::Function, node, instruc::SQLInstruction,
   hit = false
   _each_condition_leaf(node) do leaf
     hit && return nothing
-    key = _alias_filter_key(leaf.column, instruc)
+    key = _alias_filter_key(_oper_column(leaf), instruc)
     (key === nothing || key in seen) && return nothing
     push!(seen, key)
-    source = _projected_source(memo_key(leaf.column), instruc)
+    source = _projected_source(memo_key(_oper_column(leaf)), instruc)
     # A `Value(...)` literal is neither kind, and no source means the name is not a projection.
     source isa SQLTypeField || return nothing
     hit = pred(source.field) || _reads_alias(pred, source.field, instruc, seen)
@@ -216,9 +216,10 @@ end
 # byte payload and an `ArrayFormatter` (over an `ArrayField`) any vector; every other alias refuses a
 # vector, through the same funnel the WHERE arms use so the message is the one a user already knows.
 function _guard_alias_vector_equality(v::SQLTypeOper, formatter, label::AbstractString)
-  (v.operator == "=" && v.values isa AbstractVector) || return nothing
+  values = _oper_literal(v)
+  (v.operator == "=" && values isa AbstractVector) || return nothing
   formatter isa Models.ArrayFormatter && return nothing
-  (v.values isa Vector{UInt8} && formatter === Models.format_binary_sql) && return nothing
+  (values isa Vector{UInt8} && formatter === Models.format_binary_sql) && return nothing
   _raise_invalid_filter_operator([String(label)], "vector", _VECTOR_VALUE_OPERATORS)
 end
 
@@ -1858,7 +1859,7 @@ function _render_alias_predicate(v::SQLTypeOper, having_key::MemoKey, having_cac
   return _checking_unnamed_temporal(instruc) do pending
     sql = _render_alias_predicate_node(v, having_key, having_cached, instruc)
     pending === nothing ||
-      _queue_unnamed_temporal!(pending, _projected_source(having_key, instruc).field, _filter_value_node(v.values), v.operator)
+      _queue_unnamed_temporal!(pending, _projected_source(having_key, instruc).field, _oper_value_check_node(v), v.operator)
     return sql
   end
 end
@@ -1937,7 +1938,7 @@ end
 # and, since #1381, a `When` condition on it (`_render_filter_oper`), which bound the value raw.
 function _bind_alias_value(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInstruction)
   placeholder = _bind_predicate_value(instruc, v.operator,
-                  _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
+                  _resolve_having_filter_value(having_key, _oper_literal(v), instruc, v.operator))
   # #1360: an alias over the whole JSON document compares as JSON, as the column's own filter arm does
   # (`filter_nodes.jl`); a pattern lookup binds text. A range binds a pair and `@isnull` a Bool, so
   # only a marker string is wrapped. An alias over a key lookup holds that key's value, not a document.
@@ -1965,17 +1966,20 @@ function _render_alias_search(v::SQLTypeOper, source, label::AbstractString, ins
     "\e[32m@search\e[0m: \e[32m\"$(label)__@search\" => SearchQuery(…)\e[0m. A tsvector has no order or " *
     "equality worth filtering on (#1021)."))
   _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "The @search lookup"))
-  query = v.values
-  if query isa AbstractString
+  # The text, or a `SearchQuery(…)` node, read through the slot's accessors (#1599 round 10).
+  values = _oper_literal(v)
+  query = if values isa AbstractString
     get(vector.kwargs, "mixed_config", false) === true && throw(FilterError(
       "The SearchVector projected as \e[31m$(label)\e[0m adds vectors with different configs, so a " *
       "query written as a String has no config to be parsed with. Pass a SearchQuery(text; config = …) (#1021)."))
-    query = SearchQuery(query; config = vector.kwargs["config"])
+    SearchQuery(values; config = vector.kwargs["config"])
+  else
+    _oper_value_node(v)
   end
   _is_fts_node(query, "SEARCH_QUERY") || throw(FilterError(
     "The \e[31m@search\e[0m lookup takes the search text (a String) or a SearchQuery(...) (#1021)."))
   rendered_vector = _render_fts_operand(vector, instruc; _as = source._as)
-  return Dialect.search(instruc.connection, rendered_vector, _render_fts_operand(query, instruc))
+  return Dialect.search(instruc.connection, rendered_vector, _render_fts_operand(query::FObject, instruc))
 end
 
 # #894 — an interval alias compared with a duration compares milliseconds on SQLite: the alias's own
@@ -2002,27 +2006,29 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
   compares = v.operator in _INTERVAL_MS_PREDICATES || v.operator in _INTERVAL_MS_LIST_PREDICATES
   # #1130: where the interval IS its integer (MySQL), a `Subquery` or a CTE column compared with the
   # alias is an interval or it is not: rendered once, typed, and refused when it is a number.
-  if units && compares && v.values isa Union{SubqueryObject,CTEReference}
+  value_node = _oper_value_node(v)
+  if units && compares && value_node isa Union{SubqueryObject,CTEReference}
+    rhs_ref = value_node::Union{SubqueryObject,CTEReference}   # narrowed before the closure captures it
     sql, _ = _render_interval_source_ms(source, instruc)
-    rhs, _, interval = _on_join_right(() -> _render_interval_operand(v.values, instruc), instruc)
+    rhs, _, interval = _on_join_right(() -> _render_interval_operand(rhs_ref, instruc), instruc)
     interval === nothing && _refuse_interval_against_number(v.operator, instruc)
     return _render_column_rhs(sql, v, rhs, instruc)
   end
-  ms_values = _predicate_duration_units(v.operator, v.values, instruc.connection)
+  ms_values = _predicate_duration_units(v.operator, _oper_literal(v), instruc.connection)
   # #1130: and a compared VALUE that is no duration has no text comparison to fall back to: the
   # duration formatter refuses it, as the alias's own formatter does for any other interval alias,
   # rather than a `Value(Hour(1))` alias comparing its count with `10`. An expression (a queryset for
   # `@in`) is left to the path that renders it.
-  if ms_values === nothing && units && compares && !(v.values isa Union{SQLType,SQLObjectHandler})
+  if ms_values === nothing && units && compares && !(value_node isa Union{SQLType,SQLObjectHandler})
     formatter = value_formatter(CInterval(), instruc.connection)
-    _guarded_format(formatter, v.values, v.operator, having_key[2], _formatter_type_label(formatter);
+    _guarded_format(formatter, _oper_literal(v), v.operator, having_key[2], _formatter_type_label(formatter);
                     subject = "projection alias")
   end
   ms_values === nothing && return nothing
   sql, interval_ms = _render_interval_source_ms(source, instruc)
   interval_ms && return _render_predicate(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc)
   placeholder = _bind_predicate_value(instruc, v.operator,
-                  _resolve_having_filter_value(having_key, v.values, instruc, v.operator))
+                  _resolve_having_filter_value(having_key, _oper_literal(v), instruc, v.operator))
   return _render_predicate(sql, v.operator, placeholder, instruc)
 end
 

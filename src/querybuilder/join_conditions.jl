@@ -404,8 +404,8 @@ function _cjoin_on_keyed!(keyed::Set{String}, f, alias::String, instruct::SQLIns
       _cjoin_on_keyed!(keyed, g, alias, instruct, depth + 1)
     end
   elseif f isa OperObject && f.operator == "="
-    _cjoin_on_key_side!(keyed, f.column, f.values, alias, instruct)
-    _cjoin_on_key_side!(keyed, f.values, f.column, alias, instruct)
+    # Either half can be the key side: a `Joined` handle (a node) or a literal path.
+    with_oper_value(_cjoin_on_key_pair!, f, _oper_column(f), keyed, alias, instruct)
   elseif f isa FExpression && f.operation == "="
     _cjoin_on_key_side!(keyed, f.field_name, f.operand, alias, instruct)
     _cjoin_on_key_side!(keyed, f.operand, f.field_name, alias, instruct)
@@ -413,6 +413,12 @@ function _cjoin_on_keyed!(keyed::Set{String}, f, alias::String, instruct::SQLIns
   return keyed
 end
 
+# Both orders of one `OperObject` pair, its right-hand side first (the `with_oper_value` argument order).
+function _cjoin_on_key_pair!(value, column::ColumnPartNode, keyed::Set{String}, alias::String, instruct::SQLInstruction)
+  _cjoin_on_key_side!(keyed, column, value, alias, instruct)
+  _cjoin_on_key_side!(keyed, value, column, alias, instruct)
+  return nothing
+end
 function _cjoin_on_key_side!(keyed::Set{String}, own, other, alias::String, instruct::SQLInstruction)
   col = _cjoin_on_own_column(own, alias)
   col !== nothing && _cjoin_on_single_valued(other, alias, instruct) && push!(keyed, col)
@@ -495,7 +501,7 @@ function _refuse_lhs_past_hop(x, q::SQLObject, path::String, hop::String, depth:
   elseif x isa QorObject
     for f in x.or; _refuse_lhs_past_hop(f, q, path, hop, depth + 1); end
   elseif x isa OperObject
-    _refuse_lhs_past_hop(x.column, q, path, hop, depth + 1)
+    _refuse_lhs_past_hop(_oper_column(x), q, path, hop, depth + 1)
   elseif x isa SQLField
     _refuse_lhs_past_hop(x.field, q, path, hop, depth + 1)
   elseif x isa FObject
@@ -727,6 +733,13 @@ function _guard_no_join_handles(filter, context::String, depth::Int = 0)
   return nothing
 end
 
+# The right-hand side of an `OperObject` pair, in the `with_oper_value` argument order: rejected when it is
+# a handle, then swept.
+function _guard_no_handle_value(value, ::Type{T}, reject::Function, context::String, depth::Int) where {T}
+  value isa T && reject(value, context)
+  _guard_no_handle(value, T, reject, context, depth)
+  return nothing
+end
 function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, depth::Int = 0) where T
   # A cycle in the expression graph would make this walk a StackOverflowError — which Julia reports
   # with "program state may be corrupted". #457 closed ONE route into that: the comparison overloads
@@ -780,11 +793,10 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
   elseif filter isa QorObject
     for f in filter.or; _guard_no_handle(f, T, reject, context, depth + 1); end
   elseif filter isa OperObject
-    filter.column isa T && reject(filter.column, context)
-    filter.column isa SQLField && filter.column.field isa T &&
-      reject(filter.column.field, context)
-    filter.values isa T && reject(filter.values, context)
-    _guard_no_handle(filter.values, T, reject, context, depth + 1)
+    col = _oper_column(filter)
+    col isa T && reject(col, context)
+    col isa SQLField && col.field isa T && reject(col.field, context)
+    with_oper_value(_guard_no_handle_value, filter, T, reject, context, depth + 1)
   elseif filter isa FExpression
     # #444: the comparison overloads (`F("sku") == CTE("ev","sku")`) put the handle in `.operand`,
     # and an `FExpression` is a `FilterType`, so `on`/`cjoin`/`cjoin_on` accept it as an element.
@@ -832,8 +844,9 @@ function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
   elseif f isa OperObject
     # A String (or a list of them) here is a bound literal — `"nationality" => "Brazilian"` — never a
     # column, so only an expression node is walked.
-    _is_rhs_expression(f.values) && _off_path_rhs_paths(f.values, q, path, depth + 1)
-    _off_path_nested_rhs(f.column, q, path, depth + 1)
+    rhs = _oper_value_node(f)   # `_is_rhs_expression`'s members that the slot can hold
+    rhs isa Union{FExpression,FObject,SubqueryObject,ObjectHandler} && _off_path_rhs_paths(rhs, q, path, depth + 1)
+    _off_path_nested_rhs(_oper_column(f), q, path, depth + 1)
   elseif f isa FExpression && f.operation in _COMPARISON_OPERATIONS
     # A String operand of an `F` comparison is read as a column first (see `_refuse_cte_string_in_join`).
     _off_path_rhs_paths(f.operand, q, path, depth + 1)
@@ -867,8 +880,9 @@ function _off_path_nested_rhs(x, q::SQLObject, path::String, depth::Int)
     end
     _off_path_nested_rhs(x.field_name, q, path, depth + 1)
   elseif x isa OperObject   # a `When` condition: column on the left, `values` its right side
-    _is_rhs_expression(x.values) && _off_path_rhs_paths(x.values, q, path, depth + 1)
-    _off_path_nested_rhs(x.column, q, path, depth + 1)
+    rhs = _oper_value_node(x)   # `_is_rhs_expression`'s members that the slot can hold
+    rhs isa Union{FExpression,FObject,SubqueryObject,ObjectHandler} && _off_path_rhs_paths(rhs, q, path, depth + 1)
+    _off_path_nested_rhs(_oper_column(x), q, path, depth + 1)
   elseif x isa Union{QObject,QorObject}
     _off_path_rhs_condition(x, q, path, depth + 1)
   elseif x isa FObject
@@ -942,9 +956,10 @@ function _each_condition_column(visit::Function, x, depth::Int; f_slot::Bool = f
     # A `When` inside a function: its column is a column, its `values` literals unless an expression.
     # A `Joined` handle on the right of a pair is a column too (#982 reads it; #962 never sees one,
     # because a path join's conditions refuse the handle at the call).
-    _each_condition_column(visit, x.column, depth + 1)
-    (_is_rhs_expression(x.values) || x.values isa JoinedReference) &&
-      _each_condition_column(visit, x.values, depth + 1)
+    _each_condition_column(visit, _oper_column(x), depth + 1)
+    rhs = _oper_value_node(x)   # `_is_rhs_expression`'s members that the slot can hold, and a `Joined` handle
+    rhs isa Union{FExpression,FObject,SubqueryObject,ObjectHandler,JoinedReference} &&
+      _each_condition_column(visit, rhs, depth + 1)
   elseif x isa SubqueryObject
     _each_outer_ref(visit, getfield(x.query, :object))
   elseif x isa SQLObjectHandler   # an `@in` subquery, passed as the query itself
@@ -974,6 +989,7 @@ function _each_outer_ref(visit::Function, inner::SQLObject)
   return nothing
 end
 
+_collect_outer_refs_rhs!(x, refs::Vector{String}, depth::Int) = _collect_outer_refs!(refs, x, depth)
 function _collect_outer_refs!(refs::Vector{String}, x, depth::Int)
   depth > 32 && return refs
   if x isa OuterRefObject
@@ -985,7 +1001,9 @@ function _collect_outer_refs!(refs::Vector{String}, x, depth::Int)
   elseif x isa QorObject
     for v in x.or; _collect_outer_refs!(refs, v, depth + 1); end
   elseif x isa OperObject
-    _collect_outer_refs!(refs, x.column, depth + 1); _collect_outer_refs!(refs, x.values, depth + 1)
+    # A literal holds no outer reference, so only the nodes are walked (a range of `OuterRef`s included).
+    _collect_outer_refs!(refs, _oper_column(x), depth + 1)
+    with_oper_value_node(_collect_outer_refs_rhs!, x, refs, refs, depth + 1)
   elseif x isa FExpression
     for s in (x.field_name, x.column, x.operand); _collect_outer_refs!(refs, s, depth + 1); end
   elseif x isa Union{FObject,WindowFunction}
@@ -1062,8 +1080,8 @@ end
 _prefix_join_column(x::WindowFunction, ::String, _; base = nothing) = x
 # The `When` inside a composite transform: its column is part of the left side, its `values` literals.
 function _prefix_join_column(x::SQLTypeOper, prefix::String, foreign_model; base = nothing)
-  return OperObject(operator=x.operator, values=x.values,
-                    column=_prefix_join_column(x.column, prefix, foreign_model; base = base))
+  return OperObject(operator=x.operator, values=_oper_literal(x),
+                    column=_prefix_join_column(_oper_column(x), prefix, foreign_model; base = base))
 end
 _prefix_join_column(x::Vector, prefix::String, foreign_model; base = nothing) =
   Any[_prefix_join_column(v, prefix, foreign_model; base = base) for v in x]
@@ -1142,10 +1160,10 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
     # #961: the whole column is the left side, so every column inside it is prefixed — including one
     # wrapped in a transform (`Q("dob__@year" => …)` arrives as `SQLField(EXTRACT(dob))`), which the
     # old `column.field isa String` test let through onto the base row.
-    column = _prefix_join_column(new_oper.column, prefix, foreign_model; base = base)
+    column = _prefix_join_column(_oper_column(new_oper), prefix, foreign_model; base = base)
 
     # #958: `values` is the right-hand side — never prefixed, as in the `Pair` arm.
-    return OperObject(operator=new_oper.operator, values=new_oper.values, column=column)
+    return OperObject(operator=new_oper.operator, values=_oper_literal(new_oper), column=column)
   elseif filter isa FExpression
     # #444: sweep the F expression BEFORE prefixing. `F("sku") == CTE("ev","sku")` is a `FilterType`,
     # so `on()`/`cjoin()` accept it, and the arms below only rewrite `String` slots — a handle rode

@@ -440,8 +440,9 @@ function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
     _collect_projected_paths!(out, x.over.partition_by, depth + 1)
     _collect_projected_paths!(out, x.over.order_by, depth + 1)
   elseif x isa OperObject
-    _collect_projected_paths!(out, x.column, depth + 1)
-    _is_rhs_expression(x.values) && _collect_projected_paths!(out, x.values, depth + 1)
+    _collect_projected_paths!(out, _oper_column(x), depth + 1)
+    rhs = _oper_value_node(x)   # `_is_rhs_expression`'s members that the slot can hold
+    rhs isa Union{FExpression,FObject,SubqueryObject,ObjectHandler} && _collect_projected_paths!(out, rhs, depth + 1)
   elseif x isa QObject
     _collect_projected_paths!(out, x.filters, depth + 1)
   elseif x isa QorObject
@@ -864,7 +865,7 @@ function _mixed_node_signature(x, depth::Int = 0)
     return (:f, x.operation === nothing ? "" : x.operation, parts...)
   end
   if x isa OperObject
-    parts = Any[_mixed_node_signature(x.column, depth + 1), _mixed_node_signature(x.values, depth + 1)]
+    parts = Any[_mixed_node_signature(_oper_column(x), depth + 1), with_oper_value(_mixed_node_signature, x, depth + 1)]
     any(isnothing, parts) && return nothing
     return (:op, x.operator, parts...)
   end
@@ -971,8 +972,10 @@ function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::S
     # (`When("born__@year__@gt" => …)`) arrives as `SQLField(EXTRACT(born), …)`, but the #352 sargable
     # rewrite renders it as `"Tb"."born" >= ?`, so a grouped `born__@year` does not cover it. Its base
     # column is yielded with no path key, and only a grouped `born` does.
-    _alias_filter_key(node.column, instruc) === nothing && walk(node.column; cover = _ -> false)
-    node.values isa Union{FExpression,SQLTypeFunction,CTEReference,JoinedReference} && walk(node.values)
+    col = _oper_column(node)
+    _alias_filter_key(col, instruc) === nothing && walk(col; cover = _ -> false)
+    rhs = _oper_value_node(node)
+    rhs isa Union{FExpression,FObject,WindowFunction,CTEReference,JoinedReference} && walk(rhs)
   elseif node isa QObject
     walk(node.filters)
   elseif node isa QorObject

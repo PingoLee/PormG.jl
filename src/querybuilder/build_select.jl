@@ -168,7 +168,7 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
         # (`_literal_read_kind`) and not in `literal_canonical_kind`, which also feeds the binders
         # (#882's reason). A `Subquery` over it inherits the kind through the inner build's record.
         kind = _read_kind(v_copy, instruc)
-        kind === nothing || (instruc.projection_kinds[Symbol(alias)] = kind)
+        kind === nothing || _store_projection_kind!(instruc, Symbol(alias), kind)
         _projection_params!(instruc)[alias] = bound_since(mark)
       end
       continue
@@ -231,7 +231,7 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
       # (a 0/1 for a boolean, the stored text for a date). The memo already holds the resolution the
       # kind is read from, so the answer is the one the render branch gives (`_read_kind`, as below).
       kind = with_field_part(_read_kind_field_part, v_copy.field, instruc, nothing)
-      kind === nothing || (instruc.projection_kinds[Symbol(_projection_output_name(cached))] = kind)
+      kind === nothing || _store_projection_kind!(instruc, Symbol(_projection_output_name(cached)), kind)
     else
       @pormg_debug false
       # #564 — RENDER, AND CARRY OUT WHAT THE RESULT IS.
@@ -324,7 +324,7 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
       # above records under the same name, by the same rule (#979).
       if kind !== nothing
         name = _projection_output_name(v_copy)
-        name === nothing || (instruc.projection_kinds[Symbol(name)] = kind)
+        name === nothing || _store_projection_kind!(instruc, Symbol(name), kind)
       end
     end
     out = _projection_output_name(instruc.select[i])

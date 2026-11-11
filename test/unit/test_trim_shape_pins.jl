@@ -690,6 +690,40 @@ end
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
   end
 
+  # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
+  #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
+  # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete
+  #   `CanonicalType` (none parametric) and no other; and `get_select_query` makes no dynamic `setindex!`
+  #   or store call.
+  # Why: the kind reached the three stores as `Any`, then as the abstract `CanonicalType`; either way
+  #   `setindex!(::Dict{Symbol,CanonicalType}, kind, ::Symbol)` is not a compileable call (the callee
+  #   specializes on the value and has 98 methods), and the trimmed read aborted inferring
+  #   `setindex!(Dict{Symbol,CanonicalType}, CDate, Symbol)` at run time (round 8, row 31). Measured on
+  #   main ea768c047, `get_select_query` makes the dynamic `setindex!` call and `_read_kind` over a `FieldPart`
+  #   infers `Any`.
+  @testset "a projection's kind is typed where it is made and stored at its concrete type (#1599 round 8, row 31)" begin
+    QB = PormG.QueryBuilder
+    @test only(Base.return_types(QB._read_kind, (QB.FieldPart, QB.InstructionObject))) <:
+          Union{Nothing, PormG.CanonicalType}
+    calls = _named_dynamic_calls(Tuple{typeof(QB.get_select_query), Vector{QB.ProjectionNode}, QB.InstructionObject},
+                                 ("setindex!", "_store_projection_kind!"))
+    @test isempty(calls)
+    isempty(calls) || @info "dynamic kind stores in get_select_query" calls
+    concrete, open = _node_subtypes((PormG.CanonicalType,))
+    @test isempty(open)
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_kind.jl"), String)
+    start = findfirst("function _store_projection_kind!(", src)[1]
+    body = join(filter(l -> !startswith(lstrip(l), "#"),
+                       split(src[start:findnext("\nend", src, start)[end]], '\n')), '\n')
+    for T in concrete
+      @test occursin("kind isa $(nameof(T)) && return (d[name] = kind; nothing)", body)
+    end
+    @test count("kind isa ", body) == length(concrete)
+    # Every arm names a kind the module can see, statically: an arm naming an unimported kind is a global
+    # read typed `Any`, so its `isa` and store dispatch at run time (and the name would throw if reached).
+    @test isempty(_dynamic_calls(QB._store_projection_kind!, (QB.InstructionObject, Symbol, Any)))
+  end
+
   # What: the model field as the query builder reads it (#1599 round 7, row 30): the field memo's value
   #   type, what `_alias_column_field` answers, and the kind lookup's three readers of that answer.
   # Expected: the memo holds #1604's closed `AnyField`; `_alias_column_field` infers
@@ -796,10 +830,10 @@ end
     QB = PormG.QueryBuilder
     # (unresolved calls, calls whose result is `Any`), reviewed; the scope method itself adds none.
     residue = Dict(
-      # `build_select.jl`, the projection render (both arms of the split on the label): the closure
-      # returns `_read_kind(original)`, and `original` is the projection's `SQLField.field::FieldPart`,
-      # the field #1698 phase 2 closes (`_read_kind(::FieldPart)` infers `Any`).
-      "get_select_query" => (0, 2),
+      # `build_select.jl`, the projection render: none left. Its two `Any` results (the render returning
+      # `_read_kind(original)` over a `FieldPart`) went when `_read_kind` declared its answer (#1599 round 8,
+      # row 31).
+      "get_select_query" => (0, 0),
       # the ORDER BY term's interval render (`_render_interval_operand`): its closure captures
       # `order_node`, a `FieldPart`, so the scope call is left unresolved (not attributed further; a
       # `let` rebinding changes nothing). The term's plain render walks `order_node` before its closure

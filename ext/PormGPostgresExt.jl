@@ -869,8 +869,17 @@ const _CLOSED_CONNECTION_PREFIX = "postgres connection has been closed or discon
 const _LOST_SOCKET_ERRNOS = (Libc.ECONNRESET, Libc.EPIPE, Libc.ECONNABORTED, Libc.ENOTCONN,
                              Libc.ETIMEDOUT, Libc.EHOSTUNREACH, Libc.ENETUNREACH)
 
-function _is_lost_connection(e, depth::Int = 4)::Bool
-  e isa CompositeException && return any(inner -> _is_lost_connection(inner, depth), e.exceptions)
+# `@nospecialize`: every caller holds the exception as `Any` (a `catch`), so one compiled body serves them
+# all and each call to it is static (#1714). The types this driver owns are read at their known types;
+# a wrapper this driver does not own is opened through core's open arm.
+function _is_lost_connection(@nospecialize(e), depth::Int = 4)::Bool
+  # A loop, not `any(closure, e.exceptions)`: over the `Vector{Any}` that is a dynamic call.
+  if e isa CompositeException
+    for inner in e.exceptions
+      _is_lost_connection(inner, depth) && return true
+    end
+    return false
+  end
   # The server named a code: trust it over any text (a DETAIL can quote stored user data).
   e isa Postgres.Error && return e.code in _LOST_CONNECTION_CODES
   # server-text-match-ok: Postgres.jl's own client-side text, not a server message
@@ -882,11 +891,8 @@ function _is_lost_connection(e, depth::Int = 4)::Bool
   nameof(typeof(e)) === :NetClosingError && return true
   depth > 0 || return false
   # Wrappers keep the underlying failure in `.cause` (the TLS layer) or `.err` (Reseau's `OpError`).
-  for field in (:cause, :err)
-    inner = hasproperty(e, field) ? getproperty(e, field) : nothing
-    inner isa Exception && return _is_lost_connection(inner, depth - 1)
-  end
-  return false
+  inner = PormG._unowned_inner(e)
+  return inner !== nothing && _is_lost_connection(inner, depth - 1)
 end
 
 PormG.backend_is_connection_error(pool::_Pool, @nospecialize(e)) = _is_lost_connection(e)
@@ -933,9 +939,13 @@ function PormG.backend_classify_error(pool::_Pool, @nospecialize(e))
   e isa SystemError && return :operational   # any other errno: the socket, not the statement
   e isa Postgres.Error || return :unknown
   isempty(e.code) && return :operational   # the driver's own protocol error: the session is suspect
-  class = first(e.code, 2)
-  class == "23" && return :integrity
-  class in _OPERATIONAL_CLASSES && return :operational
+  # The class is the code's first two characters. Compared with `startswith`, not `first(e.code, 2)`:
+  # `first` reaches `nextind`, whose error path builds its message from an untyped value, a dynamic call
+  # in a trimmed image (#1714). The two answer alike for every code, a one-character one included.
+  startswith(e.code, "23") && return :integrity
+  for class in _OPERATIONAL_CLASSES
+    startswith(e.code, class) && return :operational
+  end
   return :statement
 end
 
@@ -947,8 +957,7 @@ PormG.backend_error_fields(pool::_Pool, @nospecialize(e)) =
   e isa Postgres.Error ? PormG.backend_error_fields(e) : PormG._NO_ERROR_FIELDS
 function PormG.backend_error_fields(e::Postgres.Error)
   sqlstate = isempty(e.code) ? nothing : e.code
-  return (sqlstate = sqlstate, constraint = e.constraint, table = e.table, column = e.column,
-          message = PormG._safe_server_message(sqlstate, e.message))
+  return PormG._error_record(sqlstate, e.constraint, e.table, e.column, PormG._safe_server_message(sqlstate, e.message))
 end
 
 # ── Cancellation (#315) ──────────────────────────────────────────────────────

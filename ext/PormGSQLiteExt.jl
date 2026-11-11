@@ -312,8 +312,20 @@ end
 # No `backend_is_cancellation` method either (#1277): SQLite has no statement timeout, and its one
 # cancel, PormG's own `sqlite3_interrupt` below, classifies as `:unknown` → `StatementError`, never
 # as the `OperationalError` a retry would consider.
+# The message of a SQLite exception (#1714), read at a known type: SQLite.jl declares `msg` an
+# `AbstractString` and stores a `String`, so only a hand-built one takes the open arm. A phrase is matched
+# against the message itself, where it used to be matched against `string(e)` (SQLite.jl's default
+# `show`, `SQLiteException("<msg>")`). The answers are the same except where `show` escaped a character:
+# an escape spells letters (`\n`, `\t`, `\xe7`), which could complete a phrase that the message does not
+# hold, and a malformed character, which `_phrase_text` replaces instead of letting `lowercase` throw.
+_sqlite_msg(e::SQLite.SQLiteException)::String = (m = e.msg; m isa String ? m : PormG._unowned_string(m))
+# The lower-cased text a phrase is matched against: the message, or, for an exception SQLite does not
+# own, the text `string` gives it, as always (core's open arm).
+_sqlite_text(@nospecialize(e))::String =
+  e isa SQLite.SQLiteException ? PormG._phrase_text(_sqlite_msg(e)) : PormG._unowned_error_text(e)
+
 function PormG.backend_is_connection_error(pool::PormGSQLite, @nospecialize(e))
-  msg = lowercase(string(e))
+  msg = _sqlite_text(e)
   # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("database is closed", msg) ||
          occursin("database connection is closed", msg) ||
@@ -326,7 +338,7 @@ end
 # degrading to the normal wait-to-deadline path. Message-substring based — SQLite.jl exposes one
 # `SQLiteException` type for every open failure, so type-matching can't separate causes (#72).
 function PormG.backend_is_permanent_connect_error(pool::PormGSQLite, @nospecialize(e))
-  msg = lowercase(string(e))
+  msg = _sqlite_text(e)
   # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
   return occursin("unable to open database file", msg)
 end
@@ -377,7 +389,7 @@ function PormG.backend_classify_error(pool::PormGSQLite, @nospecialize(e))
   # One method, the exception `@nospecialize` and tested here (#1696): see `backend_classify_error`.
   e isa SQLite.SQLiteException || return PormG._default_classify_error(pool, e)
   PormG.backend_is_connection_error(pool, e) && return :operational
-  msg = lowercase(string(e.msg))
+  msg = PormG._phrase_text(_sqlite_msg(e))
   # SQLite spells every constraint failure "<KIND> constraint failed[: table.column]".
   # server-text-match-ok: SQLite's own literal constraint text; no result code reaches here (above)
   occursin("constraint failed", msg) && return :integrity
@@ -401,10 +413,11 @@ end
 # one-argument form, which reads whichever driver's exception it is handed (#1696).
 PormG.backend_error_fields(pool::PormG.ConnectionPool.SQLiteConnectionPool, @nospecialize(e)) =
   e isa SQLite.SQLiteException ? PormG.backend_error_fields(e) : PormG._NO_ERROR_FIELDS
-PormG.backend_error_fields(e::SQLite.SQLiteException) =
-  (sqlstate = occursin("integer overflow", lowercase(e.msg)) ? "22003" : nothing,  # server-text-match-ok: SQLite's own literal
-   constraint = nothing, table = nothing, column = nothing,
-   message = isempty(e.msg) ? nothing : String(e.msg))
+function PormG.backend_error_fields(e::SQLite.SQLiteException)
+  msg = _sqlite_msg(e)
+  return PormG._error_record(occursin("integer overflow", PormG._phrase_text(msg)) ? "22003" : nothing,  # server-text-match-ok: SQLite's own literal
+                             nothing, nothing, nothing, isempty(msg) ? nothing : msg)
+end
 
 # Window-function support probe used by src/Dialect.jl.
 PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversion_number())

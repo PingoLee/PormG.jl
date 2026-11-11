@@ -36,7 +36,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
               backend_is_cancellation, backend_handle_type,
-              _NO_ERROR_FIELDS
+              _NO_ERROR_FIELDS, _ErrorFields, _field_text
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
 
@@ -366,8 +366,8 @@ function _as_database_error(pool, @nospecialize(e); fields = nothing)
   # DETAIL, HINT, the `LINE n:` excerpt — stays in `cause`. Never let an extension's reader replace
   # the failure being reported: a throw there degrades to no fields, a cancellation still propagates.
   read = fields === nothing ? _read_error_fields(pool, root) : fields
-  # One record type for every driver's reader, so the constructors below are static calls: each reader
-  # returns a `NamedTuple` of its own types (LibPQ's are `SubString`s).
+  # One record type, so the constructors below are static calls: an extension's reader returns
+  # `_ErrorFields` already (#1714); a stand-in's, or LibPQ's own `fields =`, is converted.
   f = _error_fields(read)
   kind === :integrity   && return IntegrityError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
   kind === :operational && return OperationalError(adapter, root, f.sqlstate, f.constraint, f.table, f.column, f.message)
@@ -385,20 +385,17 @@ function _read_error_fields(pool, @nospecialize(root))
   end
 end
 
-# The fields a `DatabaseError` stores, `Union{Nothing,String}` each, from a reader's `NamedTuple`. The
-# conversion is the one the error types' constructors made before (`convert(Union{String,Nothing}, x)`),
-# done here once so they are called with their own field types.
-const _ErrorFields = NamedTuple{(:sqlstate, :constraint, :table, :column, :message), NTuple{5, Union{Nothing, String}}}
+# The fields a `DatabaseError` stores, `Union{Nothing,String}` each (`_ErrorFields`, Backend.jl). Every
+# extension's pool-keyed reader returns that record already (#1714), so for them this is the identity and
+# the call is static; a stand-in's reader, or LibPQ's own `fields =`, is a `NamedTuple` of its own types,
+# converted here as the error types' constructors converted it before (`convert(Union{String,Nothing}, x)`).
+_error_fields(f::_ErrorFields) = f
 # A key a reader leaves out reads `nothing`, the keyword constructors' default.
 _error_fields(f)::_ErrorFields = (sqlstate = _field_text(get(f, :sqlstate, nothing)),
                                   constraint = _field_text(get(f, :constraint, nothing)),
                                   table = _field_text(get(f, :table, nothing)),
                                   column = _field_text(get(f, :column, nothing)),
                                   message = _field_text(get(f, :message, nothing)))
-_field_text(::Nothing) = nothing
-_field_text(s::String) = s
-_field_text(s::SubString{String}) = String(s)
-_field_text(@nospecialize(x)) = convert(Union{Nothing, String}, x)
 
 """
     _await_tx_statement(pool, task)

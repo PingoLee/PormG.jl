@@ -509,6 +509,28 @@ const _PG_LOST_CONNECTION_ERRORS = Union{
   LibPQ.Errors.IdleSessionTimeout,                             # 57P05 — the one that targets IDLE POOLED conns
 }
 
+# The lower-cased text the phrase tests below read (#1714), from LibPQ's own exceptions at their known
+# types, so no call dispatches on the untyped exception. They used to read `lowercase(string(e))`:
+#   - `show(::PQResultError)` prints `LibPQ.Errors.<Name>(repr(msg)[, repr(verbose_msg)])`, so the text
+#     is `msg`, and `verbose_msg` when there is one, joined by a newline so that no phrase can match
+#     across the two;
+#   - the other LibPQ exceptions print their `msg` through the default `show`.
+# The answers are the same except where `repr` escaped a character. An escape spells letters (`\n`, `\t`,
+# `\xe7`), which could complete a phrase the message does not hold (`"x\no pg_hba.conf entry"`, a false
+# positive). A malformed character is replaced by `_phrase_text`, where `lowercase` would throw. And a
+# `PQResultError` whose code LibPQ has no name for, whose `show` threw a `KeyError`, is now read too.
+# Any other exception (another driver's, a Base error, a mock's) is read the way it always was, through
+# core's open arm.
+function _libpq_text(@nospecialize(e))::String
+  if e isa LibPQ.Errors.PQResultError
+    v = e.verbose_msg
+    return PormG._phrase_text(v === nothing ? e.msg : e.msg * "\n" * v)
+  end
+  e isa Union{LibPQ.Errors.PQConnectionError, LibPQ.Errors.ConninfoParseError,
+              LibPQ.Errors.JLConnectionError, LibPQ.Errors.JLResultError} && return PormG._phrase_text(e.msg)
+  return PormG._unowned_error_text(e)
+end
+
 # Is `e` a DROPPED connection (the trigger for renewing the slot and retiring the pool's other idle
 # connections) rather than a statement-level failure? Whether `fetch` also re-runs the statement is
 # the narrower question `backend_is_retry_safe` answers below (#1042).
@@ -542,8 +564,13 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, @nospecialize(e)
   #     failure would skip the SQLSTATE gate below and be judged on concatenated message text. This
   #     extension's own statements no longer produce one (`throw_error = false`, #1000); the branch
   #     stays for a LibPQ call made with the default, which is any caller's to make.
-  e isa CompositeException &&
-    return any(inner -> PormG.backend_is_connection_error(pool, inner), e.exceptions)
+  #     A loop, not `any(closure, e.exceptions)`: over the `Vector{Any}` that is a dynamic call (#1714).
+  if e isa CompositeException
+    for inner in e.exceptions
+      PormG.backend_is_connection_error(pool, inner) && return true
+    end
+    return false
+  end
 
   # (1) The server gave us a code — trust it over any text.
   e isa _PG_LOST_CONNECTION_ERRORS && return true
@@ -610,9 +637,9 @@ function PormG.backend_is_connection_error(pool::PormGPostgres, @nospecialize(e)
   #     `backend_is_retry_safe` below is the retry's own gate (#1042). A socket timeout is a lost
   #     connection on both PostgreSQL drivers: the Postgres.jl extension's `_LOST_SOCKET_ERRNOS`
   #     carries ETIMEDOUT for this reason.
-  msg = lowercase(string(e))
+  msg = _libpq_text(e)
   # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a codeless error has no SQLSTATE to read (#1010)
-  return (e isa LibPQ.Errors.UnknownError && string(e) == "LibPQ.Errors.UnknownError(\"\")") ||
+  return (e isa LibPQ.Errors.UnknownError && isempty(e.msg) && e.verbose_msg === nothing) ||
          occursin("server closed the connection", msg) ||
          occursin("connection not open", msg) ||
          occursin("terminating connection", msg) ||   # server-text-match-ok: English-only extra; the 57P01 SQLSTATE and libpq's own line above cover a localized server (#1010)
@@ -648,7 +675,7 @@ function PormG.backend_is_retry_safe(pool::PormGPostgres, @nospecialize(e))
   e isa LibPQ.Errors.LibPQException || return PormG._default_retry_safe(pool, e)   # #1696
   e isa _PG_LOST_CONNECTION_ERRORS && return true
   # server-text-match-ok: libpq's own client text (untranslated in LibPQ_jll); a refusal to send carries no SQLSTATE (#1010)
-  return e isa LibPQ.Errors.PQConnectionError && startswith(lowercase(e.msg), "no connection to the server")
+  return e isa LibPQ.Errors.PQConnectionError && startswith(PormG._phrase_text(e.msg), "no connection to the server")
 end
 
 # A cancelled statement (#1277): 57014 `query_canceled`, raised by `statement_timeout`,
@@ -674,7 +701,7 @@ function PormG.backend_is_permanent_connect_error(pool::PormGPostgres, @nospecia
   # A connection string `_preflight_conninfo` refused (NUL, unparseable) is the most permanent
   # failure there is: the same string fails the same way on every retry (#657).
   e isa PormG.InvalidConfigurationError && return true
-  msg = lowercase(string(e))
+  msg = _libpq_text(e)
   # server-text-match-ok: libpq gives a failed connect no SQLSTATE; the lc_messages limit is documented in configuration/advanced.md (#1010)
   return occursin("password authentication failed", msg) ||
          occursin("no pg_hba.conf entry", msg) ||
@@ -744,8 +771,7 @@ function _pq_error_fields(@nospecialize(e::LibPQ.Errors.PQResultError))
   line = first(split(e.msg, '\n'; limit = 2))
   sep = findfirst(":  ", line)   # server-text-match-ok: the severity separator, the same in every locale (above)
   primary = strip(sep === nothing ? line : line[nextind(line, last(sep)):end])
-  return (sqlstate = sqlstate, constraint = nothing, table = nothing, column = nothing,
-          message = PormG._safe_server_message(sqlstate, primary))
+  return PormG._error_record(sqlstate, nothing, nothing, nothing, PormG._safe_server_message(sqlstate, primary))
 end
 
 PormG.backend_num_affected_rows(pool::PormGPostgres, result) = LibPQ.num_affected_rows(result)

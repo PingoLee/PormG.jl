@@ -312,8 +312,13 @@ function backend_is_retry_safe end
 backend_is_retry_safe(pool::PormGBackend, @nospecialize(e)) = _default_retry_safe(pool, e)
 
 function _default_retry_safe(pool::PormGBackend, @nospecialize(e))
-  # A multi-result failure: one coded "never ran" among them is the server's own answer.
-  e isa CompositeException && return any(inner -> backend_is_retry_safe(pool, inner), e.exceptions)
+  # A multi-result failure: one coded "never ran" among them is the server's own answer. A loop, not
+  # `any(closure, e.exceptions)`: over the `Vector{Any}` the closure call is a dynamic one (#1714).
+  if e isa CompositeException
+    for inner in e.exceptions
+      backend_is_retry_safe(pool, inner) && return true
+    end
+  end
   return false
 end
 
@@ -369,8 +374,45 @@ mid-`catch`.
 """
 function backend_error_fields end
 
-const _NO_ERROR_FIELDS = (sqlstate = nothing, constraint = nothing, table = nothing, column = nothing,
-                          message = nothing)
+# The record every reader returns (#1714): the five fields a `DatabaseError` stores, each
+# `Union{Nothing,String}`. One concrete type for every driver, so the error's constructors are static
+# calls; build it with `_error_record`, which converts what a driver hands in (LibPQ's `SubString`s).
+const _ErrorFields = NamedTuple{(:sqlstate, :constraint, :table, :column, :message), NTuple{5, Union{Nothing, String}}}
+_field_text(::Nothing) = nothing
+_field_text(s::String) = s
+_field_text(s::SubString{String}) = String(s)
+_field_text(@nospecialize(x)) = convert(Union{Nothing, String}, x)
+_error_record(sqlstate, constraint, table, column, message)::_ErrorFields =
+  _ErrorFields((_field_text(sqlstate), _field_text(constraint), _field_text(table), _field_text(column),
+                _field_text(message)))
+
+const _NO_ERROR_FIELDS = _error_record(nothing, nothing, nothing, nothing, nothing)
+
+# ── An exception the driver does not own (#1714) ─────────────────────────────
+#
+# A classifier receives the failure from a `catch`, typed `Any` (#1696). Each extension narrows the
+# exceptions it owns with `isa` and reads their fields at known types, so those make no dynamic call.
+# Anything else (another driver's exception, a Base error, a test's own) is still classified the way it
+# always was: by the text `string` gives it, or by the exception a wrapper keeps in `.cause`/`.err`.
+# Those two readings are dynamic by nature (`string` on an untyped value, a field looked up by name), so
+# they live here, in one place, behind `@noinline`: a classifier calls them only for an exception it does
+# not own, and a trimmed image meets a dynamic call there and nowhere else in the classifiers.
+@noinline _unowned_string(@nospecialize(x))::String = string(x)
+@noinline _unowned_error_text(@nospecialize(e))::String = _phrase_text(_unowned_string(e))
+
+# The lower-cased text an ASCII phrase test reads (#1714), which never throws: `lowercase` raises
+# `InvalidCharError` on a malformed character (a server message in a LATIN1 locale, say), and that
+# would replace the failure being classified. A malformed character becomes U+FFFD first; no phrase is
+# anything but ASCII, so no match changes. (`string(e)` used to hide this: `repr` escapes those bytes.)
+_phrase_text(s::String)::String =
+  lowercase(map(c -> (Base.ismalformed(c) || Base.isoverlong(c)) ? '\ufffd' : c, s))
+@noinline function _unowned_inner(@nospecialize(e))::Union{Nothing, Exception}
+  for field in (:cause, :err)
+    inner = hasproperty(e, field) ? getproperty(e, field) : nothing
+    inner isa Exception && return inner
+  end
+  return nothing
+end
 
 backend_error_fields(e) = _NO_ERROR_FIELDS
 

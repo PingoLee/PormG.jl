@@ -26,6 +26,9 @@ include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const CP = PormG.ConnectionPool
 const PGExt = Base.get_extension(PormG, :PormGPostgresExt)
+# Postgres.jl 2.7.0 checks `sslmode`/`gssencmode` in `parse_dsn`; before it, only in `connect` (#1744).
+# `[compat]` admits both (floor-resolve runs 2.6), so the tests where the two decide differently gate on it.
+const PG_PARSES_MODES = pkgversion(Postgres) >= v"2.7.0"
 const LibPQExtMod = Base.get_extension(PormG, :PormGLibPQExt)
 const PostgresPool = CP.PostgresConnectionPool{:postgres}
 const LibPQPool = CP.PostgresConnectionPool{:libpq}
@@ -383,10 +386,11 @@ end
   # the value; the accepted values pass in any case. Why: the driver checks these only after opening
   # the socket, and its `invalid sslmode: <value>` echoes the value — the tail of a password when an
   # unencoded `?` spilled it into the query with no `@` for the #662 check to catch.
-  # The accepted set is `_CONNECT_TIME_VALUES`, a copy pinned to the Postgres.jl versions its comment
-  # names (#1257). The parity fuzz below cannot cover it: it compares against `Postgres.parse_dsn`, which
-  # takes any `sslmode`/`gssencmode`, while the driver checks the value only inside `connect` —
-  # `gssencmode` before dialling, `sslmode` once a socket is open — and exposes no constant to compare.
+  # The accepted set is `_CONNECT_TIME_VALUES`, a copy of the driver's (#1257), compared with it in the
+  # testset below on a driver that checks the modes when it parses. Where the check runs depends on the
+  # release (#1744): before 2.7 only in `connect`, so `_checked_params` refuses after the parse; from 2.7
+  # in `parse_dsn`, so the driver refuses first and PormG's naming pass names the setting. The messages
+  # below are the same on both.
   refusal(dsn) = (try PGExt._checked_params(dsn); "" catch e; e isa PormG.InvalidConfigurationError ? PormG.error_message(e) : rethrow() end)
   withenv("PGSSLMODE" => nothing, "PGGSSENCMODE" => nothing) do
     for (dsn, field) in (("host=h sslmode=allow dbname=f1", "sslmode"),
@@ -409,10 +413,17 @@ end
     for dsn in ("host=h sslmode='' dbname=f1", "postgresql://u:p@h/f1?gssencmode=")
       @test occursin("is empty", refusal(dsn))
     end
-    # Under `gssencmode=require` the driver never reads `sslmode` (it connects over GSS or fails
-    # before TLS), so a `sslmode` it would refuse still connects, and is not refused. `prefer` falls
-    # back to TLS and reads it, so it is.
-    @test refusal("host=h gssencmode=REQUIRE sslmode=verify-ca dbname=f1") == ""
+    # Under `gssencmode=require` a driver that checks the modes only in `connect` never reads `sslmode`
+    # (it connects over GSS or fails before TLS), so a `sslmode` it would refuse still connects, and is
+    # not refused. From 2.7 the driver refuses it in `parse_dsn` regardless: the driver's decision, and
+    # PormG names the setting (#1744). Gated on the release, as #1533 gated Reseau. `prefer` falls back
+    # to TLS and reads it, so it is refused on both.
+    if PG_PARSES_MODES
+      msg = refusal("host=h gssencmode=REQUIRE sslmode=verify-ca dbname=f1")
+      @test occursin("the PostgreSQL connection's `sslmode`", msg) && !occursin("verify-ca", msg)
+    else
+      @test refusal("host=h gssencmode=REQUIRE sslmode=verify-ca dbname=f1") == ""
+    end
     @test occursin("`sslmode`", refusal("host=h gssencmode=prefer sslmode=verify-ca dbname=f1"))
     @test occursin("`gssencmode`", refusal("host=h gssencmode=SECg sslmode=verify-ca dbname=f1"))
     # The accepted values pass, compared lower-cased as the driver compares them.
@@ -421,10 +432,51 @@ end
       @test refusal(dsn) == ""
     end
   end
-  # From the environment: the setting is named, the variable too, the value never.
-  msg = withenv(() -> refusal("host=h dbname=f1"), "PGSSLMODE" => "SECenv")
+  # From the environment: the setting is named, the variable too, the value never. On 2.7 the driver
+  # refuses it in `parse_dsn`, and the refusal path reads the variable to name it (#1744).
+  msg = withenv(() -> refusal("host=h dbname=f1"), "PGSSLMODE" => "SECenv", "PGGSSENCMODE" => nothing)
   @test occursin("`sslmode` (from the connection string or `PGSSLMODE`)", msg)
   @test !occursin("SECenv", msg) && !occursin("secenv", msg)
+  msg = withenv(() -> refusal("host=h dbname=f1"), "PGGSSENCMODE" => "SECgssenv", "PGSSLMODE" => nothing)
+  @test occursin("`gssencmode` (from the connection string or `PGGSSENCMODE`)", msg)
+  @test !occursin("SECgssenv", msg) && !occursin("secgssenv", msg)
+  @test occursin("is empty", withenv(() -> refusal("host=h dbname=f1"), "PGSSLMODE" => "", "PGGSSENCMODE" => nothing))
+  # A value the string sets wins over the variable, as the driver merges them, so a bad variable is not
+  # what a refusal names then. A bad `PGPORT` makes the driver refuse, so the refusal path runs, and must
+  # not blame `sslmode` (the driver's text, masked, is what is left).
+  msg = withenv(() -> refusal("host=h sslmode=require dbname=f1"),
+                "PGSSLMODE" => "SECenv", "PGGSSENCMODE" => nothing, "PGPORT" => "abc")
+  @test !isempty(msg) && !occursin("`sslmode`", msg) && !occursin("SECenv", msg)
+  # The probe the extension asks agrees with the release this file gates on, whatever the environment
+  # holds: a bad `PGPORT` does not make a driver that checks modes only in `connect` look like 2.7.
+  @test PGExt._driver_parses_modes() == PG_PARSES_MODES
+  @test withenv(PGExt._driver_parses_modes, "PGPORT" => "abc", "PGCONNECT_TIMEOUT" => "x") == PG_PARSES_MODES
+end
+
+@testset "the mode table agrees with the driver's own check (#1744, #1257)" begin
+  # What: `_CONNECT_TIME_VALUES` against Postgres.jl's own acceptance of `sslmode` and `gssencmode`, read
+  # through the public `validate_dsn`, over libpq's full mode lists, case variants, an empty value and
+  # garbage, in keyword and URL form. Expected: the driver accepts a value exactly when the table does.
+  # Why: the table is a copy, and a copy drifts. A mode the driver starts accepting (libpq's `allow`,
+  # `verify-ca`) that the table lacks would make PormG refuse a configuration the driver connects with
+  # (the #1247 break), and a mode the table keeps after the driver drops it would be refused by the
+  # driver under PormG's name. Before 2.7 the driver checks the modes only in `connect`, where no public
+  # call reaches without a server, so there the comparison cannot run.
+  if !PG_PARSES_MODES
+    @test !PGExt._driver_parses_modes()
+  else
+    candidates = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full",
+                  "DISABLE", "Prefer", "REQUIRE", "Verify-Full", "", "on", "x", "sec"]
+    withenv([k => nothing for k in keys(ENV) if startswith(k, "PG")]...) do
+      for (field, accepted) in PGExt._CONNECT_TIME_VALUES, v in candidates
+        mine = PGExt._mode_accepted(v, accepted)
+        for dsn in ("host=h $(field)='$(v)' dbname=f1", "postgresql://u:p@h/f1?$(field)=$(v)")
+          theirs = Postgres.validate_dsn(dsn) === nothing
+          @test (field, v, dsn, theirs) == (field, v, dsn, mine)
+        end
+      end
+    end
+  end
 end
 
 @testset "a driver rejection PormG did not anticipate names no parameter (#1235)" begin
@@ -480,8 +532,9 @@ end
   # on grammar rows (quoting, `\` escapes, `;`, upper-case keys, spaces around `=`, URL `+`/`%xx`, and
   # `%xx` before the query, #1243) and on a seeded fuzz. Why: a tokenizer that disagreed would refuse a valid string — a behavior change
   # for a working app — or name the wrong key. Compared through the public `Postgres.parse_dsn` only,
-  # so a renamed driver internal cannot turn this red. Not covered here: the `sslmode`/`gssencmode`
-  # values the driver accepts only in `connect` — see the #1242 testset above (#1257).
+  # so a renamed driver internal cannot turn this red. The `sslmode`/`gssencmode` values are compared
+  # here only on a driver that checks them in `parse_dsn` (2.7 and later, #1744): before that the driver
+  # checks them in `connect`, and PormG's naming pass leaves them to `_checked_params`, so both accept.
   string_fields = ("host", "user", "password", "dbname", "application_name", "options", "sslrootcert",
                    "sslcert", "sslkey", "sslcapath", "sslservername", "krbsrvname")
   problems = String[]

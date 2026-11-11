@@ -847,7 +847,14 @@ end
     M = PormG.Models
     MT = M.ModelType
     @test fieldtype(MT, :cache) === M.ModelCache
-    closed(T) = isconcretetype(T) || (T isa Union && all(isconcretetype, Base.uniontypes(T)))
+    # Concrete all the way down: a `Dict{String, Any}` or a `Vector{Any}` is a concrete type, and its
+    # reads still return `Any`, so a container's key, value and element types are checked too.
+    closed(T) = T isa Union ? all(closed, Base.uniontypes(T)) :
+                T <: Tuple ? all(closed, fieldtypes(T)) :
+                T <: AbstractDict ? isconcretetype(T) && closed(keytype(T)) && closed(valtype(T)) :
+                T <: AbstractVector ? isconcretetype(T) && closed(eltype(T)) :
+                isconcretetype(T)
+    @test !closed(Dict{String, Any}) && !closed(Vector{Any})    # the check itself discriminates
     for name in fieldnames(M.ModelCache)
       @test closed(fieldtype(M.ModelCache, name))
     end
@@ -864,10 +871,14 @@ end
       @test isempty(calls)
       isempty(calls) || @info "dynamic calls under a cache reader" f calls
     end
-    live = _named_dynamic_calls(Tuple{typeof(PormG.Migrations.live_table), MT, PormG.Kernel.PormGSQLite},
-                                ("_index_name_list", "Migrations.get(", "declared_composites", "String("))
+    # `live_table` three levels down, which holds its `cache.index` read. One dynamic call there reads no
+    # cache and is not this pin's: the keyword call to `_spec_or_degraded`, which compiles each column.
+    # Its `composite_index_owners` read is held by that slot's type above instead: it reaches
+    # `LiveComposite` through a splat (`Core._apply_iterate`, a builtin), which no scan here walks into.
+    live = filter(c -> !occursin("_spec_or_degraded", c),
+                  _dynamic_calls_deep(PormG.Migrations.live_table, (MT, PormG.Kernel.PormGSQLite); depth = 3))
     @test isempty(live)
-    isempty(live) || @info "dynamic calls in live_table on the cache" live
+    isempty(live) || @info "dynamic calls under live_table" live
   end
 
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)

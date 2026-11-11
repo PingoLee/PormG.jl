@@ -2667,7 +2667,7 @@ end
     _attach_check_constraints!(model, checks::Vector{LiveCheck}) -> model
 
 Record an introspected table's named CHECKs on the model `inspectdb` builds (#742), as
-`Models.CheckConstraint`s under `Models._apply_check_constraints!`'s `"check_constraints"` — so
+`Models.CheckConstraint`s in the `check_constraints` slot `Models._apply_check_constraints!` writes — so
 `Model_to_str` writes them into `constraints = [...]`.
 
 Load-bearing for the reason `_attach_composite_indexes!` is: `makemigrations` drops a CHECK carrying

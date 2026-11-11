@@ -3,9 +3,11 @@
 - **Version**: Unreleased
 - **PormG ref**: #1687, #1599 ; `src/Models.jl`, `src/migrations/`
 - **Recorded**: 2026-11-11
-- **Severity**: breaking, for code that reads or writes `model.cache` by string key. The public
-  readers (`declared_check_constraints`, `get_many_to_many_relation`, `has_many_to_many_accessor`,
-  `declared_composites`, `live_table`) return what they returned before.
+- **Severity**: breaking, for code that reads or writes `model.cache` by string key, or builds a
+  `ModelType` with `cache = Dict(…)`. The functions that read the cache
+  (`Models.declared_check_constraints`, `Models.get_many_to_many_relation`,
+  `Models.has_many_to_many_accessor`, `Migrations.declared_composites`, `Migrations.live_table`) return
+  what they returned before.
 
 ### What changed
 
@@ -27,25 +29,27 @@ returned `Any`. It is now a `ModelCache` with one typed field per kind. A string
 
 A kind a model does not have is an empty field (or `nothing`), where it used to be a missing key.
 `model.cache["index"]`'s values were already vectors since 0.10.0. A single index name written into
-it by hand is no longer accepted: the field holds a `Vector{String}` per column.
+it by hand is no longer accepted: the field holds a `Vector{String}` per column. A `ModelType` built
+by hand takes `cache = Models.ModelCache()` (or no `cache` at all), not a `Dict`.
 
-Prefer the public readers where one exists: `Models.declared_check_constraints(model)` and
-`Migrations.declared_composites(model)` rather than the field.
+Where one of the functions above answers the question, `Models.declared_check_constraints(model)` or
+`Migrations.declared_composites(model)`, it reads the same data as the field.
 
 ### How to find the calls to migrate
 
 ```
-grep -rnE '\.cache\[|haskey\([^,]+\.cache,' --include=*.jl .
+grep -rnE '\.cache\[|(haskey|get!?|delete!)\([^,()]*\.cache, *"|\bcache *= *Dict' --include=*.jl .
 ```
 
 ### Migrate your app
 
 ```julia
 # ✗ before
-names = M.Result.cache["index"]["driverid"]
 uniques = get(get(M.Result.cache, "unique_constraints", Dict()), "constraints", [])
+# `inspected`: a model `inspectdb` read; `cache.index` is keyed by physical column
+names = get(inspected.cache["index"], "driverid", String[])
 
 # ✓ after
-names = M.Result.cache.index["driverid"]
 uniques = M.Result.cache.unique_constraints
+names = get(inspected.cache.index, "driverid", String[])
 ```

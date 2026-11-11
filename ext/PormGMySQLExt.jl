@@ -559,7 +559,7 @@ function _is_lost_connection(@nospecialize(e), depth::Int = 4)::Bool
   # write timeout closes it too.
   (e isa MySQL.Protocol.ProtocolError || e isa MySQL.Protocol.TimeoutError) && return true
   if e isa ErrorException
-    client_text = e.msg   # declared `AbstractString`; MySQL.jl's `error(...)` stores a `String`
+    client_text = e.msg   # declared `AbstractString`; MySQL.jl raises it with a `String`
     # server-text-match-ok: MySQL.jl's own client-side text, not a server message
     return Base.startswith(client_text isa String ? client_text : PormG._unowned_string(client_text), _CLOSED_CONNECTION_PREFIX)
   end

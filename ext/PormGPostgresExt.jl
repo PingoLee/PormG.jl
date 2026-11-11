@@ -347,10 +347,19 @@ function _check_dsn_params(params::Vector{_DsnParam})
       "recognizes$(case_hint)$(_QUOTING_HINT)"))
   end
   last_seen = Dict(p.key => p for p in params)
+  parses_modes = _driver_parses_modes()
   for p in params
     last_seen[p.key].label == p.label || continue
     any(v -> _value_accepted(p.key, v), p.values) ||
       throw(InvalidConfigurationError(_value_refusal(p)))
+    # The TLS and GSS modes (#1744), only where the driver itself refuses them when it parses: there
+    # it refuses first, and this pass is what names the setting. A driver that checks them only in
+    # `connect` takes any value here, and `_checked_params` refuses it after the parse instead.
+    parses_modes || continue
+    accepted = _mode_values(p.key)
+    accepted === nothing && continue
+    any(v -> _mode_accepted(v, accepted), p.values) ||
+      throw(_mode_refusal(p.key, all(isempty, p.values), accepted))
   end
   return nothing
 end
@@ -396,21 +405,56 @@ end
 # Case-insensitive, as `Postgres.parse_dsn` decides it: `POSTGRESQL://…` is parsed as a URL too.
 _is_url(s::AbstractString) = (l = lowercase(s); startswith(l, "postgresql://") || startswith(l, "postgres://"))
 
-# The values Postgres.jl accepts when it CONNECTS, compared lower-cased as it compares them. Read off
-# the params the driver parsed — PormG's policy on the driver's own result, like `reconnect`, not a
-# table run before it (#1247). In the driver's order: `gssencmode` is checked before dialling.
+# The values Postgres.jl accepts for the TLS and GSS modes, compared lower-cased as it compares them.
+# Where the driver checks them depends on its release (#1744):
+#   - before 2.7, only in `connect` (`gssencmode` before dialling, `sslmode` once the socket is open),
+#     so `_checked_params` reads them off the params the driver parsed and refuses a bad one before any
+#     I/O — PormG's policy on the driver's own result, like `reconnect` (#1247);
+#   - from 2.7, in `parse_dsn` itself, so the driver refuses first and `_check_dsn` names the setting.
 #
-# A COPY, pinned to Postgres.jl 2.2.2 and 2.3.0 (#1257): the driver has no constant to read. Its
-# `connect` compares inline, in `src/api/API.jl` — the `invalid gssencmode` and `invalid sslmode`
-# checks — and both releases accept exactly these. `[compat]` admits any 2.x, so a new release reaches
-# CI with no bump: re-read those two checks when one appears. A value it starts accepting (libpq's
-# `allow`, `verify-ca`) needs its row here, or PormG refuses a configuration the driver would connect
-# with — the #1247 break. The parity fuzz in `test_postgres_ext.jl` cannot see the drift: it compares
-# with `Postgres.parse_dsn`, which takes any value for both.
+# A COPY of the driver's sets (#1257). On a driver that checks them when it parses,
+# `test_postgres_ext.jl` compares this table with the driver through the public `validate_dsn`, so a
+# release that starts accepting a mode (libpq's `allow`, `verify-ca`) turns it red instead of PormG
+# refusing a configuration the driver would connect with — the #1247 break.
 const _CONNECT_TIME_VALUES = (
   :gssencmode => ("disable", "prefer", "require"),
   :sslmode => ("disable", "prefer", "require", "verify-full"),
 )
+
+# The accepted values for a mode keyword, or `nothing` for any other keyword.
+function _mode_values(key::String)
+  for (field, accepted) in _CONNECT_TIME_VALUES
+    key == String(field) && return accepted
+  end
+  return nothing
+end
+
+# Empty is refused, not taken for "unset": the driver keeps it, so that an unexpanded `${PGSSLMODE}`
+# fails loudly, and so does this.
+_mode_accepted(v::AbstractString, accepted) = _lowercasable(v) && lowercase(v) in accepted
+
+# Whether this Postgres.jl refuses a bad mode when it parses (2.7 and later) rather than only in
+# `connect`. Asked of the driver's behavior, not its version number; it runs only on a refusal path.
+# Through the keyword constructor, which 2.7 checks the same way and which reads no `PG*` variable:
+# `validate_dsn` applies them, so a bad `PGPORT` would make a 2.6 driver look like 2.7 (review).
+function _driver_parses_modes()::Bool
+  try
+    Postgres.ConnectionParams(; sslmode = "x")
+    return false
+  catch e
+    e isa InterruptException && rethrow()
+    return e isa ArgumentError
+  end
+end
+
+# The #1242 refusal: the setting and the values the driver accepts, never the value.
+function _mode_refusal(key::AbstractString, empty::Bool, accepted)::InvalidConfigurationError
+  accepts = join(("`$(a)`" for a in accepted), ", ", " or ")
+  return InvalidConfigurationError(
+    "the PostgreSQL connection's `$(key)` (from the connection string or `PG$(uppercase(key))`) " *
+    "$(empty ? "is empty" : "is set to a value the Postgres.jl driver does not support"); " *
+    "it accepts $(accepts). `postgres_driver: LibPQ` supports libpq's other modes")
+end
 
 # Fields a URL may legitimately carry an `@` in: the credentials themselves and free text.
 const _URL_AT_OK_FIELDS = (:user, :password, :application_name)
@@ -429,13 +473,25 @@ _pct_decode(s::AbstractString) =
 # `PG*` environment variable, a rule a later Postgres.jl adds — the driver's own message is shown
 # masked, naming nothing.
 function _driver_refusal(dsn::String, e)::InvalidConfigurationError
-  try
+  set_keys = try
     _check_dsn(dsn)
+    Set(p.key for p in (_is_url(dsn) ? _url_query_params(dsn) : _keyword_dsn_params(dsn)))
   catch named
     named isa InterruptException && rethrow()
     named isa InvalidConfigurationError && return named
     return InvalidConfigurationError(
       "the PostgreSQL connection string could not be parsed ($(nameof(typeof(named))))")
+  end
+  # A mode from `PGSSLMODE`/`PGGSSENCMODE` (#1744): a driver that checks the modes when it parses reads
+  # the environment for a key the string leaves out, and refuses a bad value there too. Named, never shown.
+  if _driver_parses_modes()
+    for (field, accepted) in _CONNECT_TIME_VALUES
+      key = String(field)
+      key in set_keys && continue
+      v = get(ENV, "PG" * uppercase(key), nothing)
+      (v === nothing || _mode_accepted(v, accepted)) && continue
+      return _mode_refusal(key, isempty(v), accepted)
+    end
   end
   return _parse_failure(e)
 end
@@ -508,24 +564,21 @@ function _checked_params(conn_str::AbstractString;
       end
     end
   end
-  # #1242: Postgres.jl takes any `sslmode`/`gssencmode` when it parses, and refuses one only in
-  # `connect` — `gssencmode` before dialling, `sslmode` once the socket is open — with a message that
-  # echoes the value: in the #662 spill shape, a password's tail with no `@` to catch it above.
-  # Refused here instead, before any I/O, by name. An empty value too: the
-  # driver keeps it so that an unexpanded `${PGSSLMODE}` fails loudly, and so does this.
-  # Under `gssencmode=require` the driver connects over GSS or fails before TLS, and never reads
-  # `sslmode`, so a value it would refuse there still connects and is not refused here (review).
+  # #1242: a Postgres.jl before 2.7 takes any `sslmode`/`gssencmode` when it parses, and refuses one
+  # only in `connect` — `gssencmode` before dialling, `sslmode` once the socket is open — with a message
+  # that echoes the value: in the #662 spill shape, a password's tail with no `@` to catch it above.
+  # Refused here instead, before any I/O, by name. (From 2.7 the driver refuses it in `parse_dsn`, above,
+  # and `_driver_refusal` names it, #1744; a value that reached here passed that check.)
+  # Under `gssencmode=require` such a driver connects over GSS or fails before TLS, and never reads
+  # `sslmode`, so a value it would refuse there still connects and is not refused here (review). 2.7
+  # refuses it in `parse_dsn` regardless, which is the driver's decision.
   gss = params.gssencmode
   gss_only = gss !== nothing && _lowercasable(gss) && lowercase(gss) == "require"
   for (field, accepted) in _CONNECT_TIME_VALUES
     field === :sslmode && gss_only && continue
     v = getfield(params, field)
-    (v === nothing || (_lowercasable(v) && lowercase(v) in accepted)) && continue
-    accepts = join(("`$(a)`" for a in accepted), ", ", " or ")
-    throw(InvalidConfigurationError(
-      "the PostgreSQL connection's `$(field)` (from the connection string or `PG$(uppercase(String(field)))`) " *
-      "$(isempty(v) ? "is empty" : "is set to a value the Postgres.jl driver does not support"); " *
-      "it accepts $(accepts). `postgres_driver: LibPQ` supports libpq's other modes"))
+    (v === nothing || _mode_accepted(v, accepted)) && continue
+    throw(_mode_refusal(String(field), isempty(v), accepted))
   end
   return params
 end

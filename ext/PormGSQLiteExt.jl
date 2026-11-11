@@ -413,11 +413,10 @@ PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversio
 #
 # This runs in the precompile worker for the EXTENSION's cache — the one place PormG can execute a
 # statement at precompile time, because only here is a driver guaranteed to be loaded.
-# `src/precompile.jl`'s own workload has no driver, so it stops at `show_query`: it compiles no
-# parameter binding, no async fetch path, no row assembly, no `:row`/`:dict`/`:json` shaper and no
-# transaction. Running here also means the code is compiled after SQLite and its dependencies have
-# loaded, so their methods cannot invalidate it; the PostgreSQL extensions run their workload here
-# for that reason (#1732).
+# `src/precompile.jl` has no driver, so it stops at `show_query` and has never compiled anything
+# past SQL generation: parameter binding, the async fetch path, row assembly, the
+# `:row`/`:dict`/`:json` shapers, the write terminals, a transaction, model registration and
+# the deletion collector.
 #
 # The approach is Nitro.jl's (`src/precompile.jl` there): drive the PUBLIC surface end to end, the
 # way an application does, instead of naming internal methods. Nitro drives `internalrequest`
@@ -446,11 +445,10 @@ PormG.backend_sqlite_version(pool::PormGSQLite) = Int(SQLite.C.sqlite3_libversio
 #     the first `create`s, the first `:json`, the first joined and aggregate reads — the steps
 #     that materialize a row type this workload never produced — which is the per-application
 #     share no workload can pay in advance. The shared machinery no longer costs anything.
-#   * PostgreSQL gets the query build and the terminals from its own extensions' workloads
-#     (`PormG._offline_postgres_workload`, #1732), rendered with `show_query = :sql` on an offline
-#     key. Statement execution cannot be driven there without a server, which is this workload's
-#     version of Nitro's "no socket" rule: warming it is worth doing, doing it with a live
-#     connection is not.
+#   * PostgreSQL can inherit at most the backend-agnostic half (query building, the fluent chain,
+#     result shaping), and how much of it does is NOT measured here. The LibPQ path cannot be
+#     driven at precompile time without a server, which is this workload's version of Nitro's
+#     "no socket" rule: warming it is worth doing, doing it with a live connection is not.
 #
 # Temp directory and pool are created and torn down INSIDE the workload: a module-body side effect
 # would run only in the precompile worker (#203), and the config key must not be serialized.
@@ -500,13 +498,7 @@ end
             dob = Models.DateField(null = true))
           Constructor = Models.Model("constructor",
             constructorid = Models.IDField(),
-            name = Models.CharField(max_length = 255, unique = true))
-          Race = Models.Model("race",
-            raceid = Models.IDField(),
-            year = Models.IntegerField(),
-            name = Models.CharField(max_length = 255),
-            date = Models.DateField(),
-            start_at = Models.DateTimeField(null = true))
+            name = Models.CharField(max_length = 255))
           Result = Models.Model("result",
             resultid = Models.IDField(),
             driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "CASCADE"),
@@ -515,18 +507,18 @@ end
             points = Models.FloatField())
           # #1602: the set `set_models` reads. Interpolated: the block's macros expand before its
           # `import PormG.Models` runs, so `Models.@models` would not resolve here.
-          $(PormG.Models._model_set_declaration([:Driver, :Constructor, :Race, :Result]))
+          $(PormG.Models._model_set_declaration([:Driver, :Constructor, :Result]))
         end)
         # `invokelatest`: the bindings are newer than this code's world, the rule `@import_models`
         # handles the same way (#211).
         Base.invokelatest(Models.set_models, _PrecompileModels, dir)
-        Driver, Constructor, Race, Result =
-          (Base.invokelatest(getglobal, _PrecompileModels, n) for n in (:Driver, :Constructor, :Race, :Result))
+        Driver, Constructor, Result =
+          (Base.invokelatest(getglobal, _PrecompileModels, n) for n in (:Driver, :Constructor, :Result))
 
         # The tables come from PormG's own DDL, not a hand-written CREATE: the first draft of this
         # workload wrote its own, left out AUTOINCREMENT, and `bulk_insert` then failed on the
         # missing `sqlite_sequence` table. A workload must exercise the schema migrations produce.
-        for m in (Driver, Constructor, Race, Result)
+        for m in (Driver, Constructor, Result)
           CP.fetch(pool, PormG.Dialect.create_table(pool, m))
         end
 
@@ -540,18 +532,6 @@ end
           QB.bulk_insert(Result.objects,
             (resultid = [1, 2], driverid = [1, 2], constructorid = [1, 1], grid = [1, 2], points = [9.0, 6.0]))
         end
-        # A float through `create`, and a `DateTime` on insert and on update (#1732): each value type is
-        # its own `validate_field_data` specialization. PormG's own workload compiled the float one
-        # before #1732 moved the PostgreSQL terminals into their extensions.
-        Result.objects.create("resultid" => 3, "driverid" => 1, "constructorid" => 1, "grid" => 3, "points" => 4.0)
-        Race.objects.create("raceid" => 1, "year" => 1988, "name" => "Japanese Grand Prix",
-                            "date" => PormG.Dates.Date(1988, 10, 30), "start_at" => PormG.Dates.DateTime(1988, 10, 30, 4, 0))
-        Race.objects.filter("raceid" => 1).update("start_at" => PormG.Dates.DateTime(1988, 10, 30, 5, 0))
-        # `defaults` built at run time is a `Vector{Pair{String,Any}}` (#1732), on a text lookup and an
-        # integer one; both miss and insert.
-        Constructor.objects.get_or_create("name" => "Williams"; defaults = Pair{String, Any}["constructorid" => 2])
-        Driver.objects.get_or_create("driverid" => 3;
-          defaults = Pair{String, Any}["forename" => "Lewis", "surname" => "Hamilton", "dob" => PormG.Dates.Date(1985, 1, 7)])
 
         # ── Reads: every list() format, over a plain and a joined projection ──
         Driver.objects.filter("surname" => "Senna").list()
@@ -596,7 +576,7 @@ end
       finally
         # The models must not reach the cache image through `_PrecompileModels`, nor this machine's
         # temp folder through its registration record (#1607).
-        Core.eval(_PrecompileModels, :(Driver = Constructor = Race = Result = nothing))
+        Core.eval(_PrecompileModels, :(Driver = Constructor = Result = nothing))
         # `invokelatest`: the set is a global the `Core.eval` above made, newer than this code's world.
         record = Base.invokelatest(Models._model_set, _PrecompileModels)
         # The set holds the models themselves (#1606), so its lists are emptied too, or the bindings

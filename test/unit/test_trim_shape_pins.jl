@@ -690,6 +690,31 @@ end
     @test !isempty(_slot_element_calls(Tuple{typeof(_tsp_old_reader), Base.RefValue{Union{PormG.SQLTypeText, PormG.SQLTypeField}}}))
   end
 
+  # What: `OperObject.column` as the WHERE readers see it (#1599 round 9, row 32): its closed set of concrete
+  #   structs (`ColumnPartNode`) and the typed read (`_oper_column`).
+  # Expected: `ColumnPartNode` equals the concrete subtypes of `ColumnPart`'s two families (none parametric);
+  #   `_oper_column` infers it; and `_guard_field_alias_collision` and `_where_node!` make no dynamic
+  #   `_model_filter_key` / `_alias_filter_key` call.
+  # Why: the slot is a union of two abstract families (`OperObject` is defined before `FObject` and
+  #   `WindowFunction`), which is never a compileable signature, so the trimmed read's WHERE clause stopped
+  #   at a `MethodError` on `_model_filter_key(::SQLField, …)`, then on `_alias_filter_key`. Over three
+  #   concrete types a one-method callee is split statically (#1735, refined in round 9): no walk. Measured
+  #   on main 438294f06, both readers make the dynamic call.
+  @testset "OperObject.column is read as its concrete structs (#1599 round 9, row 32)" begin
+    QB = PormG.QueryBuilder
+    concrete, open = _node_subtypes(Tuple(Base.uniontypes(QB.ColumnPart)))
+    @test isempty(open)
+    @test concrete == Set{DataType}(Base.uniontypes(QB.ColumnPartNode))
+    @test only(Base.return_types(QB._oper_column, (QB.OperObject,))) === QB.ColumnPartNode
+    I = QB.InstructionObject
+    for tt in (Tuple{typeof(QB._guard_field_alias_collision), QB.OperObject, I, Int},
+               Tuple{typeof(QB._where_node!), QB.FilterNode, I})
+      calls = _named_dynamic_calls(tt, ("_model_filter_key", "_alias_filter_key"))
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic column-key calls" tt calls
+    end
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete

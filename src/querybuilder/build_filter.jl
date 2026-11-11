@@ -32,7 +32,8 @@ function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
     push!(instruc._where, _get_filter_query(v, instruc))
   elseif isa(v, SQLTypeOper)
     @pormg_debug false
-    if _alias_filter_key(v.column, instruc) !== nothing
+    col = _oper_column(v)   # #1599 round 9: the column at its concrete type, read once
+    if _alias_filter_key(col, instruc) !== nothing
       # #446. This branch is reached by a PLAIN filter key — no `__` — that is not a field on the
       # model, which means it is either a projection alias (the documented HAVING spelling) or a
       # name that does not exist. The `try`/`catch` here only rethrew: it was a debug hook, not a
@@ -44,25 +45,25 @@ function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
       # Guard immediately above the raw index and leave the index plain, the shape #433 settled:
       # the membership test is what makes it total.
       # #474: `memo_key` here is uniform-with-its-neighbours, not CTE support. This branch is gated
-      # on `v.column.field isa String && !contains(field, "__")`, and `_retag_cte_field!` always
+      # on `col.field isa String && !contains(field, "__")`, and `_retag_cte_field!` always
       # replaces `field` with a `CTEReference` or an `SQLTypeFunction`, so `root` is always `:base`
       # on this path. It is read through the key helper anyway so that a CTE arriving here later is
       # namespaced like everywhere else rather than silently sharing a base-model entry.
-      having_key = memo_key(v.column)
+      having_key = memo_key(col)
       having_cached = memo_projection(instruc, having_key)
       # #1134: not an alias, and a relation rather than a typo — the message `_solve_field` gives a
       # relation as a path's last segment. After the alias lookup, so a declared alias still wins.
       if having_cached === nothing
-        relation = _relation_terminal(instruc.object.model, v.column.field)
+        relation = _relation_terminal(instruc.object.model, col.field)
         relation === nothing || throw(relation)
       end
       having_cached === nothing &&
         # #474: report the aliases the CALLER could have written, never an internal memo key.
         # #1004: read off the declaration, not the memo — a path projection is memoized under its
         # path, so the memo listed `race_date__year` for `values("yr" => "race_date__@year")`.
-        throw(_unknown_field(instruc.object.model, v.column.field;
+        throw(_unknown_field(instruc.object.model, col.field;
                              aliases = _declared_alias_names(instruc),
-                             hint = _path_alias_hint(v.column.field, instruc)))
+                             hint = _path_alias_hint(col.field, instruc)))
       # #701: only an AGGREGATE alias filters groups. A row alias — `F("raceid") + 1`, a bare
       # `F("code")` — has one value per row, so its predicate belongs in WHERE; sending every
       # alias to HAVING printed `HAVING` on a query with no GROUP BY, which both engines reject.
@@ -211,7 +212,7 @@ end
 function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
   if filter isa SQLTypeOper
-    key = _model_filter_key(filter.column, instruc)
+    key = _model_filter_key(_oper_column(filter), instruc)   # #1599 round 9, row 32
     key === nothing && return nothing
     for projection in instruc.object.values
       _projection_output_name(projection) == key || continue

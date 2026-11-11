@@ -27,6 +27,7 @@ Pinned here, with no server:
      in `msg` or `error_message`.
   4. **Configuration refusals** (#1691) — a connection URL under `adapter:` (and under `postgres_driver`)
      is refused naming the environment, the file and the accepted values, never the URL's password.
+     One in an `extensions:` list (#1727) is named by its position, in the refusals and the warnings.
 
 julia --project=test/integration test/unit/test_refusal_no_value.jl
 """
@@ -79,7 +80,10 @@ end
 # #1691: a configuration refusal's value goes by the name of the key it was read from. `load` printed
 # `adapter:` back, and a connection URL pasted one key too high carried its password into the
 # message. These are the names that hold a configured value, or a connection string built from one.
-const CONFIG_VALUE_NAMES1691 = Set(["adapter", "url", "password", "conninfo", "dsn", "connection_string"])
+# #1727: `extension`/`extensions` too. An `extensions:` entry is a configured value, and the two
+# extension refusals printed it.
+const CONFIG_VALUE_NAMES1691 = Set(["adapter", "url", "password", "conninfo", "dsn", "connection_string",
+                                    "extension", "extensions"])
 
 function _leaks971(expr::AbstractString)
   expr in VALUE_NAMES971 && return true
@@ -308,7 +312,8 @@ end
     @test any(_leaks971, _interpolations971(leak))
   end
   # #1691: a configured value goes by its key's name; the environment and the file it came from do not.
-  for leak in ("\"Unsupported adapter: \$(adapter)\"", "\"cannot reach \$url\"", "\"bad \$(conninfo)\"")
+  for leak in ("\"Unsupported adapter: \$(adapter)\"", "\"cannot reach \$url\"", "\"bad \$(conninfo)\"",
+               "\"Unsupported PostgreSQL extension '\$(extension)'\"", "\"ignoring \$extensions\"")   # #1727
     @test any(_leaks971, _interpolations971(leak))
   end
   for fine in ("\"got a \$(typeof(value))\"", "\"field `\$field`\"", "\"row \$(index)\"", "\"\$(e.reason)\"",
@@ -584,5 +589,75 @@ end
   end
   withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => URL1691) do
     no_secret1691(refusal971(() -> resolve(nothing; source = "connection.yml")))
+  end
+end
+
+# What it tests: a connection URL written as an `extensions:` entry never comes back out (#1727).
+#   - `load` of a SQLite environment that lists one (the issue's repro, `database: ":memory:"`)
+#     warns "Database extensions are only supported for PostgreSQL; …" with `count = 1`, and no log
+#     record carries the entry.
+#   - On PostgreSQL settings, `load`'s check warns "Unsupported PostgreSQL extension configured; …"
+#     with `entry = 2` (the list's second item, after a blank one), and `migrate`'s installer refuses
+#     with ``environment "dev" (folder <folder>): `extensions:` entry 2 is not a supported PostgreSQL
+#     extension; supported: "unaccent".`` before any statement runs. The installer's backstop
+#     (`_install_postgres_extension!`) refuses without the value too.
+# Why it matters: these four printed the entry (`extensions = ["postgresql://f1_user:…"]`,
+#   `Unsupported PostgreSQL extension '<entry>'`). The marker is lowercase on purpose: the entries are
+#   lowercased before they reach a message, so an uppercase marker would pass against the leak.
+const SECRET1727 = "marker1727_pw"
+const URL1727 = "postgresql://f1_user:$(SECRET1727)@db.example/f1"
+
+no_marker1727(r) = !occursin(SECRET1727, lowercase(sprint(show, r.message))) &&
+                   !occursin(SECRET1727, lowercase(sprint(show, r.kwargs)))
+
+@testset "#1727: an extensions: entry is named by its position, never printed" begin
+  mktempdir() do temp_root
+    db_dir = joinpath(temp_root, "db")
+    mkpath(db_dir)
+    write(joinpath(db_dir, "connection.yml"),
+          "dev:\n  adapter: SQLite\n  database: \":memory:\"\n  extensions:\n    - $(URL1727)\n")
+    try
+      logs, _ = Test.collect_test_logs() do
+        PormG.Configuration.load(db_dir; env = "dev")
+      end
+      warned = filter(r -> occursin("only supported for PostgreSQL", string(r.message)), logs)
+      @test length(warned) == 1
+      @test !isempty(warned) && get(Dict(warned[1].kwargs), :count, nothing) == 1
+      @test all(no_marker1727, logs)
+    finally
+      pop!(PormG.config, db_dir, nothing)
+    end
+
+    settings = PormG.Configuration.Settings(app_env = "dev", db_def_folder = db_dir)
+    settings.db_config_settings = Dict{String,Any}("adapter" => "PostgreSQL", "database" => "f1",
+                                                   "extensions" => Any[nothing, URL1727])
+    # The check's unsupported arm runs no query.
+    logs, _ = Test.collect_test_logs() do
+      PormG.Configuration._check_configured_extensions!(settings; generating = false)
+    end
+    unsupported = filter(r -> occursin("Unsupported PostgreSQL extension", string(r.message)), logs)
+    @test length(unsupported) == 1
+    @test !isempty(unsupported) && get(Dict(unsupported[1].kwargs), :entry, nothing) == 2
+    @test all(no_marker1727, logs)
+
+    # The installer refuses the entry before it runs a statement.
+    e = refusal971(() -> PormG.Configuration._install_configured_extensions!(settings))
+    @test e isa PormG.InvalidConfigurationError
+    msg = sprint(showerror, e)
+    @test !occursin(SECRET1727, lowercase(msg))
+    @test occursin("environment \"dev\"", msg)
+    @test occursin("`extensions:` entry 2 is not a supported PostgreSQL extension; supported: \"unaccent\".", msg)
+
+    e = refusal971(() -> PormG.Configuration._install_postgres_extension!(settings, lowercase(URL1727)))
+    @test e isa PormG.InvalidConfigurationError
+    @test !occursin(SECRET1727, lowercase(sprint(showerror, e)))
+
+    # The installer's non-PostgreSQL arm warns as the check does.
+    settings.db_config_settings["adapter"] = "SQLite"
+    logs, _ = Test.collect_test_logs() do
+      PormG.Configuration._install_configured_extensions!(settings)
+    end
+    @test any(r -> occursin("only supported for PostgreSQL", string(r.message)), logs)
+    @test all(no_marker1727, logs)
   end
 end

@@ -1,7 +1,7 @@
 ## `load` refuses an unknown `adapter:` without printing it (#1691)
 
 - **Version**: Unreleased
-- **PormG ref**: #1691 ; `src/Configuration.jl`, `src/Generator.jl`
+- **PormG ref**: #1691, #1727 ; `src/Configuration.jl`, `src/Generator.jl`
 - **Recorded**: 2026-11-09
 - **Severity**: behavior change, for code that matches the text of these configuration refusals.
   Every refusal still raises `InvalidConfigurationError` where it did before.
@@ -22,11 +22,17 @@ printing them too:
 | an `ignore_tables:` / `unignore_defaults:` entry that is not a string | `…, got 2024` | `…, got a value of type Int64` |
 | `register_offline` with an unknown `adapter` | ``…must be :postgres or :sqlite, got :mysql.`` | ``…must be :postgres or :sqlite.`` |
 | `create_db_folder_and_yml` with `postgres_driver` on another adapter | `…remove it for adapter = "SQLite".` | `…remove it for a non-PostgreSQL adapter.` |
+| `migrate`, an `extensions:` entry other than `unaccent` (#1727) | `Unsupported PostgreSQL extension '<entry>'. Supported extensions: unaccent` | ``environment "dev" (folder <folder>): `extensions:` entry 2 is not a supported PostgreSQL extension; supported: "unaccent".`` |
+
+The `extensions:` warnings stopped logging the entries too (#1727). The one for a non-PostgreSQL adapter
+(`load`, `migrate`) logs `count = <n>` instead of `extensions = [<entries>]`, and the one for an
+unsupported name (`load`) logs `entry = <position>` instead of `extension = "<entry>"`. Their messages
+are unchanged; only a test that matches these keyword arguments notices.
 
 ### How to find the calls to migrate
 
 ```
-grep -rnE "Unsupported adapter|case-insensitive\); got|:postgres or :sqlite, got|remove it for adapter" --include=*.jl .
+grep -rnE "Unsupported adapter|case-insensitive\); got|:postgres or :sqlite, got|remove it for adapter|Unsupported PostgreSQL extension '|Supported extensions: unaccent" --include=*.jl .
 ```
 
 ### Migrate your app

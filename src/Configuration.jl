@@ -1170,6 +1170,19 @@ function _configured_extensions(settings::PormGSettings)::Vector{String}
   return unique(normalized)
 end
 
+# #1727: where an `extensions:` entry was written, 1-based and counting the blank items
+# `_configured_extensions` drops, so a refusal or a warning can name the entry without printing it.
+# An entry is a configured value: a connection URL pasted into the list would carry its password.
+function _extension_entry_position(settings::PormGSettings, name::String)::Int
+  raw = get(settings.db_config_settings, "extensions", nothing)
+  raw isa AbstractString && return 1
+  raw isa AbstractVector || return 0
+  for (i, value) in enumerate(raw)
+    value isa AbstractString && lowercase(strip(value)) == name && return i
+  end
+  return 0
+end
+
 """
     _configured_ignore_tables(settings::PormGSettings)::Vector{String}
 
@@ -1289,7 +1302,8 @@ function _check_configured_extensions!(settings::PormGSettings;
 
   adapter = get(settings.db_config_settings, "adapter", nothing)
   if adapter != "PostgreSQL"
-    @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter extensions=extensions db_def_folder=settings.db_def_folder
+    # #1727: the count, never the entries.
+    @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter count=length(extensions) db_def_folder=settings.db_def_folder
     return nothing
   end
 
@@ -1306,7 +1320,8 @@ function _check_configured_extensions!(settings::PormGSettings;
       end
       installed || @warn "Configured PostgreSQL extension is not installed; run PormG.migrate(...) to install it and the public.immutable_unaccent helper" extension=extension db_def_folder=settings.db_def_folder
     else
-      @warn "Unsupported PostgreSQL extension configured; it will be ignored" extension=extension supported=["unaccent"] db_def_folder=settings.db_def_folder
+      # #1727: the entry's position, never its text.
+      @warn "Unsupported PostgreSQL extension configured; it will be ignored" entry=_extension_entry_position(settings, extension) supported=["unaccent"] db_def_folder=settings.db_def_folder
     end
   end
   return nothing
@@ -1318,7 +1333,8 @@ function _install_configured_extensions!(settings::PormGSettings)::Nothing
 
   adapter = get(settings.db_config_settings, "adapter", nothing)
   if adapter != "PostgreSQL"
-    @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter extensions=extensions db_def_folder=settings.db_def_folder
+    # #1727: the count, never the entries.
+    @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter count=length(extensions) db_def_folder=settings.db_def_folder
     return nothing
   end
 
@@ -1327,7 +1343,11 @@ function _install_configured_extensions!(settings::PormGSettings)::Nothing
       _install_postgres_extension!(settings, "unaccent")
       _install_immutable_unaccent!(settings)
     else
-      throw(InvalidConfigurationError("Unsupported PostgreSQL extension '$(extension)'. Supported extensions: unaccent"))
+      # #1727: the entry's position, never its text.
+      throw(InvalidConfigurationError(
+        "environment \"$(settings.app_env)\" (folder $(settings.db_def_folder)): `extensions:` entry " *
+        "$(_extension_entry_position(settings, extension)) is not a supported PostgreSQL extension; " *
+        "supported: \"unaccent\"."))
     end
   end
 
@@ -1336,7 +1356,9 @@ end
 
 function _install_postgres_extension!(settings::PormGSettings, extension::String)::Nothing
   safe_extensions = Set(["unaccent"])
-  extension in safe_extensions || throw(InvalidConfigurationError("Unsupported PostgreSQL extension '$(extension)'"))
+  # #1727: never the value. The one caller passes the literal "unaccent"; this is the backstop.
+  extension in safe_extensions ||
+    throw(InvalidConfigurationError("Unsupported PostgreSQL extension; supported: \"unaccent\"."))
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   sql = "CREATE EXTENSION IF NOT EXISTS $(extension) WITH SCHEMA public;"

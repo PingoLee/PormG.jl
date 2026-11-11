@@ -1730,7 +1730,7 @@ function get_database_schema(db::PormGPostgres; schema::Union{String, Nothing} =
   #                      wrong referenced column and wrong ON DELETE. Worse than a phantom: the
   #                      planner then diffed a live, correct constraint against a real table that is
   #                      the wrong one.
-  #   * `indexes`      — the same zip shifted index NAMES onto other columns, and `cache["index"]`
+  #   * `indexes`      — the same zip shifted index NAMES onto other columns, and `cache.index`
   #                      feeds `planner._drop_index`.
   #
   # JSON escapes its own delimiters, so no identifier and no DEFAULT expression can forge one. That
@@ -2534,7 +2534,7 @@ collated index satisfies the declaration there. An index with an expression memb
 PostgreSQL. Both converge.
 
 Returns the index NAMES as well as the column because the planner needs them to drop an index the
-model no longer declares (`model.cache["index"]`); the PostgreSQL path builds the same mapping from
+model no longer declares (`model.cache.index`); the PostgreSQL path builds the same mapping from
 its `indexes` CTE. Every name, sorted (#1341): the filters above make two names under one column two
 copies of one definition, and the planner drops the extras. ONE query per table; an unknown table
 yields an empty dict rather than throwing.
@@ -2573,9 +2573,9 @@ end
 """
     _attach_composite_indexes!(model, composites::Vector{LiveComposite}) -> model
 
-Stash introspected model-level indexes on `model` under the cache keys the declarations write —
-`Models._apply_unique_constraints!`'s `"unique_constraints"` for a unique one (#161) and
-`Models._apply_indexes!`'s `"composite_indexes"` for the rest (#347) — so `Model_to_str` re-emits
+Stash introspected model-level indexes on `model` in the cache slots the declarations write —
+`Models._apply_unique_constraints!`'s `unique_constraints` for a unique one (#161) and
+`Models._apply_indexes!`'s `composite_indexes` for the rest (#347) — so `Model_to_str` re-emits
 them as `constraints = [Models.UniqueConstraint(…)]` / `indexes = [Models.Index(…)]`.
 
 Since #161 this is load-bearing, not cosmetic. `makemigrations` now DROPS a readable composite the
@@ -2603,7 +2603,7 @@ would later be re-created as `CREATE UNIQUE INDEX "sqlite_autoindex_…"`, which
 declaration gets `name = nothing` instead — PormG derives one, and a derived name accepts whatever
 the live index is called, so the adopted constraint still matches.
 
-A cache key is written only when at least one index of its kind survives, so a table with none is
+A slot is written only when at least one index of its kind survives, so a table with none is
 byte-identical to before this existed.
 """
 function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
@@ -2652,14 +2652,14 @@ function _attach_composite_indexes!(model, composites::Vector{LiveComposite})
     end
     decl isa Models.Index ? push!(kept_ix, decl) : push!(kept_uc, decl)
     # #29: whether an advanced index is PormG's is a fact about the LIVE index, which a declaration
-    # cannot carry. Kept beside it — as `cache["index"]` keeps the live `db_index` names — so that
+    # cannot carry. Kept beside it — as `cache.index` keeps the live `db_index` names — so that
     # `live_table`, which reads this model back as a live table, does not take a hand-made index for
     # one PormG marked and plan it away.
     composite_is_advanced(lc) && (owners[lc.name] = (lc.marker, lc.comment))
   end
-  isempty(kept_uc) || (model.cache["unique_constraints"] = Dict{String, Any}("constraints" => kept_uc))
-  isempty(kept_ix) || (model.cache["composite_indexes"] = Dict{String, Any}("indexes" => kept_ix))
-  isempty(owners) || (model.cache["composite_index_owners"] = owners)
+  isempty(kept_uc) || (model.cache.unique_constraints = kept_uc)
+  isempty(kept_ix) || (model.cache.composite_indexes = kept_ix)
+  isempty(owners) || (model.cache.composite_index_owners = owners)
   return model
 end
 
@@ -2699,7 +2699,7 @@ function _attach_check_constraints!(model, checks::Vector{LiveCheck})
     push!(taken, decl.name)
     push!(kept, decl)
   end
-  isempty(kept) || (model.cache["check_constraints"] = Dict{String, Any}("constraints" => kept))
+  isempty(kept) || (model.cache.check_constraints = kept)
   return model
 end
 

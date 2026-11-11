@@ -2352,7 +2352,7 @@ end
 # Why it matters: `_resolve_m2m_side_model` used to re-resolve each side at query time, by binding and
 #   then by a scan of the module's models; it is deleted, and these slots are what replaced it.
 @testset "a many-to-many relation records both sides as models at registration (#64, #1601)" begin
-    for m in PormG.Models.get_all_models(M), (accessor, rel) in get(m.cache, "many_to_many", Dict{String, Any}())
+    for m in PormG.Models.get_all_models(M), (accessor, rel) in m.cache.many_to_many
         @test rel.owner_model_resolved isa PormG.PormGModel
         @test rel.related_model_resolved isa PormG.PormGModel
     end

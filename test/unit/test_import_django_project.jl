@@ -1361,7 +1361,7 @@ class Pilot(Racer):
                 mod = Core.eval(sandbox, :django_1180_alias)
                 Base.invokelatest(PormG.Models.set_models, mod, "import_1180_mock")
                 race = Core.eval(mod, :Race)
-                @test haskey(race.cache["many_to_many"], "rivals")
+                @test haskey(race.cache.many_to_many, "rivals")
                 @test Base.invokelatest(PormG.Models._resolve_target_model,
                                         race.fields["pilot_id"].to, mod) === Core.eval(mod, :Driver)
             finally
@@ -1509,7 +1509,7 @@ class Pilot(rm.Driver):
                 mod = Core.eval(sandbox, :django_1197_proxy)
                 Base.invokelatest(PormG.Models.set_models, mod, "import_1180_mock")
                 race = Core.eval(mod, :Race)
-                @test haskey(race.cache["many_to_many"], "rivals")
+                @test haskey(race.cache.many_to_many, "rivals")
                 @test Base.invokelatest(PormG.Models._resolve_target_model,
                                         race.fields["pilot_id"].to, mod) === Core.eval(mod, :Driver)
             finally
@@ -2713,7 +2713,7 @@ class Circuit(models.Model):
         Core.eval(sandbox, Meta.parse(generated))
         mod = Core.eval(sandbox, :django_1140_siblings)
         Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
-        @test haskey(Core.eval(mod, :Circuit).cache["many_to_many"], "races")
+        @test haskey(Core.eval(mod, :Circuit).cache.many_to_many, "races")
         # Unlabelled, no table was pinned, so the marker cannot name one.
         @test occursin("Declare a through model on the join table Django created", generated)
     finally
@@ -2756,7 +2756,7 @@ end
 """))
     mod = Core.eval(sandbox, :django_1140_through)
     Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
-    rel = Core.eval(mod, :_Driver).cache["many_to_many"]["teammates"]
+    rel = Core.eval(mod, :_Driver).cache.many_to_many["teammates"]
     @test (rel.through_table, rel.owner_column, rel.related_column) ==
           ("racing__driver_teammates", "from__driver_id", "to__driver_id")
 end
@@ -2930,7 +2930,7 @@ end
         Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
         mod
     end
-    m2m(mod, owner, field) = Core.eval(mod, owner).cache["many_to_many"][field]
+    m2m(mod, owner, field) = Core.eval(mod, owner).cache.many_to_many[field]
 
     # The issue's shape, and the same on a `__` class: both ends pinned to the through model's keys,
     # and the reverse accessor named. The file loads, and the relation reads the through model.
@@ -3134,7 +3134,7 @@ class DriverProxy(Driver):
         Core.eval(sandbox, Meta.parse(generated))
         mod = Core.eval(sandbox, :django_1172_proxy)
         Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
-        rel = Core.eval(mod, :Driver).cache["many_to_many"]["rivals"]
+        rel = Core.eval(mod, :Driver).cache.many_to_many["rivals"]
         @test (rel.through_table, rel.owner_column, rel.related_column) ==
               ("racing_driver_rivals", "driver_id", "driverproxy_id")
     finally
@@ -3163,7 +3163,7 @@ class Driver(models.Model):
         Core.eval(sandbox, Meta.parse(generated))
         mod = Core.eval(sandbox, :django_1172_cross_app)
         Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
-        rel = Core.eval(mod, :Racing_driver).cache["many_to_many"]["reserves"]
+        rel = Core.eval(mod, :Racing_driver).cache.many_to_many["reserves"]
         @test (rel.through_table, rel.owner_column, rel.related_column) ==
               ("racing_driver_reserves", "from_driver_id", "to_driver_id")
     finally
@@ -3198,7 +3198,7 @@ class Driver(models.Model):
         Core.eval(sandbox, Meta.parse(generated))
         mod = Core.eval(sandbox, :django_1172_proxy_cross_app)
         Base.invokelatest(PormG.Models.set_models, mod, "import_1140_mock")
-        rel = Core.eval(mod, :Driver).cache["many_to_many"]["rivals"]
+        rel = Core.eval(mod, :Driver).cache.many_to_many["rivals"]
         @test (rel.through_table, rel.owner_column, rel.related_column) ==
               ("racing_driver_rivals", "from_driver_id", "to_driver_id")
     finally

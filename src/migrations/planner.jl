@@ -492,7 +492,7 @@ function _drop_index(conn::_SQLEngine, migration_plan::OrderedDict{Symbol, Order
   # refuses to return any constraint-backing index on either backend (`NOT indisunique` plus a
   # `pg_constraint` probe; `origin = 'c' AND "unique" = 0`), so the lookup path cannot reach here
   # with such a name. The one caller passing an explicit `index_name` — the deleted-`db_index` flush
-  # in `_alter_table_fields` — reads it from `model.cache["index"]`, which introspection populates
+  # in `_alter_table_fields` — reads it from `model.cache.index`, which introspection populates
   # from a CTE that already filters `NOT indisunique`.
   #
   # Removing it also changes the failure mode for anything that slips past both: a constraint-backed
@@ -1560,7 +1560,7 @@ function _refuse_stale_check_conditions(model::PormGModel, renames::Dict{String,
   # since #934, a partial or functional `UniqueConstraint`.
   text_indexes = Tuple{String, String, Vector{String}, Union{String, Nothing}}[
     ("Index", String(ix.name), ix.expressions, ix.condition)
-    for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Models.Index[])
+    for ix in model.cache.composite_indexes
     if Models._index_holds_text(ix)]
   for uc in Models._declared_unique_constraints(model)
     Models._unique_holds_text(uc) && push!(text_indexes, ("UniqueConstraint", String(uc.name), uc.expressions, uc.condition))
@@ -2801,7 +2801,7 @@ function _join_table_endpoint_renames(current_model::PormGModel, colect_deletion
                                       model_fields_map::AbstractDict{String, String},
                                       current_fields_map::AbstractDict{String, String}, conn)::Dict{String, String}
   renames = Dict{String, String}()
-  (current_model.cache !== nothing && haskey(current_model.cache, "many_to_many_auto")) || return renames
+  _is_auto_join_table(current_model) || return renames
   same = Dict{Symbol, Vector{Symbol}}(
     added => _same_definition_candidates(current_model.fields[current_fields_map[string(added)]], string(added),
                                          colect_deletion, live, model_fields_map, conn)
@@ -2999,8 +2999,7 @@ end
 _rename_hint_fix(old::AbstractString, new::AbstractString) = "\"$old\" => \"$new\" to rename, or \"$old\" => nothing to drop it"
 
 # Whether `model` is an auto many-to-many join table — synthesized, never declared (#735).
-_is_auto_join_table(model::PormGModel)::Bool =
-  model.cache !== nothing && haskey(model.cache, "many_to_many_auto")
+_is_auto_join_table(model::PormGModel)::Bool = model.cache.many_to_many_auto !== nothing
 
 # #735: the live table an auto join table was renamed from, when one of its ends was renamed — or
 # `nothing`. Its name is derived from its owner (`<model>_<field>`), so renaming the owner renames
@@ -3029,15 +3028,15 @@ function _join_table_rename_source(model::PormGModel, unclaimed::Vector{Symbol},
   declared = parents(column_spec(field, conn; name = String(key)) for (key, field) in model.fields)
   any(p -> p in values(renames), declared) || return nothing
   # `_many_to_many_table_name` lowercases the whole `<model>_<field>` string, so the suffix is too.
-  # A join table that does not say which field declared it is never followed — it is asked about.
-  field = get(model.cache["many_to_many_auto"], "field", nothing)
-  field === nothing && return nothing
-  suffix = "_" * lowercase(String(field))
+  # Only a synthesized join table carries the declaring field's name; any other model is asked about.
+  auto = model.cache.many_to_many_auto
+  auto === nothing && return nothing
+  suffix = "_" * lowercase(auto.field)
   new_name = String(model_table_name(model))
   endswith(new_name, suffix) || return nothing
   new_stem = chopsuffix(new_name, suffix)
   # The owner end's table, as the join table declares it — the new name, when the owner was renamed.
-  owner_column = get(model.cache["many_to_many_auto"], "owner_column", nothing)
+  owner_column = auto.owner_column
   owner_specs = [column_spec(f, conn; name = String(k)) for (k, f) in model.fields if String(k) == owner_column]
   length(owner_specs) == 1 && only(owner_specs).reference !== nothing || return nothing
   owner = only(owner_specs).reference.table
@@ -3217,7 +3216,7 @@ function _refuse_managed_models_on_ignored_tables(current_schema::Dict{Symbol, D
     model = entry[:model]
     # A ManyToManyField's auto join table is synthesized, so `managed = false` cannot be written on
     # it: it is managed whenever either end is. Its own fix is a `db_table` outside the prefix.
-    what = if haskey(model.cache, "many_to_many_auto")
+    what = if _is_auto_join_table(model)
       join_table = true
       "the auto join table of a ManyToManyField (table \"$(table)\"; give the field a `db_table` outside the prefix, or declare an explicit `through` model)"
     else
@@ -3329,7 +3328,7 @@ function _refuse_unsupported_indexes(current_schema::Dict{Symbol, Dict{Symbol, U
   (conn isa PormGBackend && !_supports(conn, :index_methods)) || return nothing
   for table in sort!(collect(keys(current_schema)))
     model = current_schema[table][:model]
-    for ix in get(get(model.cache, "composite_indexes", Dict{String, Any}()), "indexes", Models.Index[])
+    for ix in model.cache.composite_indexes
       what = ix.method != "btree" ? "method = \"$(ix.method)\"" :
              any(!isnothing, ix.opclasses) ? "opclasses = $(Tuple(ix.opclasses))" :
              !isempty(ix.include) ? "include = $(Tuple(ix.include))" : nothing   # #934

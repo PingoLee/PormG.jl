@@ -380,7 +380,7 @@ end
       idx = _sqlite_single_column_indexed_columns(pool, :t325)
       @test collect(keys(idx)) == ["ix"]
       # The index NAME is carried too — the planner needs it to DROP the index when a model stops
-      # declaring `db_index`, and SQLite's reader never populated `cache["index"]` before.
+      # declaring `db_index`, and SQLite's reader never populated `cache.index` before.
       @test idx["ix"] == ["ix_t325_ix"]
 
       # Spelled out individually so a failure names the filter that broke:
@@ -408,7 +408,7 @@ end
       @test !m.fields["plain"].db_index
       @test !m.fields["a"].db_index
       @test !m.fields["part"].db_index
-      @test m.cache["index"]["ix"] == ["ix_t325_ix"]
+      @test m.cache.index["ix"] == ["ix_t325_ix"]
 
       # ── The other half of #325 on SQLite: a bare TEXT column must not invent a max_length ──
       # SQLite renders CharField as `TEXT(n)` and UUIDField/JSONField/ImageField/TextField all as
@@ -541,8 +541,8 @@ end
       # END TO END: the vector is only useful if convertSQLToModel attaches it. Without this the
       # whole reader could be inert and every assertion above would still pass.
       m = convertSQLToModel(pool, "t347")
-      @test haskey(m.cache, "composite_indexes")
-      ixs = Dict(ix.name => ix for ix in m.cache["composite_indexes"]["indexes"])
+      @test !isempty(m.cache.composite_indexes)
+      ixs = Dict(ix.name => ix for ix in m.cache.composite_indexes)
       @test sort(collect(keys(ixs))) == ["ix_ba", "ix_coll", "ix_desc", "ix_expr", "ix_part"]   # the LIVE names, so a re-migration reproduces them
       @test (ixs["ix_part"].fields, ixs["ix_part"].condition) == (["c", "d"], "c IS NOT NULL")
       @test ixs["ix_expr"].expressions == ["lower(c)", "d"]
@@ -550,12 +550,12 @@ end
       @test (ixs["ix_desc"].fields, ixs["ix_desc"].descending) == (["c", "d"], [true, false])
       # The hand-made DESC index's ownership rides along, so reading this model back as a live table
       # (`live_table`) does not take it for one PormG marked — which would plan it away (#29).
-      @test m.cache["composite_index_owners"]["ix_desc"] == (nothing, nothing)
+      @test m.cache.composite_index_owners["ix_desc"] == (nothing, nothing)
 
       # #161: the three unique shapes come back as `UniqueConstraint`s. Without this an inspectdb'd
       # models file would declare none of them, and the first `makemigrations` — which now drops an
       # undeclared composite — would plan their removal.
-      all_ucs = m.cache["unique_constraints"]["constraints"]
+      all_ucs = m.cache.unique_constraints
       # #934: the partial and functional ones come back with their text, under their live names.
       @test only(uc for uc in all_ucs if uc.name == "ux_part").condition == "e IS NOT NULL"
       @test only(uc for uc in all_ucs if uc.name == "ux_expr").expressions == ["lower(e)", "f"]
@@ -576,15 +576,15 @@ end
       @test !m.fields["b"].db_index
       @test m.fields["uc"].unique
       @test !m.fields["g"].unique
-      @test m.cache["index"]["solo"] == ["ix_solo"] # and every cache key coexists — one must not
+      @test m.cache.index["solo"] == ["ix_solo"] # and every cache key coexists — one must not
                                                   #   overwrite another on the way in
 
       # A table with no composite index carries no entry at all, so nothing changes for the
       # overwhelmingly common case.
       fetch(pool, "CREATE TABLE t347_plain (id INTEGER PRIMARY KEY, x TEXT);")
       plain = convertSQLToModel(pool, "t347_plain")
-      @test !haskey(plain.cache, "composite_indexes")
-      @test !haskey(plain.cache, "unique_constraints")
+      @test isempty(plain.cache.composite_indexes)
+      @test isempty(plain.cache.unique_constraints)
     finally
       close_pool!(pool)
     end

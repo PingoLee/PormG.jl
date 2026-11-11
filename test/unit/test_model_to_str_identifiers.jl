@@ -204,16 +204,16 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     m = Model("mts_uc_scratch", Dict{String, PormGField}(
       "id" => IDField(), "end" => IntegerField(), "year" => IntegerField(), "_x" => IntegerField(),
     ))
-    m.cache["unique_constraints"] = Dict("constraints" => [
+    m.cache.unique_constraints = [
       UniqueConstraint(fields = ("end", "year")),
       UniqueConstraint(fields = ("_x",), name = "uq_mts_x"),
-    ])
+    ]
     generated = Model_to_str(m)
     @test occursin("fields = (\"end_\", \"year\",)", generated)
     @test occursin("fields = (\"x\",), name = \"uq_mts_x\"", generated)
     reloaded = _reload(generated)      # threw before the rename map existed
     @test _columns(reloaded) == _columns(m)
-    ucs = reloaded.cache["unique_constraints"]["constraints"]
+    ucs = reloaded.cache.unique_constraints
     @test Set(Set(c.fields) for c in ucs) == Set([Set(["end_", "year"]), Set(["x"])])
   end
 
@@ -301,16 +301,16 @@ _columns(m) = Set(field_db_column(f, k) for (k, f) in m.fields)
     ))
     # `_teams` needs renaming, and an M2M cannot be renamed (no db_column, and its name feeds the
     # join-table name), so it takes the `continue` path and never reaches the output.
-    m.cache["unique_constraints"] = Dict("constraints" => [
+    m.cache.unique_constraints = [
       UniqueConstraint(fields = ("_teams", "year")),
       UniqueConstraint(fields = ("year",), name = "uq_mts_year"),
-    ])
+    ]
     generated = @test_logs (:warn,) (:warn,) match_mode=:any Model_to_str(m)
     @test occursin("# PormG: UniqueConstraint over (_teams, year) could not be rendered", generated)
     @test !occursin("fields = (\"_teams\"", generated)
     @test occursin("name = \"uq_mts_year\"", generated)   # the healthy one still ships
     reloaded = _reload(generated)
-    ucs = reloaded.cache["unique_constraints"]["constraints"]
+    ucs = reloaded.cache.unique_constraints
     @test length(ucs) == 1
     @test Set(ucs[1].fields) == Set(["year"])
   end

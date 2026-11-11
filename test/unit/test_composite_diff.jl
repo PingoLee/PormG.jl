@@ -333,9 +333,8 @@ end
       join_model() = begin
         m = Models.Model("car_driver"; id = Models.IDField(), car_id = Models.IntegerField(),
                          driver_id = Models.IntegerField())
-        m.cache["many_to_many_auto"] = Dict{String, Any}(
-          "owner_column" => "car_id", "related_column" => "driver_id",
-          "unique_index" => "car_driver_car_id_driver_id_uniq")
+        m.cache.many_to_many_auto = Models.AutoJoinTable(
+          "driver", "car_id", "driver_id", "car_driver_car_id_driver_id_uniq")
         m
       end
       p = _cd_plan(pool, LiveTable[], join_model())
@@ -681,7 +680,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # SQLite: inspectdb keeps a hand-made index hand-made (#29)
 # A model READ from the database carries each advanced index's live ownership beside its
-# declaration (`cache["composite_index_owners"]`). Read back as a live table — the model-vector plan
+# declaration (`cache.composite_index_owners`). Read back as a live table — the model-vector plan
 # entry point every older test uses — a hand-made DESC index must stay unowned, or the first plan
 # after inspectdb that drops the declaration would drop an index PormG never made.
 # Mutation gate: delete the `composite_index_owners` lookup in `live_table` and the plan below holds a
@@ -694,7 +693,7 @@ end
       _cd_apply!(pool, _cd_plan(pool, LiveTable[], _cd_result()))
       fetch(pool, "CREATE INDEX hand_grid_desc ON result(grid DESC);")
       read_back = only(m for m in Migrations.convert_schema_to_models(pool) if lowercase(string(m.name)) == "result")
-      @test read_back.cache["composite_index_owners"]["hand_grid_desc"] == (nothing, nothing)
+      @test read_back.cache.composite_index_owners["hand_grid_desc"] == (nothing, nothing)
       lc = only(c for c in live_table(read_back, pool).composites if c.name == "hand_grid_desc")
       @test lc.marker === nothing && !Migrations.composite_is_owned(lc)
       # The model-vector entry point, a declaration that no longer names it: nothing planned.

@@ -601,8 +601,8 @@ end
     # ── 3c. Composite NON-unique indexes round-trip as Models.Index (#347) ──
     # The multi-column half of the same index set, which both readers used to discard by arity.
     # This is the only coverage that executes PostgreSQL's `_pg_composite_indexes` query at all.
-    @test haskey(uniq.cache, "composite_indexes")
-    live_ix = uniq.cache["composite_indexes"]["indexes"]
+    @test !isempty(uniq.cache.composite_indexes)
+    live_ix = uniq.cache.composite_indexes
     live_ix_names = [i.name for i in live_ix]
     ix_by_name_coll(ixs) = only(i for i in ixs if i.name == "pormg_it_uniq_coll_idx")
     # The composite UNIQUE above must not also arrive here. On PostgreSQL it is a `pg_constraint`
@@ -630,7 +630,7 @@ end
       @test ix_by_name["pormg_it_uniq_opc_idx"].opclasses == ["text_pattern_ops", nothing]
     end
     # Both are hand-made — read, but never PormG's to drop.
-    @test uniq.cache["composite_index_owners"]["pormg_it_uniq_desc_idx"][1] === nothing
+    @test uniq.cache.composite_index_owners["pormg_it_uniq_desc_idx"][1] === nothing
     # Members are not marked `db_index` either — the single-column reader must stay disjoint.
     @test !uniq.fields["a"].db_index
     @test !uniq.fields["b"].db_index
@@ -646,7 +646,7 @@ end
     uniq_mod = Module()
     Core.eval(uniq_mod, :(import PormG.Models))
     uniq_reloaded = Core.eval(uniq_mod, Meta.parse(uniq_src))
-    @test [PormG.Models._index_shape(i) for i in uniq_reloaded.cache["composite_indexes"]["indexes"]] ==
+    @test [PormG.Models._index_shape(i) for i in uniq_reloaded.cache.composite_indexes] ==
           [PormG.Models._index_shape(i) for i in live_ix]
 
     # ── 3c'. …and the composite UNIQUE (a, b) comes back as a UniqueConstraint (#161) ──
@@ -655,7 +655,7 @@ end
     # declares, an inspectdb'd models file without it would delete the constraint on its first run.
     # This is the only coverage that runs the widened PostgreSQL query (the `pg_constraint` join on
     # `conrelid`) against a real catalog.
-    ucs = uniq.cache["unique_constraints"]["constraints"]
+    ucs = uniq.cache.unique_constraints
     @test [uc.fields for uc in ucs] == [["a", "b"]]
     # PostgreSQL names the constraint itself (`<table>_<cols>_key`) and that name is kept, so a
     # re-migration reproduces it. SQLite's `sqlite_autoindex_*` is reserved and is NOT written into
@@ -663,7 +663,7 @@ end
     # names an unnamed UNIQUE index after its first column (`a`, measured), and that name is kept.
     @test isequal(ucs[1].name, by_engine(postgres = "pormg_it_uniq_a_b_key", sqlite = nothing, mysql = "a"))
     @test occursin("Models.UniqueConstraint(fields = (\"a\", \"b\",)", uniq_src)
-    @test [uc.fields for uc in uniq_reloaded.cache["unique_constraints"]["constraints"]] == [["a", "b"]]
+    @test [uc.fields for uc in uniq_reloaded.cache.unique_constraints] == [["a", "b"]]
 
     # ── 3d. Mixed-case FK/PK identifiers keep one spelling on every side (#389) ──────────
     # PostgreSQL used to aggregate `fk_cols`, `fk_tables` and `referenced_primary_keys` through
@@ -742,7 +742,7 @@ end
     # `driver ref`, so it stopped matching `col_name` the moment the name was torn. `db_index=true`
     # reading back false is the #325 churn, in a new place.
     @test spaced.fields["driver ref"].db_index
-    @test spaced.cache["index"]["driver ref"] == ["pormg_it_spaced_ref_idx"]
+    @test spaced.cache.index["driver ref"] == ["pormg_it_spaced_ref_idx"]
     if sized_text
       # The type survived too: `col_parts[2]` was `Id"`-shaped for the FK column and equally wrong
       # here, so a sized textual column degraded to TextField and lost its length.
@@ -872,7 +872,7 @@ end
 
     # 4. The index pair, the other zip. A shifted index NAME reaches `planner._drop_index`.
     @test comma_child.fields["Idx, Col"].db_index
-    @test comma_child.cache["index"]["Idx, Col"] == ["pormg_it_comma_idx"]
+    @test comma_child.cache.index["Idx, Col"] == ["pormg_it_comma_idx"]
 
     # 5. A DEFAULT containing `, `. Two distinct defects had to be fixed for this: the aggregate
     #    tear (pre-fix this produced the phantom field key `Scuderia'::text`) AND the reader's

@@ -469,7 +469,8 @@ end
     # `managed = false` and a rename apply to a model the user wrote, not to a synthesized table.
     PormG._EXTRA_IGNORE_TABLES[] = ["legacy_timing_"]
     schema = _ig805_schema("legacy_timing_laps_circuits")
-    schema[:legacy_timing_laps_circuits][:model].cache["many_to_many_auto"] = Dict{String, Any}()
+    schema[:legacy_timing_laps_circuits][:model].cache.many_to_many_auto = Models.AutoJoinTable(
+      "circuits", "laps_id", "circuits_id", "legacy_timing_laps_circuits_laps_id_circuits_id_uniq")
     msg = PormG.error_message(_ig805_catch(() ->
       Migrations._refuse_managed_models_on_ignored_tables(schema, IgnoreMockSqlite805(), PormG.Configuration.Settings())))
     @test occursin("the auto join table of a ManyToManyField", msg)
@@ -574,7 +575,8 @@ end
     # A ManyToManyField's auto join table under a default entry can be unignored the same way.
     PormG._EXTRA_IGNORE_TABLES[] = String[]
     schema = _ig805_schema("account_profile_circuits")
-    schema[:account_profile_circuits][:model].cache["many_to_many_auto"] = Dict{String, Any}()
+    schema[:account_profile_circuits][:model].cache.many_to_many_auto = Models.AutoJoinTable(
+      "circuits", "profile_id", "circuits_id", "account_profile_circuits_profile_id_circuits_id_uniq")
     msg = PormG.error_message(_ig805_catch(() ->
       Migrations._refuse_managed_models_on_ignored_tables(schema, pg, PormG.Configuration.Settings())))
     @test occursin("the auto join table of a ManyToManyField", msg)

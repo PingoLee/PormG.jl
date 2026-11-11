@@ -907,43 +907,41 @@ chose that name, not the developer, and a join table adopted from Django keeps D
 function declared_composites(model::PormGModel)::Vector{DeclaredComposite}
   out = DeclaredComposite[]
   table = String(model_table_name(model))
-  auto = get(model.cache, "many_to_many_auto", nothing)
+  auto = model.cache.many_to_many_auto
   if auto !== nothing
-    push!(out, DeclaredComposite(String(auto["unique_index"]),
-                                 String[String(auto["owner_column"]), String(auto["related_column"])],
+    push!(out, DeclaredComposite(auto.unique_index, String[auto.owner_column, auto.related_column],
                                  true, false, true))
   end
-  for (cache_key, list_key, unique) in (("unique_constraints", "constraints", true),
-                                        ("composite_indexes", "indexes", false))
-    for decl in get(get(model.cache, cache_key, Dict{String, Any}()), list_key, Any[])
-      cols = String[Models.model_column(model, f) for f in decl.fields]
-      if decl isa Models.Index
-        # A text-holding Index always has a name (its constructor requires one).
-        name = decl.name === nothing ?
-          composite_index_name(table, cols, unique; descending = decl.descending, method = decl.method) :
-          String(decl.name)
-        push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false, decl.method,
-                                     copy(decl.descending), copy(decl.opclasses),
-                                     copy(decl.expressions), decl.condition,
-                                     String[Models.model_column(model, f) for f in decl.include]))
-      else
-        name = decl.name === nothing ? composite_index_name(table, cols, unique) : String(decl.name)
-        # #934: a partial or functional UniqueConstraint carries its text, and with it the hashed marker
-        # (`composite_marker`) — a plain one is the plain composite it always was.
-        push!(out, DeclaredComposite(name, cols, unique, decl.name !== nothing, false, "btree",
-                                     fill(false, length(cols)), Union{String, Nothing}[nothing for _ in cols],
-                                     copy(decl.expressions), decl.condition))
-      end
-    end
+  # Each `UniqueConstraint`, then each `Index` — one typed loop per slot (#1687).
+  for decl in model.cache.unique_constraints
+    cols = String[Models.model_column(model, f) for f in decl.fields]
+    given = decl.name
+    name = given === nothing ? composite_index_name(table, cols, true) : given
+    # #934: a partial or functional UniqueConstraint carries its text, and with it the hashed marker
+    # (`composite_marker`) — a plain one is the plain composite it always was.
+    push!(out, DeclaredComposite(name, cols, true, given !== nothing, false, "btree",
+                                 fill(false, length(cols)), Union{String, Nothing}[nothing for _ in cols],
+                                 copy(decl.expressions), decl.condition))
+  end
+  for decl in model.cache.composite_indexes
+    cols = String[Models.model_column(model, f) for f in decl.fields]
+    # A text-holding Index always has a name (its constructor requires one).
+    given = decl.name
+    name = given === nothing ?
+      composite_index_name(table, cols, false; descending = decl.descending, method = decl.method) :
+      given
+    push!(out, DeclaredComposite(name, cols, false, given !== nothing, false, decl.method,
+                                 copy(decl.descending), copy(decl.opclasses),
+                                 copy(decl.expressions), decl.condition,
+                                 String[Models.model_column(model, f) for f in decl.include]))
   end
   return out
 end
 
-# `cache["index"]` holds a column's live index names: a vector since #1341 (`model_from_live`), a single
-# name in a cache written by hand, nothing when only the fact of an index is known.
+# `cache.index` holds a column's live index names (`model_from_live`, a vector since #1341); a column
+# missing from it is one where only the fact of an index is known.
 _index_name_list(::Nothing)::Vector{String} = String[]
-_index_name_list(name::AbstractString)::Vector{String} = String[String(name)]
-_index_name_list(names::AbstractVector)::Vector{String} = sort!(String[string(n) for n in names])
+_index_name_list(names::Vector{String})::Vector{String} = sort(names)
 
 """
     live_table(model::PormGModel, conn) -> LiveTable
@@ -954,23 +952,23 @@ A `PormGModel` read as a description of a LIVE table — the adapter behind
 It is the declared-side compiler applied to a model: every physical column is compiled with
 `_spec_or_degraded` under the `<uncompilable:old>` marker (the #69 fail-safe keeps its asymmetry —
 a live column that cannot be compiled must still compare UNEQUAL to a declared one), `db_index`
-plus `cache["index"]` fill `indexes`, and [`declared_composites`](@ref) fills `composites` — as bare
+plus `cache.index` fill `indexes`, and [`declared_composites`](@ref) fills `composites` — as bare
 indexes, since that is what PormG itself creates, an advanced one (#29) carrying the `pormg:index`
-marker PormG writes beside it unless `cache["composite_index_owners"]` (a model `inspectdb` read)
+marker PormG writes beside it unless `cache.composite_index_owners` (a model `inspectdb` read)
 records the live index's own. Not a second
 representation of the schema: the planner's unit tests and the golden plan corpus hand-build the
 live side as models, and this is what lets them keep doing so while `makemigrations` itself never
 builds one. A `ManyToManyField` is skipped, as it is a join table and not a column.
 
 The composites go through the planner's own compiler on purpose. This adapter used to hand-roll
-them from `cache["composite_indexes"]` alone — field keys where the catalog holds physical columns,
+them from `cache.composite_indexes` alone — field keys where the catalog holds physical columns,
 no `UniqueConstraint`, and `String(ix.name)`, which throws on the `name = nothing` every derived
 declaration carries.
 """
 function live_table(model::PormGModel, conn::_SQLEngine)::LiveTable
   columns = OrderedDict{String, ColumnSpec}()
   indexes = Dict{String, Vector{String}}()
-  live_index_names = get(model.cache, "index", Dict{String, Any}())
+  live_index_names = model.cache.index
   for (key, field) in model.fields
     Models.is_many_to_many_field(field) && continue
     field_key = String(key)
@@ -988,9 +986,9 @@ function live_table(model::PormGModel, conn::_SQLEngine)::LiveTable
   # recorded by name and every unnamed one as the default — unless the model was READ from a database
   # (`_attach_composite_indexes!`), which records each advanced index's own marker and comment: a
   # hand-made index read back as marked would be planned away the moment its declaration went.
-  owners = get(model.cache, "composite_index_owners", nothing)
+  owners = model.cache.composite_index_owners
   ownership(d) = !composite_is_advanced(d) ? (nothing, nothing) :
-                 owners !== nothing && haskey(owners, d.name) ? owners[d.name] :
+                 haskey(owners, d.name) ? owners[d.name] :
                  (composite_marker(d), composite_marker(d))
   composites = LiveComposite[
     LiveComposite(d.name, d.columns, d.unique, false, d.method, copy(d.descending), copy(d.opclasses),
@@ -2000,8 +1998,9 @@ function model_from_live(table::LiveTable, conn::_SQLEngine)::PormGModel
     fields[col] = field_from_spec(spec, table, conn)
   end
   model = Models.Model(table.name, fields)
-  named = Dict{String, Any}(col => copy(names) for (col, names) in table.indexes if !isempty(names))
-  isempty(named) || (model.cache["index"] = named)
+  for (col, names) in table.indexes
+    isempty(names) || (model.cache.index[col] = copy(names))
+  end
   _attach_composite_indexes!(model, table.composites)
   _attach_check_constraints!(model, table.checks)   # #742
   return model

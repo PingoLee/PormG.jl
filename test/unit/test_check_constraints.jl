@@ -148,10 +148,10 @@ const CK_LAPS = Models.CheckConstraint(condition = "laps >= 0", name = "result_l
   # One object, or a mixed collection; each kind lands under its own cache key.
   m = _ck_result(CK_GRID)
   @test Models.declared_check_constraints(m) == [CK_GRID]
-  @test !haskey(m.cache, "unique_constraints")
+  @test isempty(m.cache.unique_constraints)
   mixed = _ck_result(Models.UniqueConstraint(fields = ("raceid", "driverid")), CK_GRID, CK_LAPS)
   @test Models.declared_check_constraints(mixed) == [CK_GRID, CK_LAPS]
-  @test length(mixed.cache["unique_constraints"]["constraints"]) == 1
+  @test length(mixed.cache.unique_constraints) == 1
   single = Models.Model("result"; resultid = Models.IDField(), grid = Models.IntegerField(), constraints = CK_GRID)
   @test Models.declared_check_constraints(single) == [CK_GRID]
 
@@ -181,11 +181,11 @@ end
   Core.eval(mod, :(import PormG.Models))
   back = Core.eval(mod, Meta.parse(src))
   @test Models.declared_check_constraints(back) == [CK_GRID, quoted]
-  @test length(back.cache["unique_constraints"]["constraints"]) == 1
+  @test length(back.cache.unique_constraints) == 1
 
   only_checks = Models.Model_to_str(_ck_result(CK_LAPS))
   @test occursin("constraints = [Models.CheckConstraint(condition = \"laps >= 0\", name = \"result_laps_non_negative\")]", only_checks)
-  @test !haskey(Core.eval(mod, Meta.parse(only_checks)).cache, "unique_constraints")
+  @test isempty(Core.eval(mod, Meta.parse(only_checks)).cache.unique_constraints)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

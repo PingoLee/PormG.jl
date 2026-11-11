@@ -3422,18 +3422,13 @@ end
 
 # The UniqueConstraints already stashed on a model by `_apply_unique_constraints!`. Applying
 # constraints one at a time (so a rejection is per-constraint) means each call must carry the ones
-# that already passed — the setter REPLACES the cache entry rather than appending to it.
-function _existing_unique_constraints(model)::Vector{Models.UniqueConstraint}
-  haskey(model.cache, "unique_constraints") || return Models.UniqueConstraint[]
-  return get(model.cache["unique_constraints"], "constraints", Models.UniqueConstraint[])
-end
+# that already passed — the setter REPLACES the slot rather than appending to it.
+_existing_unique_constraints(model::Models.ModelType)::Vector{Models.UniqueConstraint} =
+  model.cache.unique_constraints
 
-# The composite-index sibling of the above (#347). `_apply_indexes!` replaces its cache entry the
-# same way, so applying one index at a time has to carry the ones that already passed.
-function _existing_indexes(model)::Vector{Models.Index}
-  haskey(model.cache, "composite_indexes") || return Models.Index[]
-  return get(model.cache["composite_indexes"], "indexes", Models.Index[])
-end
+# The composite-index sibling of the above (#347). `_apply_indexes!` replaces its slot the same way,
+# so applying one index at a time has to carry the ones that already passed.
+_existing_indexes(model::Models.ModelType)::Vector{Models.Index} = model.cache.composite_indexes
 
 # ── Class classification and inheritance (#341) ─────────────────────────────────────────────────
 # Until #341 a class became a table iff its ENTIRE base list was one of two literals

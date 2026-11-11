@@ -756,6 +756,58 @@ end
     end
   end
 
+  # What: `Models._relation_from_many_to_many`, which builds a many-to-many relation at registration and
+  #   in the migration planner, read as both callers specialize it: `set_models` passes `_module`, the
+  #   planner's `synthesize_many_to_many_through_models` passes `model_map`.
+  # Expected: its keyword body makes no dynamic call. The explicit-`through` branch types the through
+  #   model `ModelType` at each of its arms and reads `source_field`/`target_field` once, so
+  #   `model_table_name`, `_infer_through_field`, `_is_through_pin_for`, the `fields[…]` reads with their
+  #   `.pk_field`, `model_column` and the refusal's keyword call all resolve.
+  # Why: once #1685 made the settings concrete, the `juliac --trim` verifier followed registration into
+  #   this branch and found it untyped: 34 rows on main, each a run-time `MethodError` in a trimmed binary
+  #   whose models declare an explicit `through` (#1690). A `through` or a `.to` left at a type holding the
+  #   abstract `PormGModel`, the slot's union or a re-read of it, brings them back.
+  @testset "_relation_from_many_to_many makes no dynamic call, explicit through included (#1690)" begin
+    M = PormG.Models
+    f = M._relation_from_many_to_many
+    # The keyword wrapper `Core.kwcall` and the body it `:invoke`s (`#_relation_from_many_to_many#N`).
+    function kw_body_calls(nt)
+      tt = Tuple{typeof(Core.kwcall), nt, typeof(f), M.ModelType, String, String, M.sManyToManyField,
+                 M.ModelType, String, PormG.Kernel.Settings}
+      found = String[]
+      walk(tt, d) = for (ci, _) in Base.code_typed_by_type(tt; optimize = true), (i, stmt) in enumerate(ci.code)
+        stmt isa Expr || continue
+        if stmt.head === :call
+          _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+          push!(found, "$(i): $(stmt)")
+        elseif stmt.head === :invoke && d > 0
+          mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+          (mi isa Core.MethodInstance && mi.def isa Method) || continue
+          startswith(string(mi.def.name), "#_relation_from_many_to_many#") && walk(mi.specTypes, d - 1)
+        end
+      end
+      walk(tt, 2)
+      return found
+    end
+    schema = Dict{Symbol, Dict{Symbol, Union{Bool, PormG.Kernel.PormGModel}}}
+    for nt in (NamedTuple{(:_module, :reverse_accessor), Tuple{Module, Union{Nothing, String}}},
+               NamedTuple{(:model_map,), Tuple{schema}})
+      calls = kw_body_calls(nt)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic calls in _relation_from_many_to_many" nt calls
+    end
+    # The two helpers that compare a through foreign key's target, one level down: each passed `.to`
+    # at the slot's whole type, `Nothing` included (`_through_fk_for` re-read it after its `isa` test),
+    # which `_same_model_reference`'s one method does not accept.
+    pin_calls = _dynamic_calls_deep(M._is_through_pin_for, (M.ModelType, String, M.ModelType))
+    @test isempty(pin_calls)
+    isempty(pin_calls) || @info "dynamic calls under _is_through_pin_for" pin_calls
+    infer_calls = _named_dynamic_calls(Tuple{typeof(M._infer_through_field), M.ModelType, M.ModelType, String},
+                                       ("_same_model_reference",))
+    @test isempty(infer_calls)
+    isempty(infer_calls) || @info "dynamic calls in _infer_through_field" infer_calls
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

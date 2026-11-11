@@ -754,6 +754,10 @@ _stored_read_view(k::Union{CDate,CDateTime,CTime,CInterval,CBool,CArray}) = k
 _stored_read_view(k::CDecimal) = k.precision === nothing ? nothing : k
 _stored_read_view(::Any) = nothing
 
+# `::Union{Nothing,CanonicalType}`, the contract below, stated (#1599 round 8, row 31): its arms answered
+# untyped (`_recorded_read_kind`, `_read_view`, the window recursion), so the kind reached
+# `get_select_query` as `Any`, and its store into `projection_kinds::Dict{Symbol,CanonicalType}` was a
+# dynamic `setindex!` a trimmed image had not compiled. A value outside the contract now fails here.
 """
     _read_kind(x, instruc; rendered = nothing) -> Union{CanonicalType, Nothing}
 
@@ -773,7 +777,7 @@ first, ahead of the view, so a day count records the `CInt32` the view would dro
 
 Read after `x` renders, as every kind lookup here is: resolving a path fills the memo the walk reads.
 """
-function _read_kind(x, instruc::SQLInstruction; rendered = nothing)
+function _read_kind(x, instruc::SQLInstruction; rendered = nothing)::Union{Nothing,CanonicalType}
   rendered === nothing || return rendered
   x isa SQLText && return _literal_read_kind(x.field)
   recorded = _recorded_read_kind(x, instruc)
@@ -788,6 +792,41 @@ function _read_kind(x, instruc::SQLInstruction; rendered = nothing)
     return _unapplied_window_default(x, k, instruc) ? _computed_meaning(k) : k
   end
   return _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
+end
+
+# #1599 round 8, row 31: store a projection's kind into `projection_kinds` with the kind at its concrete
+# type. `_read_kind` answers `Union{Nothing,CanonicalType}`, but a call with an abstract argument the callee
+# specializes on (`setindex!(::Dict, ::CanonicalType, ::Symbol)`, one of 98 `setindex!` methods) is not a
+# compileable signature, so it stayed a dynamic call, and the trimmed read aborted inferring
+# `setindex!(Dict{Symbol,CanonicalType}, CDate, Symbol)` at run time. One `isa` arm per concrete kind
+# (#1707's shape; a walk pays here because the callee has many methods, #1735). Behind `@noinline`, so
+# `get_select_query` keeps one call per site. `test/unit/test_trim_shape_pins.jl` checks the arms against
+# the concrete subtypes of `CanonicalType`. Here, beside the kinds,
+# because `CJSONValue` is one of them and only this file may name it in an `isa` (#1531's guard).
+@noinline function _store_projection_kind!(instruc::SQLInstruction, name::Symbol, @nospecialize(kind))
+  d = instruc.projection_kinds
+  kind isa CArray && return (d[name] = kind; nothing)
+  kind isa CBool && return (d[name] = kind; nothing)
+  kind isa CBytes && return (d[name] = kind; nothing)
+  kind isa CCidr && return (d[name] = kind; nothing)
+  kind isa CDate && return (d[name] = kind; nothing)
+  kind isa CDateTime && return (d[name] = kind; nothing)
+  kind isa CDecimal && return (d[name] = kind; nothing)
+  kind isa CFloat64 && return (d[name] = kind; nothing)
+  kind isa CInet && return (d[name] = kind; nothing)
+  kind isa CInt16 && return (d[name] = kind; nothing)
+  kind isa CInt32 && return (d[name] = kind; nothing)
+  kind isa CInt64 && return (d[name] = kind; nothing)
+  kind isa CInterval && return (d[name] = kind; nothing)
+  kind isa CJSON && return (d[name] = kind; nothing)
+  kind isa CText && return (d[name] = kind; nothing)
+  kind isa CTime && return (d[name] = kind; nothing)
+  kind isa CTsVector && return (d[name] = kind; nothing)
+  kind isa CUUID && return (d[name] = kind; nothing)
+  kind isa CUnsupported && return (d[name] = kind; nothing)
+  kind isa CVarChar && return (d[name] = kind; nothing)
+  kind isa CJSONValue && return (d[name] = kind; nothing)
+  throw(MethodError(_store_projection_kind!, (instruc, name, kind)))
 end
 
 # #1110: on an engine whose read path applies a decimal's width (`_unapplied_decimal_width`), a

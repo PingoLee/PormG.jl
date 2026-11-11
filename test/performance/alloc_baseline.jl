@@ -8,6 +8,14 @@
 ## and Julia version, and compares. It is not in the unit suite and not a CI gate: the numbers move
 ## between Julia versions and machines, so only a same-machine before/after comparison means anything.
 ##
+## Same checkout path, too (#1738). The same source allocates differently depending on the path it is
+## checked out at: a 0.2 KiB step on some queries, reproduced with byte-identical `src/` in two worktrees.
+## So run "before" and "after" from ONE worktree: check out the base's sources there
+## (`git checkout origin/main -- src/`), run, restore the branch's (`git checkout HEAD -- src/`, or copy
+## the edited files back), and run again. Not `git stash`: it restores HEAD, not the base, and the stash
+## list is shared by every worktree of the repository. Interleave the two sides (before, after, after,
+## before) and record the load average. Even then, do not attribute a difference of 0.2 KiB or less.
+##
 ## For each query below, two phases:
 ##   build — the chain from `M.Model.objects` to its terminal with `show_query = :sql`: the queryset,
 ##           the build and the render, no database;

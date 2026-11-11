@@ -5334,8 +5334,8 @@ end
 # it is the half that catches the common slip — a `db_column` written where a field name belongs.
 #
 # `to` is read once (#1690): the field is mutable, so a second `f.to` after the `isa` test is not
-# narrowed, and the call took the slot's whole union, `Nothing` included, which no method accepts —
-# a dynamic call, and a `juliac --trim` verifier row. `ModelType` is the only concrete `PormGModel`.
+# narrowed, and the call took the slot's whole union, whose abstract `PormGModel` member made it a
+# dynamic call (a `juliac --trim` verifier row). `ModelType` is the only concrete `PormGModel`.
 function _through_fk_for(f, target_model::PormGModel)::Bool
   f isa sRelationalColumn || return false
   to = f.to
@@ -5391,8 +5391,9 @@ function _infer_through_field(through_model::PormGModel, target_model::PormGMode
   matches = String[]
   for (field_name, field) in through_model.fields
     field isa sRelationalColumn || continue
-    # A resolved target or a binding name; the assertion takes `Nothing` out of the slot's type so
-    # the call resolves (#1690). A foreign key always has a target, so it cannot fail.
+    # A resolved target or a binding name. The assertion narrows the slot's type, whose abstract
+    # `PormGModel` member made the call dynamic (#1690). A foreign key always has a target, so it
+    # cannot fail.
     if _same_model_reference(field.to::Union{String, ModelType}, target_model)
       push!(matches, field_name)
     end
@@ -5447,10 +5448,11 @@ function _relation_from_many_to_many(
   # through model, so a `<model>_<pk>` derived for it was dead work that could only fail: on a model
   # named `Driver_` the derivation is `driver__id`, which `format_fild_name` refuses.
   #
-  # #1690: the two pins and `through` are read ONCE. `sManyToManyField` is mutable, so the second
-  # read in `field.source_field === nothing ? … : field.source_field` is not narrowed by the first:
-  # it stayed `Union{Nothing, String}`, and every call that took the result dispatched at run time
-  # (`juliac --trim` verifier rows, #1599). A local is narrowed by the test.
+  # #1690: the two pins and `through` are read ONCE. `sManyToManyField` is mutable, so a second read
+  # of a slot is not narrowed by the test on the first: `field.source_field === nothing ? … :
+  # field.source_field` stays `Union{Nothing, String}`, and a re-read `field.through` keeps the
+  # abstract `PormGModel`, which is what made the calls below dynamic (`juliac --trim` verifier
+  # rows, #1599). A local is narrowed by the test.
   source_pin = field.source_field
   target_pin = field.target_field
   through_ref = field.through
@@ -5513,8 +5515,8 @@ function _relation_from_many_to_many(
       through_model, related_field, field_name, "target_field";
       target_model = related_model, owner_model = owner_model))
     # A foreign key or a one-to-one: `_is_through_pin_for` has just tested exactly that
-    # (`_through_fk_for`), so the assertion cannot fail; it lets `.pk_field` be read statically
-    # rather than across the field set's 29 members (#1690).
+    # (`_through_fk_for`), so the assertion cannot fail. It reads `.pk_field` on two types rather
+    # than across the field set's 29 members, 27 of them throwing arms (#1690).
     owner_fk = through_model.fields[owner_field]::sRelationalColumn
     related_fk = through_model.fields[related_field]::sRelationalColumn
     owner_pk = owner_fk.pk_field === nothing ? owner_pk : String(owner_fk.pk_field)

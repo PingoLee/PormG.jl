@@ -765,8 +765,8 @@ end
   #   `.pk_field`, `model_column` and the refusal's keyword call all resolve.
   # Why: once #1685 made the settings concrete, the `juliac --trim` verifier followed registration into
   #   this branch and found it untyped: 34 rows on main, each a run-time `MethodError` in a trimmed binary
-  #   whose models declare an explicit `through` (#1690). A re-read of a mutable field's slot, or a `through`
-  #   left `PormGModel`, brings them back.
+  #   whose models declare an explicit `through` (#1690). A `through` or a `.to` left at a type holding the
+  #   abstract `PormGModel`, the slot's union or a re-read of it, brings them back.
   @testset "_relation_from_many_to_many makes no dynamic call, explicit through included (#1690)" begin
     M = PormG.Models
     f = M._relation_from_many_to_many

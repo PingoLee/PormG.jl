@@ -873,12 +873,15 @@ end
     end
     # `live_table` three levels down, which holds its `cache.index` read. One dynamic call there reads no
     # cache and is not this pin's: the keyword call to `_spec_or_degraded`, which compiles each column.
-    # Its `composite_index_owners` read is held by that slot's type above instead: it reaches
-    # `LiveComposite` through a splat (`Core._apply_iterate`, a builtin), which no scan here walks into.
     live = filter(c -> !occursin("_spec_or_degraded", c),
                   _dynamic_calls_deep(PormG.Migrations.live_table, (MT, PormG.Kernel.PormGSQLite); depth = 3))
     @test isempty(live)
     isempty(live) || @info "dynamic calls under live_table" live
+    # Its `composite_index_owners` read reaches `LiveComposite` through a splat (`ownership(d)...`). The
+    # scans above skip builtins, and a splat the compiler cannot resolve stays a `Core._apply_iterate`
+    # builtin call, so that read is held by there being none left in `live_table`'s own code.
+    ci, _ = only(code_typed(PormG.Migrations.live_table, (MT, PormG.Kernel.PormGSQLite); optimize = true))
+    @test !any(s -> s isa Expr && s.head === :call && s.args[1] == GlobalRef(Core, :_apply_iterate), ci.code)
   end
 
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)

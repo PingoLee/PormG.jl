@@ -30,7 +30,7 @@ returned `Any`. It is now a `ModelCache` with one typed field per kind. A string
 A kind a model does not have is an empty field (or `nothing`), where it used to be a missing key.
 `model.cache["index"]`'s values were already vectors since 0.10.0. A single index name written into
 it by hand is no longer accepted: the field holds a `Vector{String}` per column. A `ModelType` built
-by hand takes `cache = Models.ModelCache()` (or no `cache` at all), not a `Dict`.
+by hand omits `cache` (or passes `Models.ModelCache()`), not a `Dict`.
 
 Where one of the functions above answers the question, `Models.declared_check_constraints(model)` or
 `Migrations.declared_composites(model)`, it reads the same data as the field.
@@ -40,6 +40,9 @@ Where one of the functions above answers the question, `Models.declared_check_co
 ```
 grep -rnE '\.cache\[|(haskey|get!?|delete!)\([^,()]*\.cache, *"|\bcache *= *Dict' --include=*.jl .
 ```
+
+A cache reached through a call (`haskey(Core.eval(mod, :Circuit).cache, "many_to_many")`), or read
+with a key held in a variable, needs a look by hand.
 
 ### Migrate your app
 

@@ -91,6 +91,22 @@ jobs:
           # precompile, that cost comes back on every PR that touches `src/`.
           optimize: '0'
 
+      # The #1732 first-call guard (#1736): test/unit/test_precompile_hints.jl starts a fresh
+      # `--trace-compile` process per PostgreSQL driver and fails when a first call compiles what
+      # the extensions' workloads should have cached. The step above runs it under coverage, which
+      # turns off the package images' native code, so there it is skipped. This runs the file
+      # alone without coverage, at the default -O (package images are keyed by it).
+      #   * --project=test/integration: the env that carries LibPQ and Postgres; its Manifest is
+      #     gitignored, hence the instantiate.
+      #   * !cancelled(): a red unit suite must not skip this step, or a change that breaks both
+      #     would report only the suite. Ubuntu only: one platform is enough to catch a lost
+      #     workload or an invalidation, and the guard is not about the OS.
+      - name: First-call trace guard (no coverage)
+        if: ${{ matrix.os == 'ubuntu-latest' && !cancelled() }}
+        run: |
+          julia --project=test/integration -e 'using Pkg; Pkg.instantiate()'
+          julia --project=test/integration test/unit/test_precompile_hints.jl
+
   # Prove the loading contract: `using PormG` works with NO SQL driver present, and a
   # backend operation raises the friendly "load the driver" error instead of a missing
   # method / hard reference. This is the guarantee that LibPQ/SQLite are truly weakdeps.

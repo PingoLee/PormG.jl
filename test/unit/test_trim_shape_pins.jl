@@ -934,8 +934,8 @@ end
     @test built == Any[PormG.backend_handle_type(CP.PostgresConnectionPool{:postgres})]
 
     # The sites the reflection above cannot reach (inside a `lock` closure, an `invoke`d callee, a
-    # spawned task): by source, every driver call on a handle in ConnectionPool.jl and Configuration.jl
-    # goes through `_with_handle`, and `close` on a handle only through its named helpers. The SQLite
+    # spawned task): by source, every driver call on a handle in `src/` goes through `_with_handle`, and
+    # `close` on a handle only through its named helpers. The SQLite
     # worker's two statement calls are the reviewed exception: they run through `_call_latest`, the
     # world-age helper #1609 owns, and are not a #1683 site.
     # Driver generics that take a handle, called directly or handed on as a value (`_call_latest(f, …)`,
@@ -953,9 +953,9 @@ end
     reviewed = ("_call_latest(backend_execute_rows, item.pool, item.conn", "_call_latest(backend_execute, item.pool, item.conn",
                 "backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
                 "decode_on_worker(decode, backend_execute(pool, conn, sql, params))")
-    # Every file in src/ except AdvisoryLock.jl, whose handle calls are #1708.
+    # Every file in src/, AdvisoryLock.jl included since #1708.
     files = sort!([joinpath(root, f) for (root, _, fs) in walkdir(joinpath(pkgdir(PormG), "src")) for f in fs
-                   if endswith(f, ".jl") && f != "AdvisoryLock.jl"])
+                   if endswith(f, ".jl")])
     seen = Dict{String,Int}()
     bare = String[]
     for path in files
@@ -981,6 +981,63 @@ end
     @test bare == String[]
     for x in (helpers..., reviewed...)
       @test (x, get(seen, x, 0)) == (x, 1)
+    end
+  end
+
+  # What: the advisory lock's statements (`with_advisory_lock`, which migrations serialize on), run on
+  #   the handle `acquire_connection` leases: the lock and unlock query, the holder read, the
+  #   `lock_timeout` probe, set and restore, on each pool type that takes a real lock.
+  # Expected: with the handle typed `Any`, as it comes out of a slot, no function that runs them makes a
+  #   dynamic driver call or a dynamic call that takes the handle (at the callee, and at a caller): each
+  #   statement goes through `_with_handle`. The rows the driver answers are still read as `Any` (the
+  #   awaited result is untyped), which is not a handle call and is not pinned here.
+  # Why: they called `backend_execute_async(pool, conn::Any, …)` directly, the call shape #1683 removed
+  #   from the pool: one dispatch per call under the JIT, and in a trimmed image a call nothing was
+  #   compiled for, on the path a trimmed app that migrates at start meets first (#1708).
+  @testset "the advisory lock's statements reach the driver at the handle's concrete type (#1708)" begin
+    CP = PormG.ConnectionPool
+    AL = PormG.AdvisoryLock
+    S = AL._LockAwaitState
+    R = Base.RefValue{Any}
+    # The calls that take the handle: the driver generic, the barrier, and the lock helpers themselves
+    # (`_block_lock!` calls `_exec_lock_query`).
+    handle_calls = ("backend_execute_async", "_with_handle", "_with_unlisted_handle", "_exec_lock_query")
+    # MySQL's `_restore_block_timeout!` is a no-op (nothing is set on its session), so it is not listed.
+    for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool)
+      for (name, f, args) in (("_exec_lock_query", AL._exec_lock_query, (P, Any, String, String, S)),
+                              ("_lock_holder_text", AL._lock_holder_text, (P, Any, String, S)),
+                              ("_block_lock!", AL._block_lock!, (P, Any, String, Int, S, R)),
+                              ("_restore_block_timeout!", AL._restore_block_timeout!, (P, Any, Any, Symbol, S)))
+        P === CP.MySQLConnectionPool && f === AL._restore_block_timeout! && continue
+        dyn = _named_dynamic_calls(Base.signature_type(f, args), handle_calls)
+        @test (P, name, dyn) == (P, name, String[])
+      end
+    end
+    # The caller's side: `with_advisory_lock` holds the leased handle as `Any` (and, in its `finally`, the
+    # saved `lock_timeout` too), and each call resolves only because the callee takes them `@nospecialize`.
+    exq(p, r::Base.RefValue{Any}, s) = PormG.AdvisoryLock._exec_lock_query(p, r[], "SELECT 1", "k", s)
+    hld(p, r::Base.RefValue{Any}, s) = PormG.AdvisoryLock._lock_holder_text(p, r[], "k", s)
+    blk(p, r::Base.RefValue{Any}, s) = PormG.AdvisoryLock._block_lock!(p, r[], "k", 5, s, Ref{Any}(nothing))
+    rst(p, r::Base.RefValue{Any}, s) = PormG.AdvisoryLock._restore_block_timeout!(p, r[], r[], :block, s)
+    for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool),
+        (name, caller) in (("_exec_lock_query", exq), ("_lock_holder_text", hld), ("_block_lock!", blk),
+                           ("_restore_block_timeout!", rst))
+      P === CP.MySQLConnectionPool && caller === rst && continue   # the no-op, as above
+      dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}, S))
+      @test (P, name, dyn) == (P, name, String[])
+    end
+    # And the terminal that holds the lease: `with_advisory_lock` on a concrete pool makes one dynamic call,
+    # the abandon-only renewal (before #1708 it made one at each call that handed the leased handle on).
+    # That call passes the abandoned statement's handle, which `_LockAwaitState` holds as `Any`. Taking it
+    # `@nospecialize` in `_recover_abandoned_connection!` would move a dynamic call into the recovery's
+    # spawned task for two of the pool's callers, which pass it concretely; typing the state is not #1708's.
+    body = () -> nothing
+    for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool)
+      dyn = _dynamic_calls_kw(PormG.AdvisoryLock.with_advisory_lock, (typeof(body), P, String))
+      renewal = filter(d -> occursin("_recover_abandoned_connection!", d), dyn)
+      @test (P, "with_advisory_lock", setdiff(dyn, renewal)) == (P, "with_advisory_lock", String[])
+      # present, so the exception above is the one the code has (one call; the `finally` is lowered twice)
+      @test (P, "the abandon-only renewal", !isempty(renewal)) == (P, "the abandon-only renewal", true)
     end
   end
 

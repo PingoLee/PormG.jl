@@ -287,8 +287,12 @@ end
     # the method: regressing one branch to fire-and-forget while any later statement is awaited keeps
     # the count at 2 (a silent pass), and legitimately adding an awaited statement breaks it (a false
     # positive). Both were demonstrated on this file (#322 delta review).
-    @test count("_await_lock_handle(", restore) == count("backend_execute_async(", restore)
-    @test count("backend_execute_async(", restore) >= 2   # …and the branches are still there
+    # A statement is issued as `_with_handle(backend_execute_async, …)` since #1708 (the handle reaches the
+    # driver at its concrete type). Counted by the generic's name, so a bare `backend_execute_async(…)`
+    # left un-awaited is counted too.
+    issued = "backend_execute_async"
+    @test count("_await_lock_handle(", restore) == count(issued, restore)
+    @test count(issued, restore) >= 2   # …and the branches are still there
 
     # Any `wait(` not preceded by a dot or word character is the shadowed kwarg.
     @test !occursin(r"(?<![.\w])wait\s*\(", code)

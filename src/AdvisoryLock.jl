@@ -8,6 +8,11 @@ import PormG: _backend_name  # #1129: the engine's name in the contention error
 import PormG.Configuration: get_settings
 import PormG.ConnectionPool: acquire_connection, release_connection
 import PormG.ConnectionPool: with_pool  # the closed pool dispatch (#1622)
+# The leased handle is an `Any` (`acquire_connection` reads it from an untyped slot), so every lock
+# statement reaches the driver through the barrier: one type check against the handle type the pool's
+# extension registers, then a static call (#1683, #1708). Each function below that receives the handle
+# takes it `@nospecialize`, so a call with an `Any` handle has one compiled target.
+import PormG.ConnectionPool: _with_handle
 # This module is the only one outside ConnectionPool that talks to the driver directly, so no
 # `fetch`/`with_transaction` seam covers it — it has to funnel its own failures through the
 # database-error boundary (#268) or `with_advisory_lock` would be the last public entry point
@@ -114,9 +119,9 @@ end
 # caller is already raising, and a failed diagnostic must not replace the real error. The one
 # failure that is NOT swallowed is a cancellation — an abandoned await leaves the driver on `conn`,
 # and the `finally` in `with_advisory_lock` has to see that to renew it (#322).
-function _lock_holder_text(pool::PormGMySQL, conn, key::AbstractString, state::_LockAwaitState)::String
+function _lock_holder_text(pool::PormGMySQL, @nospecialize(conn), key::AbstractString, state::_LockAwaitState)::String
   rows = try
-    collect(_await_lock_handle(pool, state, backend_execute_async(pool, conn, MYSQL_HOLDER_SQL, Any[key])))
+    collect(_await_lock_handle(pool, state, _with_handle(backend_execute_async, pool, conn, MYSQL_HOLDER_SQL, Any[key])))
   catch
     # swallows a failed holder read, except a cancellation: the text only decorates an error the
     # caller is already raising (#737); an abandoned await rethrows (#322).
@@ -127,9 +132,9 @@ function _lock_holder_text(pool::PormGMySQL, conn, key::AbstractString, state::_
   return " — held by connection $(rows[1][1])"
 end
 
-function _lock_holder_text(pool::PormGPostgres, conn, key::AbstractString, state::_LockAwaitState)::String
+function _lock_holder_text(pool::PormGPostgres, @nospecialize(conn), key::AbstractString, state::_LockAwaitState)::String
   rows = try
-    collect(_await_lock_handle(pool, state, backend_execute_async(pool, conn, HOLDER_SQL, Any[key])))
+    collect(_await_lock_handle(pool, state, _with_handle(backend_execute_async, pool, conn, HOLDER_SQL, Any[key])))
   catch
     # swallows a failed holder read, except a cancellation: see the MySQL method above.
     state.abandoned && rethrow()
@@ -148,12 +153,12 @@ end
 """
 Execute a lock/unlock query on a held connection and return boolean result.
 """
-function _exec_lock_query(pool::Union{PormGPostgres, PormGMySQL}, conn, sql::String, key::AbstractString,
+function _exec_lock_query(pool::Union{PormGPostgres, PormGMySQL}, @nospecialize(conn), sql::String, key::AbstractString,
                           state::_LockAwaitState; params = Any[key])::Bool
   # backend_execute_async yields to the scheduler, allowing other Tasks to run.
   # It runs on the held connection without releasing it back to the pool, so the
   # session-level lock stays bound to this connection.
-  async_res = backend_execute_async(pool, conn, sql, params)
+  async_res = _with_handle(backend_execute_async, pool, conn, sql, params)
 
   res = _await_lock_handle(pool, state, async_res)
 
@@ -168,10 +173,10 @@ end
 # PostgreSQL bounds the wait with `lock_timeout` (#1024). It limits only the time spent waiting for a
 # lock, which is exactly what `:block` means, so a `statement_timeout` the caller set on the session
 # keeps applying to the statement as a whole instead of being overwritten.
-function _block_lock!(pool::PormGPostgres, conn, key::AbstractString, timeout_ms::Int, state::_LockAwaitState,
+function _block_lock!(pool::PormGPostgres, @nospecialize(conn), key::AbstractString, timeout_ms::Int, state::_LockAwaitState,
                      saved::Base.RefValue{Any})
   try
-    prev = _await_lock_handle(pool, state, backend_execute_async(pool, conn, "SHOW lock_timeout", nothing))
+    prev = _await_lock_handle(pool, state, _with_handle(backend_execute_async, pool, conn, "SHOW lock_timeout", nothing))
     rows = collect(prev)
     !isempty(rows) && (saved[] = rows[1][1])
   catch
@@ -185,7 +190,7 @@ function _block_lock!(pool::PormGPostgres, conn, key::AbstractString, timeout_ms
   # Await commands without returned rows through the same seam, so a cancellation here is
   # recorded too — this one runs BEFORE `got_lock`, i.e. on a connection the finally would
   # otherwise release straight back into the pool with no unlock attempted at all.
-  _await_lock_handle(pool, state, backend_execute_async(pool, conn, "SET lock_timeout = $(timeout_ms)", nothing))
+  _await_lock_handle(pool, state, _with_handle(backend_execute_async, pool, conn, "SET lock_timeout = $(timeout_ms)", nothing))
 
   got_lock = try
     _exec_lock_query(pool, conn, BLOCK_SQL, key, state)
@@ -215,7 +220,7 @@ end
 # are rounded UP to whole seconds here: the wait is never shorter than asked, and at most a second
 # longer. `timeout_ms = 0` waits with no bound (a negative timeout), as `lock_timeout = 0` does on
 # PostgreSQL.
-function _block_lock!(pool::PormGMySQL, conn, key::AbstractString, timeout_ms::Int, state::_LockAwaitState,
+function _block_lock!(pool::PormGMySQL, @nospecialize(conn), key::AbstractString, timeout_ms::Int, state::_LockAwaitState,
                      saved::Base.RefValue{Any})
   seconds = timeout_ms == 0 ? -1 : cld(timeout_ms, 1_000)
   got_lock = _exec_lock_query(pool, conn, MYSQL_BLOCK_SQL, key, state; params = Any[key, seconds])
@@ -232,23 +237,23 @@ end
 # the seam is also what records a cancellation here, which the caller's terminal branch reads. The
 # empty `catch`es stay — restoring a timeout is genuinely best-effort — but neither a MethodError nor a
 # swallowed Ctrl-C is one of the things they hide any more.
-function _restore_block_timeout!(pool::PormGPostgres, conn, old_timeout, strategy::Symbol, state::_LockAwaitState)
+function _restore_block_timeout!(pool::PormGPostgres, @nospecialize(conn), @nospecialize(old_timeout), strategy::Symbol, state::_LockAwaitState)
   if old_timeout !== nothing
     try
-      _await_lock_handle(pool, state, backend_execute_async(pool, conn, "SET lock_timeout = '$(old_timeout)'", nothing))
+      _await_lock_handle(pool, state, _with_handle(backend_execute_async, pool, conn, "SET lock_timeout = '$(old_timeout)'", nothing))
     catch
       # swallows a failed restore, best effort (above): the seam has already recorded a cancellation.
     end
   elseif strategy == :block
     try
-      _await_lock_handle(pool, state, backend_execute_async(pool, conn, "SET lock_timeout TO DEFAULT", nothing))
+      _await_lock_handle(pool, state, _with_handle(backend_execute_async, pool, conn, "SET lock_timeout TO DEFAULT", nothing))
     catch
       # swallows a failed restore, best effort (above): the seam has already recorded a cancellation.
     end
   end
   return nothing
 end
-_restore_block_timeout!(::PormGMySQL, conn, old_timeout, strategy::Symbol, state::_LockAwaitState) = nothing
+_restore_block_timeout!(::PormGMySQL, @nospecialize(conn), @nospecialize(old_timeout), strategy::Symbol, state::_LockAwaitState) = nothing
 
 """
     with_advisory_lock(f::Function, pool::PormGPostgres, key::AbstractString; wait::Bool=false, timeout_ms::Int=5_000, interval_ms::Int=100, strategy::Symbol=:poll, on_missing_lock::Symbol=:warn)

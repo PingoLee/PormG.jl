@@ -2769,12 +2769,22 @@ end
 # PormGModel). The verbatim fallback is CORRECT for introspected models: their `to`
 # is a String and their `pk_field` is already the physical column, with no
 # `db_column` on the reconstructed field.
+#
+# #1599 layer 3: the target is read at `ModelType`, the one struct PormG defines under `PormGModel`, so
+# `fields` is its typed `OrderedDict{String,AnyField}`. Narrowed only to the abstract `PormGModel`, the
+# lookup and the `field_db_column` call on its answer dispatched at run time (6 verifier rows per FK
+# type, reached once the join walk became static). Any other `PormGModel` takes the same lookup through
+# one dynamic call, behind `@noinline`.
 function fk_target_column(field::PormGField)::String
   pk = field.pk_field === nothing ? "id" : String(field.pk_field)
   tgt = field.to
-  (tgt isa PormGModel && haskey(tgt.fields, pk)) && return field_db_column(tgt.fields[pk], pk)
+  tgt isa ModelType && return _fk_target_lookup(tgt, pk)
+  tgt isa PormGModel && return _fk_target_column_other(tgt, pk)
   return pk
 end
+_fk_target_lookup(tgt::PormGModel, pk::String)::String =
+  haskey(tgt.fields, pk) ? field_db_column(tgt.fields[pk], pk) : pk
+@noinline _fk_target_column_other(@nospecialize(tgt::PormGModel), pk::String)::String = _fk_target_lookup(tgt, pk)
 
 # Referenced (parent) physical TABLE for a ForeignKey (#59) — the table-level sibling of
 # fk_target_column above. Single-sourced on `_fk_reference_table` (#388) so the DDL renderer and the

@@ -1816,6 +1816,37 @@ end
     end
   end
 
+  # What: `Models.fk_target_column`, the referenced column of a `ForeignKey` / `OneToOneField`, which the
+  #   join walk (`_forward_fk_hop`), the DDL renderer and the migration planner read.
+  # Expected: no dynamic call for either field type; the answers are the ones before: the target field's
+  #   `db_column` when the target model declares one, its name otherwise, `"id"` when `pk_field` is unset,
+  #   and the `pk_field` text verbatim for a `String` target or a name the target model does not have.
+  # Why: the target was narrowed only to the abstract `PormGModel`, so `haskey`, `getindex` and
+  #   `field_db_column` on its `fields` dispatched at run time: 12 verifier rows on the read-only entry
+  #   (6 per FK type) once the join walk became static, each a `MethodError` in a trimmed binary whose
+  #   query crosses a foreign key. Reading the target at `ModelType` closes them.
+  @testset "fk_target_column reads the target model at its concrete type (#1599, layer 3)" begin
+    M = PormG.Models
+    # Followed into `_fk_target_lookup`, where the work is; the open arm for another `PormGModel` is skipped,
+    # its one dynamic call is the point. That arm is covered by equivalence (the same lookup), not by a model
+    # type defined here, which would change inference for the other pins in this process.
+    for T in (M.sForeignKey, M.sOneToOneField)
+      @test isempty(_dynamic_calls_deep(M.fk_target_column, (T,); skip = (M._fk_target_column_other,)))
+    end
+    circuit = M.Model("tsp_fk_circuit", circuitid = M.IDField(), ref = M.CharField(db_column = "circuit_ref"),
+                      name = M.CharField())
+    @test M.fk_target_column(M.ForeignKey(circuit; pk_field = "ref")) == "circuit_ref"
+    @test M.fk_target_column(M.ForeignKey(circuit; pk_field = :name)) == "name"
+    @test M.fk_target_column(M.OneToOneField(circuit; pk_field = "ref")) == "circuit_ref"
+    @test M.fk_target_column(M.ForeignKey(circuit; pk_field = "missing")) == "missing"
+    @test M.fk_target_column(M.ForeignKey(circuit)) == "id"
+    @test M.fk_target_column(M.ForeignKey("Circuit"; pk_field = "circuitref")) == "circuitref"
+    @test M.fk_target_column(M.OneToOneField("Circuit")) == "id"
+    unresolved = M.ForeignKey("Circuit"; pk_field = "circuitref")
+    unresolved.to = nothing
+    @test M.fk_target_column(unresolved) == "circuitref"
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

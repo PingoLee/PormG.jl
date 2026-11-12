@@ -1518,6 +1518,69 @@ end
     @test QB.with_bucket(probe, instruction(nothing), :where) == 7
   end
 
+  # What: the aggregate walks, `_holds_agg` (the flag a wrapper stores) and `_contains_agg` (does the
+  #   statement aggregate), over the abstract slots they read, and `_is_agg_any`, `_is_agg` for a value of any type.
+  # Expected: one compiled body each, with no dynamic call; `_is_agg` keeps its four methods, so the closed
+  #   arms cover it; the answers are the ones before, through vectors, keyword values, windows and the depth cap.
+  # Why: `FExpression.field_name`/`operand`, `FObject.column` and `WindowFunction.column` are unions over
+  #   abstract families, so a call on them dispatched at run time, and `any(v -> …, x)` over a `Vector{Any}`
+  #   compiles the closure as `Function` (16 verifier rows, among them the two `_holds_agg` rows the ORDER
+  #   BY render reached after #1770; #1599 layer 4).
+  @testset "the aggregate walks make no dynamic call (#1599 layer 4)" begin
+    QB = PormG.QueryBuilder
+    @test isempty(_dynamic_calls(QB._holds_agg, (Any, Int)))
+    @test isempty(_dynamic_calls(QB._contains_agg, (Any, Int)))
+    @test isempty(_dynamic_calls(QB._is_agg_any, (Any,)))
+    @test length(methods(QB._is_agg)) == 4
+    # Out of line, so the recursion always reaches the one `(Any, Int)` body: inlined into a caller that
+    # knows the argument's type, it became calls on instances `juliac` does not compile ("unresolved invoke").
+    for f in (QB._holds_agg, QB._contains_agg)
+      @test only(code_lowered(f, (Any, Int))).inlining == 2   # `@noinline`
+    end
+    s = QB.Sum("points")
+    lag = QB.Lag(s)
+    @test QB._holds_agg(s) && QB._contains_agg(s)
+    @test !QB._holds_agg(lag) && QB._contains_agg(lag)              # a window over an aggregate
+    @test QB._holds_agg(Any["x", s]) && !QB._holds_agg(Any["x", 1])
+    @test QB._contains_agg(QB.F("grid") + s) && !QB._contains_agg(QB.F("grid") + 1)
+    @test QB._contains_agg(QB.Coalesce(lag, QB.Value(0)))
+    @test !QB._holds_agg(QB.Coalesce(lag, QB.Value(0)))
+    @test QB._holds_agg(QB.Coalesce(s, QB.Value(0)))
+    @test QB._contains_agg(QB.Case([QB.When("grid__@gte" => 1, then = s)]))
+    @test !QB._contains_agg(QB.Case([QB.When("grid__@gte" => 1, then = 1)]))
+    @test !QB._holds_agg(Any[s], 32) && !QB._contains_agg(Any[s], 32)   # the depth cap
+    for x in (s, lag, QB.F("grid"), QB.Rank(), "points", 1, nothing)
+      @test QB._is_agg_any(x) === QB._is_agg(x)
+    end
+  end
+
+  # What: `_is_window_expr` over the abstract slots it reads (`FExpression`'s two sides, `FObject.column`
+  #   and its keyword values), through `_is_window_expr_any`.
+  # Expected: no dynamic call in the `FExpression` and `FObject` methods or the walk; `_is_window_expr` keeps
+  #   its nine methods, which the walk's arms cover; the answers are the ones before.
+  # Why: a call on those slots dispatched at run time over nine methods: 7 verifier rows on the WHERE
+  #   guard's path (#1599 layer 4).
+  @testset "the window question makes no dynamic call on an abstract slot (#1599 layer 4)" begin
+    QB = PormG.QueryBuilder
+    @test isempty(_dynamic_calls(QB._is_window_expr, (QB.FExpression,)))
+    @test isempty(_dynamic_calls(QB._is_window_expr, (QB.FObject,)))
+    @test isempty(_dynamic_calls(QB._is_window_expr_any, (Any,)))
+    # The lists: `any(f, x)` over an array widens `f` to `Function` in Base, so they are walked by `_any_in`.
+    for T in (Vector{QB.FExpression}, Vector{Any}, QB.QObject, QB.QorObject)
+      @test isempty(_dynamic_calls(QB._is_window_expr, (T,)))
+    end
+    @test length(methods(QB._is_window_expr)) == 9
+    rank = QB.Rank()
+    @test QB._is_window_expr(QB.F("grid") + 1) == false
+    @test QB._is_window_expr(QB.Coalesce(rank, QB.Value(0)))
+    @test QB._is_window_expr(QB.Case([QB.When("grid__@gte" => 1, then = rank)]))
+    @test !QB._is_window_expr(QB.Case([QB.When("grid__@gte" => 1, then = 1)]))
+    @test QB._is_window_expr(QB.Case([QB.When(rank > 1, then = 1)]))
+    for x in (rank, QB.Sum("points"), QB.F("grid"), QB.Q("grid" => 1), [rank], Any["x", rank], Any[], "points", 1)
+      @test QB._is_window_expr_any(x) === QB._is_window_expr(x)
+    end
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete

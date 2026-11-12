@@ -1228,14 +1228,49 @@ _is_agg(::Any) = false
 # operator (a `When` condition), and `Q`/`Qor` (a `When` condition too). Concrete types on purpose —
 # each is the only subtype of its abstract parent. The depth cap is the one `_guard_no_handle`
 # (`join_conditions.jl`) keeps for the same reason: `push!(q, q)` on a `Q` is a user-buildable cycle.
-function _holds_agg(x, depth::Int = 0)::Bool
+#
+# #1599 layer 4: one compiled body (`@nospecialize`), so a call on an abstract slot or a `Vector{Any}`
+# element is static — the walk has one method, so the argument's type is all a call needs (#1735). The
+# vector is walked with a loop rather than `any(v -> …, x)`, which Base compiles with the closure widened
+# to `Function` and then calls dynamically; the order and the short-circuit are `any`'s. `@noinline`, so
+# every call reaches that one body: inlined into a caller that knows the argument's type, the recursion
+# became calls on specialized instances that `juliac` does not compile (an "unresolved invoke").
+@noinline function _holds_agg(@nospecialize(x), depth::Int = 0)::Bool
   depth > 32 && return false
-  x isa AbstractVector && return any(v -> _holds_agg(v, depth + 1), x)
+  x isa AbstractVector && return _any_in_vector(_holds_agg, x, depth + 1)
   x isa OperObject && return _holds_agg(_oper_column(x), depth + 1) || with_oper_value_node(_holds_agg, x, false, depth + 1)
   x isa Union{QObject,QorObject} && return _holds_agg(_q_nodes(x), depth + 1)   # #1698 phase 2: the closed view
-  return _is_agg(x)
+  return _is_agg_any(x)
 end
 _any_agg(args...)::Bool = any(_holds_agg, args)
+
+# `f(v, args...)` over the elements of a vector a node walk meets, in order, `true` at the first `true`:
+# `any(v -> f(v, args...), x)` (#1599 layer 4). An unspecialized walk sees the vector as `AbstractVector`,
+# whose `iterate` dispatches at run time, so the vectors the query state holds are named here: the
+# wrappers' argument lists, the `Q`/`Qor` term view, the comparison value lists, a window's partition and
+# order parts, and `FObject.column`'s lists. Any other vector takes the same loop through one dynamic
+# call, behind `@noinline`.
+function _any_in_vector(f::F, @nospecialize(x::AbstractVector), args::Vararg{Any,N})::Bool where {F,N}
+  x isa Vector{Any} && return _any_in(f, x, args...)
+  x isa QTermView && return _any_in(f, x, args...)
+  x isa Vector{FExpression} && return _any_in(f, x, args...)
+  x isa Vector{OuterRefObject} && return _any_in(f, x, args...)
+  x isa Vector{WindowPartitionPart} && return _any_in(f, x, args...)
+  x isa Vector{WindowOrderPart} && return _any_in(f, x, args...)
+  x isa Vector{SQLType} && return _any_in(f, x, args...)
+  x isa Vector{SQLTypeFunction} && return _any_in(f, x, args...)
+  x isa Vector{FObject} && return _any_in(f, x, args...)
+  x isa Vector{String} && return _any_in(f, x, args...)
+  return _any_in_other(f, x, args...)
+end
+function _any_in(f::F, xs, args::Vararg{Any,N})::Bool where {F,N}
+  for v in xs
+    f(v, args...) && return true
+  end
+  return false
+end
+# Unspecialized in `f` too: one compiled body for every walk, holding the one dynamic call.
+@noinline _any_in_other(@nospecialize(f), @nospecialize(xs), args::Vararg{Any,N}) where {N} = _any_in(f, xs, args...)::Bool
 
 # `<: SQLTypeF` on purpose, and — unlike `CTEReference` / `JoinedReference` below — every union the
 # abstract type reaches is a place an outer-row reference is legitimate SQL: the ~18 scalar-function
@@ -2244,25 +2279,61 @@ function with_field_part(f::F, @nospecialize(part), args::Vararg{Any,N}) where {
   return _unlisted_node(f, part, args...)
 end
 _is_agg(::WindowFunction) = false
+# `_is_agg(x)` for a value of any type, without a dynamic call (#1599 layer 4): one arm per method of
+# `_is_agg` (`test/unit/test_trim_shape_pins.jl` fails when a method is added), each calling that method.
+# `FObject` and `WindowFunction` are the `SQLTypeFunction` structs PormG defines; a caller's own
+# `SQLTypeFunction` takes one dynamic call to the same method, behind `@noinline`.
+function _is_agg_any(@nospecialize(x))::Bool
+  x isa FExpression && return _is_agg(x)
+  x isa FObject && return _is_agg(x)
+  x isa WindowFunction && return _is_agg(x)
+  x isa SQLTypeFunction && return _is_agg_other(x)
+  return false   # `_is_agg(::Any)`
+end
+@noinline _is_agg_other(@nospecialize(x::SQLTypeFunction))::Bool = _is_agg(x)
 _is_window_expr(::WindowFunction) = true
-_is_window_expr(f::FExpression) = _is_window_expr(f.field_name) || _is_window_expr(f.operand)
+_is_window_expr(f::FExpression) = _is_window_expr_any(f.field_name) || _is_window_expr_any(f.operand)
 # #756: the keyword slots too, because that is where `When`'s `then` and `Case`'s `else` live. A
 # window written directly in a branch — `Case([When(…, then = Rank(…))])` — was missed, so it was
 # grouped beside an aggregate and a filter on its alias escaped #685. `_any_agg` had the same gap
 # before #702. The other slots (`output_field`, a `CAST` type, an `EXTRACT` part) answer `false`.
-_is_window_expr(f::FObject) = _is_window_expr(f.column) || any(_is_window_expr, values(f.kwargs))
-_is_window_expr(values::Vector) = any(_is_window_expr, values)
+function _is_window_expr(f::FObject)
+  _is_window_expr_any(f.column) && return true
+  for v in values(f.kwargs)
+    _is_window_expr_any(v) && return true
+  end
+  return false
+end
+# The lists below are asked element by element through `_is_window_expr_any`, in `any`'s order: `any(f, x)`
+# over an array is compiled by Base with `f` widened to `Function` and calls it dynamically (#1599 layer 4).
+_is_window_expr(values::Vector) = _any_in(_is_window_expr_any, values)
 # #928: and a `When` CONDITION, which sits in `FObject.column` as a `Q`/`Qor` tree or one comparison
 # (`OperObject`). Without these a window there was invisible: `filter("lap__@gt" => Case([When(Rank(…) > 1,
 # then = 1)]))` passed the #895 WHERE guard and failed on the server. The same four node types
 # `_contains_agg` already enters. A subquery is still never entered — its windows belong to the inner
 # statement.
 # The view is not a `Vector`, so the terms are asked here rather than through the `Vector` method (#1698 phase 2).
-_is_window_expr(q::QObject) = any(_is_window_expr, _q_nodes(q))
-_is_window_expr(q::QorObject) = any(_is_window_expr, _q_nodes(q))
+_is_window_expr(q::QObject) = _any_in(_is_window_expr_any, _q_nodes(q))
+_is_window_expr(q::QorObject) = _any_in(_is_window_expr_any, _q_nodes(q))
 _is_window_expr(o::OperObject) = _is_window_expr(_oper_column(o)) || with_oper_value_node(_is_window_expr, o, false)
 _is_window_expr(f::SQLField) = _is_window_expr(f.field)
 _is_window_expr(::Any) = false
+# `_is_window_expr(x)` for a value read from an abstract slot (#1599 layer 4): `FExpression`'s two sides,
+# `FObject.column` and its keyword values. A call on them dispatched at run time over the methods above;
+# this is one arm per method (`test/unit/test_trim_shape_pins.jl` fails when a method is added), each
+# calling that method, and a vector walked in `any`'s order. `@noinline`: one compiled body for every
+# caller (#1735 — a walk pays when the callee has many methods).
+@noinline function _is_window_expr_any(@nospecialize(x))::Bool
+  x isa WindowFunction && return true
+  x isa FExpression && return _is_window_expr(x)
+  x isa FObject && return _is_window_expr(x)
+  x isa QObject && return _is_window_expr(x)
+  x isa QorObject && return _is_window_expr(x)
+  x isa OperObject && return _is_window_expr(x)
+  x isa SQLField && return _is_window_expr(x)
+  x isa Vector && return _any_in_vector(_is_window_expr_any, x)   # `_is_window_expr(::Vector)`
+  return false   # `_is_window_expr(::Any)`
+end
 
 # #776 — does the statement AGGREGATE because of this node? Django's `contains_aggregate`.
 #
@@ -2281,15 +2352,24 @@ _is_window_expr(::Any) = false
 # although `WindowOver` refuses a function there, because an exported `WindowSpec` is assembled
 # without that check. A subquery is never entered: its aggregates belong to the inner statement.
 # Depth cap as in `_holds_agg`.
-function _contains_agg(x, depth::Int = 0)::Bool
+#
+# #1599 layer 4: one compiled body, as `_holds_agg` above. The slots it reads are abstract
+# (`FExpression.field_name`/`operand`, `FObject.column`, `WindowFunction.column`), and a call on them
+# dispatched at run time. Vectors and the keyword values are walked with loops, in `any`'s order.
+@noinline function _contains_agg(@nospecialize(x), depth::Int = 0)::Bool
   depth > 32 && return false
-  _is_agg(x) && return true
-  x isa AbstractVector && return any(v -> _contains_agg(v, depth + 1), x)
+  _is_agg_any(x) && return true
+  x isa AbstractVector && return _any_in_vector(_contains_agg, x, depth + 1)
   x isa WindowFunction && return _contains_agg(x.column, depth + 1) ||
                                  _contains_agg(x.over.partition_by, depth + 1) ||
                                  _contains_agg(x.over.order_by, depth + 1)
-  x isa FObject && return _contains_agg(x.column, depth + 1) ||
-                          any(v -> _contains_agg(v, depth + 1), values(x.kwargs))
+  if x isa FObject
+    _contains_agg(x.column, depth + 1) && return true
+    for v in values(x.kwargs)
+      _contains_agg(v, depth + 1) && return true
+    end
+    return false
+  end
   x isa FExpression && return _contains_agg(x.field_name, depth + 1) || _contains_agg(x.operand, depth + 1)
   x isa Union{SQLField,SQLOrder} && return _contains_agg(x.field, depth + 1)
   x isa OperObject && return _contains_agg(_oper_column(x), depth + 1) || with_oper_value_node(_contains_agg, x, false, depth + 1)

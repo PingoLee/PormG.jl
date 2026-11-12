@@ -2311,3 +2311,70 @@ end
         end
     end
 end
+
+# ── #1768: a bad PostgreSQL driver is refused before the old pool is closed ──────────────────────
+# What it tests: re-registering a dynamic PostgreSQL key with a `postgres_driver` that names no driver,
+#   by the kwarg or by `PORMG_POSTGRES_DRIVER`, raises `InvalidConfigurationError` and leaves the old
+#   entry serving: no "Closing old pool" warning, the same pool object, its driver unchanged. A valid
+#   re-registration still closes the old pool (the control), and with the environment missing too the
+#   environment refusal still fires first (the refusals keep their order).
+# Expected SQL: none. A PostgreSQL pool connects lazily, so registering one contacts no server.
+# Why it matters: the driver was resolved in the PostgreSQL arm, after `close_pool!(key)`, so the refusal
+#   closed every connection the old pool had out, breaking the #1256 rule that a refused re-registration
+#   leaves its pool serving. `close_pool!` keeps the pool object usable (its slots re-materialize), so
+#   "serving" is read off the close's warning, as the #1256 testset does.
+@testset "register_connection refuses a bad PostgreSQL driver before closing the old pool (#1768)" begin
+    CP = PormG.ConnectionPool
+    key = "cfg1768_pg"
+    url = "postgresql://u@localhost/d"
+    refused(f) = Test.collect_test_logs() do
+        try
+            f()
+            nothing
+        catch e
+            e
+        end
+    end
+    closed_old(logs) = any(l -> occursin("Closing old pool", string(l.message)), logs)
+    try
+        withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => nothing) do
+            PormG.Configuration.register_connection(key, url; env = "test")
+            old_pool = PormG.config[key].connections
+            @test old_pool isa CP.PostgresConnectionPool{:libpq}
+
+            # The kwarg.
+            logs, err = refused(() -> PormG.Configuration.register_connection(key, url; env = "test",
+                                                                              postgres_driver = "bogus"))
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("register_connection: `postgres_driver` must be one of", sprint(showerror, err))
+            @test !closed_old(logs)                                        # still serving
+            @test PormG.config[key].connections === old_pool
+
+            # The environment variable.
+            logs, err = withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => "bogus") do
+                refused(() -> PormG.Configuration.register_connection(key, url; env = "test"))
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("environment variable $(PormG.Configuration.POSTGRES_DRIVER_ENV)", sprint(showerror, err))
+            @test !closed_old(logs)
+            @test PormG.config[key].connections === old_pool
+
+            # The order: with no environment stated either, the environment refusal comes first.
+            logs, err = withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    refused(() -> PormG.Configuration.register_connection(key, url; postgres_driver = "bogus"))
+                end
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("No environment was selected for the dynamic connection \"$(key)\"", sprint(showerror, err))
+            @test !closed_old(logs)
+
+            # Discrimination: an accepted re-registration does close the old pool.
+            logs, err = refused(() -> PormG.Configuration.register_connection(key, url; env = "test"))
+            @test err === nothing
+            @test closed_old(logs)
+        end
+    finally
+        haskey(PormG.config, key) && PormG.Configuration.unregister_connection(key)
+    end
+end

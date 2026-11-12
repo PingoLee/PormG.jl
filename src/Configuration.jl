@@ -2484,7 +2484,8 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(config[key].db_def_folder)'."))
   end
   # Every refusal comes before the existing entry is closed below, so a refused re-registration
-  # leaves its pool serving (#1256): the adapter, a MySQL URL, then the environment.
+  # leaves its pool serving (#1256): the adapter, a MySQL URL, the environment, then the PostgreSQL
+  # driver.
   # The value is not echoed (#1606 review): a resolver answer with its entries swapped would put the
   # connection URL, password included, into the message.
   adapter in ("PostgreSQL", "SQLite", "MySQL") || throw(InvalidConfigurationError(
@@ -2499,6 +2500,11 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     nothing
   end
   app_env = _registered_env(env, key)
+  # #1768: the driver is resolved here, among the refusals, not in the PostgreSQL arm below: a bad
+  # `postgres_driver` (or `PORMG_POSTGRES_DRIVER`) raised after the close, so the refusal closed the old
+  # pool's connections. After the environment, so the refusals still fire in the order they always did.
+  pg_driver = adapter == "PostgreSQL" ?
+    _resolve_postgres_driver(postgres_driver; source = "register_connection") : :libpq
 
   if haskey(config, key)
     @warn "Dynamic connection '$(key)' already exists. Closing old pool before re-registering."
@@ -2547,9 +2553,8 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   # on it would be a dynamic one — the reason `_build_connection_pool!` is written the same way.
   timers = (Float64(idle_timeout), Float64(max_lifetime), Float64(leak_detection_threshold))
   if adapter == "PostgreSQL"
-    driver = _resolve_postgres_driver(postgres_driver; source = "register_connection")
     return _install_registered_pool!(key, settings, timers,
-      CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver))
+      CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=pg_driver))
   elseif adapter == "SQLite"
     _is_unset(postgres_driver) ||
       @warn "register_connection: `postgres_driver` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key=key

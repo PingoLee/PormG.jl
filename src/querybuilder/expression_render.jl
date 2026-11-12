@@ -2095,7 +2095,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # bind is what used to break PostgreSQL: it stamped `$n::bigint` on the parameter before anything
     # asked whether the left was temporal, and `timestamp with time zone + bigint` has no operator.
     #
-    # The two implementations this replaces both gated on the left side being a `String`, while the
+    # The two implementations this replaces both gated on `v.field_name isa String`, while the
     # DURATION path gates on the OPERAND's type. That asymmetry was the whole of #568: a duration
     # composes over nesting and an integer did not, so `(F(c) + 7) + 3` fell through to plain numeric
     # addition — a silent `2012` on SQLite (TEXT with NUMERIC affinity), a hard error on PostgreSQL.
@@ -2111,7 +2111,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     #     node, so `x = F("dob") + 7` must still report `operand == 7`. The node stays faithful to
     #     what the user wrote; only the rendering is unified.
     #
-    # `!(… isa Bool)` on the operand because `Bool <: Integer` in Julia: without it `F("ts") + true` would
+    # `!(v.operand isa Bool)` because `Bool <: Integer` in Julia: without it `F("ts") + true` would
     # become `Day(true)` rather than staying the arithmetic the user wrote. `Dates.Day(n)` is exact —
     # a bare integer on a date column has meant whole days since #25 — and `_decompose_period` folds
     # `Day(0)` to an empty list, so `F(c) + 0` short-circuits to the identity and binds nothing.

@@ -1738,7 +1738,8 @@ end
                            ("expression_kind.jl", "function _interval_left_kind(p::FExpression"),
                            ("expression_kind.jl", "function _temporal_arith_kind(p::FExpression"),
                            ("expression_kind.jl", "function _operation_kind(p::FExpression"))
-      b = join((replace(l, r"#.*$" => "") for l in split(body(src(file), header), '\n')), '\n')   # code, not comments
+      # Code, not comments. A `#` inside a string cuts its line short too, which only ever drops text.
+      b = join((replace(l, r"#.*$" => "") for l in split(body(src(file), header), '\n')), '\n')
       @test !isempty(strip(b))
       @test !occursin(r"\b(v|p)\.(field_name|operand)\b", b)
     end
@@ -1802,8 +1803,8 @@ end
     @test QB._decompose_period(Dates.Year(2)) == [(:year, 2)]
     @test QB._decompose_period(Dates.Second(0)) == Tuple{Symbol, Real}[]
     # A `Period` Dates does not define: its value is read, then it is refused, as before. Defined here rather
-    # than with the file's other test types, so this testset carries all it needs.
-    isdefined(Main, :_TspPeriod) || Core.eval(Main, :(struct _TspPeriod <: Dates.Period; value::Int64; end))
+    # than with the file's test types at the top, which other slices edit too.
+    isdefined(Main, :_TspPeriod) || Core.eval(Main, :(struct _TspPeriod <: $(Dates.Period); value::Int64; end))
     @test_throws PormG.InvalidValueError QB._decompose_period(Base.invokelatest(getglobal(Main, :_TspPeriod), 1))
     @test isempty(_named_dynamic_calls(Tuple{typeof(QB._decompose_period), Dates.Hour}, ("Dates.value", "getproperty");
                                        depth = 1))
@@ -1840,8 +1841,11 @@ end
     if has(:_side_kind_any)
       for x in ("points", "date", "nope", QB.F("points"), Dates.Date(2009, 5, 24), Dates.DateTime(2009, 5, 24),
                 Dates.Hour(1), Dates.Month(1), QB.Interval(Dates.Day(1)), Dates.Hour(1) + Dates.Minute(2), 1,
-                QB.Sum("points"), QB.Max("date"), rank, cte, joined)
-        @test isequal(QB._side_kind_any(x, instruc), QB._side_kind(x, instruc))
+                QB.Sum("points"), QB.Max("date"), rank, cte, joined,
+                PormG.QueryBuilder.TimeZones.ZonedDateTime(2009, 5, 24, PormG.QueryBuilder.TimeZones.tz"UTC"),
+                _TspUserAgg(0))   # the open arm: a function type PormG does not define
+        outcome(f) = try f() catch e; typeof(e) end
+        @test isequal(outcome(() -> QB._side_kind_any(x, instruc)), outcome(() -> QB._side_kind(x, instruc)))
       end
     end
   end

@@ -2107,18 +2107,15 @@ end
       dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}, S))
       @test (P, name, dyn) == (P, name, String[])
     end
-    # And the terminal that holds the lease: `with_advisory_lock` on a concrete pool makes one dynamic call,
-    # the abandon-only renewal (before #1708 it made one at each call that handed the leased handle on).
-    # That call passes the abandoned statement's handle, which `_LockAwaitState` holds as `Any`. Taking it
-    # `@nospecialize` in `_recover_abandoned_connection!` would move a dynamic call into the recovery's
-    # spawned task for two of the pool's callers, which pass it concretely; typing the state is not #1708's.
+    # And the terminal that holds the lease: `with_advisory_lock` on a concrete pool makes no dynamic call.
+    # #1708 left one, the abandon-only renewal, which passes the abandoned statement's handle that
+    # `_LockAwaitState` holds as `Any`. #1599 layer 2 took that handle `@nospecialize` in
+    # `_recover_abandoned_connection!`, and the recovery's `wait` on it names a `Task` (`_wait_handle`), so
+    # the callers that pass it concretely still make a static call there.
     body = () -> nothing
     for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool)
       dyn = _dynamic_calls_kw(PormG.AdvisoryLock.with_advisory_lock, (typeof(body), P, String))
-      renewal = filter(d -> occursin("_recover_abandoned_connection!", d), dyn)
-      @test (P, "with_advisory_lock", setdiff(dyn, renewal)) == (P, "with_advisory_lock", String[])
-      # present, so the exception above is the one the code has (one call; the `finally` is lowered twice)
-      @test (P, "the abandon-only renewal", !isempty(renewal)) == (P, "the abandon-only renewal", true)
+      @test (P, "with_advisory_lock", dyn) == (P, "with_advisory_lock", String[])
     end
   end
 
@@ -2597,6 +2594,33 @@ end
     err = try CP._refuse_nul("SELECT ?, ?", QB.PgParameterizedQuery("", ("Monaco", "Monza\0"), 2)); nothing catch e; e end
     @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
     @test CP._refuse_nul("SELECT ?, ?", QB.PgParameterizedQuery("", ["Monaco", "Monza"], 2)) === nothing
+  end
+
+  # What: `await_result` on a `FetchTask` (which holds its pool typed `_SQLEngine`), the body it runs per
+  #   pool type, and the handle helpers it reaches (`_fetch_interruptible`, `_settle_probe`, the
+  #   abandoned-await recovery) with the handle typed `Any`, as `FetchTask` holds it.
+  # Expected: no dynamic call: `await_result` enters `with_pool`'s closed set once, so the release, the
+  #   error wrapping and the recovery take the pool at its concrete type (the stand-in pools' open arm,
+  #   `_with_unlisted_pool`, is the reviewed exception), and the handle's `fetch`/`wait` names a `Task` and
+  #   leaves any other handle to one open arm. `FetchTask` itself is unchanged, and awaits as before.
+  # Why: every call on the abstract `FetchTask.pool`, and the handle helpers specialized on an `Any`
+  #   handle, were dispatched at run time: 10 rows of the trimmed fixture's read (#1599 layer 2).
+  @testset "await_result reaches the pool at its concrete type (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    @test _dynamic_calls_deep(CP.await_result, (CP.FetchTask,); depth = 1, skip = (CP._with_unlisted_pool,)) == String[]
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(CP._await_on, (P, CP.FetchTask))) == (P, String[])
+      @test (P, _dynamic_calls_kw(CP._recover_abandoned_connection!, (P, Any, Any))) == (P, String[])
+    end
+    @test _dynamic_calls(CP._fetch_interruptible, (Any,)) == String[]
+    @test _dynamic_calls(CP._settle_probe, (Any,)) == String[]
+    @test isconcretetype(CP.FetchTask) && fieldtype(CP.FetchTask, :pool) === PormG.Kernel._SQLEngine
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    ft = CP.FetchTask(Threads.@spawn(41 + 1), sl, nothing, true)   # in a transaction: nothing is released
+    @test typeof(ft) === CP.FetchTask
+    @test CP.await_result(ft) == 42
+    @test CP.await_result(ft) == 42                                 # cached, as before
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

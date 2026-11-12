@@ -332,15 +332,24 @@ Only thread 1 receives SIGINT, so a waiter on another thread (a server's request
 without the timer and pays nothing. What the fetch throws is unchanged: the interrupt reaches the
 caller as an `InterruptException`, which [`_await_abandoned`](@ref) recognises (#315).
 """
-function _fetch_interruptible(handle)
-  Threads.threadid() == 1 || return Base.fetch(handle)
+function _fetch_interruptible(@nospecialize(handle))
+  Threads.threadid() == 1 || return _fetch_handle(handle)
   keepalive = Timer(_INTERRUPT_KEEPALIVE_SECONDS; interval = _INTERRUPT_KEEPALIVE_SECONDS)
   try
-    return Base.fetch(handle)
+    return _fetch_handle(handle)
   finally
     close(keepalive)
   end
 end
+
+# #1599 layer 2: the handle comes from `FetchTask.async_result`, typed `Any`, so `_fetch_interruptible`
+# and `_settle_probe` take it `@nospecialize` (one compiled body, a static call), and the `fetch`/`wait`
+# on it names the handle SQLite's worker, Postgres.jl and MySQL hand back: a `Task`. Any other handle
+# (LibPQ's, a unit test's stand-in) takes the one dynamic call it always took.
+_fetch_handle(@nospecialize(handle)) = handle isa Task ? Base.fetch(handle) : _fetch_handle_other(handle)
+@noinline _fetch_handle_other(@nospecialize(handle)) = Base.fetch(handle)
+_wait_handle(@nospecialize(handle)) = handle isa Task ? Base.wait(handle) : _wait_handle_other(handle)
+@noinline _wait_handle_other(@nospecialize(handle)) = Base.wait(handle)
 const _INTERRUPT_KEEPALIVE_SECONDS = 3600.0
 
 """
@@ -3223,11 +3232,11 @@ swallowed. Waiting here also CONSUMES that failure, which is what stops Julia pr
 One waiter, reused by every deadline: a query that never returns leaks exactly one parked task
 rather than one per wait, and it exits the moment the driver finally lets go.
 """
-function _settle_probe(handle)
+function _settle_probe(@nospecialize(handle))
   settled = Threads.Atomic{Bool}(false)
   Threads.@spawn begin
     try
-      Base.wait(handle)
+      _wait_handle(handle)
     catch
       # swallows the statement's own error: failed, cancelled or interrupted, the driver is done.
     finally
@@ -3316,7 +3325,7 @@ This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection
 not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
 a broken connection is discarded and replaced).
 """
-function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), handle;
+function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), @nospecialize(handle);
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
                                         close_seconds::Real = _ABANDON_CLOSE_SECONDS,
                                         force_renew::Bool = false)
@@ -3449,7 +3458,14 @@ function await_result(ft::FetchTask)
     # Already completed, just return the cached result
     return ft.result_cache
   end
+  # The pool at its concrete type (#1599 layer 2): `FetchTask.pool` is typed `_SQLEngine`, an abstract
+  # union, so every call below that takes it (the release, the error wrapping, the abandoned-await
+  # recovery) was a dispatch at run time, which a `juliac --trim` image could not resolve. `with_pool`'s
+  # closed set hands it on concretely; a unit test's stand-in pool takes its open arm, as everywhere.
+  return with_pool(_await_on, ft.pool, ft)
+end
 
+function _await_on(pool::_SQLEngine, ft::FetchTask)
   err = try
     # Await the async result (works for every driver handle: each defines `Base.fetch`). Through
     # `_fetch_interruptible`, so a Ctrl-C reaches this task while the statement runs (#1512).
@@ -3465,7 +3481,7 @@ function await_result(ft::FetchTask)
     ft.abandoned = _await_abandoned(e)
     # Inside a transaction the block owns the connection, so the abandonment is recorded on it: its
     # cleanup reads the mark even if the body catches this error or raises its own (#1588).
-    ft.abandoned && ft.in_transaction && _mark_abandoned_await!(ft.pool)
+    ft.abandoned && ft.in_transaction && _mark_abandoned_await!(pool)
     # `rethrow()` when nothing changed: PormG's own errors (DoesNotExist, QueryBuildError,
     # PoolTimeoutError…) pass through `_as_database_error` untouched, and re-`throw`ing the same
     # object would discard the backtrace saying where it came from.
@@ -3474,7 +3490,7 @@ function await_result(ft::FetchTask)
     # `StatementError` wrapping the `InterruptException`, exactly as before this fix. That
     # relabelling is its own defect — `_as_database_error`'s docstring above forbids it — but
     # correcting it changes a caller-visible error contract, so it is tracked separately.
-    wrapped = _as_database_error(ft.pool, e)
+    wrapped = _as_database_error(pool, e)
     wrapped === e && rethrow()
     wrapped
   finally
@@ -3488,7 +3504,7 @@ function await_result(ft::FetchTask)
       # NEITHER state is visible to `backend_is_alive` — so the next borrower would inherit a
       # connection on which every statement fails. Recovery runs detached and owns the
       # release/renew/discard decision from here (#315).
-      ft.abandoned ? _recover_abandoned_connection!(ft) : release_connection(ft.pool, ft.conn)
+      ft.abandoned ? _recover_abandoned_connection!(pool, ft.conn, ft.async_result) : release_connection(pool, ft.conn)
     end
   end
   throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.

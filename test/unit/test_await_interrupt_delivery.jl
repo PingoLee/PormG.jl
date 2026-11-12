@@ -154,12 +154,14 @@ end
   pattern = r"Base\.(fetch|wait)\(|(?<![\w.])(fetch|wait)\(\s*[^,()]+\)"
   definition = r"^\s*(function\s+)?(Base\.)?(fetch|wait)\([^)]*::"
   reviewed = Dict(
-    # `_fetch_interruptible` itself (2); `_settle_probe`'s `Base.wait`, on a detached task, which
-    # SIGINT never targets (1); `_note_statement_end_when_settled!`'s `Base.wait`, on a detached task
-    # for the same reason, which clears the leak scan's stamp once a LibPQ statement ends (#1637) (1);
-    # prose in docstrings (3): `_as_database_error`'s example, its `fetch(Threads.@spawn …)`, and
-    # `_settle_probe`'s `wait(result_task)`.
-    "src/ConnectionPool.jl" => 7,
+    # `_fetch_interruptible`'s two arms, `_fetch_handle` and `_fetch_handle_other` (2, #1599 layer 2: a
+    # `Task` handle at its type, any other through the open arm); `_settle_probe`'s, `_wait_handle` and
+    # `_wait_handle_other`, on a detached task, which SIGINT never targets (2);
+    # `_note_statement_end_when_settled!`'s `Base.wait`, on a detached task for the same reason, which
+    # clears the leak scan's stamp once a LibPQ statement ends (#1637) (1); prose in docstrings (3):
+    # `_as_database_error`'s example, its `fetch(Threads.@spawn …)`, and `_settle_probe`'s
+    # `wait(result_task)`.
+    "src/ConnectionPool.jl" => 8,
     # The LibPQ handle's `Base.fetch` forwarding to LibPQ's `AsyncResult`: the driver side of the
     # await, which `_fetch_interruptible` calls.
     "ext/PormGLibPQExt.jl" => 1,
@@ -175,4 +177,12 @@ end
     n > 0 && (found[replace(relpath(file, root), '\\' => '/')] = n)
   end
   @test found == reviewed
+  # The two arms `_fetch_interruptible` hands a handle to (#1599 layer 2) are not an await of their own:
+  # a call to `_fetch_handle` outside it would skip the thread-1 keepalive, and the scan above does not
+  # see it (the name is not `fetch(`). So each has its reviewed callers: `_fetch_interruptible`'s two, and
+  # `_settle_probe`'s one, on a detached task.
+  cp_lines = [l for l in eachline(joinpath(root, "src", "ConnectionPool.jl")) if !startswith(lstrip(l), "#")]
+  calls(name) = count(l -> occursin(Regex("(?<![\\w.@])" * name * "\\((?!@nospecialize)"), l), cp_lines)
+  @test calls("_fetch_handle") == 2
+  @test calls("_wait_handle") == 1
 end

@@ -119,6 +119,37 @@ if only_on(:mysql, "drives the MySQL driver extension (ext/PormGMySQLExt.jl)")
         @test PormG.Kernel._backend_name(pool) == "MySQL"
     end
 
+    # What: the suite's own connection, written as a `mysql://` URL (built in memory from the loaded
+    # block, every byte outside the unreserved set percent-encoded) and registered with
+    # `register_connection`, gets the conninfo `load` built and runs a statement on the server.
+    # SQL: `SELECT DATABASE() AS d` on the registered pool.
+    # Why: #1614 — a trimmed MySQL app boots from code, not from connection.yml (#1679). The unit file
+    # pins the parse; this pins that the pool a URL builds connects, as the same account and database.
+    @testset "a pool registered from a mysql:// URL runs a statement (#1614)" begin
+        block = PormG.config[PORMG_DB_FOLDER].db_config_settings
+        enc(v) = join(c in 'A':'Z' || c in 'a':'z' || c in '0':'9' || c in "-._~" ? string(c) :
+                      join("%" * uppercase(string(b; base = 16, pad = 2)) for b in codeunits(string(c)))
+                      for c in string(v))
+        text(k) = (v = get(block, k, nothing); v === nothing ? nothing : string(v))
+        user = text("username"); password = text("password")
+        userinfo = user === nothing ? "" : enc(user) * (password === nothing ? "" : ":" * enc(password)) * "@"
+        hostport = something(text("host"), "") * (text("port") === nothing ? "" : ":" * text("port"))
+        query = join(("$(k)=$(enc(text(k)))" for k in PormG.Configuration._MYSQL_URL_QUERY_KEYS
+                      if text(k) !== nothing), "&")
+        url = "mysql://" * userinfo * hostport * (text("database") === nothing ? "" : "/" * enc(text("database"))) *
+              (isempty(query) ? "" : "?" * query)
+        key = "my_url_1614"
+        try
+            PormG.Configuration.register_connection(key, url; adapter = "MySQL", env = "test", pool_size = 1)
+            url_pool = PormG.config[key].connections
+            @test url_pool.connection_string == pool.connection_string
+            @test DataFrame(PormG.fetch(url_pool, "SELECT DATABASE() AS d")).d[1] == text("database")
+            @test PormG.Configuration.ping(key)
+        finally
+            haskey(PormG.config, key) && PormG.Configuration.unregister_connection(key)
+        end
+    end
+
     # What: bound parameters reach the server as their values and read back as PormG's types.
     # SQL: `INSERT INTO pormg_my_phase1_values (…) VALUES (?, ?, …)`, then `SELECT … WHERE name = ?`.
     # Why: MySQL.jl returns zero-copy views (`DataString`, `DataBytes`), a `DecimalValue` and a

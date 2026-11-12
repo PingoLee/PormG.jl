@@ -264,8 +264,9 @@ end
     "src/tools.jl" => 1,
     # Not a version: a byte bound in a docstring's CHECK example.
     "src/migrations/introspection.jl" => 1,
-    # Not a gate: `register_offline` checks that a stated `server_version` is positive (#1452).
-    "src/Configuration.jl" => 1,
+    # Not a gate: `register_offline` checks that a stated `server_version` is positive (#1452), and
+    # `_mysql_url_block` checks that a `mysql://` URL's port is from 1 to 65535 (#1614).
+    "src/Configuration.jl" => 2,
     # A driver package's version, not a server's: `_check_driver_floor` warns at load when the
     # loaded Postgres.jl / MySQL.jl is below the `[compat]` floor Julia does not enforce (#1719).
     "ext/PormGPostgresExt.jl" => 1,

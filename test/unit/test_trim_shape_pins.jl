@@ -667,6 +667,15 @@ end
     @test isempty(_dynamic_calls(Configuration._is_unset, (Any,)))
     @test isempty(_dynamic_calls(Configuration._conninfo_value, (String, Any)))
     @test isempty(_dynamic_calls(Configuration._mysql_conninfo, (Dict{String,Any},)))
+    # #1614: a trimmed MySQL app boots through `register_connection` with a `mysql://` URL, so its parse
+    # is on the boot path, and so is the typed tail each adapter's branch hands its pool to.
+    @test isempty(_dynamic_calls(Configuration._mysql_url_block, (String,)))
+    @test isempty(_dynamic_calls(Configuration._url_unescape, (SubString{String}, String)))
+    reg_pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+                 CP.MySQLConnectionPool)
+    for P in reg_pools
+      @test isempty(_dynamic_calls(Configuration._install_registered_pool!, (String, S, NTuple{3, Float64}, P)))
+    end
     @test isempty(_dynamic_calls_deep(Configuration._options_split_read_write, (Any,); depth = 1, skip = open_arms))
     @test isempty(_dynamic_calls(Configuration._configured_extensions, (S,)))
     # Its keyword body, read directly (`what`, `blank`, the function, then the positional arguments): it
@@ -685,6 +694,11 @@ end
     rc_body = only(T for T in invokes_in(Base.signature_type(Configuration.register_connection, (String, String)))
                    if occursin("#register_connection#", string(T.parameters[1])))
     @test !any(T -> T <: Tuple{Type{<:Dict}, Vararg{Pair}}, invokes_in(rc_body))
+    # Each branch reaches the tail at its pool's concrete type: one pool union across the branches is
+    # wider than inference keeps, and widened to the abstract type every monitor call is dynamic (#1622).
+    rc_tails = [T.parameters[end] for T in invokes_in(rc_body)
+                if T.parameters[1] === typeof(Configuration._install_registered_pool!)]
+    @test Set(rc_tails) == Set(reg_pools)
     @test isempty(_dynamic_calls_deep(PormG.Kernel._supporting_backends, (Symbol,); depth = 2))
     for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.MySQLConnectionPool)
       @test length(_dynamic_calls(Configuration.ensure_before_connect!, (P,))) == 1

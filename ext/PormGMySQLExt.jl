@@ -852,6 +852,15 @@ function PormG.backend_drain_connection!(pool::_Pool, conn::MySQL.Connection)
   end
 end
 
+# ── Precompilation (#1599 layer 2) ───────────────────────────────────────────
+#
+# `_materialize`'s cell walk names a typed read for each of MySQL.jl's column types, and inferring all of
+# them took seconds on a session's first statement. Compiled here, after MySQL.jl has loaded, so the code
+# lands in this extension's image. These are the two cursors `_run` hands it: a prepared statement's,
+# with its charset flags, and the text protocol's. `test/unit/test_mysql_ext.jl` checks both still match.
+precompile(_materialize, (MySQL.Cursor{true, true}, Vector{Bool}))
+precompile(_materialize, (MySQL.Cursor{false, true}, Nothing))
+
 # ── Driver floor (#1719) ─────────────────────────────────────────────────────
 #
 # `[compat]` holds `MySQL = "2.2.2"` (#1648), but Julia does not check a weak dependency's compat when it

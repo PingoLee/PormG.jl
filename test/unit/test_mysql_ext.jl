@@ -577,6 +577,11 @@ end
     foreach(U -> push!(read_types, U), Base.uniontypes(Base.promote_op(_MyExt._by_charset, R, Bool)))
   end
   @test setdiff(read_types, Set{Any}(_MyExt._CELL_TYPES)) == Set{Any}()
+  # The extension precompiles `_materialize` at the two cursors `_run` hands it, so the walk's typed reads
+  # are in its image rather than inferred on a session's first statement (seconds). `precompile` returns
+  # `false` rather than throwing when a signature stops matching, so a renamed cursor type shows here.
+  @test precompile(_MyExt._materialize, (MySQL.Cursor{true, true}, Vector{Bool}))
+  @test precompile(_MyExt._materialize, (MySQL.Cursor{false, true}, Nothing))
 end
 
 # What: `_store_narrowed!`, which replaced `identity.(col)` in `_materialize`, against `identity.` itself:

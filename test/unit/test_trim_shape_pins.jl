@@ -1024,12 +1024,16 @@ end
       @test isempty(calls)
       isempty(calls) || @info "dynamic calls under a cache reader" f calls
     end
-    # `live_table` three levels down, which holds its `cache.index` read. One dynamic call there reads no
-    # cache and is not this pin's: the keyword call to `_spec_or_degraded`, which compiles each column.
-    live = filter(c -> !occursin("_spec_or_degraded", c),
-                  _dynamic_calls_deep(PormG.Migrations.live_table, (MT, PormG.Kernel.PormGSQLite); depth = 3))
+    # `live_table` makes no dynamic call on what it reads from `cache.index`: the lookups and the
+    # name-list conversion take it. The check names those calls rather than asserting the function has
+    # none at all, because the rest of it depends on dependency versions: at the `OrderedCollections`
+    # floor (1.0), iterating `model.fields` infers `Pair{String}`, losing the field type, so the
+    # `field_db_column` call in the column loop dispatches there and nowhere else (the floor-resolve CI
+    # job showed it). That loop reads `fields`, not the cache, and is not this pin's.
+    live = _named_dynamic_calls(Tuple{typeof(PormG.Migrations.live_table), MT, PormG.Kernel.PormGSQLite},
+                                ("Migrations.get(", "Base.get(", "_index_name_list(", "haskey(", "getindex("))
     @test isempty(live)
-    isempty(live) || @info "dynamic calls under live_table" live
+    isempty(live) || @info "dynamic calls in live_table on the cache's values" live
     # Its `composite_index_owners` read reaches `LiveComposite` through a splat (`ownership(d)...`). The
     # scans above skip builtins, and a splat the compiler cannot resolve stays a `Core._apply_iterate`
     # builtin call, so that read is held by there being none left in `live_table`'s own code.

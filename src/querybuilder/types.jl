@@ -855,12 +855,15 @@ end
 function Base.deepcopy(filter::Vector{FilterType})
   return [deepcopy(f) for f in filter]
 end
+# `OperObject` (defined below; the only `SQLTypeOper`), read through its accessors (#1599 round 10). The
+# values are shared, not copied, when they are a queryset; the typed clone of the whole handler is #1684.
 function Base.deepcopy(oper::SQLTypeOper)
   @pormg_debug false
+  values = _oper_literal(oper)
   return OperObject(
     operator=oper.operator,
-    values=oper.values |> typeof <: SQLObjectHandler ? oper.values : deepcopy(oper.values),
-    column=deepcopy(oper.column)
+    values=values isa SQLObjectHandler ? values : deepcopy(values),
+    column=deepcopy(_oper_column(oper))
   )
 end
 
@@ -1221,7 +1224,7 @@ _is_agg(::Any) = false
 function _holds_agg(x, depth::Int = 0)::Bool
   depth > 32 && return false
   x isa AbstractVector && return any(v -> _holds_agg(v, depth + 1), x)
-  x isa OperObject && return _holds_agg(x.column, depth + 1) || _holds_agg(x.values, depth + 1)
+  x isa OperObject && return _holds_agg(_oper_column(x), depth + 1) || with_oper_value_node(_holds_agg, x, false, depth + 1)
   x isa QObject && return _holds_agg(x.filters, depth + 1)
   x isa QorObject && return _holds_agg(x.or, depth + 1)
   return _is_agg(x)
@@ -2102,7 +2105,7 @@ _is_window_expr(values::Vector) = any(_is_window_expr, values)
 # statement.
 _is_window_expr(q::QObject) = _is_window_expr(q.filters)
 _is_window_expr(q::QorObject) = _is_window_expr(q.or)
-_is_window_expr(o::OperObject) = _is_window_expr(o.column) || _is_window_expr(o.values)
+_is_window_expr(o::OperObject) = _is_window_expr(_oper_column(o)) || with_oper_value_node(_is_window_expr, o, false)
 _is_window_expr(f::SQLField) = _is_window_expr(f.field)
 _is_window_expr(::Any) = false
 
@@ -2134,7 +2137,7 @@ function _contains_agg(x, depth::Int = 0)::Bool
                           any(v -> _contains_agg(v, depth + 1), values(x.kwargs))
   x isa FExpression && return _contains_agg(x.field_name, depth + 1) || _contains_agg(x.operand, depth + 1)
   x isa Union{SQLField,SQLOrder} && return _contains_agg(x.field, depth + 1)
-  x isa OperObject && return _contains_agg(x.column, depth + 1) || _contains_agg(x.values, depth + 1)
+  x isa OperObject && return _contains_agg(_oper_column(x), depth + 1) || with_oper_value_node(_contains_agg, x, false, depth + 1)
   x isa QObject && return _contains_agg(x.filters, depth + 1)
   x isa QorObject && return _contains_agg(x.or, depth + 1)
   return false
@@ -2176,6 +2179,88 @@ mutable struct ObjectHandler <: SQLObjectHandler
   object::SQLObjectQuery
 end
 ObjectHandler(; object::SQLObjectQuery) = ObjectHandler(object)
+
+# #1698 phase 2 (#1599 round 10, row 33): `OperObject.values`, the right-hand side of a comparison. Its
+# declared type is a `UnionAll` (the `Vector{T} where T` member), so every call on the slot dispatched at
+# run time, even to a callee with a single method: the trimmed read stopped at `_expression_operand(::String)`
+# in `_guard_where_operand`. The slot holds two halves, read through two accessors:
+#
+# - the NODES: the concrete members of its node families (`SQLTypeF`, `SQLTypeFunction`, `SQLTypeCTE`,
+#   `SQLTypeJoined`, `SQLObjectHandler`, `SubqueryObject`; `test/unit/test_trim_shape_pins.jl` checks the set
+#   against the families), and the two vectors of nodes a filter pair can build: an `@range`/`@nrange` tuple
+#   of two `F` expressions or two `OuterRef`s is stored as `[a, b]`. The tuple arm is diagonal (`Tuple{T,T}`),
+#   so a mixed pair builds no vector, and a list of nodes is refused at the pair (#918). The slot's declared
+#   type admits other vectors holding an `F` (`Vector{SQLTypeF}`, `Vector{Union{Int,FExpression}}`), which
+#   only a hand-built `OperObject` or the internal `OP` can hold; those read as literals here. Read through `_oper_value_node`, the scalar nodes only
+#   (one-method callees split over it statically; inference widens the two vector members to the abstract
+#   `Vector`, so they are not in its union), or `with_oper_value_node`, which has an arm for every member and
+#   both vectors (callees with many methods, and every reader a range of `F` must reach). Defined here,
+#   after `ObjectHandler`, because the slot is declared before most of its members.
+# - the LITERALS: open (`Number`, `Dates.TimeType`, `Dates.Period`, `Vector{T}`), so there is no closed set
+#   to type them against, and every reader hands one to a field's `formatter::Function` (layer 3 of #1599),
+#   which dispatches at run time whatever the literal's type. Read through `_oper_literal`, untyped on
+#   purpose, until the formatter is typed (#1599 round 11's decision).
+const OperValueNode = Union{FExpression,OuterRefObject,FObject,WindowFunction,CTEReference,JoinedReference,
+                            ObjectHandler,SubqueryObject}
+const OperValueNodes = Union{Vector{FExpression},Vector{OuterRefObject}}
+
+"""
+    _oper_value_node(o::OperObject)
+
+The right-hand side of `o` at its concrete type when it is a node (`OperValueNode`); `nothing` when it is
+a literal or a vector (`with_oper_value_node` reaches a vector of nodes).
+"""
+function _oper_value_node(o::OperObject)::Union{Nothing,OperValueNode}
+  v = o.values
+  v isa OperValueNode && return v
+  return nothing
+end
+
+"""
+    with_oper_value_node(f, o::OperObject, otherwise, args...)
+
+`f(node, args...)` with the right-hand side of `o` at its concrete type when it is a node or a vector of
+nodes; `otherwise` when it is a literal. For a callee with many methods, which a call over the union
+`_oper_value_node` returns would not split.
+"""
+@noinline function with_oper_value_node(f::F, o::OperObject, otherwise, args::Vararg{Any,N}) where {F,N}
+  v = o.values
+  v isa FExpression && return f(v, args...)
+  v isa OuterRefObject && return f(v, args...)
+  v isa FObject && return f(v, args...)
+  v isa WindowFunction && return f(v, args...)
+  v isa CTEReference && return f(v, args...)
+  v isa JoinedReference && return f(v, args...)
+  v isa ObjectHandler && return f(v, args...)
+  v isa SubqueryObject && return f(v, args...)
+  v isa Vector{FExpression} && return f(v, args...)
+  v isa Vector{OuterRefObject} && return f(v, args...)
+  return otherwise
+end
+
+# The right-hand side untyped: a literal (the open half, see above), or a value passed on whole (a rebuild,
+# a message).
+_oper_literal(o::OperObject) = o.values
+
+"""
+    with_oper_value(f, o::OperObject, args...)
+
+`f(value, args...)` for a walk that takes either half: a node at its concrete type (`with_oper_value_node`),
+a literal untyped (`_oper_literal`).
+"""
+with_oper_value(f::F, o::OperObject, args::Vararg{Any,N}) where {F,N} =
+  _oper_holds_node(o) ? with_oper_value_node(f, o, nothing, args...) : f(_oper_literal(o), args...)
+# Does the right-hand side hold a node, or a vector of them (`with_oper_value_node`'s members)?
+_oper_holds_node(o::OperObject)::Bool = (v = o.values; v isa OperValueNode || v isa OperValueNodes)
+
+# Is the right-hand side an expression (rendered as SQL) rather than a value (bound)? A node, or a
+# membership/range vector holding one. Only `isa` tests: no call on the slot.
+function _oper_holds_expression(o::OperObject)::Bool
+  v = o.values
+  v isa OperValueNode && return true
+  v isa OperValueNodes && return !isempty(v)
+  return false
+end
 
 """
 A model-aware row returned by `list()`, `first()`, and `get()`.

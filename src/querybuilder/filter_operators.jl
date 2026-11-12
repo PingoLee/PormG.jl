@@ -67,7 +67,7 @@ function _render_json_lookup_comparison(v::SQLTypeOper, column::String, instruc:
   # `#>> '{"kind"}' = 'UInt8[0x01, 0x02]'` — valid SQL, zero rows, no error. A JSON value is never a
   # byte payload, so the refusal is unconditional.
   _guard_vector_equality(v, nothing)
-  return _render_json_key_comparison(v.operator, v.values, column, _filter_path_label(v), instruc)
+  return _render_json_key_comparison(v.operator, _oper_literal(v), column, _filter_path_label(v), instruc)
 end
 
 # The comparison itself, for the filter pair above and for an expression comparison over the key
@@ -117,9 +117,10 @@ end
 # text[] key array) and dispatches to the per-dialect Dialect renderer (PG emits the operator;
 # SQLite throws PG-only).
 function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
-  col_as = isa(v.column, SQLTypeField) ? v.column._as : nothing
+  col = _oper_column(v)
+  col_as = isa(col, SQLTypeField) ? col._as : nothing
   # #474: the memo is keyed by namespace, the MESSAGE by what the caller wrote.
-  col_key = isa(v.column, SQLTypeField) ? memo_key(v.column) : nothing
+  col_key = isa(col, SQLTypeField) ? memo_key(col) : nothing
   if memo_json_lookup(instruc, col_key)
     throw(FilterError("The \e[31m@$(v.operator)\e[0m operator applies to a JSON column, not a nested key path (\e[31m$(col_as)\e[0m); this is not supported in v1."))
   end
@@ -127,14 +128,15 @@ function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstr
   (base !== nothing && Models.is_json_field(base)) ||
     throw(FilterError("The \e[31m@$(v.operator)\e[0m operator requires a JSONField column; \e[31m$(something(col_as, "the target"))\e[0m is not JSON."))
   op = v.operator
+  values = _oper_literal(v)
   ph = if op == "jcontains"
-    add_parameter!(instruc, Models.format_json_sql(v.values); sql_type="jsonb")
+    add_parameter!(instruc, Models.format_json_sql(values); sql_type="jsonb")
   elseif op == "has_key"
-    add_parameter!(instruc, string(v.values))
+    add_parameter!(instruc, string(values))
   else  # has_any_keys / has_keys
-    v.values isa AbstractVector ||
+    values isa AbstractVector ||
       throw(FilterError("The \e[31m@$(op)\e[0m operator requires an array of keys, e.g. filter(\"col__@$(op)\" => [\"a\", \"b\"]); got a single value."))
-    add_parameter!(instruc, String.(v.values); sql_type="text[]")
+    add_parameter!(instruc, String.(values); sql_type="text[]")
   end
   return _json_operator_sql(op, instruc.connection, column, ph)
 end
@@ -158,13 +160,14 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
   # through a `When` condition) or a transform (`happened__@year`). A transform node keeps neither the
   # caller's `@year` spelling nor a path to quote, so its refusal names the column it transforms and
   # quotes no path, rather than one the caller never wrote or the SQL it renders.
+  col = _oper_column(v)
   label, subject = if operand_field !== nothing
     field_label, field_label
-  elseif isa(v.column, SQLTypeField) && isa(v.column.field, AbstractString)
-    v.column.field, v.column.field
-  elseif isa(v.column, SQLTypeField) && isa(v.column.field, SQLTypeFunction) &&
-         isa(v.column.field.column, AbstractString)
-    nothing, "$(v.column.field.column), under a transform,"
+  elseif isa(col, SQLTypeField) && isa(col.field, AbstractString)
+    col.field, col.field
+  elseif isa(col, SQLTypeField) && isa(col.field, SQLTypeFunction) &&
+         isa(col.field.column, AbstractString)
+    nothing, "$(col.field.column), under a transform,"
   else
     column, column
   end
@@ -173,24 +176,27 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
     throw(FilterError("$(where_): the @$(op) lookup requires a GenericIPAddressField " *
                       "or CIDRField column, and $(subject) is not one."))
   lookup = "$(label)__@$(op)"
-  ph = if isa(v.values, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
-    _on_join_right(() -> _get_filter_query(v.values, instruc), instruc)   # #985: the right side
-  elseif isa(v.values, Union{SQLType,SubqueryObject,SQLObjectHandler})
+  value_node = _oper_value_node(v)
+  values = _oper_literal(v)
+  ph = if isa(value_node, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
+    rhs_ref = value_node::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}   # narrowed before the closure captures it
+    _on_join_right(() -> _get_filter_query(rhs_ref, instruc), instruc)   # #985: the right side
+  elseif isa(value_node, Union{SQLType,SubqueryObject,SQLObjectHandler})
     throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes a value or a column " *
                       "(F(\"…\")), not this expression."))
   elseif op in NETWORK_CONTAINMENT_OPERATORS
-    add_parameter!(instruc, _guarded_format(Models.format_inet_network_sql, v.values, op, label,
+    add_parameter!(instruc, _guarded_format(Models.format_inet_network_sql, values, op, label,
                                             operand_field.type); sql_type = "inet")
   else  # family / prefixlen
     # #988: the value is bound, so a refusal is an `InvalidValueError`, located like a formatter's.
     # A `Bool` is an `Integer` in Julia, and `true` is not a family (#949's reasoning).
     allowed, what = op == "family" ? ((4, 6), "4 or 6") : (0:128, "a whole number from 0 to 128")
-    kind = !(v.values isa Integer) || v.values isa Bool ? :type :
-           v.values in allowed ? nothing : :range
+    kind = !(values isa Integer) || values isa Bool ? :type :
+           values in allowed ? nothing : :range
     kind === nothing ||
       throw(with_location(InvalidValueError("The @$(op) lookup takes $(what)", kind);
                           op = "filter", field = label, field_type = _opt_label(operand_field.type)))
-    add_parameter!(instruc, Int(v.values))
+    add_parameter!(instruc, Int(values))
   end
   return _network_operator_sql(op, instruc.connection, column, ph)
 end
@@ -198,8 +204,9 @@ end
 # Resolve the base PormGField a JSON operator targets: a bare column name lives on the model;
 # an FK-reached terminal JSON column was cached in tab_field_cache when `column` resolved.
 function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
-  isa(v.column, SQLTypeField) || return nothing
-  fld = v.column.field
+  col = _oper_column(v)
+  isa(col, SQLTypeField) || return nothing
+  fld = col.field
   if fld isa String && !contains(fld, "__")
     return get(instruc.object.model.fields, fld, nothing)
   end
@@ -209,7 +216,7 @@ function _resolve_json_operator_field(v::SQLTypeOper, instruc::SQLInstruction)
   # "evc__payload is not JSON", a shape that rendered before #474. The mirror hazard is worse: with
   # a base-model path spelled the same, the un-namespaced lookup could return the OTHER namespace's
   # field and license a jsonb operator against a CTE's text column.
-  return memo_field(instruc, memo_key(v.column))
+  return memo_field(instruc, memo_key(col))
 end
 
 # #28: render an array containment/overlap lookup (`@acontains` @>, `@contained_by` <@, `@overlap` &&)
@@ -230,11 +237,12 @@ function _render_array_operator(v::SQLTypeOper, column::String, instruc::SQLInst
                       "\e[31m$(_array_lookup_label(v))\e[0m is not one."))
   # The parse ladder admits only a vector here (`_check_fixed_shape_lookup` refuses a scalar, and
   # `_check_column_rhs_lookup` a column); this is the fail-safe for a spelling that bypasses it.
-  v.values isa AbstractVector ||
+  values = _oper_literal(v)
+  values isa AbstractVector ||
     throw(FilterError("The \e[31m@$(v.operator)\e[0m lookup takes a list of elements."))
   formatter = field.formatter::Models.ArrayFormatter
   unbounded = Models.ArrayFormatter(formatter.base, formatter.kind, nothing)
-  literal = _guarded_format(unbounded, v.values, v.operator, _array_lookup_label(v), field.type)
+  literal = _guarded_format(unbounded, values, v.operator, _array_lookup_label(v), field.type)
   placeholder = add_parameter!(instruc, literal)
   return _array_operator_sql(v.operator, instruc.connection, column, placeholder)
 end
@@ -258,9 +266,12 @@ function _render_search_operator(v::SQLTypeOper, column::String, instruc::SQLIns
                       "search its name: \e[4m\e[32mvalues(\"doc\" => SearchVector(…)).filter(\"doc__@search\" => …)\e[0m (#1021)."))
   # The parse ladder admits only these two (`_check_fixed_shape_lookup`); this is the fail-safe for a
   # spelling that bypasses it.
-  query = v.values isa AbstractString ? SearchQuery(v.values) : v.values
-  _is_fts_node(query, "SEARCH_QUERY") ||
+  # The text, or a `SearchQuery(…)` node, read through the slot's accessors (#1599 round 10).
+  values = _oper_literal(v)
+  operand = values isa AbstractString ? SearchQuery(values) : _oper_value_node(v)
+  _is_fts_node(operand, "SEARCH_QUERY") ||
     throw(FilterError("The \e[31m@search\e[0m lookup takes the search text or a SearchQuery(...) (#31)."))
+  query = operand::FObject
   vector = field.type == "TSVECTOR" ? column : Dialect.ts_vector_sql(column, query.kwargs["config"], instruc.connection)
   rendered = _on_join_right(() -> _render_fts_operand(query, instruc), instruc)
   return Dialect.search(instruc.connection, vector, rendered)
@@ -270,7 +281,7 @@ end
 # key's path for a joined or CTE column. `"this expression"` for an operand with neither (`@len`).
 # The `@search` lookup's messages use it too (#31).
 function _array_lookup_label(v::SQLTypeOper)::String
-  c = v.column
+  c = _oper_column(v)
   c isa SQLField && c.field isa String && return c.field
   k = c isa Union{SQLField,CTEReference,JoinedReference} ? memo_key(c) : nothing
   return k === nothing ? "this expression" : k[2]
@@ -305,8 +316,9 @@ end
 #
 # Returns the rendered SQL string, or `nothing` to fall through to the existing rendering.
 function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::Union{String,Nothing}
-  isa(v.column, SQLTypeField) || return nothing
-  fobj = v.column.field
+  col = _oper_column(v)
+  isa(col, SQLTypeField) || return nothing
+  fobj = col.field
   isa(fobj, FObject) || return nothing
   raw_field = fobj.column
   # #444: a CTE-scoped bucket column arrives as a handle rather than a `"<cte>__col"` string. It
@@ -318,7 +330,8 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   # #481: `JoinedReference` for the same reason, one namespace over.
   isa(raw_field, Union{String,CTEReference,JoinedReference}) || return nothing
   v.operator in ("=", ">=", ">", "<=", "<") || return nothing
-  (v.values isa AbstractString || v.values isa Number) || return nothing
+  values = _oper_literal(v)
+  (values isa AbstractString || values isa Number) || return nothing
 
   # The bucket gate runs BEFORE the column is resolved: resolving a joined path renders its join,
   # and a non-bucket transform (`@month`, `@quarter`, …) must never reach that.
@@ -351,7 +364,7 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   if bucket == :date
     # Same granularity as the column: no range, operator unchanged — just drop the to_char.
     # This `bind` is the only one handed the RAW value; the range arms below bind computed `Date`s.
-    return string(column_sql, " ", v.operator, " ", bind(v.values))
+    return string(column_sql, " ", v.operator, " ", bind(values))
   end
 
   # Both helpers refuse a value with an `InvalidValueError` carrying the reason alone — their own
@@ -365,8 +378,8 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   # not parse. The value's shape is checked either way.
   bounds = try
     ranged = v.operator == "="
-    bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(v.values; ranged = ranged) :
-                         _year_bucket_bounds(v.values; ranged = ranged)
+    bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(values; ranged = ranged) :
+                         _year_bucket_bounds(values; ranged = ranged)
   catch e
     _locate_filter_refusal(e, raw_field, f_meta.type)
   end

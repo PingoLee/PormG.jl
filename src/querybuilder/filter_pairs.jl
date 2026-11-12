@@ -587,15 +587,16 @@ function _summarize_projection_labels(labels::Vector{String}; max_items::Integer
 end
 
 function _validate_membership_subquery(v::SQLTypeOper)
-  v.values isa SQLObjectHandler || return nothing
+  subquery = _oper_value_node(v)
+  subquery isa ObjectHandler || return nothing
   v.operator in ["IN", "NOT IN"] || return nothing
 
-  subquery = v.values
   projection_labels = _subquery_projection_labels(subquery)
   projection_count = length(projection_labels)
   projection_count == 1 && return nothing
 
-  filter_field = v.column isa SQLTypeField && v.column.field isa String ? v.column.field : "field"
+  col = _oper_column(v)
+  filter_field = col isa SQLField && col.field isa String ? col.field : "field"
   operator_suffix = v.operator == "IN" ? "in" : "nin"
   lookup = string(filter_field, "__@", operator_suffix)
   detail = if isempty(subquery.object.values)
@@ -709,7 +710,10 @@ function _check_filter(x::Pair)
   if isa(x.first, CTEReference)
     ref = _reject_cte_desc(x.first, "filter(...)")
     oper = _check_filter(ref.path => x.second)
-    isa(oper, SQLTypeOper) && isa(oper.column, SQLField) && _retag_cte_field!(oper.column, ref.name)
+    if oper isa OperObject
+      col = _oper_column(oper)
+      col isa SQLField && _retag_cte_field!(col, ref.name)
+    end
     return oper
   end
   # #481: the joined-copy twin, for exactly the reason above. Delegating on `ref.path` is also what
@@ -719,7 +723,10 @@ function _check_filter(x::Pair)
   if isa(x.first, JoinedReference)
     ref = _reject_joined_desc(x.first, "filter(...)")
     oper = _check_filter(ref.path => x.second)
-    isa(oper, SQLTypeOper) && isa(oper.column, SQLField) && _retag_joined_field!(oper.column, ref.alias)
+    if oper isa OperObject
+      col = _oper_column(oper)
+      col isa SQLField && _retag_joined_field!(col, ref.alias)
+    end
     return oper
   end
   if isa(x.first, AbstractString)

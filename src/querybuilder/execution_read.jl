@@ -919,10 +919,10 @@ function _filters_name_alias(object::SQLObjectQuery)::Bool
     f isa ExistsObject && continue
     visit = leaf -> begin
       hit[] && return nothing
-      key = _plain_filter_key(leaf.column)
+      key = _plain_filter_key(_oper_column(leaf))
       if key !== nothing && !(key in object.model.field_names)
         hit[] = true
-      elseif (mkey = _model_filter_key(leaf.column, instruc)) !== nothing
+      elseif (mkey = _model_filter_key(_oper_column(leaf), instruc)) !== nothing
         hit[] = any(p -> _projection_output_name(p) == mkey && !_projects_column(p, mkey), object.values)
       end
       return nothing
@@ -1832,8 +1832,9 @@ _filters_repr(q::SQLObjectHandler)::String =
   isempty(q.object.filter) ? "(none)" : join(String[with_filter_node(_get_filter_repr, f) for f in q.object.filter], ", ")
 
 function _get_filter_repr(filter::SQLTypeOper)::String
-  column = filter.column isa SQLTypeField ? filter.column.field : filter.column
-  return "$(column) $(filter.operator) $(filter.values)"
+  col = _oper_column(filter)
+  column = col isa SQLField ? col.field : col
+  return "$(column) $(filter.operator) $(_oper_literal(filter))"
 end
 
 function _get_filter_repr(filter::SQLTypeQ)::String

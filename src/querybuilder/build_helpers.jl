@@ -189,7 +189,10 @@ function _check_function(f::Vector{FObject})
 end
 # #863: the right-hand side too, when it is an expression (a `When` condition, a hand-built `OP`).
 function _check_function(f::SQLTypeOper)
-  return OperObject(operator=f.operator, values=_walk_slot(f.values), column=_check_function(f.column))
+  # Through the slot's accessors (#1599 round 10): `_walk_slot`'s test, asked of the node view.
+  node = _oper_value_node(f)
+  values = node isa Union{SQLTypeFunction,FExpression} ? _check_function(node) : _oper_literal(f)
+  return OperObject(operator=f.operator, values=values, column=_check_function(_oper_column(f)))
 end
 function _check_function(f::Union{SQLText,SQLField})
   return f
@@ -344,7 +347,7 @@ function _retag_cte_column(x::SQLField, name::String)
   return x
 end
 function _retag_cte_column(x::SQLTypeOper, name::String)
-  return OperObject(operator=x.operator, values=x.values, column=_retag_cte_column(x.column, name))
+  return OperObject(operator=x.operator, values=_oper_literal(x), column=_retag_cte_column(_oper_column(x), name))
 end
 _retag_cte_column(x::Vector, name::String) = Any[_retag_cte_column(v, name) for v in x]
 function _retag_cte_column(x, ::String)
@@ -399,7 +402,7 @@ function _retag_joined_column(x::SQLField, alias::String)
   return x
 end
 function _retag_joined_column(x::SQLTypeOper, alias::String)
-  return OperObject(operator=x.operator, values=x.values, column=_retag_joined_column(x.column, alias))
+  return OperObject(operator=x.operator, values=_oper_literal(x), column=_retag_joined_column(_oper_column(x), alias))
 end
 _retag_joined_column(x::Vector, alias::String) = Any[_retag_joined_column(v, alias) for v in x]
 function _retag_joined_column(x, ::String)

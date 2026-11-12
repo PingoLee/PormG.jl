@@ -211,7 +211,7 @@ end
 # `_guard_no_aggregate_predicate`, because `Q`/`Qor` admit the same leaf.
 function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
-  if filter isa SQLTypeOper
+  if filter isa OperObject
     key = _model_filter_key(_oper_column(filter), instruc)   # #1599 round 9, row 32
     key === nothing && return nothing
     for projection in instruc.object.values
@@ -258,7 +258,7 @@ function _guard_select_condition_collision(projections, instruc::SQLInstruction)
     owner isa SQLTypeField || continue
     owner_name = _projection_output_name(owner)
     _each_condition_leaf(owner.field) do leaf
-      key = _model_filter_key(leaf.column, instruc)
+      key = _model_filter_key(_oper_column(leaf), instruc)
       key === nothing && return nothing
       for (j, projection) in pairs(projections)
         j == i && continue
@@ -281,7 +281,7 @@ end
 _each_condition_leaf_of(node, f::F) where {F<:Function} = _each_condition_leaf(f, node)
 function _each_condition_leaf(f::Function, node, depth::Int = 0)
   depth > 32 && return nothing
-  if node isa SQLTypeOper
+  if node isa OperObject   # the only `SQLTypeOper`: `f` reads it through its accessors (#1599 round 10)
     f(node)
   elseif node isa SQLTypeQ
     foreach(x -> _each_condition_leaf(f, x, depth + 1), node.filters)
@@ -400,8 +400,8 @@ end
 # (`When(OP(...))`) never enters this walk; it renders through `_get_select_query(::SQLTypeOper)`.
 function _guard_no_aggregate_predicate(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
-  if filter isa SQLTypeOper
-    col = filter.column
+  if filter isa OperObject
+    col = _oper_column(filter)
     if col isa WindowFunction
       throw(QueryBuildError(
         "\e[4m\e[31mOP($(col.function_name)(…), …)\e[0m — a window function cannot be a WHERE " *
@@ -452,12 +452,14 @@ const _AGGREGATE_EXPRESSION_ADVICE =
 # aggregate is not WHERE-bound (`HAVING COUNT(…) > MAX(…)` is legal), so the routing decides first and
 # this never sees it. Asked after aliases resolve, as the `F` arm is.
 function _guard_where_operand(v::SQLTypeOper, instruc::SQLInstruction)
-  _expression_operand(v.values) || return nothing
-  _resolved_window(v.values, instruc) && throw(QueryBuildError(
+  # #1599 round 10, row 33: both questions asked of the right-hand side at its concrete type, through the
+  # slot's walk (a range of `F` included), never of the untyped slot.
+  _expression_operand(v) || return nothing
+  with_oper_value_node(_resolved_window, v, false, instruc) && throw(QueryBuildError(
     "\e[4m\e[31mfilter(\"$(_filter_path_label(v))\" => …)\e[0m — the right-hand side contains a window " *
     "function, which cannot be a WHERE predicate: SQL evaluates windows after WHERE. " *
     _WINDOW_PREDICATE_ADVICE * " (#895)."))
-  _resolved_contains_agg(v.values, instruc) && throw(QueryBuildError(
+  with_oper_value_node(_resolved_contains_agg, v, false, instruc) && throw(QueryBuildError(
     "\e[4m\e[31mfilter(\"$(_filter_path_label(v))\" => …)\e[0m — the right-hand side contains an " *
     "aggregate, which cannot be a WHERE predicate, and PormG does not move it to HAVING. Project " *
     "the left-hand side as an aggregate alias and compare that, which renders as HAVING — " *
@@ -491,11 +493,15 @@ function _guard_no_aggregate_on_condition(condition, row::JoinRow, instruc::SQLI
     # The pair itself is asked too: a plain key naming a projection alias renders that projection,
     # and only the whole pair is a condition leaf `_reads_alias` resolves — `"n" => 1` over
     # `"n" => Count(…)` rendered `ON … AND COUNT(…) = ?` with the operands asked alone (review of #917).
-    operands = condition isa SQLTypeOper ? (condition, condition.column, condition.values) : (condition,)
-    any(x -> _resolved_window(x, instruc), operands) && throw(QueryBuildError(
+    # The right-hand side through the slot's walk (#1599 round 10); a literal answers `false`.
+    oper = condition isa OperObject
+    operands = oper ? (condition, _oper_column(condition)) : (condition,)
+    (any(x -> _resolved_window(x, instruc), operands) ||
+     oper && with_oper_value_node(_resolved_window, condition, false, instruc)) && throw(QueryBuildError(
       "$(_on_condition_label(row)) — a window function cannot appear in a join's ON clause: SQL " *
       "evaluates windows after the join. " * _ON_CONDITION_ADVICE))
-    any(x -> _resolved_contains_agg(x, instruc), operands) && throw(QueryBuildError(
+    (any(x -> _resolved_contains_agg(x, instruc), operands) ||
+     oper && with_oper_value_node(_resolved_contains_agg, condition, false, instruc)) && throw(QueryBuildError(
       "$(_on_condition_label(row)) — an aggregate cannot appear in a join's ON clause: SQL joins " *
       "rows before it groups them. " * _ON_CONDITION_ADVICE))
   end
@@ -565,8 +571,8 @@ end
 # `_guard_no_aggregate_predicate`'s depth cap.
 function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
-  if filter isa SQLTypeOper
-    col = filter.column
+  if filter isa OperObject
+    col = _oper_column(filter)
     _alias_filter_key(col, instruc) === nothing && return nothing
     key = memo_key(col)
     memo_projection(instruc, key) === nothing && return nothing
@@ -597,7 +603,7 @@ end
 # condition reads, so this gate asks `_resolved_agg` — the same test the top-level branch and the
 # GROUP BY decision ask, so the three cannot disagree about one projection.
 function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
-  col = v.column
+  col = _oper_column(v)
   _alias_filter_key(col, instruc) === nothing && return nothing
   key = memo_key(col)
   cached = memo_projection(instruc, key)
@@ -624,7 +630,7 @@ end
 # a node stays in WHERE, which is where every node went before.
 function _split_having(filter, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return (filter, nothing)
-  if filter isa SQLTypeOper
+  if filter isa OperObject
     return _aggregate_alias_leaf(filter, instruc) === nothing ? (filter, nothing) : (nothing, filter)
   elseif filter isa Union{SQLTypeQ,SQLTypeQor}
     parts = [_split_having(f, instruc, depth + 1) for f in (filter isa SQLTypeQ ? filter.filters : filter.or)]
@@ -651,7 +657,8 @@ end
 _and_of(terms::Vector{FilterType}) = length(terms) == 1 ? only(terms) : QObject(filters = terms)
 
 # The alias the first HAVING leaf of a split part compares — for the mixed-`Qor` message.
-_having_leaf_label(v::SQLTypeOper) = v.column.field
+# Every HAVING leaf passed the alias test (`_aggregate_alias_leaf`), so its column is an `SQLField`.
+_having_leaf_label(v::SQLTypeOper) = (_oper_column(v)::SQLField).field
 _having_leaf_label(q::SQLTypeQ) = _having_leaf_label(first(q.filters))
 _having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
 
@@ -664,7 +671,7 @@ function _get_having_query(v::SQLTypeOper, instruc::SQLInstruction)::String
     # #926 (review): a subquery on the right is evaluated after GROUP BY here — see `RenderScope`. The
     # caller set the `:group` phase; this names the alias the predicate compares.
     return _with_render_scope(() -> _get_filter_query(v, instruc), instruc;
-                      phase = :group, having = true, label = _having_subquery_label(something(_plain_filter_key(v.column), "?")))
+                      phase = :group, having = true, label = _having_subquery_label(something(_plain_filter_key(_oper_column(v)), "?")))
   end
   having_key, having_cached = _aggregate_alias_leaf(v, instruc)
   return _render_alias_predicate(v, having_key, having_cached, instruc)
@@ -707,16 +714,19 @@ _get_where_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
 _get_where_query(v, instruc::SQLInstruction)::String = _get_filter_query(v, instruc)
 
 # Is a predicate's right-hand side an expression (rendered as SQL) rather than a value (bound)?
-# The node kinds `OperObject.values` admits besides literals, and a membership list holding one.
+# The node kinds `OperObject.values` admits besides literals, and the two vectors of them a filter pair
+# builds (`OperValueNodes`: an `@range` of two `F`s or two `OuterRef`s).
 # #926 added `SubqueryObject` with its slot: a scalar subquery renders as SQL, so an alias compared with
 # one takes the WHERE renderer, not the typed binder, which handed the node to a value formatter.
-_expression_operand(x) = x isa Union{SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,SQLObjectHandler,SubqueryObject}
-_expression_operand(x::AbstractVector) = any(_expression_operand, x)
+# #1599 round 10, row 33: asked of the comparison, not of its untyped slot. The answer is
+# `_oper_holds_expression`'s `isa` tests over the slot's node view (types.jl): it was a call on the slot,
+# with two methods, which dispatched at run time.
+_expression_operand(v::OperObject) = _oper_holds_expression(v)
 # Is the predicate a comparison between two expressions, which the WHERE path renders, rather than an
 # alias against a value, which `_render_alias_predicate` types? #1021: `@search`'s right-hand side is
 # a `SearchQuery` — the lookup's operand, not a second expression to compare — so a `"doc__@search"`
 # pair always takes the alias renderer, where `_render_alias_search` routes it.
-_compared_operand(v::SQLTypeOper) = v.operator != "search" && _expression_operand(v.values)
+_compared_operand(v::SQLTypeOper) = v.operator != "search" && _expression_operand(v)
 
 # `(key, cached)` when `v` compares a projection alias the WHERE half of a split holds — a plain key
 # naming no field, memoized under its own output name. `_split_having` has already moved every
@@ -727,7 +737,7 @@ function _row_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   # it (`WHERE ("Tb"."points" = "Tb"."grid")`), and did before #707. Routing it here handed the
   # node to a value formatter — a `MethodError`, or worse, the node bound as a parameter.
   _compared_operand(v) && return nothing
-  col = v.column
+  col = _oper_column(v)
   _alias_filter_key(col, instruc) === nothing && return nothing
   key = memo_key(col)
   cached = memo_projection(instruc, key)

@@ -22,6 +22,7 @@ using Test
 using PormG
 using PormG: Configuration
 using InteractiveUtils: InteractiveUtils
+using Dates: Dates
 # The #1683 pins read the handle type each driver extension registers; the suite loads all four.
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
@@ -228,6 +229,52 @@ function _node_subtypes(roots::Tuple)
   return concrete, open
 end
 _concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
+
+# Every read of an `OperObject` slot (`.column`, `.values`) in the query builder outside the slot's own
+# accessors, as "<function> <file>:<line> .<slot> on <receiver type>" (#1599 round 10). It reads each
+# method's optimized code with inlining off, so an accessor stays a call and a read is a `getproperty` or
+# `getfield` whose receiver is inferred as an `SQLTypeOper` (`OperObject` is the only one); the IR carries
+# the narrowing an `isa` test gives, which the unoptimized code does not. Not covered: a closure body (its
+# methods belong to the closure's type), a `Base` method the module extends (`Base.deepcopy(::SQLTypeOper)`:
+# `names` does not list it), and a receiver typed `Any` at the read.
+const _TSP_OPER_ACCESSORS = (:_oper_column, :_oper_value_node, :with_oper_value_node, :_oper_literal,
+                             :_oper_holds_expression, :_oper_holds_node)
+function _tsp_ir_type(ci::Core.CodeInfo, @nospecialize(x))
+  x isa Core.SSAValue && return Core.Compiler.widenconst(ci.ssavaluetypes[x.id])
+  x isa Core.Argument && return Core.Compiler.widenconst(ci.slottypes[x.n])
+  x isa Core.SlotNumber && return Core.Compiler.widenconst(ci.slottypes[x.id])
+  return Core.Typeof(x)
+end
+function _oper_slot_reads()::Vector{String}
+  QB = PormG.QueryBuilder
+  CC = Core.Compiler
+  interp = CC.NativeInterpreter(; opt_params = CC.OptimizationParams(; inlining = false))
+  found = String[]
+  for name in names(QB; all = true)
+    isdefined(QB, name) || continue
+    f = getglobal(QB, name)
+    f isa Function || continue
+    for m in methods(f)
+      (m.module === QB && occursin("querybuilder", String(m.file))) || continue
+      m.name in _TSP_OPER_ACCESSORS && continue
+      for (ci, _) in Base.code_typed_by_type(m.sig; optimize = true, interp = interp)
+        ci isa Core.CodeInfo || continue
+        for stmt in ci.code
+          stmt isa Expr || continue
+          args = stmt.head === :invoke ? stmt.args[2:end] : stmt.head === :call ? stmt.args : continue
+          length(args) >= 3 || continue
+          (args[1] isa GlobalRef && args[1].name in (:getproperty, :getfield)) || continue
+          slot = args[3] isa QuoteNode ? args[3].value : args[3]
+          slot in (:column, :values) || continue
+          T = _tsp_ir_type(ci, args[2])
+          (T !== Union{} && T <: PormG.SQLTypeOper) || continue
+          push!(found, "$(m.name) $(basename(String(m.file))):$(m.line) .$(slot) on $(nameof(T))")
+        end
+      end
+    end
+  end
+  return unique(found)
+end
 
 # A visitor for the walk pins (#1698): a real call, not a builtin and not inlined, so a walk that reaches
 # it statically shows an `:invoke`.
@@ -721,6 +768,103 @@ end
       @test isempty(calls)
       isempty(calls) || @info "dynamic column-key calls" tt calls
     end
+  end
+
+  # What: `OperObject.values` as its readers see it (#1599 round 10, row 33): the node half (`OperValueNode`,
+  #   `OperValueNodes`), read through `_oper_value_node` (scalars) or the walk `with_oper_value_node` (both);
+  #   the literal half through `_oper_literal`; and `_expression_operand`, asked of the comparison.
+  # Expected: `OperValueNode` equals the concrete subtypes of the slot's node families (none parametric); the
+  #   walk has one arm per node member and per node vector, and makes no dynamic call for its visitor; the
+  #   scalar view infers its declared union (two vector members would widen to the abstract `Vector`); and
+  #   on every value kind a filter pair builds, `_expression_operand` and the view give the answer the old
+  #   `_expression_operand(values)` gave. An empty node vector is a node to the walk and not an expression,
+  #   as before. A vector holding an `F` that only a hand-built node holds (`Vector{SQLTypeF}`) reads as a
+  #   literal now; `ObjectHandler` and `SubqueryObject` are checked by the family test, not built here.
+  # Why: the slot's type is a `UnionAll`, so every call on it dispatched at run time, even to a one-method
+  #   callee (probed with `code_typed` on main e9f05d70f); the trimmed read stopped at a `MethodError` on
+  #   `_expression_operand(::String)` in `_guard_where_operand`. The literal half is open (`Number`,
+  #   `TimeType`, `Period`, `Vector{T}`) and feeds `formatter::Function`, so it stays untyped by decision
+  #   (round 11). On main the names do not exist, so this testset errors there.
+  @testset "OperObject.values: a closed node view, the literal half through one accessor (#1599 round 10, row 33)" begin
+    QB = PormG.QueryBuilder
+    roots = (PormG.SQLTypeF, PormG.SQLTypeFunction, PormG.SQLTypeCTE, PormG.SQLTypeJoined,
+             PormG.Kernel.SQLObjectHandler, QB.SubqueryObject)
+    concrete, open = _node_subtypes(roots)
+    @test isempty(open)
+    @test concrete == Set{DataType}(Base.uniontypes(QB.OperValueNode))
+    @test Set{Any}(Base.uniontypes(QB.OperValueNodes)) == Set{Any}([Vector{QB.FExpression}, Vector{QB.OuterRefObject}])
+    @test only(Base.return_types(QB._oper_value_node, (QB.OperObject,))) === Union{Nothing, QB.OperValueNode}
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "types.jl"), String)
+    start = findfirst("function with_oper_value_node(", src)[1]
+    body = join(filter(l -> !startswith(lstrip(l), "#"),
+                       split(src[start:findnext("\nend", src, start)[end]], '\n')), '\n')
+    for T in Base.uniontypes(QB.OperValueNode)
+      @test occursin("v isa $(nameof(T)) && return f(v, args...)", body)
+    end
+    for T in (QB.FExpression, QB.OuterRefObject)
+      @test occursin("v isa Vector{$(nameof(T))} && return f(v, args...)", body)
+    end
+    @test count("v isa ", body) == length(Base.uniontypes(QB.OperValueNode)) + 2
+    @test isempty(_dynamic_calls(QB.with_oper_value_node, (typeof(_tsp_visit), QB.OperObject, Int)))
+    # The old question, over every kind of value the slot holds.
+    old(x) = x isa AbstractVector ? any(old, x) :
+             x isa Union{PormG.SQLTypeF, PormG.SQLTypeFunction, PormG.SQLTypeCTE, PormG.SQLTypeJoined,
+                         PormG.Kernel.SQLObjectHandler, QB.SubqueryObject}
+    values = Any["Monaco", 1, 1.5, true, Dates.Date(2009, 5, 24), Dates.DateTime(2009, 5, 24, 14),
+                 Dates.Hour(1), Dates.Time(14, 0), Dates.CompoundPeriod(Dates.Hour(1), Dates.Minute(2)),
+                 Base.UUID(1), ["a", "b"], [1, 2], UInt8[1, 2], [UInt8[1], UInt8[2]], [Base.UUID(1)],
+                 Union{Missing, String}["a", missing], QB.FExpression[], QB.OuterRefObject[],
+                 QB.F("grid"), QB.OuterRef("raceid"), QB.Sum("points"), QB.Rank(over = QB.WindowOver(order_by = "points")),
+                 QB.CTE("c", "x"), QB.Joined("d", "x"), [QB.F("a"), QB.F("b")], [QB.OuterRef("a"), QB.OuterRef("b")]]
+    for x in values
+      o = QB.OperObject(operator = "=", values = x, column = QB.SQLField("grid"))
+      @test QB._expression_operand(o) == old(x)
+      @test QB._oper_value_node(o) === (old(x) && !(x isa AbstractVector) ? x : nothing)
+      @test QB._oper_literal(o) === x
+      @test QB.with_oper_value_node(typeof, o, :literal) === (old(x) || x isa QB.OperValueNodes ? typeof(x) : :literal)
+    end
+  end
+
+  # What: the readers of `OperObject`'s two slots on the WHERE, HAVING and `Q` paths: the row-33 guard, the
+  #   operand test, the leaf renderer, the alias routings and the aggregate refusal.
+  # Expected: no dynamic call to the questions they ask of either slot (`_named_dynamic_calls`).
+  # Why: each asked them of `filter.values` (a `UnionAll`) or `filter.column` (two abstract families), so
+  #   each call dispatched at run time; the trimmed read stopped at the first, `_expression_operand` in
+  #   `_guard_where_operand` (row 33). Measured on main e9f05d70f: the dynamic calls are there.
+  @testset "the OperObject slot readers ask their questions statically (#1599 round 10, row 33)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    O = QB.OperObject
+    questions = ("_expression_operand", "_resolved_window", "_resolved_contains_agg", "_alias_filter_key",
+             "_model_filter_key", "_plain_filter_key", "_oper_column", "_oper_value_node", "_holds_agg",
+             "_contains_agg", "_is_window_expr")
+    for tt in (Tuple{typeof(QB._guard_where_operand), O, I},
+               Tuple{typeof(QB._compared_operand), O},
+               Tuple{typeof(QB._aggregate_alias_leaf), O, I},
+               Tuple{typeof(QB._row_alias_leaf), O, I},
+               Tuple{typeof(QB._guard_window_alias_in_q), O, I, Int},
+               Tuple{typeof(QB._guard_no_aggregate_predicate), O, I, Int},
+               Tuple{typeof(QB._get_having_query), O, I},
+               Tuple{typeof(QB._render_filter_oper), O, I},
+               Tuple{typeof(QB._holds_agg), O, Int},
+               Tuple{typeof(QB._contains_agg), O, Int},
+               Tuple{typeof(QB._is_window_expr), O})
+      calls = _named_dynamic_calls(tt, questions)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic OperObject slot questions" tt calls
+    end
+  end
+
+  # What: every read of `OperObject.column` and `.values` in `src/querybuilder/` (`_oper_slot_reads`).
+  # Expected: none outside the accessors (`_oper_column`, `_oper_value_node`, `with_oper_value_node`,
+  #   `_oper_literal`, `_oper_holds_expression`, `_oper_holds_node`).
+  # Why: round 10's decision is "every reader, not only the ones the run meets": a raw read left on a path
+  #   the fixture does not take is the next wall on a query that does. Measured on main e9f05d70f with the
+  #   same scan: about 80 reads in 12 files.
+  @testset "every OperObject slot read goes through an accessor (#1599 round 10)" begin
+    reads = _oper_slot_reads()
+    @test isempty(reads)
+    isempty(reads) || @info "raw OperObject slot reads" reads
   end
 
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s

@@ -1387,8 +1387,8 @@ end
 # Recursive in the shape of `_guard_no_aggregate_predicate` (build_filter.jl), with its depth cap.
 function _projection_alias_in_filter(f, names::Set{String}, depth::Int = 0)::Union{Nothing,String}
   depth > 32 && return nothing
-  if f isa SQLTypeOper
-    col = f.column
+  if f isa OperObject
+    col = _oper_column(f)
     (col isa SQLTypeField && col.field isa String && col.field in names) && return col.field
   elseif f isa Union{SQLTypeQ,SQLTypeQor}
     for g in (f isa SQLTypeQ ? f.filters : f.or)

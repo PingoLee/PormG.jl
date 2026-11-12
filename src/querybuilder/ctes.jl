@@ -465,8 +465,8 @@ end
 # it arrived; those have their own arms or need none.
 _retag_cte_string_window_order(x, q::SQLObject, rewrote::Set{String}) = x
 function _retag_cte_string(x::SQLTypeOper, q::SQLObject, rewrote::Set{String})
-  return OperObject(operator=x.operator, values=x.values,
-                    column=_retag_cte_string(x.column, q, rewrote))
+  return OperObject(operator=x.operator, values=_oper_literal(x),
+                    column=_retag_cte_string(_oper_column(x), q, rewrote))
 end
 _retag_cte_string(x::Vector, q::SQLObject, rewrote::Set{String}) =
   Any[_retag_cte_string(v, q, rewrote) for v in x]
@@ -534,7 +534,7 @@ function _refuse_cte_string_in_join(x, q::SQLObject, context::String, depth::Int
   elseif x isa QorObject
     for f in x.or; _refuse_cte_string_in_join(f, q, context, depth + 1); end
   elseif x isa OperObject
-    _refuse_cte_string_in_join(x.column, q, context, depth + 1)
+    _refuse_cte_string_in_join(_oper_column(x), q, context, depth + 1)
     # The RHS, swept the same as everything else — including a bare `String`.
     #
     # That is deliberate OVER-refusal, and it is worth being explicit about because the same shape
@@ -550,7 +550,7 @@ function _refuse_cte_string_in_join(x, q::SQLObject, context::String, depth::Int
     # pair is a `MethodError` out of `_get_pair_to_oper`, independently of anything #492 did. The
     # remedy is the one the message already prints: move the predicate into `.filter(...)`, where the
     # same pair IS a value comparison. Failing that, rename the CTE.
-    _refuse_cte_string_in_join(x.values, q, context, depth + 1)
+    with_oper_value(_refuse_cte_string_in_join, x, q, context, depth + 1)
   elseif x isa SQLTypeField
     _refuse_cte_string_in_join(x.field, q, context, depth + 1)
   elseif x isa FExpression
@@ -635,8 +635,9 @@ function _bind_cte_filter(f, q::SQLObject, depth::Int = 0)
   elseif f isa QorObject
     return QorObject(or=FilterType[_bind_cte_filter(x, q, depth + 1) for x in f.or])
   elseif f isa OperObject
-    f.column isa SQLField || return f
-    return OperObject(operator=f.operator, values=f.values, column=_bind_cte_string!(deepcopy(f.column), q))
+    col = _oper_column(f)
+    col isa SQLField || return f
+    return OperObject(operator=f.operator, values=_oper_literal(f), column=_bind_cte_string!(deepcopy(col), q))
   elseif f isa SQLField
     return _bind_cte_string!(deepcopy(f), q)
   end

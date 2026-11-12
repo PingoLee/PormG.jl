@@ -10,8 +10,8 @@
 # item in the build.
 #
 # The tests below are RELATIVE, so they hold across Julia versions: each terminal against the same
-# work done with one copy, with the margin set to three quarters of one `deepcopy` of the same handler. Before
-# #1589 every one of them was one or two whole copies over.
+# work done with one copy, with the margin set to one `deepcopy` of the same handler. Before #1589 every
+# one of them was one or two whole copies over.
 #
 # Hermetic: an in-memory SQLite database with an inline model module. No live database.
 # =============================================================================
@@ -59,16 +59,21 @@ function _oc_allocs(f::F) where {F}
     return minimum(Base.gc_alloc_count(@timed(f()).gcstats) for _ in 1:3)
 end
 
-# Assert `terminal` costs what `one_copy` costs plus less than three quarters of a copy of `q`. Before
-# #1589 the extra was at least one whole copy (86 allocations for these handlers, two for `get(T)`);
-# since, it is the terminal's own fixed work (its limit, ordering, projection, message text, result
-# shaping): 3–35 allocations when measured. The margin is a fraction of a copy rather than a heavier
-# handler, because a heavier handler grows the terminal side too (`_get` renders every filter into its
-# message text, `last` inverts every order term).
+# Assert `terminal` costs what `one_copy` costs plus less than one copy of `q`. Before #1589 the extra
+# was at least one whole copy (86 allocations for these handlers, two for `get(T)`); since, it is the
+# terminal's own fixed work (its limit, ordering, projection, message text, result shaping): 1–53
+# allocations when measured (#1599 round 10, Julia 1.13.3: `aggregate()` 53, `count(col)` 41). The margin
+# is a copy of the handler rather than a heavier handler, because a heavier handler grows the terminal
+# side too (`_get` renders every filter into its message text, `last` inverts every order term).
+#
+# One whole copy, not the three quarters it was: #1599 round 10 typed `deepcopy(::OperObject)`, so a copy
+# of these handlers fell from 73 allocations to 70 while `aggregate()`'s extra stayed 53, which put the
+# three-quarter margin (52.5) below a terminal that had not changed. A second copy per layer, the defect
+# #1589 removed, costs at least one copy, so this margin still catches it.
 function _oc_one_copy(terminal::F, one_copy::G, q) where {F,G}
     copy_allocs = _oc_allocs(() -> deepcopy(q))
     extra = _oc_allocs(terminal) - _oc_allocs(one_copy)
-    return (; extra, copy_allocs, ok = extra < 3 * copy_allocs / 4)
+    return (; extra, copy_allocs, ok = extra < copy_allocs)
 end
 
 _oc_query() = OC.Driver.objects.filter("constructorid" => 1)

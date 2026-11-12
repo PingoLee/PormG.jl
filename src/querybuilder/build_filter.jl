@@ -27,7 +27,11 @@ end
 # The HAVING half of a split `Q`/`Qor` entry (#692), rendered under the `:having` bucket. A function of its
 # own so the closures below capture the part at its concrete type (#1698 phase 2): captured as the
 # `FilterNode` union, the closure's type was built at run time and `with_bucket` dispatched dynamically.
-function _push_having_part!(having_part::FilterNode, instruc::SQLInstruction)::Nothing
+# Typed on the three members a HAVING part can be: only an aggregate-alias `OperObject` leaf goes to HAVING
+# (`_split_having`), alone or in the `Q`/`Qor` that holds it, so one specialization per member is compiled
+# for those three only. Any other part raised a `MethodError` on `_having_leaf_label` before, and raises one
+# here.
+function _push_having_part!(having_part::Union{OperObject,QObject,QorObject}, instruc::SQLInstruction)::Nothing
   with_bucket(instruc, :having) do
     push!(instruc.having, _with_render_scope(() -> _get_having_query(having_part, instruc), instruc;
                                      phase = :group, having = true,   # #1367: promotes nothing

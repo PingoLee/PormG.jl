@@ -1007,7 +1007,7 @@ end
            Tuple{typeof(QB._get_having_query), Q, I},
            Tuple{typeof(QB._get_where_query), R, I},
            Tuple{typeof(QB._where_node!), QB.FilterNode, I},
-           Tuple{typeof(QB._push_having_part!), QB.FilterNode, I},
+           Tuple{typeof(QB._push_having_part!), Union{QB.OperObject, Q, R}, I},
            Tuple{typeof(QB._check_function), Q},
            Tuple{typeof(QB._collect_projected_paths!), Vector{String}, Q, Int},
            Tuple{typeof(QB._mixed_node_signature), R, Int},

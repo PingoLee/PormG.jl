@@ -335,7 +335,7 @@ end
 # Oracle: PostgreSQL's `$N` walk (`_pg_text_order`), the cross-backend differential — neither this
 # test nor the change. The spelled-out `inside` run checks the oracle itself is the shape it claims.
 # Shapes the public surface cannot express are recorded, not forced:
-#   - ORDER BY: `order_by` takes a name, not an expression (`SQLOrder.field` is an `SQLTypeField`), so
+#   - ORDER BY: `order_by` takes a name, not an expression (`SQLOrder.field` is an `SQLField`), so
 #     a subquery reaches ORDER BY only as its projected alias — the case below, where it renders in SELECT;
 #   - `Exists(...)` clears the inner projection and ORDER BY, so it has no alias to HAVING on and no
 #     ordering to bind: WHERE and ON only;

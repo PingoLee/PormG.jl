@@ -409,9 +409,14 @@ end
 #
 # CONSTRUCTS, never mutates: this node arrived through the public API, so it is replaced rather than
 # written into (the standing contract above, and #508's half of it).
-function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::Set{String})
+# #1599 slice C: an `SQLOrder` entry at its type; a caller's own `SQLTypeOrder` through the open arm, as before.
+_retag_cte_string_window_order(t::SQLTypeOrder, q::SQLObject, rewrote::Set{String}) =
+  with_order_term(_retag_window_order_term, t, q, rewrote)
+function _retag_window_order_term(x, q::SQLObject, rewrote::Set{String})
   # #533 removed the `x.field isa String` branch that stood here. `SQLOrder.field` is `SQLTypeField`
-  # now, so a String is normalized into an `SQLField` by `_order_field` at CONSTRUCTION and reaches
+  # now (`SQLField` since #1599 slice C, so the test below always holds for an `SQLOrder`; it stays for a caller's
+  # own `SQLTypeOrder`, which reaches this body through `with_order_term`'s open arm and whose `field` may hold
+  # anything, as before), so a String is normalized into an `SQLField` by `_order_field` at CONSTRUCTION and reaches
   # this walker as one: `SQLOrder("ev__sku")` takes the branch below, where `_bind_cte_string!`
   # resolves the same CTE path.
   #
@@ -589,6 +594,8 @@ function _bind_cte_order(o::SQLTypeOrder, q::SQLObject)::SQLTypeOrder
   f isa SQLField || return o
   return SQLOrder(_bind_cte_string!(_field_copy(f), q), o.order, o.orientation, o._as, o.nulls)
 end
+# The terms bound (#1599 slice C): handed the closed view or, for a caller's own `SQLTypeOrder`, the slot.
+_bind_cte_orders(terms, q::SQLObject)::Vector{SQLTypeOrder} = SQLTypeOrder[_bind_cte_order(o, q) for o in terms]
 
 function _resolve_cte_string_paths(q::SQLObjectQuery)::SQLObjectQuery
   # A query with no CTE cannot have a CTE-rooted path, so it pays one `isempty` and nothing else.
@@ -599,7 +606,7 @@ function _resolve_cte_string_paths(q::SQLObjectQuery)::SQLObjectQuery
   values = ProjectionNode[v isa SQLField ? _bind_cte_string!(_field_copy(v), q) : v for v in q.values]
   # #1698: each element at its concrete type, through the slot's walk.
   filter = FilterNode[with_filter_node(_bind_cte_filter, f, q) for f in q.filter]
-  order = SQLTypeOrder[_bind_cte_order(o, q) for o in q.order]
+  order = with_order_terms(_bind_cte_orders, q, q)::Vector{SQLTypeOrder}   # #1599 slice C
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
   # `custom_join` conditions are refused where they are bound (`_bind_join_conditions!`, #977): stored

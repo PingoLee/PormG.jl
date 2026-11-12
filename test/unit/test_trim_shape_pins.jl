@@ -231,7 +231,9 @@ end
 _concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
 
 # Every read of a node slot pinned to its accessors, in the query builder: `OperObject.column` / `.values`
-# (#1599 round 10) and `QObject.filters` / `QorObject.or` (#1599 slice B, #1698 phase 2). It reads each
+# (#1599 round 10), `QObject.filters` / `QorObject.or` (#1599 slice B, #1698 phase 2), `SQLObjectQuery.order`
+# and `SQLOrder.field` read off a receiver that is not an `SQLOrder` (#1599 slice C; the slot is `SQLField`, so a
+# read at `SQLOrder` is concrete and needs no accessor: each rule's third entry exempts it). It reads each
 # method's optimized code with inlining off, so an accessor stays a call and a read is a `getproperty` or
 # `getfield` whose receiver is inferred as the slot's family (`SQLTypeOper`, `SQLTypeQ`, `SQLTypeQor`, each with
 # one concrete member) or as a union that reaches into it (`Union{QObject,QorObject}`); the IR carries the
@@ -243,8 +245,11 @@ _concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
 const _TSP_OPER_ACCESSORS = (:_oper_column, :_oper_value_node, :with_oper_value_node, :_oper_literal,
                              :_oper_holds_expression, :_oper_holds_node)
 const _TSP_Q_ACCESSORS = (:_q_terms,)
-const _TSP_SLOT_RULES = ((:column, PormG.SQLTypeOper), (:values, PormG.SQLTypeOper),
-                         (:filters, PormG.SQLTypeQ), (:or, PormG.SQLTypeQor))
+const _TSP_ORDER_ACCESSORS = (:_order_terms,)
+const _TSP_SLOT_RULES = ((:column, PormG.SQLTypeOper, Union{}), (:values, PormG.SQLTypeOper, Union{}),
+                         (:filters, PormG.SQLTypeQ, Union{}), (:or, PormG.SQLTypeQor, Union{}),
+                         (:order, PormG.QueryBuilder.SQLObjectQuery, Union{}),
+                         (:field, PormG.SQLTypeOrder, PormG.QueryBuilder.SQLOrder))
 function _tsp_ir_type(ci::Core.CodeInfo, @nospecialize(x))
   x isa Core.SSAValue && return Core.Compiler.widenconst(ci.ssavaluetypes[x.id])
   x isa Core.Argument && return Core.Compiler.widenconst(ci.slottypes[x.n])
@@ -276,7 +281,8 @@ function _tsp_slot_reads_all()
           T === Union{} && continue
           # A receiver within the family, or a union reaching into it (`Union{QObject,QorObject}`); `Any`
           # is left out, since every untyped read would match.
-          any(r -> slot === r[1] && T !== Any && typeintersect(T, r[2]) !== Union{}, _TSP_SLOT_RULES) || continue
+          any(r -> slot === r[1] && T !== Any && typeintersect(T, r[2]) !== Union{} && !(T <: r[3]),
+              _TSP_SLOT_RULES) || continue
           push!(found, (fn = m.name, slot = slot,
                         text = "$(m.name) $(basename(String(m.file))):$(m.line) .$(slot) on $(nameof(T))"))
         end
@@ -290,15 +296,13 @@ _tsp_slot_reads(slots::Tuple, accessors::Tuple)::Vector{String} =
   unique(String[r.text for r in _tsp_slot_reads_all() if r.slot in slots && !(r.fn in accessors)])
 _oper_slot_reads()::Vector{String} = _tsp_slot_reads((:column, :values), _TSP_OPER_ACCESSORS)
 _q_slot_reads()::Vector{String} = _tsp_slot_reads((:filters, :or), _TSP_Q_ACCESSORS)
+_order_slot_reads()::Vector{String} = _tsp_slot_reads((:order, :field), _TSP_ORDER_ACCESSORS)
 
 # The dynamic calls in `tt`'s optimized code, following every `:invoke` `depth` levels down (closures, the
-# `any`/`foreach`/`collect` a reader hands a term to, keyword bodies), that take a `Q`/`Qor` term at an
-# abstract type (#1599 slice B): an argument typed within `Union{Nothing, FilterType}` but not within
-# `Union{Nothing, FilterNode}`, which is what an element read off `QObject.filters` / `QorObject.or` is
-# until it is narrowed. Calls on other slots' unions (`FieldPart`, `ColumnPart`) are not counted.
-function _q_term_calls(@nospecialize(tt); depth::Int = 5)::Vector{String}
-  QB = PormG.QueryBuilder
-  term_arg(@nospecialize(T)) = T !== Union{} && T <: Union{Nothing, QB.FilterType} && !(T <: Union{Nothing, QB.FilterNode})
+# `any`/`foreach`/`collect` a reader hands a term to, keyword bodies), that take an argument `term_arg` accepts:
+# a node read off a slot at its abstract type. With `getfields`, a `getfield` on such a value counts too (a slot of
+# an ordering term read off an abstract receiver comes back as `Any`, so the call it feeds names no term type).
+function _term_calls(term_arg::Function, @nospecialize(tt); depth::Int = 5, getfields::Bool = false)::Vector{String}
   found = String[]
   seen = Set{Any}()
   walk(tt, d) = begin
@@ -307,7 +311,12 @@ function _q_term_calls(@nospecialize(tt); depth::Int = 5)::Vector{String}
     for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
       stmt isa Expr || continue
       if stmt.head === :call
-        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        C = _tsp_callee_type(ci, stmt.args[1])
+        if C <: Core.Builtin
+          getfields && C === typeof(getfield) && length(stmt.args) >= 2 &&
+            term_arg(_tsp_ir_type(ci, stmt.args[2])) && push!(found, "$(tt): $(stmt)")
+          continue
+        end
         any(a -> term_arg(_tsp_ir_type(ci, a)), stmt.args) && push!(found, "$(tt): $(stmt)")
       elseif stmt.head === :invoke && d > 0
         mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
@@ -318,6 +327,19 @@ function _q_term_calls(@nospecialize(tt); depth::Int = 5)::Vector{String}
   walk(tt, depth)
   return found
 end
+# A `Q`/`Qor` term at an abstract type (#1599 slice B): an argument typed within `Union{Nothing, FilterType}` but
+# not within `Union{Nothing, FilterNode}`, which is what an element read off `QObject.filters` / `QorObject.or` is
+# until it is narrowed. Calls on other slots' unions (`FieldPart`, `ColumnPart`) are not counted.
+_q_term_calls(@nospecialize(tt); depth::Int = 5)::Vector{String} =
+  _term_calls(T -> T !== Union{} && T <: Union{Nothing, PormG.QueryBuilder.FilterType} &&
+                   !(T <: Union{Nothing, PormG.QueryBuilder.FilterNode}), tt; depth = depth)
+# An ORDER BY term at an abstract type (#1599 slice C): an argument typed within `Union{Nothing, SQLTypeOrder}` but
+# not within `Union{Nothing, SQLOrder}` (an element read off `SQLObjectQuery.order` before it is narrowed), a
+# `getfield` on one, or an argument typed `SQLTypeField`, which is what `SQLOrder.field` was declared as.
+_order_term_calls(@nospecialize(tt); depth::Int = 5)::Vector{String} =
+  _term_calls(T -> T === PormG.SQLTypeField ||
+                   (T !== Union{} && T <: Union{Nothing, PormG.SQLTypeOrder} && !(T <: Union{Nothing, PormG.QueryBuilder.SQLOrder})),
+              tt; depth = depth, getfields = true)
 
 # A visitor for the walk pins (#1698): a real call, not a builtin and not inlined, so a walk that reaches
 # it statically shows an `:invoke`.
@@ -346,6 +368,10 @@ PormG.backend_error_fields(::_TspFakeError) =
 # An `F` node PormG does not define, for the Q/Qor view's refusal (#1599 slice B). `_node_subtypes` skips it:
 # it is not PormG's.
 struct _TspOutsiderF <: PormG.SQLTypeF end
+# An ordering term PormG does not define, for the ORDER BY view's refusal (#1599 slice C); skipped the same way.
+struct _TspOutsiderOrder <: PormG.SQLTypeOrder end
+# A visitor taking an `OuterRef`'s two parts, for `_each_outer_ref` (#1599 slice C).
+@noinline _tsp_visit_ref(@nospecialize(r), @nospecialize(s)) = nothing
 # A typed-read row type, for the projection pin (#1695).
 struct _TspRaceRow
   raceid::Int64
@@ -1093,6 +1119,194 @@ end
     isempty(reads) || @info "raw Q/Qor slot reads" reads
   end
 
+  # What: `SQLObjectQuery.order` and `SQLOrder.field` (#1698 phase 2): the slot types, the split the query's
+  #   terms are read through (`with_order_terms`: the closed view `OrderTermView`, or the slot through the open
+  #   arm), the one-term split (`with_order_term`), and the writers.
+  # Expected: `SQLOrder.field` is `SQLField`, which every constructor spelling stores; the query slot stays
+  #   `Vector{SQLTypeOrder}`, and `SQLOrder` is the one concrete `SQLTypeOrder` PormG and its extensions define;
+  #   the view yields the slot's own terms, in order, at `SQLOrder`; a query holding a caller's own
+  #   `SQLTypeOrder` hands the slot itself to the reader (its rendering is pinned against the base in
+  #   `test_sqlorder_orientation.jl`), while `order_by` still stores it; `last()`'s inversion through the view
+  #   gives what the old in-place `map!` over the slot gave.
+  # Why: an element read at `SQLTypeOrder` and a field read at `SQLTypeField` made every call on them a run-time
+  #   dispatch, and a verifier row in a trimmed build (10 rows on 7720d2b45, in `get_order_query` and the
+  #   projected-path walk). A second concrete `SQLTypeOrder` would bring the abstract element back silently.
+  @testset "SQLObjectQuery.order / SQLOrder.field: a closed view over the terms, the field closed (#1599 slice C, #1698 phase 2)" begin
+    QB = PormG.QueryBuilder
+    @test fieldtype(QB.SQLOrder, :field) === QB.SQLField
+    @test fieldtype(QB.SQLObjectQuery, :order) === Vector{PormG.SQLTypeOrder}
+    concrete, open = _node_subtypes((PormG.SQLTypeOrder,))
+    @test concrete == Set{DataType}([QB.SQLOrder])
+    @test isempty(open)
+    @test eltype(QB.OrderTermView) === QB.SQLOrder
+    @test isconcretetype(QB.OrderTermView)
+    # No accessor hands out the view without the check (#1599 slice C review): only `with_order_terms` builds it.
+    @test !isdefined(QB, :_order_nodes)
+    @test only(Base.return_types(QB._order_terms, (QB.SQLObjectQuery,))) === Vector{PormG.SQLTypeOrder}
+    @test only(Base.return_types(getindex, (QB.OrderTermView, Int))) === QB.SQLOrder
+    @test only(Base.return_types(QB._order_node, (PormG.SQLTypeOrder,))) === QB.SQLOrder
+    # Every constructor spelling stores an `SQLField`, which is why the narrower slot admits all of them.
+    for o in (QB.SQLOrder("points"), QB.SQLOrder("raceid__year"), QB.SQLOrder(QB.SQLField("grid", "grid")),
+              QB.SQLOrder(QB.CTE("ev", "seen")), QB.SQLOrder(QB.Joined("d", "surname"); orientation = "DESC"),
+              QB.SQLOrder(QB.SQLField("grid", "grid"), nothing, "asc", nothing, :first))
+      @test o.field isa QB.SQLField
+    end
+    @test_throws PormG.QueryBuildError QB.SQLOrder(42)
+    @test_throws PormG.QueryBuildError QB.SQLOrder(QB.SQLOrder("points"))
+    # The writers and the view, on a query of a model of the test's own (no database).
+    model = PormG.Models.Model("tsp_order_race", raceid = PormG.Models.IDField(),
+                               points = PormG.Models.IntegerField(), grid = PormG.Models.IntegerField())
+    q = QB.SQLObjectQuery(model = model)
+    @test isempty(QB.OrderTermView(QB._order_terms(q))) && QB._order_terms(q) === q.order
+    explicit = QB.SQLOrder("grid"; nulls = :first)
+    QB._order_by!(q, ("-points", explicit, "raceid"))
+    terms = QB._order_terms(q)
+    @test terms === q.order && length(terms) == 3   # the slot itself, not a copy
+    nodes = QB.OrderTermView(QB._order_terms(q))
+    @test length(nodes) == 3 && all(i -> nodes[i] === terms[i], eachindex(terms))
+    @test nodes[2] === explicit
+    @test [(n.field._as, n.orientation, n.nulls) for n in nodes] ==
+          [("points", "DESC", nothing), ("grid", "ASC", :first), ("raceid", "ASC", nothing)]
+    # `last()`'s inversion, through the view into the slot, against the old formula over the slot.
+    old = map(QB._invert_order, copy(terms))
+    map!(QB._invert_order, QB._order_terms(q), QB.OrderTermView(QB._order_terms(q)))
+    @test [(n.field, n.orientation, n.nulls) for n in QB.OrderTermView(QB._order_terms(q))] == [(n.field, n.orientation, n.nulls) for n in old]
+    # The copies keep the slot's type.
+    @test deepcopy(q).order isa Vector{PormG.SQLTypeOrder} && length(deepcopy(q).order) == 3
+    # The split: the view for `SQLOrder` terms, the slot itself (the open arm) for a caller's own `SQLTypeOrder`.
+    @test QB._all_sqlorder(QB._order_terms(q))
+    @test QB.with_order_terms((t, x) -> (typeof(t), x), q, 7) === (QB.OrderTermView, 7)
+    @test QB.with_order_term((t, x) -> (typeof(t), x), explicit, 7) === (QB.SQLOrder, 7)
+    QB._order_by!(q, ("grid", _TspOutsiderOrder()))
+    @test q.order[2] === _TspOutsiderOrder() && !QB._all_sqlorder(QB._order_terms(q))
+    @test QB.with_order_terms((t, x) -> (t, x), q, 7) === (q.order, 7)   # the slot itself, not a copy
+    @test QB.with_order_term((t, x) -> (t, x), _TspOutsiderOrder(), 7) === (_TspOutsiderOrder(), 7)
+    # The view is for `SQLOrder` terms only: read directly, an outsider is refused (`_order_node`, #1698).
+    @test_throws MethodError QB.OrderTermView(QB._order_terms(q))[2]
+    err = try QB._order_node(_TspOutsiderOrder()) catch e; e end
+    @test err isa MethodError && err.f === QB._order_node && err.args == (_TspOutsiderOrder(),)
+    # Each open arm makes exactly one dynamic call, the reader's own, so an outsider runs the old formula. One
+    # method per arity, every argument unspecialized: read at `Any`, the one instance each compiles.
+    for open in (QB._order_terms_open, QB._order_term_open)
+      @test length(methods(open)) == 3
+      for m in methods(open)
+        @test m.nospecialize == 2^(m.nargs - 1) - 1   # every argument `@nospecialize`d
+        calls = _dynamic_calls(open, Tuple(Any for _ in 2:m.nargs))
+        @test length(calls) == 1
+        length(calls) == 1 || @info "an open arm's dynamic calls" open calls
+      end
+    end
+    # The NULL-placement refusal, reached statically now: the text `repr` gave, spelled without it (#1613).
+    for s in (:middle, :end, :+, Symbol("a b"), Symbol(""))
+      err = try QB._nulls_placement("ASC", s) catch e; e end
+      @test err isa PormG.QueryBuildError && err.msg == "Invalid nulls placement $(repr(s)); use :first or :last"
+    end
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+    start = findfirst("function _nulls_placement(", src)[1]
+    @test !occursin("repr(", src[start:findnext("\n\n", src, start)[1]])
+  end
+
+  # What: every reader of the query's ORDER BY terms and of an ordering term's field: the ORDER BY render, the
+  #   FROM-column look-ahead and the projected-path walk, the CTE binding, the degenerate-aggregate check, the
+  #   `OuterRef` collector, the terminal copy, `order_by`, `last()`, the mutation guard, the copy, and the window
+  #   readers that take an `SQLOrder` entry (`_each_bare_column`, `_build_over_clause`, `_resolve_window_order`,
+  #   `_retag_cte_string_window_order`).
+  # Expected: no dynamic call taking a term at `SQLTypeOrder` or a field at `SQLTypeField`, and no slot read off an
+  #   abstract term, following every resolved call five levels down (`_order_term_calls`); and the main readers
+  #   make no dynamic call to the callee they hand a term or its field to (`_named_dynamic_calls`).
+  # Why: those were dynamic calls (10 verifier rows on 7720d2b45: `_field_copy`, `_nulls_placement`,
+  #   `_order_term_sql`'s orientation and `_collect_projected_paths!`). Measured on 7720d2b45 with the same
+  #   detector: most of these readers make such a call there.
+  @testset "the ORDER BY term readers make no call on a term at its abstract type (#1599 slice C)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    SQ = QB.SQLObjectQuery
+    O = QB.SQLOrder
+    TO = PormG.SQLTypeOrder
+    tts = (Tuple{typeof(QB.get_order_query), SQ, I},
+           Tuple{typeof(QB._from_column_names), SQ, I},
+           Tuple{typeof(QB._projected_paths), QB.OrderTermView},
+           Tuple{typeof(QB._order_cte_names!), Set{String}, QB.OrderTermView},
+           Tuple{typeof(QB._resolve_cte_string_paths), SQ},
+           Tuple{typeof(QB._bind_cte_order), O, SQ},
+           Tuple{typeof(QB._degenerate_aggregate), SQ},
+           Tuple{typeof(QB._each_outer_ref), typeof(_tsp_visit_ref), SQ},
+           Tuple{typeof(QB._terminal_copy), QB.ObjectHandler},
+           Tuple{typeof(QB._order_by!), SQ, Tuple{String}},
+           Tuple{typeof(QB._order_by!), SQ, Tuple{O}},
+           Tuple{typeof(QB._reject_unsafe_mutation_shape), SQ, String},
+           Tuple{typeof(QB._each_bare_column), typeof(_tsp_visit), QB.WindowFunction, I, String, Int},
+           Tuple{typeof(QB._build_over_clause), QB.WindowSpec, I},
+           Tuple{typeof(QB._resolve_window_order), TO, I},
+           Tuple{typeof(QB._retag_cte_string_window_order), TO, SQ, Set{String}},
+           Tuple{typeof(QB._collect_projected_paths!), Vector{String}, O, Int},
+           Tuple{typeof(QB._contains_agg), O, Int},
+           Tuple{typeof(QB._each_condition_leaf), typeof(_tsp_visit), O, Int},
+           Tuple{typeof(QB._order_cte_names!), Set{String}, O},
+           Tuple{typeof(QB._invert_order), O},
+           # The bodies `with_order_terms` / `with_order_term` hand the terms to, at the view (the typed path).
+           Tuple{typeof(QB._render_order_terms), QB.OrderTermView, SQ, I},
+           Tuple{typeof(QB._bind_cte_orders), QB.OrderTermView, SQ},
+           Tuple{typeof(QB._orders_name_projections), QB.OrderTermView, Vector{String}},
+           Tuple{typeof(QB._invert_orders_into!), QB.OrderTermView, Vector{TO}},
+           Tuple{typeof(QB._order_fields), QB.OrderTermView},
+           Tuple{typeof(QB._order_cte_names_of!), QB.OrderTermView, Set{String}},
+           Tuple{typeof(QB._resolve_window_order_term), O, I},
+           Tuple{typeof(QB._retag_window_order_term), O, SQ, Set{String}})
+    for tt in tts
+      calls = _order_term_calls(tt)
+      @test isempty(calls)
+      isempty(calls) || @info "calls on an ORDER BY term at an abstract type" tt calls
+    end
+    # Two readers whose callees reach most of the read path: two levels, so the walk stays on the readers.
+    for tt in (Tuple{typeof(deepcopy), SQ},
+               Tuple{typeof(Core.kwcall), NamedTuple{(:show_query,), Tuple{Symbol}}, typeof(QB._last), QB.ObjectHandler, Val{:row}})
+      calls = _order_term_calls(tt; depth = 2)
+      @test isempty(calls)
+      isempty(calls) || @info "calls on an ORDER BY term at an abstract type" tt calls
+    end
+    # The open arms (`_order_terms_open`, `_order_term_open`) are not followed: their one dynamic call is the point
+    # (pinned in the testset above). A body named here called dynamically from the typed path would be one again.
+    callees = ("_field_copy", "_nulls_placement", "_projected_paths", "_collect_projected_paths!", "_order_cte_names!",
+               "_bind_cte_order", "_invert_order", "_is_labelled_term", "_orders_as_sqlite_interval", "_order_node",
+               "_render_order_terms", "_bind_cte_orders", "_orders_name_projections", "_invert_orders_into!",
+               "_order_cte_names_of!", "_order_fields", "_resolve_window_order_term", "_retag_window_order_term",
+               "_order_term_field")
+    for tt in (Tuple{typeof(QB.get_order_query), SQ, I},
+               Tuple{typeof(QB._from_column_names), SQ, I},
+               Tuple{typeof(QB._resolve_cte_string_paths), SQ},
+               Tuple{typeof(QB._degenerate_aggregate), SQ},
+               Tuple{typeof(QB._each_outer_ref), typeof(_tsp_visit_ref), SQ},
+               Tuple{typeof(QB._render_order_terms), QB.OrderTermView, SQ, I},
+               Tuple{typeof(QB._build_over_clause), QB.WindowSpec, I},
+               Tuple{typeof(QB._resolve_window_order), TO, I},
+               Tuple{typeof(QB._retag_cte_string_window_order), TO, SQ, Set{String}},
+               Tuple{typeof(QB._each_bare_column), typeof(_tsp_visit), QB.WindowFunction, I, String, Int},
+               Tuple{typeof(Core.kwcall), NamedTuple{(:show_query,), Tuple{Symbol}}, typeof(QB._last), QB.ObjectHandler, Val{:row}})
+      calls = _named_dynamic_calls(tt, callees)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic calls on an ORDER BY term" tt calls
+      # The open arm is reached at its one unspecialized instance, never one compiled for this reader.
+      for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
+        (stmt isa Expr && stmt.head === :invoke) || continue
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        (mi isa Core.MethodInstance && mi.def isa Method && mi.def.name in (:_order_terms_open, :_order_term_open)) || continue
+        @test all(T -> T === Any, Base.unwrap_unionall(mi.specTypes).parameters[2:end])
+      end
+    end
+  end
+
+  # What: every read of `SQLObjectQuery.order` in `src/querybuilder/`, and every read of `SQLOrder.field` off a
+  #   receiver that is not an `SQLOrder` (`_order_slot_reads`).
+  # Expected: none outside the slot's accessor, `_order_terms` (the view `with_order_terms` builds reads through it).
+  # Why: as for `OperObject` and `Q`/`Qor`: a raw read left on a path the fixture does not take is the next wall on
+  #   a query that does. Measured on 7720d2b45 with the same scan: the reads are there in nine files.
+  @testset "every SQLObjectQuery.order read goes through the accessor, every SQLOrder.field read is at SQLOrder (#1599 slice C)" begin
+    reads = _order_slot_reads()
+    @test isempty(reads)
+    isempty(reads) || @info "raw ORDER BY slot reads" reads
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete
@@ -1400,7 +1614,8 @@ end
     QB = PormG.QueryBuilder
     I = QB.InstructionObject
     for tt in (Tuple{typeof(QB.get_select_query), Vector{QB.ProjectionNode}, I},
-               Tuple{typeof(QB.get_order_query), QB.SQLObjectQuery, I},
+               # The ORDER BY render's body since #1599 slice C (`get_order_query` hands it the terms).
+               Tuple{typeof(QB._render_order_terms), QB.OrderTermView, QB.SQLObjectQuery, I},
                Tuple{typeof(QB._get_select_query), QB.SQLField, I},
                Tuple{typeof(QB._get_filter_query), QB.SQLField, I},
                Tuple{typeof(QB._alias_lhs), QB.MemoKey, QB.SQLField, I})
@@ -1433,11 +1648,11 @@ end
       # `order_node`, a `FieldPart`, so the scope call is left unresolved (not attributed further; a
       # `let` rebinding changes nothing). The term's plain render walks `order_node` before its closure
       # is built, behind a `@noinline` barrier (`_render_order_term`, #1698 phase 2), so its scope calls
-      # are not in this function's code.
-      "get_order_query" => (1, 0),
+      # are not in this function's code. The body is `_render_order_terms` since #1599 slice C.
+      "_render_order_terms" => (1, 0),
     )
     for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
-                     (QB.get_order_query, (QB.SQLObjectQuery, QB.InstructionObject)))
+                     (QB._render_order_terms, (QB.OrderTermView, QB.SQLObjectQuery, QB.InstructionObject)))
       name = string(nameof(f))
       stmts = _with_scope_stmts(f, sig; scope = QB._with_render_scope)
       @test !isempty(stmts)
@@ -1489,7 +1704,7 @@ end
     @test found == clause_sites
     found == clause_sites || @info "with_scope( call sites outside types.jl" found
     for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
-                     (QB.get_order_query, (QB.SQLObjectQuery, QB.InstructionObject)))
+                     (QB._render_order_terms, (QB.OrderTermView, QB.SQLObjectQuery, QB.InstructionObject)))
       @test isempty(_with_scope_stmts(f, sig))
     end
   end

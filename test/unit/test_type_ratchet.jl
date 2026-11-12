@@ -102,7 +102,7 @@ const _TR_FIELDS_REVIEWED = Dict{String,Int}(
   "src/migrations/importers.jl" => 2,
   "src/models/fields.jl" => 68,
   "src/querybuilder/many_to_many.jl" => 2,   # #1615: ManyToManyManager.owner_model/related_model
-  "src/querybuilder/types.jl" => 28,    # #1698: the two `parameters` slots and `InstructionObject.object` closed (+1: `PgParameterizedQuery.parameters` moved in from parameters.jl); #1593: SQLTbAlias.count::Int; #1615: ObjectHandler.object, SQLObjectQuery.model/limit/offset, PormGRow._model
+  "src/querybuilder/types.jl" => 27,    # #1599 slice C: SQLOrder.field is SQLField; #1698: the two `parameters` slots and `InstructionObject.object` closed (+1: `PgParameterizedQuery.parameters` moved in from parameters.jl); #1593: SQLTbAlias.count::Int; #1615: ObjectHandler.object, SQLObjectQuery.model/limit/offset, PormGRow._model
 )
 
 # :ok, :any or :abstract for one declared field type.

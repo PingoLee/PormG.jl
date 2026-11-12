@@ -24,12 +24,48 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, CharField
 using PormG.QueryBuilder: SQLField, SQLOrder
+using PormG.Functions: Rank, WindowOver, Count
+using PormG.QueryBuilder: Subquery, OuterRef
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── Mock backend for full-render tests ──────────────────────────────────────────────────────
 # A mock PostgreSQL marker (no DB round-trip), mirroring the pattern in test_order_by_nulls.jl,
 # so the render-time guard can be exercised through the public order_by/list(show_query=:sql) path.
 struct MockPG_OrientGuard <: PormG.PormGPostgres end
+
+# Ordering terms of the test's own types, for the #1599 slice C testset: `SQLOrder`'s slots, one slot short, none.
+struct OrientOwnOrder <: PormG.SQLTypeOrder
+  field::SQLField
+  order::Union{Integer,Nothing}
+  orientation::String
+  _as::Union{String,Nothing}
+  nulls::Union{Symbol,Nothing}
+end
+struct OrientOwnOrderNoNulls <: PormG.SQLTypeOrder
+  field::SQLField
+  order::Union{Integer,Nothing}
+  orientation::String
+  _as::Union{String,Nothing}
+end
+struct OrientOwnBare <: PormG.SQLTypeOrder end
+
+# F1-shaped models in a registry, for the #1599 slice C cases that need a relation or a CTE: a mock SQLite pool
+# for the registry; the statements render on the PostgreSQL marker below (`inspect_query(q; connection = …)`).
+struct OrientMockSL <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::OrientMockSL) = 3045000
+PormG.config["orient_f1_mock"] = PormG.Configuration.Settings(connections = OrientMockSL(), change_data = true,
+                                                               db_def_folder = "orient_f1_mock")
+module OrientF1
+import PormG
+import PormG.Models
+Circuit::Models.ModelType = Models.Model("orient_circuit", circuitid = Models.IDField(), name = Models.CharField(),
+                                         country = Models.CharField())
+Race::Models.ModelType = Models.Model("orient_race", raceid = Models.IDField(), name = Models.CharField(),
+                                      year = Models.IntegerField(),
+                                      circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE", related_name = "races"))
+Models.@models Circuit Race
+PormG.Models.set_models(@__MODULE__, "orient_f1_mock")
+end
 
 DriverOrientModel = Model("drivers_orientation",
   id = IDField(),
@@ -156,6 +192,58 @@ PormG.config["orientation_guard_pg"] = PormG.Configuration.Settings(
     @test !occursin("NULLS FIRST", sql)
     @test q.object.order[1].orientation == "ASC"
     @test q.object.order[1].nulls === :first
+  end
+
+  # What: an ordering term of a type the caller defines (`<: SQLTypeOrder`, which is exported), handed to
+  #   `order_by` and to a window's `order_by`, through `list`, `last` and `first` (#1599 slice C).
+  # Expected: what 7720d2b45 gives, measured there with these spellings: a term with `SQLOrder`'s slots renders
+  #   by them exactly as the `SQLOrder` would; `last()` leaves it un-inverted (`_invert_order(o) = o`); a term
+  #   missing a slot raises Julia's `FieldError` naming that slot, where the reader reads it.
+  # Why: slice C reads `SQLObjectQuery.order` through a closed view of `SQLOrder` terms. Such a term is a public
+  #   spelling that worked, so it keeps the old formula through an open arm (`with_order_terms`), and whether to
+  #   refuse it is the maintainer's decision (D-C1), not a side effect of the typing.
+  @testset "a caller's own SQLTypeOrder renders by its slots, as before (#1599 slice C)" begin
+    q() = DriverOrientModel.objects
+    mine = OrientOwnOrder(SQLField("surname", "surname"), nothing, "DESC", nothing, nothing)
+    own_sql = (qq = q(); qq.order_by(mine); qq.list(show_query=:sql))
+    pormg_sql = (qq = q(); qq.order_by(SQLOrder("surname"; orientation="DESC")); qq.list(show_query=:sql))
+    @test own_sql == pormg_sql == "SELECT\n    *\nFROM \"drivers_orientation\" as \"Tb\"\nORDER BY \"Tb\".\"surname\" DESC NULLS FIRST\n"
+    @test (qq = q(); qq.order_by("id", mine); qq.list(show_query=:sql)) ==
+          "SELECT\n    *\nFROM \"drivers_orientation\" as \"Tb\"\nORDER BY \"Tb\".\"id\" ASC NULLS LAST, \n  \"Tb\".\"surname\" DESC NULLS FIRST\n"
+    # `last()` does not invert a term it does not know, and `first()` renders the same order: a silent wrong
+    # answer on main, kept as it was (fixing it changes a result: decision D-C3 in the slice's PR).
+    last_sql = (qq = q(); qq.order_by(mine); qq.last(show_query=:sql))
+    @test last_sql == (qq = q(); qq.order_by(mine); qq.first(show_query=:sql))
+    @test occursin("ORDER BY \"Tb\".\"surname\" DESC NULLS FIRST", last_sql)
+    @test (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [mine]))); qq.list(show_query=:sql)) ==
+          (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [SQLOrder("surname"; orientation="DESC")]))); qq.list(show_query=:sql))
+    # A slot missing: Julia's `FieldError`, naming it.
+    err = try (qq = q(); qq.order_by(OrientOwnOrderNoNulls(SQLField("surname", "surname"), nothing, "DESC", nothing)); qq.list(show_query=:sql)) catch e; e end
+    @test err isa FieldError && err.field === :nulls
+    err = try (qq = q(); qq.order_by(OrientOwnBare()); qq.list(show_query=:sql)) catch e; e end
+    @test err isa FieldError && err.field === :field
+    err = try (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [OrientOwnBare()]))); qq.list(show_query=:sql)) catch e; e end
+    @test err isa FieldError && err.field === :field
+    # Through the rest of the read path (the review's cases, #1599 slice C), each statement as 7720d2b45 renders it.
+    F1 = OrientF1
+    own(p; o = "DESC") = OrientOwnOrder(SQLField(p, p), nothing, o, nothing, nothing)
+    sq(qq) = (r = PormG.QueryBuilder.inspect_query(qq; connection = MockPG_OrientGuard()); (r[:sql_text], r[:parameters]))
+    # count / exists over an aggregate projection: the degenerate-aggregate check reads the term's `field`.
+    err = try (qq = F1.Race.objects; qq.values("n" => Count("raceid")); qq.order_by(own("n"; o = "ASC")); qq.count(show_query=:sql)) catch e; e end
+    @test err isa PormG.QueryBuildError && err.msg == "count() cannot answer for this query: its values() projection is an aggregate with no GROUP BY and no HAVING, so it is exactly one row whatever matched (list() returns that one row, or none under a slice), and the answer would be a constant. To count the matched rows, drop the aggregate from values(); to keep the aggregate row only when it passes a condition, filter on its alias; to read the aggregate's value, use .aggregate(\"n\" => Count(...)) instead (#1100)."
+    err = try (qq = F1.Race.objects; qq.values("n" => Count("raceid")); qq.order_by("n", own("n"; o = "ASC")); qq.exists(show_query=:sql)) catch e; e end
+    @test err isa PormG.QueryBuildError && err.msg == "exists() cannot answer for this query: its values() projection is an aggregate with no GROUP BY and no HAVING, so it is exactly one row whatever matched (list() returns that one row, or none under a slice), and the answer would be a constant. To ask whether any row matched, drop the aggregate from values(); to keep the aggregate row only when it passes a condition, filter on its alias; to read the aggregate's value, use .aggregate(\"n\" => Count(...)) instead (#1100)."
+    # A CTE: the term passes through the CTE binding untouched.
+    @test sq((qq = F1.Race.objects; qq.with("c" => (c = F1.Race.objects; c.values("raceid", "name"); c), join_field = "raceid" => "raceid");
+              qq.values("year", "s" => PormG.CTE("c", "name")); qq.order_by(PormG.CTE("c", "name"), own("year")); qq)) ==
+          ("WITH \"c\" AS (\n  SELECT\n    \"Tb\".\"raceid\" as \"raceid\", \n  \"Tb\".\"name\" as \"name\"\nFROM \"orient_race\" as \"Tb\"\n\n)\nSELECT\n    \"R1\".\"year\" as \"year\", \n  \"R1_1\".\"name\" as \"s\"\nFROM \"orient_race\" as \"R1\"\n LEFT JOIN \"c\" AS \"R1_1\" ON \"R1\".\"raceid\" = \"R1_1\".\"raceid\" \nORDER BY \"R1_1\".\"name\" ASC NULLS LAST, \n  \"year\" DESC NULLS FIRST\n", Any[])
+    # A subquery's ORDER BY, beside an `OuterRef`.
+    @test sq((qq = F1.Race.objects; qq.values("name", "s" => Subquery((s = F1.Race.objects; s.filter("year" => OuterRef("year"));
+              s.values("name"); s.order_by(own("name"), "-raceid"); s.limit(1); s))); qq)) ==
+          ("SELECT\n    \"Tb\".\"name\" as \"name\", \n  (SELECT\n    \"R1\".\"name\" as \"name\"\nFROM \"orient_race\" as \"R1\"\nWHERE \"R1\".\"year\" = \"Tb\".\"year\"\nORDER BY \"name\" DESC NULLS FIRST, \n  \"R1\".\"raceid\" DESC NULLS FIRST\nLIMIT \$1 \n) as \"s\"\nFROM \"orient_race\" as \"Tb\"\n", Any[1])
+    # An aggregate over a join: the term's path is joined and grouped.
+    @test sq((qq = F1.Race.objects; qq.values("year", "n" => Count("raceid")); qq.order_by("circuitid__country", own("circuitid__name")); qq)) ==
+          ("SELECT\n    \"Tb\".\"year\" as \"year\", \n  COUNT(\"Tb\".\"raceid\") as \"n\"\nFROM \"orient_race\" as \"Tb\"\n INNER JOIN \"orient_circuit\" AS \"Tb_1\" ON \"Tb\".\"circuitid\" = \"Tb_1\".\"circuitid\" \nGROUP BY 1, \"Tb_1\".\"country\", \"Tb_1\".\"name\" \nORDER BY \"Tb_1\".\"country\" ASC NULLS LAST, \n  \"Tb_1\".\"name\" DESC NULLS FIRST\n", Any[])
   end
 
 end

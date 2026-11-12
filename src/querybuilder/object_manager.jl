@@ -74,7 +74,7 @@ function _order_field(ref::JoinedReference)
   return _retag_joined_field!(_path_sqlfield(check), ref.alias)
 end
 
-# #533 — the rest of the funnel. `SQLOrder.field` is `SQLTypeField` now, and its inner constructor
+# #533 — the rest of the funnel. `SQLOrder.field` is `SQLField` now (#1599 slice C), and its inner constructor
 # routes EVERY construction path through here, so a value the constructor accepts is a value the four
 # readers (`get_order_query`, `_resolve_window_order`, `_resolve_cte_string_paths`, `deepcopy`) can
 # handle. Before this the slot was `Union{SQLTypeField,String}`: a bare String type-checked at
@@ -652,6 +652,7 @@ end
 # lives on the `object` docstring's `.order_by(...)` bullet.
 function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeOrder,CTEReference,JoinedReference}} where N)
   q.order = [] # every call of order_by, reset the order
+  terms = _order_terms(q)   # the slot, written through its accessor (#1599 slice C)
   for v in values
     if isa(v, AbstractString)
       # #603: normalize at the TOP of the branch, not just before `SQLField`. `v[2:end]` on a
@@ -662,11 +663,11 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeO
       v[1:1] == "-" ? (orientation = "DESC"; v = v[2:end]) : orientation = "ASC"
       check = String.(split(v, "__@"))
       if size(check, 1) == 1
-        push!(q.order, SQLOrder(SQLField(v, v), orientation=orientation))
+        push!(terms, SQLOrder(SQLField(v, v), orientation=orientation))
       elseif haskey(PormGsuffix, check[end])
         throw(QueryBuildError("Invalid order_by() field \"$(v)\": operator suffixes (__@lte, __@gte, __@contains, …) are not allowed in ordering."))  # refusal-value-ok: an order_by field name
       else
-        push!(q.order, SQLOrder(_path_sqlfield(check), orientation=orientation))
+        push!(terms, SQLOrder(_path_sqlfield(check), orientation=orientation))
       end
     elseif isa(v, CTEReference)
       # #444: `order_by(CTE("monaco_stats", "total_points"; desc = true))`. A reference object cannot
@@ -674,14 +675,14 @@ function _order_by!(q::SQLObject, values::NTuple{N,Union{AbstractString,SQLTypeO
       # is the ONE site where `desc` is meaningful; every other consumer refuses it.
       # #509: the peel/validate/retag itself is `_order_field`, shared with `SQLOrder(CTE(...))`.
       orientation = v.desc ? "DESC" : "ASC"
-      push!(q.order, SQLOrder(_order_field(v), orientation=orientation))
+      push!(terms, SQLOrder(_order_field(v), orientation=orientation))
     elseif isa(v, JoinedReference)
       # #481: `order_by(Joined("d", "surname"; desc = true))` — the joined-copy twin of the branch
       # above, and the other site where `desc` is meaningful.
       orientation = v.desc ? "DESC" : "ASC"
-      push!(q.order, SQLOrder(_order_field(v), orientation=orientation))
+      push!(terms, SQLOrder(_order_field(v), orientation=orientation))
     else
-      push!(q.order, v)
+      push!(terms, v)
     end
   end
   return q

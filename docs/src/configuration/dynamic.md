@@ -80,6 +80,16 @@ default is `"LibPQ"`), as the `postgres_driver:` key does in `connection.yml` â€
 [Choosing the PostgreSQL driver](connection_yml.md#Choosing-the-PostgreSQL-driver). A resolver returning a `Dict` may
 carry a `"postgres_driver"` entry for the same purpose.
 
+!!! note "LibPQ cannot be used in a `juliac --trim` build"
+    A trimmed binary that connects to PostgreSQL registers its connection with
+    `postgres_driver = "Postgres"`. Built with LibPQ 1.18, the binary aborts before `main` runs:
+    LibPQ depends on Infinity.jl, whose `__init__` uses Requires' `@require`, and a trimmed binary
+    cannot run it (Memento, another LibPQ dependency, would likely stop it too). Postgres.jl has neither
+    dependency, and a trimmed binary built with it compiles. It has not been run, and no trimmed
+    build runs a query end to end yet ([#1599](https://github.com/PingoLee/PormG.jl/issues/1599)).
+    The cause is upstream, and this applies until LibPQ's dependencies stop using Requires
+    ([#1614](https://github.com/PingoLee/PormG.jl/issues/1614)).
+
 To tell a dynamic entry from a folder-backed one, read `PormG.Configuration.status(key).dynamic`,
 or `settings.dynamic` inside a `before_connect` hook. Do not compare `db_def_folder`: a dynamic
 entry stores the label `"dynamic_connection"` there, and so does a static folder of that name

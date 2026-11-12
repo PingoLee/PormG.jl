@@ -2675,6 +2675,45 @@ end
     CP.release_connection(sl, c)
   end
 
+  # What: the cause walks a classifier runs on a caught exception (`backend_is_cancellation` over a
+  #   `CompositeException`, `_unowned_inner`, the Postgres.jl extension's interrupt walk) and that
+  #   extension's parameter binding (`_bind`) on each collector type.
+  # Expected: no dynamic call but the reviewed ones: `backend_is_cancellation`'s recursion on an untyped
+  #   inner exception (a method per driver, so a dispatch by design), and the open arms (`_unowned_field`,
+  #   `_bind_other`, `_bind_value_other`), which are not walked. The answers are the ones before.
+  # Why: Base does not specialize `any` on a function argument (2 rows), a specializing walk called with an
+  #   `Any` exception is a dispatch per call (2 rows of the Postgres.jl fixture), and `_bind` mapped over
+  #   the abstract `parameters` slot (10 rows of the Postgres.jl fixture) (#1599 layer 2).
+  @testset "the cause walks and the Postgres.jl binding make no dynamic call (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    stmt(s) = split(s, "}: "; limit = 2)[end]
+    found = _dynamic_calls_deep(PormG.backend_is_cancellation, (CompositeException,); depth = 2)
+    @test filter(s -> !startswith(stmt(s), "PormG.backend_is_cancellation("), found) == String[]
+    @test !PormG.backend_is_cancellation(CompositeException(Any[ErrorException("x")]))
+    @test PormG.backend_is_cancellation(CompositeException(Any[ErrorException("x"),
+      CompositeException(Any[MySQL.Protocol.Error(UInt32(1317), "Query execution was interrupted", "70100")])]))
+    @test _dynamic_calls(PormG._unowned_inner, (Any,)) == String[]
+    @test PormG._unowned_inner(_TspWrap(ErrorException("x"))) isa ErrorException
+    @test PormG._unowned_inner(_TspWrapErr(ErrorException("x"))) isa ErrorException
+    @test PormG._unowned_inner(_TspWrap("not an exception")) === nothing
+    @test PormG._unowned_inner(ErrorException("x")) === nothing
+    @test _dynamic_calls(pgx._interrupt_in_causes, (Any, Int)) == String[]
+    @test pgx._interrupt_in_causes(InterruptException())
+    @test pgx._interrupt_in_causes(_TspWrap(_TspWrap(InterruptException())))
+    @test !pgx._interrupt_in_causes(_TspWrap(ErrorException("x")))
+    @test !pgx._interrupt_in_causes(foldl((e, _) -> _TspWrap(e), 1:5; init = InterruptException()))   # past 4 levels
+    for T in (QB.PgParameterizedQuery, QB.SQLiteParameterizedQuery, QB.MySQLParameterizedQuery, Nothing)
+      @test (T, _dynamic_calls(pgx._bind, (T,))) == (T, String[])
+    end
+    for vals in (Any[UInt8[1, 2], "Monaco", 3], Any[1, 2], Any["Spa", nothing])
+      bound = pgx._bind(QB.PgParameterizedQuery("", vals, length(vals)))
+      @test typeof(bound) == typeof(map(pgx._bind_value, vals)) && bound == map(pgx._bind_value, vals)
+    end
+    @test pgx._bind((UInt8[7], "Imola")) == ([7], "Imola")
+    @test pgx._bind(nothing) === nothing
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

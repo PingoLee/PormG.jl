@@ -360,8 +360,15 @@ Extensions add one method per driver exception type:
 """
 function backend_is_cancellation end
 
-function backend_is_cancellation(e)
-  e isa CompositeException && return any(backend_is_cancellation, e.exceptions)
+# `@nospecialize` and a loop, not `any(backend_is_cancellation, e.exceptions)` (#1599 layer 2): Base does
+# not specialize `any` on a function argument, so its call was a dispatch at run time, and so was a
+# specializing method called with the exception a `catch` hands in, typed `Any`. Same answer.
+function backend_is_cancellation(@nospecialize(e))
+  if e isa CompositeException
+    for inner in e.exceptions
+      backend_is_cancellation(inner) && return true
+    end
+  end
   return false
 end
 
@@ -424,11 +431,15 @@ _phrase_text(s::String)::String =
   lowercase(map(c -> (Base.ismalformed(c) || Base.isoverlong(c)) ? '\ufffd' : c, s))
 @noinline function _unowned_inner(@nospecialize(e))::Union{Nothing, Exception}
   for field in (:cause, :err)
-    inner = hasproperty(e, field) ? getproperty(e, field) : nothing
+    inner = _unowned_field(e, field)
     inner isa Exception && return inner
   end
   return nothing
 end
+# The field read itself, `nothing` when `e` has no such property (#1599 layer 2): the one place a cause
+# walk looks a field up by name, shared with the Postgres.jl extension's interrupt walk, so a trimmed
+# image meets that dynamic call here once instead of in each walk.
+@noinline _unowned_field(@nospecialize(e), field::Symbol) = hasproperty(e, field) ? getproperty(e, field) : nothing
 
 backend_error_fields(e) = _NO_ERROR_FIELDS
 

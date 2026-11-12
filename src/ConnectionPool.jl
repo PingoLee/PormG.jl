@@ -2832,7 +2832,10 @@ is handed `rollback_error` values that already crossed a seam (`migrations/runne
 """
 _is_benign_rollback_error(pool::_SQLEngine, @nospecialize(e)) =
   pool isa PormGSQLite &&   # server-text-match-ok: SQLite only; it attaches no code here and never localizes
-  occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
+  occursin("no transaction is active", PormG._unowned_string(_driver_cause(_unwrap_async_exception(e))))
+# The text through `PormG._unowned_string` (#1599 layer 2), the one `@noinline` owner of `string` on an
+# exception no driver claims (#1714): a bare `string` on the untyped cause was a dynamic call, and its
+# untyped answer made the `occursin` and every caller's `!` dynamic too. Same text, same answer.
 
 """
     _finish_statement_connection!(pool, conn, handle; abandoned, rollback_failed) -> Nothing
@@ -2960,8 +2963,8 @@ error that reached you is another one (`run_in_transaction` does, for a body tha
 interrupt). Both are optional: without them the connection is returned exactly as before.
 """
 function finalize_transaction_connection!(pool::_SQLEngine, @nospecialize(conn);
-                                          rollback_error = nothing, renew::Bool = false,
-                                          body_error = nothing, abandoned_await::Bool = false)
+                                          @nospecialize(rollback_error = nothing), renew::Bool = false,
+                                          @nospecialize(body_error = nothing), abandoned_await::Bool = false)
   # The one gate for the cancel (#1588, #1638), shared by `run_in_transaction` and every hand-rolled
   # lifecycle (`delete()`, the migration precheck and apply). Postgres.jl closes its socket when an
   # interrupt lands in its read, so the ROLLBACK after an abandoned await fails at once on a lost
@@ -2989,6 +2992,18 @@ finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = not
 _finalize_on(pool::_SQLEngine, @nospecialize(conn), rollback_error, renew::Bool, body_error, abandoned_await::Bool) =
   finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = renew,
                                    body_error = body_error, abandoned_await = abandoned_await)
+
+# The keyword call this file makes with errors from a `catch` (#1599 layer 2). They are typed `Any`, so
+# `f(pool, conn; rollback_error = e, …)` builds a `NamedTuple` of an abstract type, and the call was
+# dispatched at run time (a `kwcall` row of the trimmed fixture's write). A `NamedTuple` whose field types
+# are written out is concrete, so the same keyword call, on the public generic (a method added for a
+# pool type is still the one called), is static; the two errors are `@nospecialize` keywords above, so
+# the keyword body it reaches is compiled once, for `Any`.
+const _FinalizeKeywords = NamedTuple{(:rollback_error, :renew, :body_error, :abandoned_await), Tuple{Any, Bool, Any, Bool}}
+_finalize_with(pool::_SQLEngine, @nospecialize(conn), @nospecialize(rollback_error), renew::Bool,
+               @nospecialize(body_error), abandoned_await::Bool) =
+  Core.kwcall(_FinalizeKeywords((rollback_error, renew, body_error, abandoned_await)),
+              finalize_transaction_connection!, pool, conn)
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
@@ -3424,7 +3439,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), @
       # `release_connection` to throw, whose every internal step is itself guarded — so the cost of
       # threading the renewed handle out here is not worth paying for it.
       still_ours = try
-        Base.lock(() -> any(c -> c === conn, pool.connections), pool.lock)
+        _slot_holds(pool, conn)
       catch
         # swallows a failed membership check: `false` takes the `@debug` path below.
         false
@@ -3442,6 +3457,18 @@ function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), @
     end
   end
   return nothing
+end
+
+# Is `conn` still in one of the pool's slots? Under the pool lock, by identity. A named function, not a
+# `lock(() -> any(c -> c === conn, …))` closure (#1599 layer 2): a closure capturing the untyped handle has
+# a type the compiler cannot name, so the `lock` call on it was a dispatch at run time.
+function _slot_holds(pool, @nospecialize(conn))::Bool
+  Base.@lock pool.lock begin
+    for c in pool.connections
+      c === conn && return true
+    end
+    return false
+  end
 end
 
 # The `fetch`/`await_result` caller already owns all three pieces on a FetchTask; the transaction and
@@ -4203,7 +4230,7 @@ function without_foreign_keys(f::F, pool::PormGSQLite; check_on_exit::Bool = tru
       end
     finally
       # renew=true: this handle has enforcement OFF and must never go back to the pool as-is.
-      finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = true)
+      _finalize_with(pool, conn, rollback_error, true, nothing, false)
     end
   end
 end
@@ -4465,19 +4492,26 @@ function _run_in_transaction_impl(f::F, pool::_SQLEngine) where {F<:Function}
       # holds the #1588 cancel gate, fed the body's error and the `await_result` mark: the mark covers
       # a body that caught the interrupt or raised its own error, `body_error` an abandoned await no
       # `FetchTask` saw (#1638).
-      finalize_transaction_connection!(pool, conn; rollback_error = rollback_error,
-                                       body_error = body_error, abandoned_await = abandoned_in_body[])
+      _finalize_with(pool, conn, rollback_error, false, body_error, abandoned_in_body[])
     end
   end
 end
 
 function run_in_transaction(f::F, db::String) where {F<:Function}
   settings::Settings = get_settings(db)
-  return with_pool(_run_in_transaction_on, settings.connections, f)
+  return with_pool(_InTransaction(f), settings.connections)
 end
 
-run_in_transaction(f::F, settings::PormGSettings) where {F<:Function} = with_pool(_run_in_transaction_on, settings.connections, f)
-_run_in_transaction_on(pool::_SQLEngine, f::F) where {F<:Function} = run_in_transaction(f, pool)
+run_in_transaction(f::F, settings::PormGSettings) where {F<:Function} = with_pool(_InTransaction(f), settings.connections)
+
+# The block handed to `with_pool` as the callee rather than as one of its `args` (#1599 layer 2): Julia
+# does not specialize a vararg slot holding a `Function`, so `with_pool(_run_in_transaction_on, pool, f)`
+# saw `f::Function` and called `_run_in_transaction_on(pool, ::Function)` at run time (eight rows of the
+# trimmed fixture's write). A struct field keeps the block's concrete type.
+struct _InTransaction{F}
+  f::F
+end
+(t::_InTransaction)(pool::_SQLEngine) = run_in_transaction(t.f, pool)
 
 """
     atomic(f::Function, db; durable::Bool=false) -> result

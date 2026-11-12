@@ -2644,6 +2644,37 @@ end
     @test isconcretetype(CP._Handed)
   end
 
+  # What: `run_in_transaction` entered with a settings entry (`with_pool`'s closed set), the transaction
+  #   body, its rollback classifier and the slot-membership check, on each pool type.
+  # Expected: no dynamic call: the block reaches `with_pool` as the callee (`_InTransaction`), the
+  #   terminal release is a keyword call on the public `finalize_transaction_connection!` with a
+  #   `NamedTuple` whose type is written out (`_finalize_with`), the SQLite rollback test reads the text through
+  #   `_unowned_string`, and the membership check is a named function. `with_pool`'s open arm
+  #   (`_with_unlisted_pool`) is the reviewed exception. The answers are the ones before.
+  # Why: eight `with_pool` rows (a vararg slot holding a `Function` is not specialized), four `kwcall` rows
+  #   (a keyword call carrying two `Any` errors), eight in `_is_benign_rollback_error` and its callers' `!`,
+  #   and two on a `lock` closure capturing an untyped handle (#1599 layer 2, the fixture's write).
+  @testset "a transaction is entered and finished without a dynamic call (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    body = () -> 1
+    @test _dynamic_calls_deep(CP.run_in_transaction, (typeof(body), PormG.Kernel.Settings); depth = 1,
+                              skip = (CP._with_unlisted_pool,)) == String[]
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(CP._run_in_transaction_impl, (typeof(body), P))) == (P, String[])
+      @test (P, _dynamic_calls(CP._is_benign_rollback_error, (P, Any))) == (P, String[])
+      @test (P, _dynamic_calls(CP._slot_holds, (P, Any))) == (P, String[])
+      # one level into the keyword sorter: the keyword body it calls takes the two errors `@nospecialize`
+      @test (P, _dynamic_calls_deep(CP._finalize_with, (P, Any, Any, Bool, Any, Bool); depth = 1)) == (P, String[])
+    end
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    @test CP._is_benign_rollback_error(sl, ErrorException("cannot rollback - no transaction is active"))
+    @test !CP._is_benign_rollback_error(sl, ErrorException("disk I/O error"))
+    c = CP.acquire_connection(sl)
+    @test CP._slot_holds(sl, c) && !CP._slot_holds(sl, :not_a_handle)
+    CP.release_connection(sl, c)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

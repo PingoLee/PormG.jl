@@ -17,7 +17,10 @@ function _get_alias_name(instruct::SQLInstruction)::String
 end
 function _get_alias_name(row_join::Vector{JoinRow}, alias::String,
                          reserved::Vector{String}=String[])::String
-  taken = vcat([r.alias_a for r in row_join], [r.alias_b for r in row_join], reserved)
+  # #1599 layer 5: element-typed comprehensions over the closed alias reads. An untyped one takes its
+  # element type from inference at run time, which a trimmed image does not have: it built two
+  # `Vector{Any}`, and `vcat(::Vector{Any}, ::Vector{Any}, ::Vector{String})` had no compiled method.
+  taken = vcat(String[_join_alias_a(r) for r in row_join], String[_join_alias_b(r) for r in row_join], reserved)
   count = 1
   while true
     alias_name = alias * string("_", count)

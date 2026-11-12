@@ -2797,7 +2797,8 @@ end
     P = PormG.ConnectionPool.MySQLConnectionPool
     skip = (myx._other_param_values, myx._bind_other, PormG.Models._pg_decimal_text, Base.print_to_string)
     in_ext(s) = occursin("PormGMySQLExt.", first(split(s, "}: "; limit = 2)))
-    for T in (QB.PgParameterizedQuery, QB.MySQLParameterizedQuery, QB.SQLiteParameterizedQuery, Vector{Any}, Nothing)
+    # `Any` is the signature `@nospecialize` compiles; the collectors are what the statement paths pass.
+    for T in (Any, QB.PgParameterizedQuery, QB.MySQLParameterizedQuery, QB.SQLiteParameterizedQuery, Vector{Any}, Nothing)
       @test (T, filter(in_ext, _dynamic_calls_deep(myx._bind, (P, T); depth = 3, skip))) == (T, String[])
     end
     for T in (QB.PgParameterizedQuery, QB.MySQLParameterizedQuery)
@@ -2854,9 +2855,8 @@ end
   # What: `_run` at both bound shapes, and the cause walk `_with_bare_interrupt` uses.
   # Expected: no dynamic call in `_run` or its closures (`_materialize` is pinned above; the server-error
   #   open arm, #1714, is skipped), none in `_interrupt_in_causes`.
-  # Why: `_run` read `e.errno` through the abstract `ServerError` and passed `execute` a
-  #   `Union{Tuple{}, Vector{Any}}`, and `_interrupt_in_causes` read `.cause` by name on an `Any`: 6 rows
-  #   in the MySQL trim fixture (#1599 layer 2). MySQL.jl's own `param_code` over the bound `Vector{Any}`
+  # Why: `_run` read `e.errno` through the abstract `ServerError`, and `_interrupt_in_causes` read
+  #   `.cause` by name on an `Any`: 6 rows in the MySQL trim fixture (#1599 layer 2). MySQL.jl's own `param_code` over the bound `Vector{Any}`
   #   stays: typing what MySQL.jl receives is a maintainer decision.
   @testset "the MySQL statement runner and its cause walk make no dynamic call (#1599 layer 2)" begin
     myx = Base.get_extension(PormG, :PormGMySQLExt)

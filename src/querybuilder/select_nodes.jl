@@ -1376,10 +1376,15 @@ _len_operand_label(::Any) = "this expression"
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
   for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
-    push!(resp, _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc))   # #1367
+    push!(resp, _or_arm_select(v, instruc, _as))   # #1367
   end
   return "(" * join(resp, " OR ") * ")"
 end
+# One arm of a `Qor` in a projection, its term passed in so it is specialized at the term's concrete type
+# (#1698 phase 2), as `_or_arm_filter` is: a closure capturing the term at the `FilterNode` union made
+# `_or_arm` a dynamic call.
+_or_arm_select(v, instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc)
 
 function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []

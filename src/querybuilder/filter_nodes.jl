@@ -1536,10 +1536,14 @@ end
 function _get_filter_query(q::SQLTypeQor, instruc::SQLInstruction)
   resp = []
   for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
-    push!(resp, _or_arm(() -> _get_filter_query(v, instruc), instruc))
+    push!(resp, _or_arm_filter(v, instruc))
   end
   return "(" * join(resp, " OR ") * ")"
 end
+# One arm of a `Qor` in WHERE (#1367), with its term passed in so it is specialized at the term's concrete
+# type (#1698 phase 2): a closure built in the loop over the view captured the term at the `FilterNode`
+# union, so its type was made at run time and `_or_arm` dispatched dynamically.
+_or_arm_filter(v, instruc::SQLInstruction) = _or_arm(() -> _get_filter_query(v, instruc), instruc)
 function _get_filter_query(v::SQLTypeF, instruc::SQLInstruction)
   return _get_select_query(v, instruc)
 end

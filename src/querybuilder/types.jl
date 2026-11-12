@@ -1383,7 +1383,9 @@ end
 """
     QTermView <: AbstractVector{FilterNode}
 
-A read-only view of a `Q`/`Qor` term vector whose elements are `FilterNode` (`_q_nodes`).
+A read-only view of a `Q`/`Qor` term vector whose elements are `FilterNode` (`_q_nodes`). It prints
+differently from the slot (`Union{ExistsObject, …}[…]`), so never interpolate a view into a message, an error
+or a log.
 """
 struct QTermView <: AbstractVector{FilterNode}
   terms::Vector{FilterType}

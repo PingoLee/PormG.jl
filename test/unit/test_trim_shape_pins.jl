@@ -234,7 +234,8 @@ _concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
 # (#1599 round 10) and `QObject.filters` / `QorObject.or` (#1599 slice B, #1698 phase 2). It reads each
 # method's optimized code with inlining off, so an accessor stays a call and a read is a `getproperty` or
 # `getfield` whose receiver is inferred as the slot's family (`SQLTypeOper`, `SQLTypeQ`, `SQLTypeQor`, each with
-# one concrete member); the IR carries the narrowing an `isa` test gives, which the unoptimized code does not.
+# one concrete member) or as a union that reaches into it (`Union{QObject,QorObject}`); the IR carries the
+# narrowing an `isa` test gives, which the unoptimized code does not.
 # The methods are every function the module names, plus the module's own methods of `Base.deepcopy` and
 # `Base.push!` (`names` does not list a `Base` function the module extends, and those two read the slots).
 # Not covered: a closure body (its methods belong to the closure's type), another `Base` function the module
@@ -273,7 +274,9 @@ function _tsp_slot_reads_all()
           slot = args[3] isa QuoteNode ? args[3].value : args[3]
           T = _tsp_ir_type(ci, args[2])
           T === Union{} && continue
-          any(r -> slot === r[1] && T <: r[2], _TSP_SLOT_RULES) || continue
+          # A receiver within the family, or a union reaching into it (`Union{QObject,QorObject}`); `Any`
+          # is left out, since every untyped read would match.
+          any(r -> slot === r[1] && T !== Any && typeintersect(T, r[2]) !== Union{}, _TSP_SLOT_RULES) || continue
           push!(found, (fn = m.name, slot = slot,
                         text = "$(m.name) $(basename(String(m.file))):$(m.line) .$(slot) on $(nameof(T))"))
         end
@@ -997,9 +1000,10 @@ end
   #   SELECT-side render, the join-condition and CTE walks, the grouping and path collectors, the copy, the
   #   write-back and `push!`.
   # Expected: no dynamic call taking a term at an abstract type, following every resolved call five levels
-  #   down (`_q_term_calls`); and the four main render readers make no dynamic call to the render or guard
-  #   they hand a term to, nor to `with_bucket` with a closure over one (`_named_dynamic_calls`): a closure
-  #   capturing a term at the `FilterNode` union gets its type at run time.
+  #   down (`_q_term_calls`); and the five main render readers make no dynamic call to the render or guard
+  #   they hand a term to, nor to `with_bucket` or `_or_arm` with a closure over one (`_named_dynamic_calls`):
+  #   a closure capturing a term at the `FilterNode` union gets its type at run time (measured on 87cbf874b:
+  #   the `Qor` arms of `_get_filter_query` and `_get_select_query` made a dynamic `_or_arm` call).
   # Why: each read `q.filters` / `q.or` and called on the element at `FilterType`, a dispatch per call under
   #   the JIT and a verifier row in a trimmed build (60 rows on 765139bf9, 12 of them `_split_having`'s
   #   parts). Measured on 765139bf9 with the same detector: most of these readers make such a call there.
@@ -1031,6 +1035,7 @@ end
            Tuple{typeof(QB._projection_alias_in_filter), Q, Set{String}, Int},
            Tuple{typeof(QB._get_filter_query), R, I},
            Tuple{typeof(Core.kwcall), NamedTuple{(:_as,), Tuple{Nothing}}, typeof(QB._get_select_query), Q, I},
+           Tuple{typeof(Core.kwcall), NamedTuple{(:_as,), Tuple{Nothing}}, typeof(QB._get_select_query), R, I},
            Tuple{typeof(QB._order_cte_names!), Set{String}, Q},
            Tuple{typeof(QB._cjoin_on_keyed!), Set{String}, Q, String, I, Int},
            Tuple{typeof(QB._refuse_lhs_past_hop), Q, SQ, String, String, Int},
@@ -1052,11 +1057,14 @@ end
     end
     renders = ("_get_where_query", "_get_having_query", "_get_filter_query", "_get_select_query",
                "_split_having", "_having_leaf_label", "_guard_no_aggregate_predicate",
-               "_guard_field_alias_collision", "_guard_window_alias_in_q", "with_bucket", "_push_having_part!")
+               "_guard_field_alias_collision", "_guard_window_alias_in_q", "with_bucket", "_push_having_part!",
+               "_or_arm")
     for tt in (Tuple{typeof(QB._where_node!), QB.FilterNode, I},
                Tuple{typeof(QB._get_where_query), R, I},
                Tuple{typeof(QB._get_having_query), Q, I},
-               Tuple{typeof(QB._get_filter_query), R, I})
+               Tuple{typeof(QB._get_filter_query), R, I},
+               # The positional method, which `_named_dynamic_calls` follows into the keyword body.
+               Tuple{typeof(QB._get_select_query), R, I})
       calls = _named_dynamic_calls(tt, renders)
       @test isempty(calls)
       isempty(calls) || @info "dynamic calls on a Q/Qor term" tt calls

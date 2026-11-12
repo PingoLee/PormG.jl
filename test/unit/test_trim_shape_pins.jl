@@ -571,7 +571,8 @@ end
   #   `options:` spelling, and the capability table's `_supporting_backends`.
   # Expected: no dynamic call in any of them, at the types they receive (a value read from the
   #   `Dict{String,Any}` block is an `Any`). `ensure_before_connect!` keeps exactly one, the call on the
-  #   user's hook, in one compiled body for every pool type. The answers are the untyped code's,
+  #   user's hook (as each per-pool copy did before), and is `@nospecialize`, so one compiled body serves
+  #   every pool type: the `nospecialize` assertion is the one that tells the two apart. The answers are the untyped code's,
   #   including for a resolver `Dict` and a list of a type no branch names (the one dynamic arm each
   #   keeps) and for an entry `String` cannot convert, which still raises `MethodError`.
   # Why: each was a verifier row of the trimmed fixture (#1599, layer 1: a call on an `Any` value or on
@@ -601,6 +602,11 @@ end
     @test isempty(_dynamic_calls(Configuration._builtin_ignores_for_adapter, (Any,)))
     @test isempty(_dynamic_calls(Configuration._build_connection_pool!, (S, String)))
     @test isempty(_dynamic_calls(Configuration._register_resolved!, (String, Any)))
+    # The helpers those call, pinned directly: a pin reads one body, not its callees'.
+    @test isempty(_dynamic_calls(Configuration._register_resolved_dict!, (String, Dict{String,Any})))
+    @test isempty(_dynamic_calls(Configuration._register_resolved_dict!, (String, Dict{String,String})))
+    @test isempty(_dynamic_calls(Configuration._push_extension_name!, (Vector{String}, Any)))
+    @test isempty(_dynamic_calls(Configuration._push_prefix_entry!, (Vector{String}, AbstractString, String, String)))
     # `register_connection` builds its block with one `setindex!` per entry, not `Dict(pairs...)`.
     rc_body = only(T for T in invokes_in(Base.signature_type(Configuration.register_connection, (String, String)))
                    if occursin("#register_connection#", string(T.parameters[1])))

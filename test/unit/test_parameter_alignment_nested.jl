@@ -50,6 +50,7 @@ divergence — which is the entire defect class — cannot surface there.
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

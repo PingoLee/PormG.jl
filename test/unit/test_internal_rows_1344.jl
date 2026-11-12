@@ -26,6 +26,7 @@ using PormG
 using PormG.Migrations: convertSQLToModel
 import DataFrames: DataFrame
 import JSON
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _IR_ROOT = pkgdir(PormG)
 

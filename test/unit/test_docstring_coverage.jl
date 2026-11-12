@@ -21,6 +21,7 @@ Runs WITHOUT a live database: it inspects module namespaces and scans source tex
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const DOCCOV_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const DOCCOV_OBJECT_MANAGER = joinpath(DOCCOV_REPO_ROOT, "src", "querybuilder", "object_manager.jl")

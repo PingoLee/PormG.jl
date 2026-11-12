@@ -19,6 +19,7 @@ Hermetic: `SQLField`s built by hand; the connection argument is not read for a p
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _QS = PormG.QueryBuilder
 _qs_field(text; as = nothing, custom = nothing) = _QS.SQLField(text, as, custom, :base, nothing)

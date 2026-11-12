@@ -28,6 +28,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 const _M = PormG.Models
 import PormG.Migrations: _fk_constraint_action, column_spec, column_delta
 

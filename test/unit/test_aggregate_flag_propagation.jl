@@ -38,6 +38,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField, CharField, DateField
 using PormG.QueryBuilder: inspect_query, _is_agg, OP
 using PormG.Functions
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

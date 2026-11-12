@@ -4,6 +4,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField, BigIntegerField, DateField, DateTimeField, DurationField
 using PormG.QueryBuilder: inspect_query, F, Max, Sum, Avg
 using PormG.Functions: Abs, Greatest, Case, When
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1034 phase 3 step 5a: the type walk types F temporal arithmetic, as its render does.

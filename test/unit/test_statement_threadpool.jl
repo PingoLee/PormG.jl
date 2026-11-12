@@ -17,6 +17,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # What: `_statement_task` gives an `:interactive` caller a task on `:interactive`, and a `:default`
 #   caller one on `:default`. The second is the control: a constant pool passes only one of the two.

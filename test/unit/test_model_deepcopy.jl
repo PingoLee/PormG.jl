@@ -21,6 +21,7 @@ resolved ModelType carrying `_module` (the exact throwing input). `sForeignKey`,
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config key so this file can't contaminate / be contaminated by other unit files in Main.
 struct ModelDeepcopyMockPostgres <: PormG.PormGPostgres end

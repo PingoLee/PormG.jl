@@ -33,6 +33,7 @@ julia --project=test/integration test/unit/test_cte_left_comparison.jl
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct CteLeftMockSQLite <: PormG.PormGSQLite end
 struct CteLeftMockPostgres <: PormG.PormGPostgres end

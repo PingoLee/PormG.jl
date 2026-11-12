@@ -21,6 +21,7 @@ using Test
 using Decimals
 using PormG
 import PormG: Models, StatementError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct Mock1110SQLite <: PormG.PormGSQLite end
 struct Mock1110Postgres <: PormG.PormGPostgres end

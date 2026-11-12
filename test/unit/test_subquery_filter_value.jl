@@ -22,6 +22,7 @@ using PormG.Functions: Count, Max, Min, Lower, Case, When
 using PormG: QueryBuildError, FilterError
 using PormG.Functions: Greatest
 import Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

@@ -13,6 +13,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The frozen top-level surface of `using PormG` (must match docs/src/api.md exactly).
 #

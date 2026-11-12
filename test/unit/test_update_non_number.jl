@@ -24,6 +24,7 @@ using Test
 using PormG
 using PormG.Models
 import PormG: QueryBuildError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config key + mock types: `runtests.jl` includes every unit file into one `Main`.
 struct UnnMockSQLite <: PormG.PormGSQLite end

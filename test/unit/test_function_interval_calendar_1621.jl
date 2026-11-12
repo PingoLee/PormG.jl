@@ -24,6 +24,7 @@ using PormG.Models
 using PormG.QueryBuilder: F, Max, Min, Coalesce, Case, When, Cast, Lag, WindowOver, inspect_query
 using Dates
 import PormG.QueryBuilder as QB
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated config keys + mock types: `runtests.jl` includes every unit file into one `Main`.
 struct Fi1621MockPostgres <: PormG.PormGPostgres end

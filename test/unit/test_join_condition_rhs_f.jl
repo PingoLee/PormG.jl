@@ -22,6 +22,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, OP, Lower, Case, When, Subquery, OuterRef
 using PormG.Functions: Max, Coalesce, Cast
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct JoinRhsFMockPostgres <: PormG.PormGPostgres end
 struct JoinRhsFMockSQLite <: PormG.PormGSQLite end

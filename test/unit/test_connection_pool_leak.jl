@@ -1,6 +1,7 @@
 using Test
 using PormG
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 const CP = PormG.ConnectionPool   # match the sibling pool tests' idiom
 
 # ─────────────────────────────────────────────────────────────────────────────

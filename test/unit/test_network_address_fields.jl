@@ -31,6 +31,7 @@ using PormG.Functions: Max, Value, Coalesce, Case, When
 import PormG: Migrations, Dialect, CInet, CCidr, CText, CVarChar, CUnsupported
 import PormG.Migrations: column_spec, column_delta, parse_canonical_type, _lossy_alters,
                          ColumnSpec, NoDefault
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const NA = PormG.Models
 

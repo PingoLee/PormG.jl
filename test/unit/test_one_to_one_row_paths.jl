@@ -50,6 +50,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, ForeignKey, OneToOneField, ManyToManyField
 import PormG.ConnectionPool: fetch
 import PormG.QueryBuilder: PormGRow, save
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The mock backend. `save(show_query = :dict)` never executes, so this only has to exist — the
 # `:execute` path is deliberately not taken anywhere in this file, and an empty DataFrame is what a

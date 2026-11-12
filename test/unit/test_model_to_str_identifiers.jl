@@ -22,6 +22,7 @@ using PormG
 using PormG.Models: Model, Model_to_str, CharField, IDField, IntegerField, ForeignKey,
                     ManyToManyField, UniqueConstraint, field_db_column, _julia_field_identifier
 using PormG: PormGField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const MTS_SETTINGS = PormG.Configuration.Settings()
 

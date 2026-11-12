@@ -24,6 +24,7 @@ using PormG.Models
 
 import PormG: PormGModel
 import PormG.QueryBuilder: Count
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct SharedStateMockPostgres <: PormG.PormGPostgres end
 

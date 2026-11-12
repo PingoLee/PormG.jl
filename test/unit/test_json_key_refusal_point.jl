@@ -33,6 +33,7 @@ julia --project=test/integration test/unit/test_json_key_refusal_point.jl
 using Test
 using PormG
 using InteractiveUtils: subtypes
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _JKR_QB = PormG.QueryBuilder
 const _JKR_HOME = joinpath("querybuilder", "json_key_refusal.jl")

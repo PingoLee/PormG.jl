@@ -21,6 +21,7 @@ using Test
 using PormG
 using PormG.Models
 using DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connection names carry a `283` suffix on purpose: several unit files already
 # define a bare `MockPostgres`, and because runtests.jl includes them all into one

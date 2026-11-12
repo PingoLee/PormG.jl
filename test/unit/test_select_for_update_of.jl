@@ -18,6 +18,7 @@ Hermetic: mock connections, no database.
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connections + config keys: `runtests.jl` includes every unit file into one `Main`,
 # so a shared name would let another file's settings decide this file's dialect.

@@ -3,6 +3,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField
 using PormG.QueryBuilder: bulk_update
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Helpers under test live in the package namespace / QueryBuilder submodule.
 const _emsg = PormG._emsg

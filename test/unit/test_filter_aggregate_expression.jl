@@ -5,6 +5,7 @@ using PormG.Models: Model, IDField, IntegerField, FloatField, CharField, DateTim
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, Count, Max, Min, Sum
 using PormG.Functions: Lower, Upper, Rank, WindowOver, Case, When, Coalesce, Substr
 using PormG: QueryBuildError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

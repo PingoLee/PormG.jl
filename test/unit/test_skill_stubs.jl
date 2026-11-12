@@ -43,6 +43,7 @@
 # ============================================================
 
 using Test
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const REPO_ROOT    = normpath(joinpath(@__DIR__, "..", ".."))
 const CANON_DIR    = joinpath(REPO_ROOT, ".github", "skills")

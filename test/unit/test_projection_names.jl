@@ -46,6 +46,7 @@ in BOTH directions, which the `db_column` testset below demonstrates rather than
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

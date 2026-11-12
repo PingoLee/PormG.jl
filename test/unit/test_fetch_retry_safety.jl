@@ -19,6 +19,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # No DB drivers needed: every backend_* call below dispatches to the mock methods, as in
 # test_fetch_retry_transaction.jl, whose mock pools these copy.

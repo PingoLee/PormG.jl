@@ -31,6 +31,7 @@ using PormG.Models: Model, IDField, CharField, TextField, IntegerField, BigInteg
   DecimalField, BooleanField, DateField, DateTimeField, TimeField, DurationField, UUIDField,
   JSONField, BinaryField, ArrayField
 using PormG.QueryBuilder: bulk_copy
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct BulkCopyStreamMockPg <: PormG.PormGPostgres end
 PormG.config["bcs1344_pg"] = PormG.Configuration.Settings(

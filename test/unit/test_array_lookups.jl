@@ -17,6 +17,7 @@ using Test
 using PormG
 using PormG.Models
 import PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct _MockPgArrLk28 <: PormG.PormGPostgres end
 struct _MockSlArrLk28 <: PormG.PormGSQLite end

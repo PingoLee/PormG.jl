@@ -24,6 +24,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, Subquery, OuterRef, Exists, Joined, Case, When
 using PormG.Functions: Count, Max, RowNumber, WindowOver
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct JcardMockPostgres <: PormG.PormGPostgres end
 struct JcardMockSQLite <: PormG.PormGSQLite end

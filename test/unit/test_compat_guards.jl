@@ -86,6 +86,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _COMPAT_PROJECT_TOML = joinpath(pkgdir(PormG), "Project.toml")
 

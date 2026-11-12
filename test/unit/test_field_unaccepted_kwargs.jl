@@ -17,6 +17,7 @@ using Test
 using PormG
 import PormG.Models as FUK_M
 import PormG.Migrations
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct FukPg <: PormG.PormGPostgres end
 struct FukSl <: PormG.PormGSQLite end

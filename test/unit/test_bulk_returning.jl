@@ -29,6 +29,7 @@ import Decimals
 using Dates
 using PormG.QueryBuilder: bulk_insert
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 const BR671_Tables = PormG.QueryBuilder.Tables
 
 # Run `f(pool, model)` against a fresh temp SQLite database. `results` carries a UNIQUE (driver, year)

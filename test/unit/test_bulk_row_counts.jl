@@ -25,6 +25,7 @@ using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
 using PormG.QueryBuilder: bulk_insert, bulk_update, bulk_copy
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Run `f(pool, key)` against a fresh temp SQLite database registered under its own config key, then
 # tear everything down. `results` gets a UNIQUE constraint on (driver, year) so a conflicting insert

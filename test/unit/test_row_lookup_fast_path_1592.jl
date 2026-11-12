@@ -23,6 +23,7 @@ using PormG
 import PormG.ConnectionPool: fetch
 import PormG.QueryBuilder: PormGRow
 import PormG: UnknownFieldError, LazyTraversalError
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 const Tables = PormG.QueryBuilder.Tables   # no new test dependency
 
 struct MockRowLookup1592 <: PormG.PormGPostgres end

@@ -27,6 +27,7 @@ using Test
 using Logging
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct PmbMockPostgres <: PormG.PormGPostgres end
 

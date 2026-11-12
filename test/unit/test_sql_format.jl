@@ -3,6 +3,7 @@ using DataFrames
 using PormG
 using PormG.QueryBuilder: OuterRef, Subquery, Count, Sum, Qor, F, bulk_insert, bulk_update
 import PormG.QueryBuilder: _format_sql, _sql_tokens
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # show_query = :pretty (#48)

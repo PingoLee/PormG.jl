@@ -27,6 +27,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: inspect_query, F, Q, Qor, OP, Case, When, Subquery, OuterRef, Exists, CTE, Joined
 using PormG.Functions: Max, Abs
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct JcmMockPostgres <: PormG.PormGPostgres end
 struct JcmMockSQLite <: PormG.PormGSQLite end

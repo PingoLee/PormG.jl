@@ -32,6 +32,7 @@ using PormG.QueryBuilder: bulk_insert, bulk_update
 using Dates, UUIDs
 import DataFrames
 import LibPQ   # only for the rendering canary below; the rest of the file is driver-free
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const QB672 = PormG.QueryBuilder
 

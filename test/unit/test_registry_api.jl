@@ -14,6 +14,7 @@ import PormG: Configuration, Models
 import JSON
 using SQLite   # the #1451 testset's last `load` builds a live SQLite pool, which needs the extension
 using DataFrames: DataFrame
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A throwaway models module with one F1 model, exactly what `@import_models` would evaluate.
 function _reg1229_models(name::Symbol)

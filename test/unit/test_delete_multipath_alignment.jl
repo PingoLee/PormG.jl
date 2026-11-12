@@ -67,6 +67,7 @@ in this family has been SQLite-only — but the COUNT half fails on both, and di
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 include("helper_marker_alignment.jl")
 

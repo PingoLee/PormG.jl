@@ -3,6 +3,7 @@ using DataFrames
 using PormG
 using PormG.Models: Model, CharField, IDField, IntegerField
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Initialize a dummy model for testing sequence synchronization.
 SequenceDriver = Model("drivers",

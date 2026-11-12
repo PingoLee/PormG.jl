@@ -3,6 +3,7 @@ using DataFrames
 using PormG
 using PormG.Models: Model, CharField, IDField
 import PormG.ConnectionPool: fetch
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # create()/insert() return a PormGRow (#166)

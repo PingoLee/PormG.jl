@@ -2,6 +2,7 @@ using Test
 using PormG
 using PormG.QueryBuilder
 using Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # The internal types are not exported, so we access them via PormG.QueryBuilder
 const QB = PormG.QueryBuilder

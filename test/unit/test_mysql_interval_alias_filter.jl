@@ -4,6 +4,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField, DurationField
 using PormG.QueryBuilder: inspect_query, F, Max
 using PormG.Functions: Cast, Case, When
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1456: a filter on an alias over an interval binds MySQL's microseconds, whatever spells the interval.

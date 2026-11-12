@@ -21,6 +21,7 @@ using Test
 using PormG
 using PormG.Models
 using Dates
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct JsonLookupMockSQLite <: PormG.PormGSQLite end
 struct JsonLookupMockPostgres <: PormG.PormGPostgres end

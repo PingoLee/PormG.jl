@@ -19,6 +19,7 @@ using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, ForeignKey, format_fild_name, field_db_column
 using PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connection — uniquely named so it never clashes with other unit files'
 # mock structs when runtests.jl includes them into the same module.

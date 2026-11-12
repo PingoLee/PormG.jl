@@ -20,6 +20,7 @@ using Test
 using PormG
 import PormG: Configuration
 import PormG.Migrations: discard_pending_migration
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Write a valid pending_migrations.jl under `<dir>/migrations/`, matching the real
 # generated format. Two OrderedDict "tables" → tables=2; 1+2 entries → statements=3.

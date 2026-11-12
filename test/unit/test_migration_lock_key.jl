@@ -22,6 +22,7 @@ using PormG
 import PormG.Migrations
 import PormG.Configuration: Settings
 import PormG: PormGPostgres
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A probe pool that intercepts the lock instead of taking one. Suffixed name: `runtests.jl` includes
 # every unit file into ONE module.

@@ -20,6 +20,7 @@
 # ==============================================================================
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Each pattern is one way a measurement of the private apps has been written into an entry. They run
 # over the entry with newlines turned into spaces (same length, so an offset still maps to a line),

@@ -10,6 +10,7 @@
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connections for DB-free SQL generation (same pattern as test_migrations_runner.jl).
 struct MockPGCheck <: PormG.PormGPostgres end

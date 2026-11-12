@@ -14,6 +14,7 @@
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _EF_QB = PormG.QueryBuilder
 struct _EfPg <: PormG.PormGPostgres end

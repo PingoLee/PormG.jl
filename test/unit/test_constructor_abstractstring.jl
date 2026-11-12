@@ -56,6 +56,7 @@ thrown exception. Deterministic, DB-free, no connection — every query renders 
 using Test
 using PormG
 using PormG.Functions
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const Mo603 = PormG.Models
 const QB603 = PormG.QueryBuilder

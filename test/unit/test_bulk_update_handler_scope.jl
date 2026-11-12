@@ -24,6 +24,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: bulk_update, Qor, Count, Value
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mocks and config keys so this file cannot contaminate (or be contaminated by) other
 # unit files sharing Main in runtests.jl. `db_def_folder` names the key itself, so `set_models`

@@ -28,6 +28,7 @@ Why a dedicated file?
 using Test
 using PormG
 using PormG.Models: Model, IDField, DateField, DateTimeField, format_yyyy_mm
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ---------------------------------------------------------------------------
 # Minimal mock-Postgres fixture (no live database).

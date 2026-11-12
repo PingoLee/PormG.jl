@@ -28,6 +28,7 @@ using Test
 using PormG
 using PormG.QueryBuilder: SQLOrder, SQLField, inspect_query, Rank, Lag, WindowOver, Max, Sum
 using PormG.Functions: Case, When
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connections + config keys: `runtests.jl` includes every unit file into one `Main`.
 struct OrderAggGroupMockPostgres <: PormG.PormGPostgres end

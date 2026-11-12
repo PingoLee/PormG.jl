@@ -13,6 +13,7 @@ No database required.
 using Test
 using InteractiveUtils: subtypes   # walk the taxonomy by TYPE, not by export list
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 @testset "Kernel layering" begin
 

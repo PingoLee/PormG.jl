@@ -45,6 +45,7 @@ julia --project=test/integration test/unit/test_redact_secret.jl
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const R649 = PormG.Configuration.redact_secret
 

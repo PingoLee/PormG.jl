@@ -15,6 +15,7 @@ julia --project=test/integration test/unit/test_models_file_name.jl
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const Generator1486 = PormG.Generator
 

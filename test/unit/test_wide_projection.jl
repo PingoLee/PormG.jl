@@ -18,6 +18,7 @@ Hermetic: mock PostgreSQL and SQLite connections, no database.
 using Test
 using PormG
 using PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct WpMockSQLite <: PormG.PormGSQLite end
 struct WpMockPostgres <: PormG.PormGPostgres end

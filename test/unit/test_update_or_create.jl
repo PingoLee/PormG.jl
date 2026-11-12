@@ -1,6 +1,7 @@
 using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, DateTimeField
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Row-level update_or_create (#30)

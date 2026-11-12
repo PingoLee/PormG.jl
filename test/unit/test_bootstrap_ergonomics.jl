@@ -10,6 +10,7 @@ No live database: SQLite `:memory:` pools, a subprocess that never loads a drive
 using Test
 using PormG
 import PormG: Configuration, Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 function _boot1232_folder(root::AbstractString, name::AbstractString = "boot1232_db")
   db = joinpath(root, name)

@@ -23,6 +23,7 @@ using Test
 using PormG
 using PormG.Models
 import PormG.QueryBuilder: F, Subquery, OuterRef
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct UjMockPostgres <: PormG.PormGPostgres end
 struct UjMockSQLite <: PormG.PormGSQLite end

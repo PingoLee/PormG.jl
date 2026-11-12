@@ -23,6 +23,7 @@ using Test
 using PormG
 using PormG: Configuration, Models
 using YAML
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A loader that misses the way a trimmed build's call does.
 _swe_missing_method(io) = throw(MethodError(_swe_missing_method, (io, :no_compiled_target)))

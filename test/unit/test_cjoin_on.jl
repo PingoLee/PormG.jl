@@ -21,6 +21,7 @@ using Test
 using PormG
 import PormG.QueryBuilder: F, Q, Qor, Joined, Exists, OuterRef
 import PormG.Functions: Count, Max
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct CJoinOnMockPG <: PormG.PormGPostgres end
 struct CJoinOnMockSL <: PormG.PormGSQLite end

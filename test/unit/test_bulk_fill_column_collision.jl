@@ -44,6 +44,7 @@ using PormG.QueryBuilder: _prepare_bulk_df!, _normalize_bulk_columns, _bulk_fram
 using PormG.QueryBuilder: _BULK_FILL_PREFIX, _is_injected_fill_column
 using UUIDs
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connection under a dedicated key so this file cannot contaminate (or be
 # contaminated by) other unit files sharing Main in runtests.jl.

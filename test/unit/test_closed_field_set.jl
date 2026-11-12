@@ -14,6 +14,7 @@ No SQL, no database.
 using Test
 using PormG
 import PormG.Models
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct _ClosedSetLapTime <: PormG.PormGField
   type::String

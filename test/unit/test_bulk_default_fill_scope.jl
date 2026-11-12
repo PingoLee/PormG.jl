@@ -40,6 +40,7 @@ using PormG.QueryBuilder: bulk_copy, bulk_insert, bulk_update
 using PormG: InvalidValueError, PormGError
 using UUIDs
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connection under a dedicated key so this file cannot contaminate (or be
 # contaminated by) other unit files sharing Main in runtests.jl.

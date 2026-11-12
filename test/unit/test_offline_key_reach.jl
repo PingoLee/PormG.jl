@@ -30,6 +30,7 @@ using PormG
 import PormG: Configuration, Models
 using SQLite
 using DataFrames: DataFrame
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const _OKR_CP = PormG.ConnectionPool
 

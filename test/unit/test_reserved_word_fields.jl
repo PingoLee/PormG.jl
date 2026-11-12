@@ -26,6 +26,7 @@ using Test
 using PormG
 using PormG.Models: Model, CharField, IDField, format_fild_name, add_field!
 using PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mechanics-only fixture: the reserved words `end` / `function` are declared under legal Julia
 # identities and pinned to their real columns with `db_column`. `id` needs nothing special — it

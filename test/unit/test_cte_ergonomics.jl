@@ -25,6 +25,7 @@ using Test
 using PormG
 using PormG.Models
 import Logging
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connections under dedicated keys so this file cannot contaminate (or be contaminated by)
 # other unit files sharing Main in runtests.jl. Only the connection TYPE matters — dispatch

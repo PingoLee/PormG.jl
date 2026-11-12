@@ -20,6 +20,7 @@ using DataFrames
 using PormG
 import PormG: Models, InvalidValueError, FilterError
 import PormG.QueryBuilder: validate_field_data, bulk_insert, bulk_update
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct Mock773Postgres <: PormG.PormGPostgres end
 PormG.config["mock773"] = PormG.Configuration.Settings(connections = Mock773Postgres(), change_data = true, db_def_folder = "mock773")

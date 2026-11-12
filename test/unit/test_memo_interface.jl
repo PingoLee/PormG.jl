@@ -38,6 +38,7 @@ using PormG.Models
 import PormG.QueryBuilder: memo_key, memo_name, memo_projection, memo_projection!,
                            memo_field, memo_field!, memo_json_lookup, memo_json_lookup!,
                            CTE, Joined
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const MEMO_REPO_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const MEMO_SRC_DIR = joinpath(MEMO_REPO_ROOT, "src")

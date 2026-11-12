@@ -19,6 +19,7 @@ Fix: the field-accessing `close_pool!` bodies dispatch on the CONCRETE pool stru
 
 using Test
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const CP = PormG.ConnectionPool
 

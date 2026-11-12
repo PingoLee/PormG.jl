@@ -24,6 +24,7 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, CharField
 using PormG.QueryBuilder: SQLField, SQLOrder
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── Mock backend for full-render tests ──────────────────────────────────────────────────────
 # A mock PostgreSQL marker (no DB round-trip), mirroring the pattern in test_order_by_nulls.jl,

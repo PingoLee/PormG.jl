@@ -31,6 +31,7 @@ using PormG
 using PormG.Models: CharField, BigIntegerField, ForeignKey
 import PormG.Migrations: column_delta, column_spec, _degraded_spec, _spec_or_degraded,
                          _fk_constraint_action
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # A marker connection: `column_spec` dispatches on the engine and needs nothing else.
 struct MockPgFailsafe69 <: PormG.PormGPostgres end

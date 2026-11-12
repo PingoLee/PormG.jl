@@ -29,13 +29,14 @@ Shapes:
 The rows are executed on a temp SQLite file. The mocks render the same plan for each engine; on a mock
 the key read returns no keys, so the statements after it render over the empty set.
 """
-# julia --project=test/integration -e 'include("test/load_drivers.jl"); include("test/unit/test_delete_root_own_table.jl")'
+# julia --project=test/integration test/unit/test_delete_root_own_table.jl
 
 using Test
 using DataFrames
 using PormG
 using PormG.Models
 import PormG.ConnectionPool: fetch, SQLiteConnectionPool
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct LnMockSQLite <: PormG.PormGSQLite end
 struct LnMockPostgres <: PormG.PormGPostgres end

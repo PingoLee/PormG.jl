@@ -54,6 +54,7 @@ using PormG.Models
 using InteractiveUtils: subtypes
 import Dates
 import TimeZones
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct AdmMockSQLite <: PormG.PormGSQLite end
 struct AdmMockPostgres <: PormG.PormGPostgres end

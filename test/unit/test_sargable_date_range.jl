@@ -29,6 +29,7 @@ using PormG
 using PormG.Models: Model, IDField, DateField, DateTimeField, CharField, ForeignKey, ManyToManyField
 using PormG.Functions: ToChar
 import Decimals
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ---------------------------------------------------------------------------
 # Mock fixture (no live database). The shapes the rewrite has to tell apart:

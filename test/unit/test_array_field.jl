@@ -32,6 +32,7 @@ import PormG: Migrations, Dialect, CArray, CInt32, CInt64, CFloat64, CDecimal, C
 import PormG.Migrations: column_spec, column_delta, parse_canonical_type, _lossy_alters,
                          ColumnSpec, NoDefault
 import DataFrames
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const AF = PormG.Models
 

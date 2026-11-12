@@ -24,6 +24,7 @@ using PormG
 import PormG.Dialect
 using PormG.QueryBuilder: inspect_query, WindowSpec
 using PormG.Functions: WindowOver, LastValue, RowNumber
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connections — only their type matters (dispatch selects the PG vs SQLite body).
 struct _PgFrameConn <: PormG.PormGPostgres end

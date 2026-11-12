@@ -66,6 +66,7 @@ Deterministic, DB-free, no network, no connection.
 using Test
 using Dates
 using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 const Mo = PormG.Models
 

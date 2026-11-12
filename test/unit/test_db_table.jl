@@ -25,6 +25,7 @@ using PormG.Models: Model, CharField, IDField, IntegerField, ForeignKey, ManyToM
                     UniqueConstraint, model_table_name, model_has_db_table, fk_target_table,
                     Model_to_str
 using PormG.QueryBuilder: inspect_query
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Dedicated mock connections + config key — uniquely named so they never clash with other unit
 # files' mock structs when runtests.jl includes them all into the same module.

@@ -14,6 +14,10 @@
 # are otherwise never exercised. Mutation gate: dropping the `::Missing` method (or
 # reverting the text method to an ASCII fold) fails the corresponding assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
+using Test
+using PormG
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+
 @testset "pormg_lower UDF (#78)" begin
     # The SQLite weakdep is activated by test/load_drivers.jl, so the extension module
     # (and its non-exported _pormg_lower) is reachable via Base.get_extension.

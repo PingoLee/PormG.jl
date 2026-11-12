@@ -27,6 +27,7 @@ using DataFrames
 using PormG
 using PormG.Models: Model, CharField, DecimalField, IDField, IntegerField
 using PormG.QueryBuilder: bulk_insert, bulk_update
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct BulkWriteCellErrorsMockPg <: PormG.PormGPostgres end
 struct BulkWriteCellErrorsMockSl <: PormG.PormGSQLite end

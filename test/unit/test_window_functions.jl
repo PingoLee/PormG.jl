@@ -4,6 +4,7 @@ using PormG.Models: Model, IDField, IntegerField, FloatField, DateField, Positiv
 using PormG.QueryBuilder: WindowOver, Rank, DenseRank, RowNumber, Lag, NthValue, inspect_query, Count, Sum, Q,
                             WindowSpec, SQLOrder, SQLField, F, Max
 using PormG.Functions: Case, When, Coalesce, Value, FirstValue, Lead
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 struct WindowMockPostgres <: PormG.PormGPostgres end
 struct WindowMockSQLite <: PormG.PormGSQLite end

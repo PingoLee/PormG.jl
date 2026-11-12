@@ -4,6 +4,7 @@ using PormG.Models
 using PormG.Migrations
 using OrderedCollections
 import PormG: PormGModel, PormGPostgres, PormGSQLite
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # Mock connection types for dispatch — subtype abstract PormG types
 struct MockPostgres <: PormGPostgres end

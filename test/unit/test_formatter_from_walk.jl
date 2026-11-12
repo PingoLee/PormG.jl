@@ -4,6 +4,7 @@ using PormG
 using PormG.Models: Model, IDField, IntegerField, FloatField, DateField, DurationField, BooleanField, CharField
 using PormG.QueryBuilder: inspect_query, Max, Min, Sum, Q, Qor, F, Subquery, OuterRef, WindowOver
 using PormG.Functions: Case, When, Coalesce, Lag, Rank, LPad, Concat
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #1034 step 4: the value formatter is a view of the type walk.

@@ -1,33 +1,47 @@
 
-"build a row to join"
-function _determine_join_type(field::PormGField; previus_how::Union{String, Nothing} = nothing, second_fild_name::Union{String, Nothing}=nothing,
-                              column_name::Union{String, Nothing}=nothing)
-  if previus_how !== nothing && previus_how == "LEFT"
-    # if the previous join was a LEFT JOIN, the current join must be a LEFT JOIN
-    return "LEFT"
-  end
-
+# The join type of a hop over `field`: a `LEFT` parent makes a `LEFT` child, then the relation's own
+# `how`, then `LEFT` for a nullable key. A field with no `how` is not a relation, and the hop is refused.
+#
+# #1599 slice A: positional. It was the keyword function `_determine_join_type`, and the hops pass the previous
+# hop's join type and the segment after this one as `Union`s; a `Union` value in a keyword call makes its
+# `NamedTuple` abstract, so the whole call dispatched at run time (#1711's rule). The hops call it over
+# `Models.sRelationalColumn` only (the two structs with a `how`), so it is compiled for those two. A
+# model field outside them is answered without the field: at the first hop by `_refuse_not_a_relation`,
+# at the reverse hop by `_no_how_join_type`.
+function _hop_join_type(field::PormGField, previus_how::Union{String, Nothing}, second_fild_name::Union{String, Nothing},
+                        column_name::Union{String, Nothing})::String
+  # if the previous join was a LEFT JOIN, the current join must be a LEFT JOIN
+  (previus_how !== nothing && previus_how == "LEFT") && return "LEFT"
   @pormg_debug false
-  if !hasproperty(field, :how)
-    if second_fild_name !== nothing
-      _check_if_field_is_a_operator(second_fild_name)
-    end
-    # #28: this used to read "The field 'CharField()' does not have a 'how' property" — the field's
-    # display and an internal slot, never the path the caller wrote (`test_operators.jl` pinned the
-    # omission as `broken`). An `ArrayField` landed here too before its own gate in `_build_row_join`,
-    # so the message names the two kinds of column a path CAN continue past besides a relation.
-    column = column_name === nothing ? "this column" : "\e[31m$(column_name)\e[0m"
-    next = second_fild_name === nothing ? "" : " with \e[31m$(second_fild_name)\e[0m"
-    throw(QueryBuildError(
-      "Invalid field path: $(column) is not a relation, so the path cannot continue past it$(next). " *
-      "Only a ForeignKey, OneToOneField or ManyToManyField leads to another model; an ArrayField " *
-      "takes an index or slice (`__0`, `__0_2`) and a JSONField a key path. A lookup takes an `@` " *
-      "(`__@gte`)."))
-  elseif field.how !== nothing && !isempty(field.how)
+  hasproperty(field, :how) || _refuse_not_a_relation(second_fild_name, column_name)
+  if field.how !== nothing && !isempty(field.how)
     return _normalize_join_type(field.how)
   end
-  
   return field.null ? "LEFT" : "INNER"
+end
+
+# `_hop_join_type` for a field with no `how`, which is every model field outside `sRelationalColumn`:
+# its answer reads only the previous hop's join type and the path, so it is asked without the field.
+_no_how_join_type(previus_how::Union{String, Nothing}, second_fild_name::Union{String, Nothing},
+                  column_name::Union{String, Nothing})::String =
+  (previus_how !== nothing && previus_how == "LEFT") ? "LEFT" : _refuse_not_a_relation(second_fild_name, column_name)
+
+# A path continuing past a column that is not a relation.
+function _refuse_not_a_relation(second_fild_name::Union{String, Nothing}, column_name::Union{String, Nothing})
+  if second_fild_name !== nothing
+    _check_if_field_is_a_operator(second_fild_name)
+  end
+  # #28: this used to read "The field 'CharField()' does not have a 'how' property" — the field's
+  # display and an internal slot, never the path the caller wrote (`test_operators.jl` pinned the
+  # omission as `broken`). An `ArrayField` landed here too before its own gate in `_build_row_join`,
+  # so the message names the two kinds of column a path CAN continue past besides a relation.
+  column = column_name === nothing ? "this column" : "\e[31m$(column_name)\e[0m"
+  next = second_fild_name === nothing ? "" : " with \e[31m$(second_fild_name)\e[0m"
+  throw(QueryBuildError(
+    "Invalid field path: $(column) is not a relation, so the path cannot continue past it$(next). " *
+    "Only a ForeignKey, OneToOneField or ManyToManyField leads to another model; an ArrayField " *
+    "takes an index or slice (`__0`, `__0_2`) and a JSONField a key path. A lookup takes an `@` " *
+    "(`__@gte`)."))
 end
 
 """
@@ -215,8 +229,8 @@ function _insert_many_to_many_joins(
   instruct::SQLInstruction,
   parent_table::String,
   parent_alias::String,
-  join_path::String;
-  previus_how::Union{String, Nothing}=nothing,
+  join_path::String,
+  previus_how::Union{String, Nothing} = nothing;   # positional: a `Union` keyword value is a dynamic call (#1599 slice A)
   track_path::Bool=true,
 )
   join_type = previus_how == "LEFT" ? "LEFT" : "INNER"
@@ -339,9 +353,12 @@ end
 # the wrong table. Not necessarily a MISSING one: `Driver_Profile` folds to `driver_profile`, which on
 # PostgreSQL is a second, real table that may exist and hold someone else's rows — a query that
 # returns results, all of them wrong. That is the case the two mixed-case join testsets pin.
-function _forward_join_model(to::AbstractString, mod::Module, owner::PormGModel, column::AbstractString)::PormGModel
+#
+# #1599 slice A: typed `ModelType`, which the resolver returns, not the abstract `PormGModel`, so the
+# hop reads the target's `fields` (#1604's `AnyField`) without a dynamic `getproperty`.
+function _forward_join_model(to::AbstractString, mod::Module, owner::PormGModel, column::AbstractString)::Models.ModelType
   model = Models._resolve_target_model(to, mod)
-  model isa PormGModel && return model
+  model isa Models.ModelType && return model
   throw(QueryBuildError(
     "Invalid field path: the foreign key \e[31m$(column)\e[0m in \e[32m$(owner.name)\e[0m targets " *
     "\e[31m$(to)\e[0m, which is not a model binding in \e[32m$(mod)\e[0m. A ForeignKey `to` string " *
@@ -359,11 +376,13 @@ function _apply_many_to_many_branch(
   parent_table::String,
   parent_alias::String,
   join_path::String,
-  vector::Vector{String};
-  previus_how::Union{String, Nothing}=nothing,
+  vector::Vector{String},
+  previus_how::Union{String, Nothing} = nothing;   # positional: a `Union` keyword value is a dynamic call (#1599 slice A)
   track_path::Bool=true,
 )
-  foreign_model = relation.related_model_resolved   # #1601: resolved at registration
+  # #1601: resolved at registration. #1599 slice A: read as `ModelType`, the one `PormGModel`, so
+  # `last_field` below is #1604's `AnyField` rather than whatever a dynamic `getproperty` returns.
+  foreign_model = relation.related_model_resolved::Models.ModelType
   # #1134: no `length(vector) == 1` refusal. A hop always has a segment after it — `_build_row_join`
   # only ever receives two or more, and its loop only runs while two remain — so a path ending at
   # this relation reaches `_solve_field`, which refuses it as a relation (`_relation_terminal`).
@@ -373,7 +392,7 @@ function _apply_many_to_many_branch(
   # that names the column, the model and its available fields — one message for every hop shape
   # instead of a KeyError here and a good error three lines later.
   last_field = size(vector, 1) == 2 ? get(foreign_model.fields, vector[2], nothing) : nothing
-  tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how=previus_how, track_path=track_path)
+  tb_alias = _insert_many_to_many_joins(relation, instruct, parent_table, parent_alias, join_path, previus_how; track_path=track_path)
   # #169: the path names the RELATED row; the link-table row is internal and is never a lock target.
   # `track_path` is false exactly on a CTE build, which `_finish_hop!` keeps out of the map too. The
   # gate comes first so a build with no `of` never pays for canonicalizing the path (#41).
@@ -503,20 +522,25 @@ end
 # Returns the row it BUILT (not the dedup survivor — the loop reads `prev_how`/`prev_b` off it, as
 # it always did), the resolved target model, and the terminal field when this is the last hop.
 function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
-                         src_alias::String, column::String, field::PormGField, vector::Vector{String};
-                         prev_how::Union{String,Nothing}, no_target_message::String)
-  # Resolved BEFORE the `.to` check below, on purpose: `_determine_join_type` is what turns
+                         src_alias::String, column::String, field::PormGField, vector::Vector{String},
+                         prev_how::Union{String,Nothing}; no_target_message::String)
+  # Resolved BEFORE the `.to` check below, on purpose: `_hop_join_type` is what turns
   # `name__contains` into the "did you mean an operator?" hint, and it has to fire first.
-  how = _determine_join_type(field, previus_how = prev_how,
-                             second_fild_name = size(vector, 1) > 1 ? vector[2] : nothing,
-                             column_name = column)
+  # #1599 slice A: `prev_how` is positional here and the join type is asked positionally, because both
+  # optional values are `Union`s and a `Union` keyword value made each call dynamic (#1711's rule). The
+  # callers pass a `sRelationalColumn`, or any `PormGField` through the open arm.
+  how = _hop_join_type(field, prev_how, size(vector, 1) > 1 ? vector[2] : nothing, column)
   target = field.to
   target === nothing && throw(QueryBuildError(no_target_message))
   # #388: the two arms are ONE arm now. A String `.to` is the target's binding, so resolving it
   # yields the same model a `set_models`-resolved `.to` already holds, and the table comes off that
   # model either way. Carrying the model forward (matching the reverse hop below, #343) also
   # spares the next hop and `_solve_field` from repeating the binding lookup.
-  next_model = target isa PormGModel ? target :
+  #
+  # #1599 slice A: `isa Models.ModelType`, the one `PormGModel`, so `next_model` is concrete and the
+  # target's `fields` read is static: `last_field` is #1604's `AnyField`, and `memo_field!` takes it
+  # without a dynamic call.
+  next_model = target isa Models.ModelType ? target :
     _forward_join_model(target, instruct.object.model._module::Module, src_model, column)
   last_field = size(vector, 1) == 2 ? get(next_model.fields, vector[2], nothing) : nothing
   row = ModelJoin(
@@ -538,6 +562,19 @@ function _forward_fk_hop(instruct::SQLInstruction, src_model::PormGModel, src_ta
     how = how,
   )
   return (row, next_model, last_field)
+end
+
+# #1599 slice A: the first hop over a `cjoin(field = …)` link whose type is a `PormGField` of the caller's
+# own, outside #1604's closed set. `cjoin` still accepts one (`PathJoin.field` is the abstract type), so
+# this arm keeps it working as before: the hop dispatches at run time, which a trimmed build has nothing
+# compiled for. `@nospecialize` keeps the call to this arm static; the result is asserted at the types
+# the closed arm infers, so the caller's locals stay concrete. Closing `cjoin`'s `field` to `AnyField`
+# deletes this arm, and that changes what `cjoin` accepts: the maintainer's decision.
+@noinline function _forward_fk_hop_open_link(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
+    src_alias::String, column::String, @nospecialize(field::PormGField), vector::Vector{String},
+    no_target_message::String)::Tuple{ModelJoin, Models.ModelType, Union{Nothing, Models.AnyField}}
+  return _forward_fk_hop(instruct, src_model, src_table, src_alias, column, field, vector, nothing;
+    no_target_message = no_target_message)::Tuple{ModelJoin, Models.ModelType, Union{Nothing, Models.AnyField}}
 end
 
 # #1002: does a forward hop's target column fail to be a declared key of the target? Declared, not
@@ -563,14 +600,18 @@ _child_key_unique(child::PormGModel, fk_field::Symbol)::Bool = _covers_unique_ke
 # (#1134). Nor what it is, against the child's columns: the loop did until #1112, which refused a path
 # continuing through another relation.
 function _reverse_hop(instruct::SQLInstruction, src_model::PormGModel, src_table::String,
-                      src_alias::String, rel::Models.ReverseRelation, vector::Vector{String};
-                      prev_how::Union{String,Nothing})
+                      src_alias::String, rel::Models.ReverseRelation, vector::Vector{String},
+                      prev_how::Union{String,Nothing})   # positional, as `_forward_fk_hop`'s (#1599 slice A)
   # #343: the child model is READ off the relation, never rebuilt from its name. The old
   # `Symbol(uppercasefirst(lowercased_name))` could only ever spell `Xxxxx`, so a binding with an
   # internal capital (Grand_PRIX, TeamPrincipal) raised UndefVarError instead of joining.
-  reverse_model = rel.model_resolved
+  reverse_model = rel.model_resolved::Models.ModelType   # #1599 slice A: the one `PormGModel`, as above
   join_field = reverse_model.fields[String(rel.fk_field)]
-  how = _determine_join_type(join_field, previus_how = prev_how, second_fild_name = vector[2])
+  # #1599 slice A: the key is a ForeignKey or OneToOneField, which a reverse relation is built from; any
+  # other field has no `how`, and `_no_how_join_type` gives `_hop_join_type`'s answer for it without
+  # compiling that for each field type.
+  how = join_field isa Models.sRelationalColumn ? _hop_join_type(join_field, prev_how, vector[2], nothing) :
+    _no_how_join_type(prev_how, vector[2], nothing)
   last_field = size(vector, 1) == 2 ? get(reverse_model.fields, vector[2], nothing) : nothing
   row = ModelJoin(
     a = src_table,
@@ -677,7 +718,7 @@ _outer_join_key!(instruct::SQLInstruction, key::String) = _each_reach_on(r -> (r
 # survivor the leaf reached — is promoted too.
 #
 # The hops after a promoted one follow it, as a LEFT parent makes a LEFT child at build
-# (`_determine_join_type`): an INNER join on a NULL-extended row would drop the parent again. A join type
+# (`_hop_join_type`): an INNER join on a NULL-extended row would drop the parent again. A join type
 # `on(path, join_type = …)` stated is kept as stated, here as at build (`_with_config` applies it last).
 # A plain AND filter never reaches this: it matches only a parent that has the row, so INNER keeps its
 # plan. A CTE-rooted hop records no reach and keeps its declared type.
@@ -764,7 +805,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   @pormg_debug false
 
   first_column = _resolve_fk_short_form(instruct.object.model, vector[1])
-  last_field::Union{Nothing, PormGField} = nothing
+  # #1599 slice A: #1604's closed set, as every arm assigns it (a model's own field); it was the abstract
+  # `PormGField`, so the `memo_field!` at the end dispatched at run time.
+  last_field::Union{Nothing, Models.AnyField} = nothing
   join_path = field[1]
   # The M2M arms insert their own pair of rows (`_apply_many_to_many_branch` folds the tail), so
   # they skip `_finish_hop!` — which also means a `cjoin`/`on()` config keyed on an M2M path is
@@ -774,7 +817,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
 
   # #27: a non-terminal JSON base field is a value extraction (`payload__key`, `payload__0__name`),
   # not a join hop. Fire before the CTE/FK cascade — otherwise `payload` enters the forward-FK
-  # branch and crashes in `_determine_join_type` (a JSONField has no `.how`). A TERMINAL JSON field
+  # branch and crashes in `_hop_join_type` (a JSONField has no `.how`). A TERMINAL JSON field
   # (length == 1) is left to resolve as a plain jsonb column (the target of the containment operators).
   #
   # `!cte` because a CTE-scoped path is resolved against the CTE's own model, not the base model. A
@@ -787,7 +830,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
   end
   # #28: the same arrangement for an `ArrayField` — a non-terminal array column is an index or a slice
   # (`tags__0`, `tags__0_2`), not a join hop. Without it the column took the forward-FK arm below and
-  # died in `_determine_join_type`, because an `ArrayField` has no `.how` either. `!cte` for the JSON
+  # died in `_hop_join_type`, because an `ArrayField` has no `.how` either. `!cte` for the JSON
   # gate's reason.
   if !cte && haskey(instruct.object.model.fields, first_column) &&
      instruct.object.model.fields[first_column] isa sArrayField &&
@@ -956,10 +999,29 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # A `cjoin(field = …)` entry on this path supplies the link field itself; the first hop is the
     # only one that can carry such an override. `_segment_field` is the one place that reads it
     # (#977), so `on()`, the #962 check and this hop agree on which relation a segment is.
-    row_join, foreign_table_name, last_field = _forward_fk_hop(
-      instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
-      first_column, first_field, vector; prev_how = nothing,
-      no_target_message = "Invalid field path: the column $(first_column) does not have a foreign key")
+    #
+    # #1599 slice A (row 34): `_segment_field` answers the abstract `PormGField`, because a `cjoin` link
+    # is stored as one (`PathJoin.field`), so this call dispatched at run time, and a trimmed build
+    # stopped at it. Split three ways, each as the hop answered before:
+    #   - a ForeignKey or OneToOneField (`sRelationalColumn`): the hop, a static call over the two (one
+    #     method, so no walk, #1735);
+    #   - any other model field (#1604's `AnyField`): it has no `how`, so the hop's join type refuses it,
+    #     and with no previous hop that refusal is all the hop does. It is raised here without the
+    #     field, so the hop is not compiled for each of the other 27 field types;
+    #   - a link whose type is the caller's own `PormGField`: the open arm, which dispatches as before.
+    if first_field isa Models.sRelationalColumn
+      row_join, foreign_table_name, last_field = _forward_fk_hop(
+        instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
+        first_column, first_field, vector, nothing;
+        no_target_message = "Invalid field path: the column $(first_column) does not have a foreign key")
+    elseif first_field isa Models.AnyField
+      _refuse_not_a_relation(size(vector, 1) > 1 ? vector[2] : nothing, first_column)
+    else
+      row_join, foreign_table_name, last_field = _forward_fk_hop_open_link(
+        instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
+        first_column, first_field, vector,
+        "Invalid field path: the column $(first_column) does not have a foreign key")
+    end
     hop_reach = (:forward, foreign_table_name.name, "")
   elseif haskey(instruct.object.model.related_objects, vector[1])
     related_object = instruct.object.model.related_objects[vector[1]]
@@ -977,7 +1039,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       # through to `_solve_field`'s typed error (#446). The loop's reverse arm agrees since #1112.
       row_join, foreign_table_name, last_field = _reverse_hop(
         instruct, instruct.object.model, Models.model_table_name(instruct.object.model), instruct.alias,
-        rel, vector; prev_how = nothing)
+        rel, vector, nothing)
       hop_reach = (:reverse, foreign_table_name.name, String(rel.binding), String(rel.fk_field), String(rel.target_pk))
     end
   else
@@ -1026,7 +1088,9 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # get new object
     @pormg_debug false
     join_path = join(field[1:length(field)-length(vector) + 1], "__")
-    new_object = foreign_table_name::PormGModel
+    # #1599 slice A: asserted as `ModelType`, the one `PormGModel` (it never fails), so the field reads
+    # below are #1604's `AnyField` and this loop's hop is a static call, as the first hop's is.
+    new_object = foreign_table_name::Models.ModelType
     first_column = _resolve_fk_short_form(new_object, vector[1])
 
     # #27: a non-terminal JSON field reached through FK joins (e.g. `fk__payload__key`) is a value
@@ -1052,18 +1116,21 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     if haskey(new_object.fields, first_column) && Models.is_many_to_many_field(new_object.fields[first_column])
       relation = Models.get_many_to_many_relation(new_object, first_column)
       tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-        relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, track_path = !cte
+        relation, instruct, prev_b, tb_alias, join_path, vector, prev_how; track_path = !cte
       )
       foreign_table_name = foreign_model
       inserted = true
     elseif first_column in new_object.field_names
       first_field = new_object.fields[first_column]
       # This guard fires BEFORE the join type is derived — so a non-FK column here never reaches
-      # `_determine_join_type`'s operator hint, unlike at the first hop. Kept in the caller for
+      # `_hop_join_type`'s operator hint, unlike at the first hop. Kept in the caller for
       # exactly that reason: the helper must not decide the order (#68).
       !hasfield(typeof(first_field), :to) && throw(QueryBuildError("Invalid field path: the column $(first_column) is a field from $(new_object.name), but it does not have a foreign key"))
+      # #1599 slice A: the three field structs with a `to` are the ForeignKey, the OneToOneField and the
+      # ManyToManyField, and the arm above took the last, so the assertion holds; it keeps the hop
+      # compiled for the two (`sRelationalColumn`) rather than for every field type.
       row_join, foreign_table_name, last_field = _forward_fk_hop(
-        instruct, new_object, prev_b, tb_alias, first_column, first_field, vector; prev_how = prev_how,
+        instruct, new_object, prev_b, tb_alias, first_column, first_field::Models.sRelationalColumn, vector, prev_how;
         # #197: this used to blame `vector[2]`, but the FK-less column is `first_column`.
         no_target_message = "Invalid field path: the column $(first_column) in $(new_object.name) does not have a foreign key target")
       hop_reach = (:forward, foreign_table_name.name, "")
@@ -1072,7 +1139,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
       if related_object isa Models.ManyToManyRelation
         relation = related_object::Models.ManyToManyRelation
         tb_alias, row_join, foreign_model, last_field = _apply_many_to_many_branch(
-          relation, instruct, prev_b, tb_alias, join_path, vector; previus_how=prev_how, track_path = !cte
+          relation, instruct, prev_b, tb_alias, join_path, vector, prev_how; track_path = !cte
         )
         foreign_table_name = foreign_model
         inserted = true
@@ -1082,7 +1149,7 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
         # refused a reverse accessor or a ManyToMany field there, neither of which is in `field_names`;
         # the next iteration resolves those, and an unknown name reaches its `else` or `_solve_field`.
         row_join, foreign_table_name, last_field = _reverse_hop(
-          instruct, new_object, prev_b, tb_alias, rel, vector; prev_how = prev_how)
+          instruct, new_object, prev_b, tb_alias, rel, vector, prev_how)
         hop_reach = (:reverse, foreign_table_name.name, String(rel.binding))
       end
 

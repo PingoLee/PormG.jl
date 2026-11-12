@@ -210,7 +210,7 @@ end
 # A forward hop past a promoted reverse hop follows it to LEFT
 # `results__driver__code`: the reverse hop to rj_result is promoted, and the NOT NULL forward hop to
 # rj_driver after it must be LEFT too — an INNER join on a NULL-extended result row would drop Spa again.
-# This is the rule a LEFT parent already gives its child at build (`_determine_join_type`).
+# This is the rule a LEFT parent already gives its child at build (`_hop_join_type`).
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a forward hop after a promoted reverse hop is LEFT too (#1367)" begin
   f = q -> q.filter(Qor("name" => "Spa", "results__driver__code" => "SEN"))

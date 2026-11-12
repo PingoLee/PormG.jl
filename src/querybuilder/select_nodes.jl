@@ -229,8 +229,8 @@ _order_cte_names!(out::Set{String}, x::WindowFunction) =
 _order_cte_names!(out::Set{String}, x::OperObject) =
   (_order_cte_names!(out, _oper_column(x)); with_oper_value_node(_order_cte_names_rhs!, x, out, out))
 _order_cte_names_rhs!(x, out::Set{String}) = _order_cte_names!(out, x)
-_order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, x.filters)
-_order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, x.or)
+_order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, _q_nodes(x))   # the closed view (#1698 phase 2)
+_order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, _q_nodes(x))
 _order_cte_names!(out::Set{String}, x::AbstractVector) = (foreach(v -> _order_cte_names!(out, v), x); out)
 _order_cte_names!(out::Set{String}, ::Any) = out
 
@@ -572,8 +572,20 @@ const _TEMPORAL_KIND_FIELDS = Dict(:date => "DateField", :datetime => "DateTimeF
                                    :timestamptz => "DateTimeField with a time zone (the default `TIMESTAMPTZ`)")
 # A row reads `:timestamptz` when only a zoned timestamp will do (`EXTRACT(TIMEZONE …)`): PostgreSQL
 # rejects it over a `DateTimeField(type = "TIMESTAMP")`, which is a `:datetime` all the same.
-_temporal_reads(field, reads) = _temporal_kind(field) in reads ||
-                                (:timestamptz in reads && getproperty(field, :type) == "TIMESTAMPTZ")
+#
+# #1599 slice A: `reads` is `_TemporalRow`'s `Tuple{Vararg{Symbol}}`, an abstract type, so a call that
+# specializes on it dispatched at run time; `@nospecialize` makes the call static, and the search is
+# written with builtins (`nfields`, `getfield`) because `in` over it dispatches too. The answer is `in`'s.
+function _temporal_reads(field::Models.AnyField, @nospecialize(reads::Tuple{Vararg{Symbol}}))::Bool
+  kind = _temporal_kind(field)
+  zoned = false
+  for i in 1:nfields(reads)
+    r = getfield(reads, i)::Symbol
+    r === kind && return true
+    zoned |= r === :timestamptz
+  end
+  return zoned && getproperty(field, :type) == "TIMESTAMPTZ"
+end
 
 # A bare `F("col")` or `SQLField("col")` names a column as plainly as `"col"` does, so it is checked as
 # that column. Anything with an operation is an expression, and stays unchecked (fail open).
@@ -586,14 +598,19 @@ _temporal_operand(x) = x
 # `EXTRACT(YEAR FROM <integer>)`, which PostgreSQL refuses and SQLite answers from the text. A key
 # that is itself a relation (a one-to-one primary key) is followed in turn. `nothing` — fail open —
 # for a target PormG cannot resolve here; the join walk reports that one when it needs the model.
-function _relation_key_field(field::PormGField, instruc::SQLInstruction)
+#
+# #1599 slice A: typed #1604's `AnyField` in and out, and the target tested as `ModelType` (the one
+# `PormGModel`), so the key field read off it is `AnyField` too. Untyped, the caller merged the answers
+# of its 28 split calls into the abstract `PormGField`, and its `hasproperty`, `_temporal_reads` and
+# `_field_label` calls on the answer dispatched at run time.
+function _relation_key_field(field::Models.AnyField, instruc::SQLInstruction)::Union{Nothing, Models.AnyField}
   for _ in 1:8
     field isa Union{Models.sForeignKey, Models.sOneToOneField} || return field
     mod = instruc.object.model._module
     target = field.to isa PormGModel ? field.to :
              (field.to isa AbstractString && mod isa Module) ? Models._resolve_target_model(field.to, mod) :
              nothing
-    target isa PormGModel || return nothing
+    target isa Models.ModelType || return nothing
     pk = field.pk_field === nothing ? Models.get_model_pk_field(target) : field.pk_field
     pk === nothing && return nothing
     field = get(target.fields, String(pk), nothing)
@@ -1358,15 +1375,20 @@ _len_operand_label(c::JoinedReference) = "Joined(\"$(c.alias)\", \"$(c.path)\")"
 _len_operand_label(::Any) = "this expression"
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
-  for v in q.or
-    push!(resp, _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc))   # #1367
+  for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
+    push!(resp, _or_arm_select(v, instruc, _as))   # #1367
   end
   return "(" * join(resp, " OR ") * ")"
 end
+# One arm of a `Qor` in a projection, its term passed in so it is specialized at the term's concrete type
+# (#1698 phase 2), as `_or_arm_filter` is: a closure capturing the term at the `FilterNode` union made
+# `_or_arm` a dynamic call.
+_or_arm_select(v::FilterNode, instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc)
 
 function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
-  for v in q.filters
+  for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
     push!(resp, _get_select_query(v, instruc, _as=_as))
   end
   return "(" * join(resp, " AND ") * ")"

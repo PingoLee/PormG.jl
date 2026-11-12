@@ -77,9 +77,9 @@ Ran_parent = Models.Model("ran_parent",
 
 Ran_child = Models.Model("ran_child",
   id     = Models.IDField(),
-  # NULLABLE — `_determine_join_type` answers "LEFT".
+  # NULLABLE — `_hop_join_type` answers "LEFT".
   parent = Models.ForeignKey(Ran_parent, on_delete = "CASCADE", related_name = "ran_kids", null = true),
-  # NOT NULL — `_determine_join_type` answers "INNER". This is the pair that makes `on()`'s former
+  # NOT NULL — `_hop_join_type` answers "INNER". This is the pair that makes `on()`'s former
   # silent "LEFT" default visible as a row-count change rather than a cosmetic one.
   owner  = Models.ForeignKey(Ran_parent, on_delete = "CASCADE", related_name = "ran_owned", null = false),
   note   = Models.CharField(null = true),
@@ -370,7 +370,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "on() does not invent a join_type (#474)" begin
 
-  # The oracle is neither the test nor `on()`: `_determine_join_type` types a relation from
+  # The oracle is neither the test nor `on()`: `_hop_join_type` types a relation from
   # `field.how`, else `field.null ? "LEFT" : "INNER"`. So the same path WITHOUT `on()` is the
   # correct answer, and the two must agree.
   @testset "a NOT NULL ForeignKey keeps INNER" begin
@@ -385,7 +385,7 @@ end
     @test occursin("INNER JOIN \"ran_parent\"", sql)     # pre-fix: LEFT JOIN
     @test occursin("\"product_sku\" = ", sql)            # ...and the predicate still lands
     # The override is `nothing`, not a computed value: deciding the type HERE would have to
-    # reproduce `_determine_join_type`'s `previus_how` LEFT-propagation for deep paths, which this
+    # reproduce `_hop_join_type`'s `previus_how` LEFT-propagation for deep paths, which this
     # call site cannot see. Not overriding is what leaves that knowledge where it lives.
     # (#484 typed the entry: what was an absent `"join_type"` key is now a `nothing` field.)
     @test q.object.custom_join["owner"].join_type === nothing

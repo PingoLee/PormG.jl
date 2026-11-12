@@ -203,15 +203,11 @@ function _check_function(f::Vector{T}) where T<:Union{SQLType,Any}
   end
   return f
 end
-function _check_function(f::QorObject)
-  for i in 1:length(f.or)
-    f.or[i] = _check_function(f.or[i])
-  end
-  return f
-end
-function _check_function(f::QObject)
-  for i in 1:length(f.filters)
-    f.filters[i] = _check_function(f.filters[i])
+# Each term read at its concrete type and written back in place (#1698 phase 2).
+function _check_function(f::Union{QObject,QorObject})
+  terms, nodes = _q_terms(f), _q_nodes(f)
+  for i in 1:length(terms)
+    terms[i] = _check_function(nodes[i])
   end
   return f
 end

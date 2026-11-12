@@ -113,7 +113,10 @@ end
 # `format_uuid_sql`'s — the same choice the pair path makes at `_get_filter_query(::SQLTypeOper)`
 # (filter_nodes.jl) by reading `model.fields[...]`. The String arm is `_date_field_type`'s own
 # two-step lookup (model fields, then the base-namespace memo the left-side render populated).
-function _operand_column_field(field_name, instruc::SQLInstruction)::Union{PormGField,Nothing}
+#
+# #1599 slice A: typed #1604's `AnyField`, which both lookups hold, not the abstract `PormGField`, so a
+# call on the answer is static (#1735).
+function _operand_column_field(field_name, instruc::SQLInstruction)::Union{Models.AnyField,Nothing}
   if field_name isa String
     model = instruc.object.model
     haskey(model.fields, field_name) && return model.fields[field_name]

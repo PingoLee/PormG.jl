@@ -303,14 +303,12 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     let fbody = try Base.bodyfunction(which(QB.add_parameter!, (QB.SQLiteParameterizedQuery, Int64,))) catch; missing end
       ismissing(fbody) || precompile(fbody, (Bool, String, Nothing, typeof(QB.add_parameter!), QB.SQLiteParameterizedQuery, Int64,))
     end
-    # _determine_join_type bodyfunction forms (0.018s combined). The body function takes the keywords
-    # in declaration order — `previus_how`, `second_fild_name`, `column_name` (#28) — then the function
-    # and the field; the forward-FK hop passes all three.
-    # swallows `which` finding no method: the signature moved, so this precompile is skipped
-    let fbody = try Base.bodyfunction(which(QB._determine_join_type, (QB.sForeignKey,))) catch; missing end
-      ismissing(fbody) || precompile(fbody, (Nothing, String, String, typeof(QB._determine_join_type), QB.sForeignKey,))
-      ismissing(fbody) || precompile(fbody, (String,  String, String, typeof(QB._determine_join_type), QB.sForeignKey,))
-    end
+    # A join hop's type (0.018s combined when snooped, as the keyword `_determine_join_type`, which #1599
+    # slice A made the positional `_hop_join_type`): `(field, previus_how, second_fild_name, column_name)`.
+    # The forward hop passes the column, with no previous hop or after one; the reverse hop passes none.
+    Base.precompile(Tuple{typeof(QB._hop_join_type), QB.sForeignKey, Nothing, String, String})
+    Base.precompile(Tuple{typeof(QB._hop_join_type), QB.sForeignKey, String, String, String})
+    Base.precompile(Tuple{typeof(QB._hop_join_type), QB.sForeignKey, Nothing, String, Nothing})
   end
 
   # Base Dict row-assembly (triggered by Tables.rowtable → Dict{Symbol,Any}) ---

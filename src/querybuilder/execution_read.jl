@@ -1837,12 +1837,13 @@ function _get_filter_repr(filter::SQLTypeOper)::String
   return "$(column) $(filter.operator) $(_oper_literal(filter))"
 end
 
+# Each term at its concrete type (#1698 phase 2).
 function _get_filter_repr(filter::SQLTypeQ)::String
-  return "(" * join(_get_filter_repr.(filter.filters), " AND ") * ")"
+  return "(" * join(String[_get_filter_repr(f) for f in _q_nodes(filter)], " AND ") * ")"
 end
 
 function _get_filter_repr(filter::SQLTypeQor)::String
-  return "(" * join(_get_filter_repr.(getfield(filter, :or)), " OR ") * ")"
+  return "(" * join(String[_get_filter_repr(f) for f in _q_nodes(filter)], " OR ") * ")"
 end
 
 _get_filter_repr(filter) = sprint(show, filter)

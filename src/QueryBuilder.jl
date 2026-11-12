@@ -8,7 +8,7 @@ using Dates, TimeZones, Decimals, UUIDs
 import Sockets  # #28: a `Sockets.IPAddr` is a network-address field value
 import Printf   # #1087: PostgreSQL's `float8` → `numeric` conversion is `%.15g`
 
-# `sForeignKey` is imported for `src/precompile.jl`, which warms `_determine_join_type` through
+# `sForeignKey` is imported for `src/precompile.jl`, which warms `_hop_join_type` through
 # `QB.sForeignKey`; nothing in this module or `src/querybuilder/` names it any more, since the
 # FK/one-to-one gates spell the pair `Models.sRelationalColumn` (#418). Do not drop it as unused
 # without moving that precompile hint to `PormG.Models.sForeignKey` first.

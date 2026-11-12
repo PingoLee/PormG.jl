@@ -76,7 +76,7 @@ Cts_parent = Models.Model("cts_parent",
 
 Cts_child = Models.Model("cts_child",
   id     = Models.IDField(),
-  # NULLABLE — `_determine_join_type` answers "LEFT", which is what the control below pins next
+  # NULLABLE — `_hop_join_type` answers "LEFT", which is what the control below pins next
   # to the CTE's declared INNER.
   parent = Models.ForeignKey(Cts_parent, on_delete = "CASCADE", related_name = "cts_kids", null = true),
   grand  = Models.ForeignKey(Cts_grand, on_delete = "CASCADE", related_name = "cts_gkids", null = true),

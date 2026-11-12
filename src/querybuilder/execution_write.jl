@@ -1079,7 +1079,7 @@ function _get_join_condition_list(row_join::Vector{JoinRow}, connection;
     # #1430: a path join's anchor lands in WHERE, so a LEFT or FULL join acts as an INNER one on every
     # engine: a row with no match is not updated, where the join it was declared as keeps it with the
     # joined column read as NULL. A path through a nullable ForeignKey is LEFT by default
-    # (`_determine_join_type`), so `update("x" => F("<nullable_fk>__col"))` skipped every row whose key
+    # (`_hop_join_type`), so `update("x" => F("<nullable_fk>__col"))` skipped every row whose key
     # is NULL, silently. A filter's join is flattened the same way (`"fk__col__@isnull" => true` then
     # matches nothing), so the rule covers every path join in the statement, as #174 did beside a
     # `cjoin_on`. Refused rather than rendered: the caller names which of the two meanings they want.
@@ -1390,8 +1390,8 @@ function _projection_alias_in_filter(f, names::Set{String}, depth::Int = 0)::Uni
   if f isa OperObject
     col = _oper_column(f)
     (col isa SQLTypeField && col.field isa String && col.field in names) && return col.field
-  elseif f isa Union{SQLTypeQ,SQLTypeQor}
-    for g in (f isa SQLTypeQ ? f.filters : f.or)
+  elseif f isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for g in _q_nodes(f)
       hit = _projection_alias_in_filter(g, names, depth + 1)
       hit === nothing || return hit
     end

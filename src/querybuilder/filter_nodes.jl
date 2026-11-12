@@ -913,15 +913,27 @@ end
 # The field a filter's left-hand side names, and the path to report it by — a key of the model's own
 # fields, or the terminal field of a joined path from the #474 memo. `(nothing, "")` when the operand
 # is not a field. Read AFTER the column is rendered: rendering is what fills the memo.
-function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)
+# #1599 layer 5: the column's name is read once, so the `isa String` test narrows it, and the answer is
+# typed: read again off the slot, the name was `SQLField.field`'s union, the field `Any`, and every call on
+# the field (its `formatter`, first) dispatched at run time, which stopped the trimmed read.
+function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)::Tuple{Union{Nothing,Models.AnyField},String}
   col = _oper_column(v)
   col isa SQLField || return nothing, ""
-  if col.field isa String && haskey(instruc.object.model.fields, col.field)
-    return instruc.object.model.fields[col.field], col.field
+  name = col.field
+  if name isa String
+    fields = instruc.object.model.fields
+    haskey(fields, name) && return fields[name], name
   end
-  f = memo_field(instruc, memo_key(col))
-  return f === nothing ? (nothing, "") : (f, memo_key(col)[2])
+  key = memo_key(col)
+  f = memo_field(instruc, key)
+  return f === nothing ? (nothing, "") : (f, key[2])
 end
+
+# A model field's `formatter`, for a field held at `Models.AnyField` (#1599 layer 5). Every member of that
+# union has the slot, typed `Function`, and none overloads `getproperty` (`test_trim_shape_pins.jl` checks
+# both), so the builtin `getfield` reads what `field.formatter` read; `getproperty` on the 29-member union
+# was a run-time dispatch, which stopped the trimmed read.
+_field_formatter(@nospecialize(field::Models.AnyField))::Function = getfield(field, :formatter)
 
 # #28/#903: the kind of column a pattern lookup must read as TEXT, or `nothing` for one it reads as it
 # is. Keyed on the formatter because that is the one piece of evidence a column and a projection alias
@@ -1240,7 +1252,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # #1086 (review): a transform has no field, but its node carries the formatter of what it yields —
   # `@date` a date, `@hour` an integer — so a pattern lookup over one reads the same text a column of
   # that kind does. Without it `"seen__@date__@startswith"` was a `LIKE` on a `date` on PostgreSQL.
-  operand_formatter = operand_field !== nothing ? operand_field.formatter :
+  operand_formatter = operand_field !== nothing ? _field_formatter(operand_field) :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
                       col isa SQLTypeField && col.field isa SQLTypeFunction ? col.field.formatter :
                       nothing

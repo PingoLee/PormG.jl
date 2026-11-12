@@ -1383,7 +1383,7 @@ end
 # One arm of a `Qor` in a projection, its term passed in so it is specialized at the term's concrete type
 # (#1698 phase 2), as `_or_arm_filter` is: a closure capturing the term at the `FilterNode` union made
 # `_or_arm` a dynamic call.
-_or_arm_select(v, instruc::SQLInstruction, _as::Union{Nothing,String}) =
+_or_arm_select(v::FilterNode, instruc::SQLInstruction, _as::Union{Nothing,String}) =
   _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc)
 
 function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)

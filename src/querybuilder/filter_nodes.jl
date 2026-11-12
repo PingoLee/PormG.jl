@@ -1543,7 +1543,7 @@ end
 # One arm of a `Qor` in WHERE (#1367), with its term passed in so it is specialized at the term's concrete
 # type (#1698 phase 2): a closure built in the loop over the view captured the term at the `FilterNode`
 # union, so its type was made at run time and `_or_arm` dispatched dynamically.
-_or_arm_filter(v, instruc::SQLInstruction) = _or_arm(() -> _get_filter_query(v, instruc), instruc)
+_or_arm_filter(v::FilterNode, instruc::SQLInstruction) = _or_arm(() -> _get_filter_query(v, instruc), instruc)
 function _get_filter_query(v::SQLTypeF, instruc::SQLInstruction)
   return _get_select_query(v, instruc)
 end

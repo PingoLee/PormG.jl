@@ -1069,6 +1069,15 @@ end
       @test isempty(calls)
       isempty(calls) || @info "dynamic calls on a Q/Qor term" tt calls
     end
+    # The `Qor` arm barriers themselves, at each term type: `_named_dynamic_calls` does not step into them,
+    # so if one stopped inlining, a dynamic `_or_arm` would move inside it and the checks above stay green.
+    for T in Base.uniontypes(QB.FilterNode)
+      for tt in (Tuple{typeof(QB._or_arm_filter), T, I}, Tuple{typeof(QB._or_arm_select), T, I, Nothing})
+        calls = _named_dynamic_calls(tt, ("_or_arm",))
+        @test isempty(calls)
+        isempty(calls) || @info "dynamic _or_arm in a Qor arm barrier" tt calls
+      end
+    end
   end
 
   # What: every read of `QObject.filters` and `QorObject.or` in `src/querybuilder/`, `Base.deepcopy` and

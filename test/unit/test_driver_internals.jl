@@ -148,6 +148,10 @@ const PINNED_NAMES = _NamePin[
   (name = "MySQL.Protocol.ProtocolError",       status = :documented, reader = "_is_lost_connection"),
   (name = "MySQL.Protocol.TimeoutError",        status = :documented, reader = "_is_lost_connection"),
   (name = "MySQL.Protocol.Limits",              status = :documented, reader = "PormG.backend_mysql_parameter_limit"),
+  # #1599 layer 2: two of the column types `MySQL.juliatype` decodes to, named by `_materialize`'s cell walk
+  # (`_COLUMN_BASE_TYPES`); `test_mysql_ext.jl` checks that walk against `juliatype` itself.
+  (name = "MySQL.Bit",                          status = :documented, reader = "_COLUMN_BASE_TYPES, _CELL_TYPES"),
+  (name = "MySQL.DecimalResult",                status = :documented, reader = "_COLUMN_BASE_TYPES"),
 ]
 
 # ── Fields — the hand audit; no scan can see these ─────────────────────────────────────────────────
@@ -191,6 +195,9 @@ const PINNED_FIELDS = _FieldPin[
   # branch from hiding a rename.
   (type = MySQL.Cursor, fields = [:rows_affected], status = :documented, reader = "_materialize"),
   (type = MySQL.Cursor, fields = [:ok], status = :internal, reader = "_ok_info"),
+  # #1599 layer 2: what `Tables.schema(cursor)` wraps, read without building a `Tables.Schema` from
+  # run-time types; `types` drives the cell walk over MySQL.jl's column types.
+  (type = MySQL.Cursor, fields = [:names, :types], status = :internal, reader = "_materialize"),
   (type = MySQL.Protocol.OKPacket, fields = [:info], status = :internal, reader = "_ok_info"),
   (type = MySQL.Statement, fields = [:columns], status = :internal, reader = "_run"),
   (type = MySQL.Protocol.ColumnDef, fields = [:charset, :type], status = :internal, reader = "_is_binary_column"),

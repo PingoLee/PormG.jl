@@ -373,17 +373,118 @@ _by_charset(v::Vector{UInt8}, binary::Bool) = binary ? v : String(v)
 _by_charset(v::String, binary::Bool) = binary ? Vector{UInt8}(codeunits(v)) : v
 _by_charset(v, ::Bool) = v
 
+# #1599 layer 2: the result cursor read at concrete types.
+#
+# A cursor column's type is a run-time `Type` (`cursor.types[j]`, from `MySQL.juliatype`), so
+# `Tables.getcolumn(row, j)` returns `Any` and every call after it (`_read_value`, `_by_charset`, the
+# column's `identity.` narrowing) was a dynamic dispatch, per cell. MySQL.jl's types are a closed set:
+# `MySQL.juliatype` maps each wire type to one of `_COLUMN_BASE_TYPES`, and a nullable column to its
+# `Union{Missing, T}`. Each cell is read through a walk over that set, with the typed accessor
+# `Tables.getcolumn(row, T, j, name)`, which is what `getcolumn(row, j)` calls with `types[j]` (MySQL.jl's
+# trim-supported row access), so the value is the same. A type outside the set (a later MySQL.jl, a
+# `time_type` option PormG does not set) takes the one dynamic arm, `_push_other_cell!`.
+# `test/unit/test_mysql_ext.jl` fails when `MySQL.juliatype` yields a type the set does not hold.
+const _COLUMN_BASE_TYPES = (Int64, MySQL.DataString, Int32, MySQL.DecimalResult, Dates.Date,
+                            MySQL.Timestamp{Dates.Millisecond}, MySQL.Timestamp{Dates.Second},
+                            MySQL.Timestamp{Dates.Microsecond}, Float64, MySQL.DataBytes, Int8, Int16,
+                            UInt8, UInt16, UInt32, UInt64, Float32, Dates.Time, MySQL.Bit)
+const _COLUMN_TYPES = (_COLUMN_BASE_TYPES..., map(T -> Union{Missing, T}, _COLUMN_BASE_TYPES)...)
+
+# One cell, as `_materialize` always read it: decoded, read (`_read_value`), then typed by the column's
+# character set when the statement was prepared (`_by_charset`). `binary` is `nothing` on the text protocol.
+@inline function _cell_value(v, name::Symbol, binary::Union{Nothing, Vector{Bool}}, j::Int)
+  r = _read_value(v, name)
+  return binary === nothing ? r : _by_charset(r, binary[j])
+end
+
+@eval @noinline function _push_cell!(col::Vector{Any}, row, @nospecialize(T), j::Int, name::Symbol,
+                                     binary::Union{Nothing, Vector{Bool}})::Nothing
+  $(Expr(:block, (:(T === $C && (push!(col, _cell_value(Tables.getcolumn(row, $C, j, name), name, binary, j)); return nothing))
+                  for C in _COLUMN_TYPES)...))
+  return _push_other_cell!(col, row, j, name, binary)
+end
+
+# The open arm: a column type outside the set, read as before, by dispatch.
+@noinline function _push_other_cell!(col::Vector{Any}, row, j::Int, name::Symbol,
+                                     binary::Union{Nothing, Vector{Bool}})::Nothing
+  push!(col, _cell_value(Tables.getcolumn(row, j), name, binary, j))
+  return nothing
+end
+
+# A column narrowed to the types it holds, exactly as `identity.(col)` narrows it: `Vector{R}` when every
+# value is an `R`, `Vector{Union{Missing, R}}` when some are `missing`, `Vector{Missing}` when all are, and
+# an empty column kept as it is. `R` is found from the first value that is not `missing`, through a walk
+# over the types a cell reads as (`_cell_value`'s results), and checked against every value; anything else
+# takes `identity.` (the open arm, `_store_other!`). Each arm stores its own vector into `columns[j]` at
+# that vector's concrete type: a stored value typed only `AbstractVector` (or `Vector`) is a dynamic call
+# into `setindex!`, which specializes on it.
+const _CELL_TYPES = (Int64, String, Int32, Decimals.Decimal, Dates.Date, Dates.DateTime, Float64,
+                     Vector{UInt8}, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, Dates.Time, MySQL.Bit)
+
+function _store_narrowed!(columns::Vector{AbstractVector}, j::Int, col::Vector{Any})::Nothing
+  isempty(col) && (columns[j] = col; return nothing)
+  first_value = 0
+  for i in eachindex(col)
+    col[i] === missing || (first_value = i; break)
+  end
+  first_value == 0 && (columns[j] = fill(missing, length(col)); return nothing)
+  return _store_by!(columns, j, col, col[first_value])
+end
+
+@eval @noinline function _store_by!(columns::Vector{AbstractVector}, j::Int, col::Vector{Any},
+                                    @nospecialize(v))::Nothing
+  $(Expr(:block, (:(v isa $R && return _store_as!(columns, j, $R, col)) for R in _CELL_TYPES)...))
+  return _store_other!(columns, j, col)
+end
+
+function _store_as!(columns::Vector{AbstractVector}, j::Int, ::Type{R}, col::Vector{Any})::Nothing where {R}
+  has_missing = false
+  for x in col
+    if x === missing
+      has_missing = true
+    elseif !(x isa R)
+      return _store_other!(columns, j, col)
+    end
+  end
+  if has_missing
+    columns[j] = _copy_as(Union{Missing, R}, col)
+  else
+    columns[j] = _copy_as(R, col)
+  end
+  return nothing
+end
+
+function _copy_as(::Type{E}, col::Vector{Any})::Vector{E} where {E}
+  out = Vector{E}(undef, length(col))
+  for i in eachindex(col)
+    out[i] = col[i]::E
+  end
+  return out
+end
+
+# The open arm: `identity.`, as before, whose result type is known only at run time.
+@noinline function _store_other!(columns::Vector{AbstractVector}, j::Int, col::Vector{Any})::Nothing
+  columns[j] = identity.(col)
+  return nothing
+end
+
 function _materialize(cursor, binary::Union{Nothing,Vector{Bool}} = nothing)::MySQLResult
-  schema = Tables.schema(cursor)
-  names = schema === nothing ? Symbol[] : collect(Symbol, schema.names)
-  raw = [Any[] for _ in names]
-  for row in cursor, (j, name) in enumerate(names)
-    v = _read_value(Tables.getcolumn(row, j), name)
-    push!(raw[j], binary === nothing ? v : _by_charset(v, binary[j]))
+  # The cursor's own names and types: what `Tables.schema(cursor)` wraps, read without building a
+  # `Tables.Schema` from run-time types.
+  names = copy(cursor.names)
+  types = cursor.types
+  raw = Vector{Any}[Any[] for _ in names]
+  for row in cursor
+    for j in eachindex(names)
+      _push_cell!(raw[j], row, types[j], j, names[j], binary)
+    end
   end
   # Narrow each column to the types it holds (`String`, `Union{Missing, Int64}`, …), as a driver
   # result would be, so `DataFrame(result)` gets typed columns.
-  columns = AbstractVector[isempty(c) ? c : identity.(c) for c in raw]
+  columns = Vector{AbstractVector}(undef, length(raw))
+  for j in eachindex(raw)
+    _store_narrowed!(columns, j, raw[j])
+  end
   nrows = isempty(raw) ? 0 : length(first(raw))
   return MySQLResult(names, columns, nrows, Int(cursor.rows_affected), UInt64(DBInterface.lastrowid(cursor)),
                      _ok_info(cursor))

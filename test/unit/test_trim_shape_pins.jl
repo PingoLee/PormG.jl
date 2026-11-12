@@ -2821,6 +2821,8 @@ end
     @test myx._bind(pool, QB.MySQLParameterizedQuery()) === nothing
     @test myx._bind(pool, ("Imola", 1)) == Any["Imola", 1]   # a tuple takes the open arm, as before
     @test myx._bind(pool, ()) === nothing
+    # The open arm is one dynamic call (#1735), into the body that specializes on the container.
+    @test length(_dynamic_calls(myx._bind_other, (P, Any))) == 1
   end
 
   # What: `backend_mysql_version` and the reader of its result, `_version_text`, then what the reader
@@ -2834,6 +2836,7 @@ end
     P = PormG.ConnectionPool.MySQLConnectionPool
     @test _dynamic_calls(PormG.backend_mysql_version, (P,)) == String[]
     @test _dynamic_calls(myx._version_text, (Any,)) == String[]
+    @test length(_dynamic_calls(myx._version_text_other, (Any,))) == 1   # the open arm (#1735)
     R = myx.MySQLResult
     old(r) = String(only(collect(r))[1])
     err(f, r) = try f(r); nothing catch e; (typeof(e), sprint(showerror, e)) end

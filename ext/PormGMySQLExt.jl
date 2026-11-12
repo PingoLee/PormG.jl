@@ -273,7 +273,9 @@ function _version_text(@nospecialize(result))::String
   end
   return _version_text_other(result)
 end
-@noinline _version_text_other(@nospecialize(result))::String = String(only(collect(result))[1])
+@noinline _version_text_other(@nospecialize(result))::String = _version_text_of(result)
+# The read this was before, specialized on the result, so the open arm is one dynamic call (#1735).
+_version_text_of(result)::String = String(only(collect(result))[1])
 
 # ── Execution ────────────────────────────────────────────────────────────────
 
@@ -314,8 +316,11 @@ function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector
   return bound
 end
 
-# The open arm: any other container, bound as before.
-@noinline function _bind_other(pool::_Pool, @nospecialize(resolved))::Union{Nothing, Vector{Any}}
+# The open arm: any other container, bound as before. One dynamic call (#1735), into a body that
+# specializes on the container.
+@noinline _bind_other(pool::_Pool, @nospecialize(resolved))::Union{Nothing, Vector{Any}} =
+  _bind_container(pool, resolved)
+function _bind_container(pool::_Pool, resolved)::Union{Nothing, Vector{Any}}
   (resolved === nothing || isempty(resolved)) && return nothing
   _check_parameter_count(pool, length(resolved))
   return Any[_bind_value(v) for v in resolved]

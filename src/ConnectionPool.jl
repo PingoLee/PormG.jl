@@ -873,6 +873,12 @@ PoolWaiter(mode::Symbol, retry::Bool = false) = PoolWaiter(mode, Channel{Any}(1)
 # Delivered to a waiter's channel when its timeout budget elapses (vs. a slot index on handoff).
 const _POOL_WAIT_TIMEOUT = :__pormg_pool_wait_timeout__
 
+# What a handoff delivers: the slot and the handle it held (#584), as one concrete type (#1599 layer 2).
+# A bare `(i, handle)` tuple is a `Tuple{Int,Any}` to the compiler, an abstract type, and `put!`
+# specializes on what it is given, so every handoff's `put!` was dispatched at run time (eight rows of
+# the trimmed fixture). A `NamedTuple` whose field types are written out is concrete whatever the handle.
+const _Handed = NamedTuple{(:slot, :handle), Tuple{Int, Any}}
+
 # Delivered instead when a waiter that parked after a FAILED connect is due to try again (#1518).
 const _POOL_WAIT_RETRY = :__pormg_pool_wait_retry__
 
@@ -1017,7 +1023,7 @@ function _handoff_or_free!(pool, i::Int; skip_retry::Bool = false)
     w = ws[idx]
     w.done = true                 # win the race against this waiter's timeout Timer
     deleteat!(ws, idx)
-    put!(w.chan, (i, pool.connections[i]))   # cap-1 + empty → never blocks; slot stays leased (available[i]=false)
+    put!(w.chan, _Handed((i, pool.connections[i])))   # cap-1 + empty → never blocks; slot stays leased (available[i]=false)
   end
   return nothing
 end
@@ -1064,7 +1070,7 @@ function _abandon_wait!(pool, w::PoolWaiter, owned::_OwnedSlot)
         k === nothing || deleteat!(ws, k)
       elseif isready(w.chan)
         handed = take!(w.chan)
-        handed isa Tuple{Int, Any} && (owned[] = handed)
+        handed isa _Handed && (owned[] = (handed.slot, handed.handle))
       end
     end
   end
@@ -2166,7 +2172,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       end
       throw(err)
     else # :wait / :wait_retry — park until a slot is handed to us, the retry is due, or the deadline.
-      w = outcome[2]
+      w = outcome[2]::PoolWaiter   # the park branch made it (#1599 layer 2: a static `take!`)
       kind === :wait_retry && (retry_pass += 1)
       sentinel, wake_in = _waiter_wake(deadline, kind === :wait_retry ? retry_pass : 0)
       timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
@@ -2187,7 +2193,8 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       elseif handed === _POOL_WAIT_RETRY
         continue                                         # scan and connect again (#1518)
       end
-      owned[] = handed::Tuple{Int, Any}                  # loop back to materialize the handed slot
+      h = handed::_Handed
+      owned[] = (h.slot, h.handle)                       # loop back to materialize the handed slot
       continue
     end
   end
@@ -2348,7 +2355,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
           "Timeout after $(to) seconds waiting for available SQLite connection") pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
       throw(err)
     else # :wait / :wait_retry — see the PormGPostgres twin (#1518).
-      w = outcome[2]
+      w = outcome[2]::PoolWaiter   # the park branch made it (#1599 layer 2: a static `take!`)
       kind === :wait_retry && (retry_pass += 1)
       sentinel, wake_in = _waiter_wake(deadline, kind === :wait_retry ? retry_pass : 0)
       timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
@@ -2369,7 +2376,8 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
       elseif handed === _POOL_WAIT_RETRY
         continue
       end
-      owned[] = handed::Tuple{Int, Any}
+      h = handed::_Handed
+      owned[] = (h.slot, h.handle)
       continue
     end
   end

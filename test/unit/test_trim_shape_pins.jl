@@ -2623,6 +2623,27 @@ end
     @test CP.await_result(ft) == 42                                 # cached, as before
   end
 
+  # What: the park branch of both `acquire_connection` twins (the wait for a handed slot), and the
+  #   handoff that delivers one (`_handoff_or_free!`), on each pool type.
+  # Expected: the waiter is read at `PoolWaiter`, so its `take!` is static; the delivered pair is a
+  #   `_Handed` (`slot`, `handle`), a concrete type, so the handoff's `put!` is static.
+  # Why: the waiter came out of the outcome tuple as `Any` (4 rows), and the pair was a `Tuple{Int,Any}`,
+  #   an abstract type that `put!` specializes on (8 rows of the trimmed fixture, #1599 layer 2).
+  @testset "the waiter's take! and the handoff's put! are static (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    owned = Base.RefValue{Union{Nothing, Tuple{Int, Any}}}
+    waits(dyn) = filter(s -> occursin("take!", s) || occursin(":chan", s), dyn)
+    @test waits(_dynamic_calls(CP._acquire_connection!, (CP.SQLiteConnectionPool, owned, Nothing, Int, Symbol))) == String[]
+    for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool)
+      @test (P, waits(_dynamic_calls(CP._acquire_connection!, (P, owned, Nothing, Int)))) == (P, String[])
+    end
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls_kw(CP._handoff_or_free!, (P, Int))) == (P, String[])
+    end
+    @test isconcretetype(CP._Handed)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -86,7 +86,7 @@ _saturate(p) = [CP.acquire_connection(p; timeout_seconds = 5) for _ in 1:(p.pool
   w = CP.PoolWaiter(:any)
   push!(CP._waiters_for(p), w)
   Base.lock(() -> CP._handoff_or_free!(p, 1), p.lock) # simulate a release handing slot 1 to w
-  @test take!(w.chan) == (1, c)                       # waiter received the slot AND its handle (#584)
+  @test take!(w.chan) == (slot = 1, handle = c)       # waiter received the slot AND its handle (#584)
   @test w.done
   @test p.available == [false]                        # slot stays LEASED for the waiter (no free)
   @test isempty(CP._waiters_for(p))                   # waiter dequeued
@@ -200,7 +200,7 @@ end
   w = CP.PoolWaiter(:any); push!(CP._waiters_for(p), w)
   Base.lock(() -> CP._handoff_or_free!(p, 1), p.lock)
   CP._pool_wait_timeout!(p, w)                               # w already done → must no-op
-  @test isready(w.chan) && take!(w.chan) == (1, c)           # the (slot, handle) pair, not the timeout
+  @test isready(w.chan) && take!(w.chan) == (slot = 1, handle = c)   # the (slot, handle) pair, not the timeout
   @test !isready(w.chan)                                     # exactly one item ever
   @test w.done && isempty(CP._waiters_for(p))
   @test p.available == [false]                               # slot stays leased for the handed waiter
@@ -225,7 +225,7 @@ end
     t2 = Threads.@spawn CP._pool_wait_timeout!(p3, w3)
     wait(t1); wait(t2)
     item = take!(w3.chan)                                    # exactly one item present (else this hangs)
-    handed = item isa Tuple && item[1] == 1                  # a (slot, handle) pair (#584) …
+    handed = item isa CP._Handed && item.slot == 1           # a (slot, handle) pair (#584) …
     @test handed || item == CP._POOL_WAIT_TIMEOUT            # … or the timeout sentinel
     @test !isready(w3.chan)                                  # never a second (no double delivery/lease)
     @test w3.done && isempty(CP._waiters_for(p3))
@@ -484,7 +484,7 @@ end
   CP.release_connection(p, c)                          # → w1
   owned = CP._OwnedSlot(nothing)
   CP._abandon_wait!(p, w1, owned); CP._drop_owned!(p, owned)
-  @test w2.done && take!(w2.chan) == (1, c)            # w2 has it, still leased for w2
+  @test w2.done && take!(w2.chan) == (slot = 1, handle = c)   # w2 has it, still leased for w2
   @test p.available[1] === false && isempty(CP._waiters_for(p))
 
   # A sentinel the Timer already delivered is dropped; nothing is owned.

@@ -12,6 +12,19 @@ struct `list(show_query = :struct)` writes (#1632). Each step prints one line.
 Not a test the suite runs: it needs Julia 1.13 and JuliaC, and today the binary stops before the
 query (the walls left are in #1599's tables).
 
+## Drivers
+
+The fixture runs on SQLite. For PostgreSQL in a `juliac --trim` build, use Postgres.jl
+(`register_connection(…; adapter = "PostgreSQL", postgres_driver = "Postgres")`). A copy of this
+fixture switched to it (not committed) builds, and has not been run. A binary built with LibPQ 1.18
+aborts before `main` with `InitError(:Infinity, MethodError(!, (false,)))`: the `__init__` of
+Infinity.jl, a LibPQ dependency, calls Requires' `@require`, which makes a dynamic call the trimmed
+image has no compiled code for. The cause is upstream, not in PormG. Memento, LibPQ's logging
+dependency, calls `@require` in its `__init__` as well, so it would likely abort next (read from its
+source, not observed, since Infinity aborts first). Until LibPQ's dependency chain stops using
+Requires, a PostgreSQL variant of the fixture uses Postgres.jl. Measurements are in
+[#1614](https://github.com/PingoLee/PormG.jl/issues/1614).
+
 ## Build and run
 
 Julia 1.13.3 and JuliaC 0.3.12 (`pkg> app add JuliaC`, which installs `~/.julia/bin/juliac`). From

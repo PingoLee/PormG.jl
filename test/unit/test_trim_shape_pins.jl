@@ -340,6 +340,9 @@ struct _TspWrapErr <: Exception; err::Any; end
 @noinline _tsp_insert_unreferenced!(r) = (r[PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)] = [5]; nothing)
 PormG.backend_error_fields(::_TspFakeError) =
   (sqlstate = "XX000", constraint = "fake_c", table = "fake_t", column = nothing, message = "fake")
+# An `F` node PormG does not define, for the Q/Qor view's refusal (#1599 slice B). `_node_subtypes` skips it:
+# it is not PormG's.
+struct _TspOutsiderF <: PormG.SQLTypeF end
 # A typed-read row type, for the projection pin (#1695).
 struct _TspRaceRow
   raceid::Int64
@@ -913,7 +916,8 @@ end
   #   split's parts, the deep copy of a term vector, the window and aggregate questions.
   # Expected: the slots keep their declared `Vector{FilterType}` (closing them is a reorder of `types.jl`, a
   #   maintainer decision); the view infers `FilterNode` per element and yields the slot's own elements, in
-  #   order, identical; `deepcopy` gives a `Vector{FilterType}` of fresh copies; `_split_having` infers the
+  #   order, identical; an element outside it raises `MethodError`, as the slot walks refuse one;
+  #   `deepcopy` gives a `Vector{FilterType}` of fresh copies; `_split_having` infers the
   #   concrete `HavingSplit`; and the window and aggregate questions over a group give the answer they gave over
   #   the slot.
   # Why: an element read at `FilterType` (four abstract families and `ExistsObject`) was a run-time dispatch
@@ -954,6 +958,15 @@ end
       @test typeof(cg) === typeof(g) && QB._q_terms(cg) !== terms && length(QB._q_terms(cg)) == length(terms)
     end
     @test map(typeof, QB._q_nodes(q)) == [QB.OperObject, QB.QorObject, QB.QObject, QB.FExpression, QB.OuterRefObject]
+    # An element outside `FilterNode` (a subtype of the families PormG does not define) is refused with a
+    # `MethodError`, the class a dispatch with no method raised and the slot walks' refusal (#1698): naming
+    # `_filter_node`, through the view and through the copy alike.
+    outsider = QB.QObject(filters = QB.FilterType[_TspOutsiderF()])
+    @test_throws MethodError QB._filter_node(_TspOutsiderF())
+    @test_throws MethodError QB._q_nodes(outsider)[1]
+    @test_throws MethodError deepcopy(QB._q_terms(outsider))
+    err = try QB._filter_node(_TspOutsiderF()) catch e; e end
+    @test err isa MethodError && err.f === QB._filter_node && err.args == (_TspOutsiderF(),)
     # `push!` writes through the slot.
     g = QB.Q("grid" => 1)
     push!(g, "raceid" => 18)

@@ -1371,10 +1371,14 @@ end
     _filter_node(x::FilterType) -> FilterNode
 
 An element of a `Q`/`Qor` term vector at the closed set, so a call on it splits over the six concrete
-members. A value outside it (a subtype of the abstract families that PormG does not define) raises
-`TypeError`.
+members. A value outside it (a subtype of the abstract families that PormG does not define) raises a
+`MethodError` naming `_filter_node` and the value (`_unlisted_node`), the error class a dispatch with no
+method raised, as the slot walks refuse an outsider (#1698).
 """
-_filter_node(x::FilterType)::FilterNode = x::FilterNode
+function _filter_node(x::FilterType)::FilterNode
+  x isa FilterNode && return x
+  return _unlisted_node(_filter_node, x)
+end
 
 """
     QTermView <: AbstractVector{FilterNode}

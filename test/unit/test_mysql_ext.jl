@@ -496,3 +496,47 @@ end
   @test e isa PormG.QueryBuildError && occursin("binds 4097 parameters", sprint(showerror, e))
   @test !occursin("424242", sprint(showerror, e))
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A refused MySQL cancel warns, unless the session has already ended (#1719)
+# What: the logger `backend_cancel_query!` calls when `KILL QUERY` fails. A server refusal (1095, not
+#   the session's owner) or a failed second connection warns that the statement may still be running;
+#   1094 (`Unknown thread id`: the session is gone, so its statement is too) stays at `@debug`.
+# Expected: one `:warn` record matching "refused the cancel request … may still be running on the
+#   server" for 1095 and for an `ErrorException`; for 1094 one `:debug` record and nothing at `:warn`.
+#   No SQL is sent.
+# Why: the refusal used to be a `@debug`, so a cancel that never reached the server was invisible while
+#   the abandoned statement ran on with its locks held; a session that ended is not that case.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a refused MySQL cancel warns, unless the session has already ended (#1719)" begin
+  warn_re = r"MySQL refused the cancel request; the statement may still be running on the server"
+  @test_logs (:warn, warn_re) _MyExt._log_refused_cancel(_my_err(1095; msg = "You are not owner of thread 42"))
+  @test_logs (:warn, warn_re) _MyExt._log_refused_cancel(ErrorException("connect failed"))
+  gone = _my_err(1094; msg = "Unknown thread id: 42")
+  @test_logs min_level = Base.CoreLogging.Warn _MyExt._log_refused_cancel(gone)
+  @test_logs (:debug, r"already ended") min_level = Base.CoreLogging.Debug _MyExt._log_refused_cancel(gone)
+  @test _MyExt._log_refused_cancel(gone) === nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A MySQL.jl below the floor warns once at load (#1719)
+# What: `_check_driver_floor` warns when the loaded MySQL.jl is below the extension's floor, naming the
+#   version, the floor, the issue that set it and `Pkg.update()`, and is silent at or above it. `__init__`
+#   calls it on the version captured at precompile, behind the generating-output guard (read from the
+#   source: `__init__` runs once, at load, and a test cannot load the extension again).
+# Expected: `_check_driver_floor(v"2.2.0")` logs one `:warn` matching "2.2.0 … 2.2.2 … #1648 …
+#   Pkg.update()"; at `_DRIVER_FLOOR` and above, nothing at `:warn` or higher; `__init__`'s body is the
+#   guard followed by the check. No SQL.
+# Why: Julia does not check a weak dependency's `[compat]` when it loads an extension, so a stale manifest
+#   loaded MySQL.jl 2.2.0 silently, where a Ctrl+C can be dropped by the driver's reaper task (#1520).
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "a MySQL.jl below the floor warns once at load (#1719)" begin
+  @test _MyExt._DRIVER_FLOOR == v"2.2.2"
+  @test _MyExt._DRIVER_VERSION == pkgversion(MySQL)
+  @test_logs (:warn, r"MySQL\.jl 2\.2\.0 is older than 2\.2\.2.*#1648.*#1520.*Pkg\.update\(\)") _MyExt._check_driver_floor(v"2.2.0")
+  @test (@test_logs min_level = Base.CoreLogging.Warn _MyExt._check_driver_floor(_MyExt._DRIVER_FLOOR)) === nothing
+  @test_logs min_level = Base.CoreLogging.Warn _MyExt._check_driver_floor(v"2.3.0")
+  @test _MyExt._DRIVER_VERSION >= _MyExt._DRIVER_FLOOR
+  src = read(joinpath(pkgdir(PormG), "ext", "PormGMySQLExt.jl"), String)
+  @test occursin(r"function __init__\(\)\n  Base\.generating_output\(\) && return nothing\n  _DRIVER_VERSION === nothing \|\| _check_driver_floor\(_DRIVER_VERSION\)\n", src)
+end

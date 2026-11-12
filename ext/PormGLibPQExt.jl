@@ -834,7 +834,11 @@ function PormG.backend_cancel_query!(pool::PormGPostgres, conn::LibPQ.Connection
   try
     errbuf = zeros(UInt8, 256)
     if LibPQ.libpq_c.PQcancel(cancel_ptr, pointer(errbuf), Cint(length(errbuf))) != 1
-      @debug "PostgreSQL refused the cancel request" reason=unsafe_string(pointer(errbuf))
+      # A `@warn`, not a `@debug` (#1719, as on the Postgres.jl and MySQL extensions): `PQcancel` fails
+      # only when the request could not be sent, so the statement may still be running and holding its
+      # locks. A cancel that arrives after the statement ended is sent, and PostgreSQL drops it. `reason`
+      # is libpq's text about the cancel socket, never the connection string.
+      @warn "PostgreSQL refused the cancel request; the statement may still be running on the server, holding its locks" reason=GC.@preserve(errbuf, unsafe_string(pointer(errbuf)))
     end
   finally
     LibPQ.libpq_c.PQfreeCancel(cancel_ptr)

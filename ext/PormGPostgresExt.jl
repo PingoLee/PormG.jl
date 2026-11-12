@@ -87,7 +87,7 @@ const _CONNINFO_KEYWORDS = (
 )
 
 # The keywords Postgres.jl accepts — its `KNOWN_PARAMS`, then the libpq keywords it accepts and ignores
-# (`IGNORED_PARAMS`); both tables are the same in Postgres.jl 2.2.2 and 2.3.0. PormG's own
+# (`IGNORED_PARAMS`), the same in Postgres.jl 2.6.0 and 2.7.0. PormG's own
 # copy, because the WORDING of a refusal is PormG's: a libpq keyword missing here is named as one this
 # driver does not support. A release that accepts more still connects, because the table is read
 # only after the driver refused (#1247); the new keyword is a row to add, never a refusal.
@@ -104,7 +104,8 @@ const _DRIVER_KEYWORDS = (
 
 # A refusal names a key only when it is one of these, because a keyword is never a secret. Any other
 # word in a key position may be a password fragment — `password=my secret=x` makes `secret` a key — so
-# it is referred to by its position instead (Postgres.jl v2.3.0 stopped naming one for the same reason).
+# it is referred to by its position instead (Postgres.jl's own refusal of an unknown key names none, for
+# the same reason).
 const _NAMEABLE_KEYWORDS = Set((_CONNINFO_KEYWORDS..., _DRIVER_KEYWORDS...))
 
 # Ignored keywords Postgres.jl refuses unless set to a no-op value (its `SECURITY_SENSITIVE_IGNORED`):
@@ -254,9 +255,8 @@ end
 # A URL's query parameters, as `URIs.URI` and `URIs.queryparams` split them for Postgres.jl: the query
 # runs from the first `?` to the next `#` — there is none when a `#` comes first — and splits at `&`,
 # then at the first `=`. Keys keep their case. The authority is left to the driver, and so is a
-# bracketed IPv6 host holding a `?` or `#` — no host does, and URIs reads one there differently. On
-# Postgres.jl 2.3.0 a URL it cannot parse is refused with a message that quotes nothing; on 2.2.2
-# URIs' own error reaches `_parse_failure`, which masks only what is double-quoted.
+# bracketed IPv6 host holding a `?` or `#` — no host does, and URIs reads one there differently.
+# Postgres.jl refuses a URL it cannot parse with a message that quotes nothing.
 function _url_query_params(dsn::String)::Vector{_DsnParam}
   q = findfirst('?', dsn)
   fragment = findfirst('#', dsn)
@@ -280,10 +280,11 @@ function _url_query_params(dsn::String)::Vector{_DsnParam}
 end
 
 # Whether every `%` in a URL before its query — the user info, host, port and database name —
-# starts a two-hex-digit escape; no release of the driver accepts one that does not. On Postgres.jl
-# 2.2.2 a bad one in the user info, host or database name reaches `URIs.unescapeuri`, whose Base
-# `parse` error names the offending character: one character of a password (#1243). This names the
-# fault; `_mask_quoted` is what keeps that character out of any message this does not anticipate.
+# starts a two-hex-digit escape; no release of the driver accepts one that does not. A bad one in the
+# user info, host or database name reaches `URIs.unescapeuri`, whose Base `parse` error names the
+# offending character: one character of a password (#1243). The driver catches that error and refuses
+# with a message that quotes nothing. This names the fault; `_mask_quoted` is what keeps that character
+# out of any message this does not anticipate.
 function _url_escapes_ok(dsn::String)::Bool
   scheme_end = findfirst("://", dsn)
   scheme_end === nothing && return true
@@ -374,7 +375,7 @@ function _check_dsn(dsn::String)
 end
 
 # A `Char` as Base's errors print one — `'o'`, `'\''`, `'\x01'` — the way a Base `parse` error names
-# the character it rejected: on Postgres.jl 2.2.2 one character of a password (#1243).
+# the character it rejected, which in #1243 was one character of a password.
 const _CHAR_LITERAL = r"'(?:\\(?:'|[^']*)|[^'\\])'"
 
 # Mask every character literal, then everything between the first and the last `"`, as the LibPQ
@@ -510,7 +511,8 @@ function _checked_params(conn_str::AbstractString;
   _lowercasable(dsn) || throw(InvalidConfigurationError(
     "the PostgreSQL connection string is not valid UTF-8, which a PostgreSQL connection string must be"))
   # The driver first (#1247). Its refusal is explained outside the `catch`, so the exception stack never
-  # carries the driver's error, whose message may quote the string — as Postgres.jl 2.3.0 does itself.
+  # carries the driver's error, whose message may quote the string, as Postgres.jl's own does for an
+  # invalid value (`invalid value "…" for connection parameter …`).
   refused = nothing
   params = try
     parse(dsn)
@@ -792,8 +794,8 @@ _is_stale_cached_statement(e)::Bool = false
 # PormG opens its transactions with a raw `BEGIN`, which the driver's `in_transaction` flag does not
 # see, so `server_in_transaction` is read instead: the status the last ReadyForQuery reported (a
 # Bind error skips the update, but cannot open or close a transaction block either), a field of
-# `Postgres.Connection` from 2.2.2 through 2.4.0 that Postgres.jl's own pool reset reads the same
-# way. `test_postgres_statement_cache.jl` pins it.
+# `Postgres.Connection` (2.6.0 and 2.7.0) that Postgres.jl's own pool reset reads the same way.
+# `test_postgres_statement_cache.jl` pins it.
 function _execute(conn::Postgres.Connection, sql::String, params)
   if conn.statement_cache_maxsize == 0
     return params === nothing ? DBInterface.execute(conn, sql) : DBInterface.execute(conn, sql, params)
@@ -840,12 +842,10 @@ function PormG.backend_execute_async(pool::_Pool, conn::Postgres.Connection, sql
   end
 end
 
-# #1447: the most parameters Postgres.jl binds in one statement. It writes the Bind message's parameter
-# count as a signed `Int16` (`Int16(length(params))`, 2.2.2 through 2.4.0), so 32768 raises an
-# `InexactError` before anything is sent, where the protocol and libpq allow 65535. Upstream:
-# JuliaDatabases/Postgres.jl#34. A statement PormG splits under the limit (a many-to-many `remove`, a bulk
-# write given no positive `chunk_size`) sizes to this.
-PormG.backend_postgres_parameter_limit(::_Pool)::Int = Int(typemax(Int16))
+# No `backend_postgres_parameter_limit` method (#1447, #1662): every Postgres.jl `[compat]` admits writes
+# the Bind message's parameter count as a `UInt16` (`API.bind_param_count`, JuliaDatabases/Postgres.jl#34),
+# so it binds the protocol's 65535, as libpq does, and core's `::PormGPostgres` fallback answers.
+# `test/unit/test_postgres_ext.jl` checks that against the driver's own `API.MAX_BIND_PARAMS`.
 
 PormG.backend_num_rows(pool::_Pool, result) = length(result)
 
@@ -977,8 +977,25 @@ function PormG.backend_cancel_query!(pool::_Pool, conn::Postgres.Connection)
   try
     Postgres.cancel_query!(conn)
   catch e
-    @debug "PostgreSQL refused the cancel request" exception = e
+    _log_refused_cancel(e)
   end
+  return nothing
+end
+
+# A `@warn`, not a `@debug` (#1719): every error `cancel_query!` raises means the request did not reach
+# the server, so the statement the caller abandoned is still running and holding its locks. From 2.6 it
+# raises only when the cancel socket cannot be opened, when TLS or GSS encryption was required and the
+# server refused it (the driver will not send the key in the clear), or when the write failed. No
+# harmless case shares this catch: a cancel that arrives after the statement ended is delivered, and
+# PostgreSQL drops it without a reply. Below the floor, 2.4's "connection not open" lands here too,
+# which is exactly the silent failure #1719 found. An interrupt that lands during the cancel's own
+# connect is logged here too: the cancel was not sent, so the same consequence holds.
+#
+# The cause goes through `_redacted_cause`, the one backstop that turns a connect failure into text
+# (`redact_secret`, #657), so nothing the driver quotes of the connection string reaches the log, and no
+# backtrace is printed at warn level.
+function _log_refused_cancel(@nospecialize(e))
+  @warn "PostgreSQL refused the cancel request; the statement may still be running on the server, holding its locks" cause = PormG.ConnectionPool._redacted_cause(e)
   return nothing
 end
 
@@ -1032,6 +1049,43 @@ function PormG.backend_copy_in!(pool::_Pool, conn::Postgres.Connection, sql::Str
   payload = _copy_payload(data_itr)
   Postgres.copy_from(conn, sql, payload)
   return _csv_record_count(String(payload))
+end
+
+# ── Driver floor (#1719) ─────────────────────────────────────────────────────
+#
+# `[compat]` holds `Postgres = "2.6"` (#1647), but Julia does not check a weak dependency's compat when
+# it loads an extension, so an environment resolved before that floor rose loads this file against an
+# older driver without a word: the 0.10.0 release gate ran on 2.4.0. Below 2.6 `cancel_query!` refuses
+# a connection whose socket an interrupt closed (#1577), so a Ctrl+C stops the wait while the statement
+# runs on, and an interrupted autocommit write commits. `__init__` warns once and never refuses: an
+# `__init__` that throws makes `using Postgres` fail, more than a degraded cancel warrants (refusing is
+# the maintainer's call, #1719). `test/unit/test_compat_guards.jl` fails when `_DRIVER_FLOOR` and
+# `[compat]` disagree.
+#
+# The version is read once, at precompile. This extension's cache file lists Postgres.jl's build id
+# among its required modules, and another Postgres.jl version is another package directory with its own
+# cache and build id, so Julia rejects this cache and rebuilds the extension: the constant is always the
+# loaded driver's. It also keeps `pkgversion`, which reads the driver's Project.toml from disk, out of
+# the load path of a trimmed image (#1599), which has no package directory to read.
+const _DRIVER_FLOOR = v"2.6.0"
+const _DRIVER_VERSION = pkgversion(Postgres)
+
+# Returns nothing and never throws.
+function _check_driver_floor(v::VersionNumber)
+  v < _DRIVER_FLOOR || return nothing
+  @warn "Postgres.jl $v is older than $_DRIVER_FLOOR, PormG's floor for it (#1647): a Ctrl+C that closes a statement's connection does not cancel the statement on the server, which runs on holding its locks (#1719). Update the driver with `Pkg.update()`."
+  return nothing
+end
+
+# Not while generating output. This extension's own precompile does not run `__init__`, but the
+# precompile of every package that loads PormG and the driver does, and Pkg reprints that worker's
+# output ("1 dependency had output during precompilation"): one stale driver would print the warning
+# once more per dependent package rebuilt (checked with a scratch package, #1719). The user's session is
+# where it belongs, once per `using`. (A juliac build defers `__init__` to the image's start anyway.)
+function __init__()
+  Base.generating_output() && return nothing
+  _DRIVER_VERSION === nothing || _check_driver_floor(_DRIVER_VERSION)
+  return nothing
 end
 
 # ── Precompile workload: the terminals on an offline `PostgresConnectionPool{:postgres}` key (#1732)

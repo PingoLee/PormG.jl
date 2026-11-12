@@ -154,11 +154,11 @@ end
 by_engine(; rows...) = by_engine(PormG.config[PORMG_DB_FOLDER].connections; rows...)
 
 # The bind parameters one statement takes on this run's pool, written down per engine and, on PostgreSQL,
-# per driver (#1447): Postgres.jl writes the Bind count as an `Int16`, so it binds 32767 where libpq binds the
-# protocol's 65535. MySQL.jl binds 4096; SQLite from 3.32 binds 32766. A literal, never read from `src/`: the
-# tests that split a write under the limit pin it here first. A driver with no row is an error, never another
-# driver's value (#1179).
-const PG_DRIVER_PARAMETER_LIMITS = Dict(:libpq => 65535, :postgres => 32767)
+# per driver (#1447): both PostgreSQL drivers bind the protocol's 65535 (Postgres.jl writes the Bind count as
+# a `UInt16` in every release `[compat]` admits, #1662). MySQL.jl binds 4096; SQLite from 3.32 binds 32766. A
+# literal, never read from `src/`: the tests that split a write under the limit pin it here first. A driver
+# with no row is an error, never another driver's value (#1179).
+const PG_DRIVER_PARAMETER_LIMITS = Dict(:libpq => 65535, :postgres => 65535)
 function _pg_driver_parameter_limit(conn)::Int
     driver = PormG.postgres_driver(conn)
     return get(PG_DRIVER_PARAMETER_LIMITS, driver) do

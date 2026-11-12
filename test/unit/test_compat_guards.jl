@@ -263,20 +263,21 @@ end
 # six to its old range (`"0.10"`, `"1"`, `"1"`, `"0.8"`, `"1"`), lowering Postgres below 2.6,
 # MySQL below 2.2.2 or YAML below 0.4.7 fails the matching assertion here.
 # ─────────────────────────────────────────────────────────────────────────────
-@testset "Measured floors that PormG cannot go below (#574)" begin
-  # Lower bound of a range's FIRST comma-separated arm, as a VersionNumber. `"0.10.13"` and
-  # `"0.10.13, 1"` both give v"0.10.13"; a bare major `"1"` gives v"1.0.0".
-  function _compat_floor(name::AbstractString)
-    entry = _compat_entry(name)
-    entry === nothing && return nothing
-    first_arm = strip(first(split(entry, ",")))
-    parts = split(first_arm, ".")
-    while length(parts) < 3
-      push!(parts, "0")
-    end
-    return VersionNumber(join(parts[1:3], "."))
+# Lower bound of a range's FIRST comma-separated arm, as a VersionNumber. `"0.10.13"` and
+# `"0.10.13, 1"` both give v"0.10.13"; a bare major `"1"` gives v"1.0.0". File-level since #1719, which
+# reads it from the driver-floor testset below too.
+function _compat_floor(name::AbstractString)
+  entry = _compat_entry(name)
+  entry === nothing && return nothing
+  first_arm = strip(first(split(entry, ",")))
+  parts = split(first_arm, ".")
+  while length(parts) < 3
+    push!(parts, "0")
   end
+  return VersionNumber(join(parts[1:3], "."))
+end
 
+@testset "Measured floors that PormG cannot go below (#574)" begin
   # Pin the helper before trusting its verdicts, same reason as the testsets above.
   @test _compat_floor("PormGNotADependency") === nothing
 
@@ -300,6 +301,35 @@ end
     @test entry !== nothing
     @test entry !== nothing && occursin(r"^[0-9][0-9.,\s]*$", entry)
     @test _compat_floor(name) >= floor
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A driver extension's floor agrees with `[compat]` (#1719)
+# What: `PormGPostgresExt._DRIVER_FLOOR` and `PormGMySQLExt._DRIVER_FLOOR`, the versions each
+#   extension's `__init__` warns below, against the `[compat]` lower bound of `Postgres` / `MySQL` (which
+#   the #574 testset above keeps at or above its measured floor). The constant is read from the loaded
+#   extension when it is loaded, and parsed from `ext/<name>.jl` either way, so the guard also bites in an
+#   environment without the driver.
+# Expected: for each driver `_DRIVER_FLOOR` equals the `[compat]` lower bound (Postgres 2.6.0, MySQL
+#   2.2.2), and the parsed source agrees with the loaded constant. No SQL.
+# Why: Julia does not check a weak dependency's `[compat]` when it loads an extension (#1719), so the
+#   floor lives twice: `[compat]` for the resolver, the constant for the load-time warning. Raising one
+#   without the other would warn below the wrong version, or not at all. Equality, not `>=`: a floor
+#   raised in `[compat]` is a floor the warning must name. Mutation gate: `MySQL = "2.2.3"` in
+#   `[compat]`, or `_DRIVER_FLOOR = v"2.5.0"` in `ext/PormGPostgresExt.jl`, fails here.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "A driver extension's floor agrees with [compat] (#1719)" begin
+  for (name, ext) in (("Postgres", :PormGPostgresExt), ("MySQL", :PormGMySQLExt))
+    src = read(joinpath(pkgdir(PormG), "ext", "$(ext).jl"), String)
+    m = match(r"^const _DRIVER_FLOOR = v\"([0-9.]+)\"$"m, src)
+    @test m !== nothing
+    m === nothing && continue
+    parsed = VersionNumber(m.captures[1])
+    mod = Base.get_extension(PormG, ext)
+    floor = mod === nothing ? parsed : mod._DRIVER_FLOOR
+    mod === nothing || @test parsed == floor
+    @test floor == _compat_floor(name)
   end
 end
 

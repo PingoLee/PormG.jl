@@ -789,13 +789,13 @@ end
     #      driver's true limit: post-fix → a 2-element Vector; pre-fix (uncapped) → a
     #      single un-split SQL String, so `res isa Vector` fails (mutation gate).
     #   2. execute — proves the auto-split writes the FULL row set correctly across the
-    #      chunk boundary. On PostgreSQL the limit is the driver's (65535 on LibPQ, 32767
-    #      on Postgres.jl, #1447), so pre-fix this also overflows the driver; on SQLite the runtime limit can exceed our
+    #      chunk boundary. On PostgreSQL the limit is the driver's (65535 under both
+    #      drivers, #1447, #1662), so pre-fix this also overflows the driver; on SQLite the runtime limit can exceed our
     #      conservative 32766 default, so there the execute is a correctness check (the
     #      show_query assertion is the SQLite gate).
     #
-    # nrows tracks the live backend limit: 4096 rows on SQLite (32766) and Postgres.jl
-    # (32767), 8192 on LibPQ (65535).
+    # nrows tracks the live backend limit: 4096 rows on SQLite (32766), 8192 on
+    # PostgreSQL (65535), 513 on MySQL.jl (4096).
     #
     # Since #672 PostgreSQL binds one ARRAY per column — 8 parameters whatever the row
     # count — so there the cap never binds: chunk_size == nrows is honoured as ONE
@@ -875,6 +875,36 @@ end
             @test last_row[:nullable_int] == nrows
         finally
             _clear_bulk_update_scratch_rows!()
+        end
+    end
+
+    # What: a bulk_insert given a non-positive `chunk_size` splits under the driver's limit on every engine,
+    #   PostgreSQL included: `fld(limit, 8)` rows of the 8-column table per statement. 4096 rows, 32768 cells
+    #   (one past the ceiling PormG held Postgres.jl to), are `cld(4096, fld(limit, 8))` statements: one on
+    #   PostgreSQL under either driver (65535), two on SQLite (32766), eight on MySQL.jl (4096).
+    # SQL: the INSERTs `show_query = :sql` builds, one per chunk (a String for one, a Vector for more); none
+    #   is sent, so the frame needs no parent rows.
+    # Why (#1662): a positive chunk_size binds column arrays on PostgreSQL and is never capped (#672), but a
+    #   non-positive one falls back to the driver's limit, which PormG held at 32767 under Postgres.jl after
+    #   the driver had started binding 65535: this frame was two statements there where one does.
+    @testset "a non-positive chunk_size splits under the driver's limit (#1662)" begin
+        per_statement = fld(expected_parameter_limit(), 8)
+        columns = ["id", "label", "required_parent_id", "optional_parent_id",
+                   "event_date", "is_active", "event_time", "nullable_int"]
+        for nrows in (per_statement, per_statement + 1, 4096)
+            frame = DataFrame(
+                id                 = [6_000_000 + i for i in 1:nrows],
+                label              = ["chunk1662-$(i)" for i in 1:nrows],
+                required_parent_id = fill(1, nrows),
+                optional_parent_id = fill(1, nrows),
+                event_date         = fill(Date(2024, 1, 1), nrows),
+                is_active          = fill(true, nrows),
+                event_time         = fill(DateTime(2024, 1, 1, 0, 0, 0), nrows),
+                nullable_int       = collect(1:nrows),
+            )
+            res = bulk_insert(M.Bulk_update_payload_scratch.objects, frame,
+                              columns = columns, chunk_size = 0, show_query = :sql)
+            @test (res isa String ? 1 : length(res)) == cld(nrows, per_statement)
         end
     end
 end

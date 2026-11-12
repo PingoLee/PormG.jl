@@ -1321,8 +1321,8 @@ _sqlite_param_limit(version_number::Integer) = version_number >= 3032000 ? 32766
 
 # Max bind parameters one prepared statement accepts, dispatched on the pool MARKER type so
 # core never names a concrete driver (see src/Backend.jl). PostgreSQL: the driver's
-# (`backend_postgres_parameter_limit`): 65535 on LibPQ, the protocol's unsigned 2-byte count in the
-# Bind message; 32767 on Postgres.jl, which writes that count as an `Int16` (#1447). SQLite: probed
+# (`backend_postgres_parameter_limit`): 65535 under LibPQ and Postgres.jl alike, the protocol's unsigned
+# 2-byte count in the Bind message (#1447, #1662). SQLite: probed
 # from the library version.
 _backend_parameter_limit(conn::PormGPostgres) = backend_postgres_parameter_limit(conn)
 # #1452: through `_server_version`, so an offline SQLite key chunks by the version it states.
@@ -1686,8 +1686,8 @@ Inserts multiple rows into the database in bulk from any Tables.jl table (#1344)
   - `columns`: Optional. Specifies the columns to insert and their mappings. Can be `nothing`, a `String`, a `Pair{String, String}`, or a `Vector` of these. If `nothing`, all columns of the table are used.
   - `chunk_size::Integer`: Optional. The number of rows to insert in each batch (default: 1000).
     PostgreSQL binds one array per column, so a positive batch is used as given (a non-positive
-    one falls back to the driver's bind-parameter limit ÷ columns rows: 65,535 on LibPQ, 32,767 on
-    Postgres.jl); SQLite binds one parameter per cell and caps it automatically to stay under its
+    one falls back to the driver's bind-parameter limit ÷ columns rows: 65,535 under LibPQ and
+    Postgres.jl alike); SQLite binds one parameter per cell and caps it automatically to stay under its
     bind-parameter limit.
   - `show_query::Symbol`: Optional. Return the generated SQL instead of executing it — `:sql`,
     `:dict`, `:inspection`, or `:params` (see Query Inspection). Defaults to `:execute` (run it).
@@ -2839,8 +2839,8 @@ Performs a bulk update operation on a database table using the provided Tables.j
 - `show_query::Symbol`: (Optional) `:execute` (the default) runs the update. The dry-run modes (`:sql`, `:dict`, `:inspection`, `:params`, `:none`) build the statement without executing it and return it in that form — one result per chunk, as a `Vector` when there is more than one chunk (`:none` returns `nothing` per chunk).
 - `chunk_size::Integer`: (Optional) Number of rows to process per chunk. Defaults to `1000`.
   PostgreSQL binds one array per column, so a positive chunk is used as given (a non-positive
-  one falls back to the driver's bind-parameter limit ÷ columns rows: 65,535 on LibPQ, 32,767 on
-  Postgres.jl); SQLite and MySQL bind one parameter per cell and cap it automatically to stay under
+  one falls back to the driver's bind-parameter limit ÷ columns rows: 65,535 under LibPQ and
+  Postgres.jl alike); SQLite and MySQL bind one parameter per cell and cap it automatically to stay under
   their bind-parameter limit.
 
 # Handler scope

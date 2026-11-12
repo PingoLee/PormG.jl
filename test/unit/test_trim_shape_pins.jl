@@ -636,6 +636,115 @@ end
     @test Configuration._resolve_postgres_driver("libpq"; source = "test") === :libpq
   end
 
+  # What: the boot path of a configuration built in code, and the readers `load` shares with it (#1599
+  #   layer 1): `register_connection`'s block, a resolver's `Dict` answer (`_register_resolved!`),
+  #   `_build_connection_pool!` and the monitors it wires, `_is_unset`, `_conninfo_value` and the MySQL
+  #   conninfo, the list settings (`extensions:`, `ignore_tables:`), the adapter comparison, the older
+  #   `options:` spelling, and the capability table's `_supporting_backends`.
+  # Expected: no dynamic call in any of them, at the types they receive (a value read from the
+  #   `Dict{String,Any}` block is an `Any`). `ensure_before_connect!` keeps exactly one, the call on the
+  #   user's hook (as each per-pool copy did before), and is `@nospecialize`, so one compiled body serves
+  #   every pool type: the `nospecialize` assertion is the one that tells the two apart. The answers are the untyped code's,
+  #   including for a resolver `Dict` and a list of a type no branch names (the one dynamic arm each
+  #   keeps) and for an entry `String` cannot convert, which still raises `MethodError`.
+  # Why: each was a verifier row of the trimmed fixture (#1599, layer 1: a call on an `Any` value or on
+  #   an abstract `Pair`/`AbstractDict`/`AbstractVector`/`DataType`, and the monitor calls on a pool
+  #   union that inference widened to the abstract `PostgresConnectionPool`), and a dispatch per call
+  #   under the JIT. The hook and the resolver are the user's functions, so their one call stays.
+  @testset "the configuration built in code and the readers load shares are typed (#1599, layer 1)" begin
+    S = Configuration.Settings
+    CP = PormG.ConnectionPool
+    # The methods the code of signature type `tt` `:invoke`s, as signature types.
+    invokes_in(tt) = [mi.specTypes for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+                      for st in ci.code if st isa Expr && st.head === :invoke
+                      for mi in ((st.args[1] isa Core.CodeInstance ? st.args[1].def : st.args[1]),)
+                      if mi isa Core.MethodInstance]
+    # The reviewed open arms: the one dynamic call each keeps for a type no branch names.
+    open_arms = Tuple(getfield(Configuration, n) for n in (:_options_split_read_write_other, :_config_entries_other,
+                      :_entry_string_other, :_cfg_text_other, :_is_blank_other) if isdefined(Configuration, n))
+    @test isempty(_dynamic_calls(Configuration._is_unset, (Any,)))
+    @test isempty(_dynamic_calls(Configuration._conninfo_value, (String, Any)))
+    @test isempty(_dynamic_calls(Configuration._mysql_conninfo, (Dict{String,Any},)))
+    @test isempty(_dynamic_calls_deep(Configuration._options_split_read_write, (Any,); depth = 1, skip = open_arms))
+    @test isempty(_dynamic_calls(Configuration._configured_extensions, (S,)))
+    # Its keyword body, read directly (`what`, `blank`, the function, then the positional arguments): it
+    # has no defaults for its keywords, so a call without them never reaches the body.
+    prefix_body = Base.bodyfunction(only(methods(Configuration._configured_prefix_list)))
+    @test isempty(_dynamic_calls(prefix_body, (String, String, typeof(Configuration._configured_prefix_list), S, String)))
+    @test isempty(_dynamic_calls(Configuration._builtin_ignores_for_adapter, (Any,)))
+    @test isempty(_dynamic_calls(Configuration._build_connection_pool!, (S, String)))
+    @test isempty(_dynamic_calls(Configuration._register_resolved!, (String, Any)))
+    # The helpers those call, pinned directly: a pin reads one body, not its callees'.
+    @test isempty(_dynamic_calls(Configuration._register_resolved_dict!, (String, Dict{String,Any})))
+    @test isempty(_dynamic_calls(Configuration._register_resolved_dict!, (String, Dict{String,String})))
+    @test isempty(_dynamic_calls(Configuration._push_extension_name!, (Vector{String}, Any)))
+    @test isempty(_dynamic_calls(Configuration._push_prefix_entry!, (Vector{String}, AbstractString, String, String)))
+    # `register_connection` builds its block with one `setindex!` per entry, not `Dict(pairs...)`.
+    rc_body = only(T for T in invokes_in(Base.signature_type(Configuration.register_connection, (String, String)))
+                   if occursin("#register_connection#", string(T.parameters[1])))
+    @test !any(T -> T <: Tuple{Type{<:Dict}, Vararg{Pair}}, invokes_in(rc_body))
+    @test isempty(_dynamic_calls_deep(PormG.Kernel._supporting_backends, (Symbol,); depth = 2))
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.MySQLConnectionPool)
+      @test length(_dynamic_calls(Configuration.ensure_before_connect!, (P,))) == 1
+      @test only(methods(Configuration.ensure_before_connect!, (P,))).nospecialize != 0
+    end
+
+    # The answers. `_is_unset`: blank text of any string type is unset, a non-string never is.
+    for v in (nothing, "", "  ", SubString(" x ", 1, 1), Test.GenericString(" "))
+      @test Configuration._is_unset(v) === true
+    end
+    for v in ("x", SubString("ax", 2), Test.GenericString("x"), 0, false, :x)
+      @test Configuration._is_unset(v) === false
+    end
+    # `_conninfo_value` spells a value as `string(v)` did, quoted.
+    for v in ("a b", :sym, 7, 2.5, true, nothing, 1//2, SubString("xy", 2))
+      @test Configuration._conninfo_value("k", v) == "'" * string(v) * "'"
+    end
+    @test Configuration._mysql_conninfo(Dict{String,Any}("host" => "127.0.0.1", "port" => 3307,
+                                                         "username" => "f1", "database" => "f1")) ==
+          "host='127.0.0.1' port='3307' user='f1' dbname='f1'"
+    # The list settings: the YAML `Vector{Any}`, a `Vector{String}`, another `AbstractVector`, a bare string.
+    ext(v) = Configuration._configured_extensions(S(db_config_settings = Dict{String,Any}("extensions" => v)))
+    @test ext(Any["unaccent", nothing, " UnAccent ", ""]) == ["unaccent"]
+    @test ext(view(["Unaccent", "x"], 1:1)) == ["unaccent"]
+    @test ext(SubString(" Unaccent ", 1)) == ["unaccent"]
+    @test_throws MethodError ext(Any["unaccent", 1])
+    ign(v) = Configuration._configured_ignore_tables(S(db_config_settings = Dict{String,Any}("ignore_tables" => v)))
+    @test ign(Any["legacy_", nothing, " etl_ ", "legacy_"]) == ["legacy_", "etl_"]
+    @test ign(view(["legacy_"], 1:1)) == ["legacy_"]
+    @test ign(Test.GenericString("legacy_")) == ["legacy_"]
+    @test_throws PormG.InvalidConfigurationError ign(Any["legacy_", 3])
+    @test_throws PormG.InvalidConfigurationError ign(("legacy_",))
+    # The adapter comparison: text of either string type matches, a `Symbol` does not (as `==` said).
+    @test Configuration._builtin_ignores_for_adapter(SubString("xSQLite", 2)) === PormG.sqlite_ignore_schema
+    @test_throws PormG.InvalidConfigurationError Configuration._builtin_ignores_for_adapter(:SQLite)
+    # `options:`: a YAML mapping, the placeholder, a block in code, another dict type, no block.
+    @test Configuration._options_split_read_write(Dict{Any,Any}("sqlite_split_read_write" => "yes")) === true
+    @test Configuration._options_split_read_write(Dict{String,String}()) === false
+    @test Configuration._options_split_read_write(IdDict{String,Any}("sqlite_split_read_write" => true)) === true
+    @test Configuration._options_split_read_write(nothing) === false
+
+    # `register_connection` stores the block it always stored, and a resolver's `Dict` of a type no branch
+    # names still registers (through `_register_resolved_other!`).
+    key = "_tsp_layer1_res"
+    try
+      Configuration._register_resolved!(key, IdDict{String,Any}("url" => ":memory:", "adapter" => "SQLite",
+                                                                "pool_size" => 1, "env" => "test",
+                                                                "change_data" => true))
+      settings = PormG.config[key]
+      @test settings.connections isa CP.SQLiteConnectionPool
+      @test settings.change_data === true && settings.app_env == "test"
+      block = settings.db_config_settings
+      @test sort!(collect(keys(block))) == sort!(["adapter", "url", "pool_size", "sqlite_split_read_write",
+        "idle_timeout", "max_lifetime", "pool_timeout", "leak_detection_threshold", "fail_fast_on_connect"])
+      @test block["adapter"] == "SQLite" && block["url"] == ":memory:" && block["pool_size"] === 1
+      @test block["idle_timeout"] === 0 && block["pool_timeout"] === Float64(PormG.DEFAULT_POOL_TIMEOUT)
+      @test block["fail_fast_on_connect"] === true && block["sqlite_split_read_write"] === false
+    finally
+      haskey(PormG.config, key) && Configuration.unregister_connection(key)
+    end
+  end
+
   # What: the pool's calls into code that may be defined later than the task making them (the SQLite
   #   worker's `backend_execute`, a deferred or reaped `close`).
   # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its

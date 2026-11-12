@@ -883,6 +883,17 @@ function _cfg_text(@nospecialize(v))::Union{Nothing, String}
 end
 @noinline _cfg_text_other(@nospecialize(v))::String = string(v)
 
+# `v == s` for a configured value and a literal (#1599, layer 1): typed for text and `nothing`, so a
+# comparison on a value read from the block is no dynamic call; any other value takes the one dynamic
+# `==` it always took (`_cfg_equals_other`), with `==`'s answer, a `missing` included.
+function _cfg_equals(@nospecialize(v), s::String)
+  v === nothing && return false
+  v isa String && return v == s
+  v isa SubString{String} && return v == s
+  return _cfg_equals_other(v, s)
+end
+@noinline _cfg_equals_other(@nospecialize(v), s::String) = v == s
+
 # The text of `key` in the block, or `nothing` when it is absent or `nothing`.
 _cfg_string(settings::PormGSettings, key::String)::Union{Nothing, String} =
   _cfg_text(get(settings.db_config_settings, key, nothing))
@@ -974,8 +985,12 @@ end
 # converting the DSN to a C string throws `ArgumentError: embedded NULs are not allowed in C strings:
 # "<the whole DSN>"`, which `PoolConnectError` keeps as its cause — the password printed verbatim
 # beside the redacted copy. Rejected here instead, naming the key and never the value.
-function _conninfo_value(key::AbstractString, v)
-  s = string(v)
+#
+# `v` is not specialized, and its text is `_cfg_text`'s, which is `string(v)` for every value: the MySQL
+# conninfo reads it from the `Dict{String,Any}` block, so it is an `Any` there, and a call on an `Any`
+# to a method that specializes is a dynamic one (#1599, layer 1).
+function _conninfo_value(key::AbstractString, @nospecialize(v))
+  s = something(_cfg_text(v), "nothing")
   '\0' in s && throw(InvalidConfigurationError(
     "connection.yml: `$key` contains a NUL character, which a connection string cannot carry"))
   return "'" * replace(s, "\\" => "\\\\", "'" => "\\'") * "'"
@@ -1034,9 +1049,12 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   adapter = _cfg_string(settings, "adapter")
-  # #1606: the pool is built into a local, so the monitor calls below take it at its concrete type;
-  # `settings.connections` reads back as the field's untyped union.
-  pool = if adapter == "SQLite"
+  # #1606: each branch hands the pool it built to `_install_built_pool!`, so the monitor calls there
+  # take it at its concrete type; `settings.connections` reads back as the field's untyped union. Not a
+  # local assigned from the `if`: the branches' union (SQLite, a pool per PostgreSQL driver, MySQL) is
+  # wider than inference keeps, and it widened to the abstract `PostgresConnectionPool`, so every
+  # monitor call on it was a dynamic one (#1599, layer 1).
+  if adapter == "SQLite"
     dbname = something(_cfg_string(settings, "host"), _cfg_string(settings, "database"), Some(nothing))
 
     # SQLite reads two unrelated kinds of string here: a filesystem path, and its own keywords (#545) —
@@ -1063,7 +1081,8 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     end
 
     @pormg_debug false
-    CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    pool = CP.SQLiteConnectionPool(db_path; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    return _install_built_pool!(settings, pool, idle_timeout, max_lifetime, leak_detection_threshold)
 
   elseif adapter == "PostgreSQL"
     dns = String[]
@@ -1094,12 +1113,14 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
     driver = _resolve_postgres_driver(get(settings.db_config_settings, "postgres_driver", nothing);
                                       source = "connection.yml")
 
-    CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    pool = CP.PostgresConnectionPool(dns_str; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    return _install_built_pool!(settings, pool, idle_timeout, max_lifetime, leak_detection_threshold)
 
   elseif adapter == "MySQL"
-    CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
-                           pool_size=pool_size, pool_timeout=pool_timeout,
-                           fail_fast_on_connect=fail_fast_on_connect)
+    pool = CP.MySQLConnectionPool(_mysql_conninfo(settings.db_config_settings);
+                                  pool_size=pool_size, pool_timeout=pool_timeout,
+                                  fail_fast_on_connect=fail_fast_on_connect)
+    return _install_built_pool!(settings, pool, idle_timeout, max_lifetime, leak_detection_threshold)
 
   else
     # #1691: never the value; `read_db_connection_data` refuses it first for a `load`.
@@ -1107,6 +1128,13 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
       "environment \"$(settings.app_env)\" (folder $(path)): unsupported `adapter`; " *
       "expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))
   end
+end
+
+# The pool `_build_connection_pool!` built, installed on `settings` with its monitors, at the pool's
+# concrete type (#1599, layer 1): one call per adapter branch, so each call below is static.
+function _install_built_pool!(settings::PormGSettings, pool::P, idle_timeout::Float64, max_lifetime::Float64,
+                              leak_detection_threshold::Float64) where {P<:_SQLEngine}
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
   settings.connections = pool
 
   # Opt the pool into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured.
@@ -1134,12 +1162,40 @@ function _build_connection_pool!(settings::PormGSettings, path::String)
 end
 
 # `sqlite_split_read_write` under `options:`, the older spelling, read as `_build_connection_pool!` did.
-function _options_split_read_write(@nospecialize(options))::Bool
+# #1599 (layer 1): read at the block's concrete type when it has a `String` key type — the
+# `Dict{String,String}` `read_db_connection_data` puts in place of a missing one, or a block built in code.
+# Any other `AbstractDict` takes the one dynamic call in `_options_split_read_write_other`, a YAML mapping
+# (`Dict{Any,Any}`) included: its keys are `Any`, so a lookup in it compares them dynamically anyway.
+@noinline function _options_split_read_write(@nospecialize(options))::Bool
+  options isa Dict{String,Any} && return _options_split_read_write_in(options)
+  options isa Dict{String,String} && return _options_split_read_write_in(options)
   options isa AbstractDict || return false
-  return _options_split_read_write_in(options)
+  return _options_split_read_write_other(options)
 end
-@noinline _options_split_read_write_in(@nospecialize(options::AbstractDict))::Bool =
+_options_split_read_write_in(options::AbstractDict)::Bool =
   haskey(options, "sqlite_split_read_write") ? _cfg_truthy(options["sqlite_split_read_write"]) : false
+@noinline _options_split_read_write_other(@nospecialize(options::AbstractDict))::Bool =
+  _options_split_read_write_in(options)
+
+# The entries of a list setting (`extensions:`, `ignore_tables:`, `unignore_defaults:`) as a
+# `Vector{Any}`, so the readers below iterate a concrete type (#1599, layer 1). YAML parses a list as a
+# `Vector{Any}`, returned as it is; a `Vector{String}` written in code is copied; any other
+# `AbstractVector` takes the one dynamic `collect` in `_config_entries_other`.
+function _config_entries(@nospecialize(raw::AbstractVector))::Vector{Any}
+  raw isa Vector{Any} && return raw
+  raw isa Vector{String} && return Vector{Any}(raw)
+  return _config_entries_other(raw)
+end
+@noinline _config_entries_other(@nospecialize(raw::AbstractVector))::Vector{Any} = collect(Any, raw)
+
+# `String(v)` for an entry of a list setting, typed for the text YAML and code give; any other value
+# takes the one dynamic `String(v)` in `_entry_string_other`, and raises there as it did (#1599, layer 1).
+function _entry_string(@nospecialize(v))::String
+  v isa String && return v
+  v isa SubString{String} && return String(v)
+  return _entry_string_other(v)
+end
+@noinline _entry_string_other(@nospecialize(v))::String = String(v)
 
 """
     _configured_extensions(settings::PormGSettings)::Vector{String}
@@ -1152,22 +1208,23 @@ function _configured_extensions(settings::PormGSettings)::Vector{String}
   raw = get(settings.db_config_settings, "extensions", String[])
   (raw === nothing || raw === missing) && return String[]
 
-  values = if raw isa AbstractString
-    [raw]
+  normalized = String[]
+  if raw isa AbstractString
+    _push_extension_name!(normalized, raw)
   elseif raw isa AbstractVector
-    raw
+    for value in _config_entries(raw)
+      (value === nothing || value === missing) && continue
+      _push_extension_name!(normalized, value)
+    end
   else
     throw(InvalidConfigurationError("The 'extensions' setting must be a string or a list of strings"))
   end
-
-  normalized = String[]
-  for value in values
-    (value === nothing || value === missing) && continue
-    name = lowercase(strip(String(value)))
-    isempty(name) && continue
-    push!(normalized, name)
-  end
   return unique(normalized)
+end
+function _push_extension_name!(normalized::Vector{String}, @nospecialize(value))::Nothing
+  name = lowercase(strip(_entry_string(value)))
+  isempty(name) || push!(normalized, name)
+  return nothing
 end
 
 # #1727: where an `extensions:` entry was written, 1-based and counting the blank items
@@ -1211,20 +1268,28 @@ function _configured_prefix_list(settings::PormGSettings, key::String; what::Str
   # INSIDE a list is refused below, since no key can use one (`blank` says why for each).
   (raw === missing || _is_unset(raw)) && return String[]
 
-  values = raw isa AbstractString ? [raw] : raw isa AbstractVector ? raw :
-    throw(InvalidConfigurationError("The '$(key)' setting must be a string or a list of strings, got $(typeof(raw))"))
-
   normalized = String[]
-  for value in values
-    (value === nothing || value === missing) && continue   # a bare `- ` item, as `extensions:` skips it
-    value isa AbstractString || throw(InvalidConfigurationError(
-      "Every '$(key)' entry must be a string ($(what)), got a value of type $(typeof(value))"))
-    name = String(strip(value))
-    isempty(name) && throw(InvalidConfigurationError(
-      "An '$(key)' entry is blank. $(blank); remove it"))
-    push!(normalized, name)
+  if raw isa AbstractString
+    _push_prefix_entry!(normalized, raw, key, blank)
+  elseif raw isa AbstractVector
+    for value in _config_entries(raw)
+      (value === nothing || value === missing) && continue   # a bare `- ` item, as `extensions:` skips it
+      value isa AbstractString || throw(InvalidConfigurationError(
+        "Every '$(key)' entry must be a string ($(what)), got a value of type $(typeof(value))"))
+      _push_prefix_entry!(normalized, value, key, blank)
+    end
+  else
+    throw(InvalidConfigurationError("The '$(key)' setting must be a string or a list of strings, got $(typeof(raw))"))
   end
   return unique(normalized)
+end
+function _push_prefix_entry!(normalized::Vector{String}, @nospecialize(value::AbstractString),
+                             key::String, blank::String)::Nothing
+  name = String(strip(_entry_string(value)))
+  isempty(name) && throw(InvalidConfigurationError(
+    "An '$(key)' entry is blank. $(blank); remove it"))
+  push!(normalized, name)
+  return nothing
 end
 
 # Built-in ignore entries no connection may remove (#818): PormG's own history table, and SQLite's
@@ -1273,10 +1338,12 @@ end
 # again there, so a connection built without load() is still validated. Names each engine and
 # refuses any other (#1129 item 2) — with the refusal `_build_connection_pool!` gives an unknown
 # adapter, so an unknown adapter is refused here rather than checked against another engine's list.
-function _builtin_ignores_for_adapter(adapter)::Vector{String}
-  adapter == "PostgreSQL" && return postgres_ignore_table
-  adapter == "SQLite" && return sqlite_ignore_schema
-  adapter == "MySQL" && return mysql_ignore_table
+# `adapter` is read from the block, an `Any`: not specialized, and compared through `_cfg_equals`
+# (#1599, layer 1).
+function _builtin_ignores_for_adapter(@nospecialize(adapter))::Vector{String}
+  _cfg_equals(adapter, "PostgreSQL") && return postgres_ignore_table
+  _cfg_equals(adapter, "SQLite") && return sqlite_ignore_schema
+  _cfg_equals(adapter, "MySQL") && return mysql_ignore_table
   throw(InvalidConfigurationError("unsupported `adapter`; expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))   # #1691: never the value
 end
 
@@ -1301,7 +1368,10 @@ function _check_configured_extensions!(settings::PormGSettings;
   isempty(extensions) && return nothing
 
   adapter = get(settings.db_config_settings, "adapter", nothing)
-  if adapter != "PostgreSQL"
+  # `if … else`, not `if adapter != …`: the comparison is typed (`_cfg_equals`, #1599 layer 1), and a `!`
+  # on its answer would be a dynamic call. A `missing` answer raises the same `TypeError` either way.
+  if _cfg_equals(adapter, "PostgreSQL")
+  else
     # #1727: the count, never the entries.
     @warn "Database extensions are only supported for PostgreSQL; ignoring configured extensions" adapter=adapter count=length(extensions) db_def_folder=settings.db_def_folder
     return nothing
@@ -1472,7 +1542,18 @@ const CONNECTION_KEY_ALIASES = Dict{String,String}(
 
 # A key written with no value (`url:`) parses to `nothing`, and one written blank (`url: ''`) to an
 # empty string. Both mean "not set" — neither should be treated as a configured value.
-_is_unset(v) = v === nothing || (v isa AbstractString && isempty(strip(v)))
+#
+# Not specialized (#1599, layer 1): most callers read the value from a `Dict{String,Any}`, and a call on
+# an `Any` to a method that specializes is a dynamic one. Text is read at its concrete type; any other
+# `AbstractString` takes the one dynamic `strip` in `_is_blank_other`.
+function _is_unset(@nospecialize(v))::Bool
+  v === nothing && return true
+  v isa String && return isempty(strip(v))
+  v isa SubString{String} && return isempty(strip(v))
+  v isa AbstractString && return _is_blank_other(v)
+  return false
+end
+@noinline _is_blank_other(@nospecialize(v::AbstractString))::Bool = isempty(strip(v))
 
 # `database:` values SQLite reads as keywords rather than filesystem paths, so `load` must pass them
 # through untouched instead of resolving them against the config folder (see the `db_path` branch).
@@ -2123,19 +2204,33 @@ function _register_resolved!(key::String, @nospecialize(res))::Nothing
     register_connection(key, _resolved_text(key, "url", res[1]);
                         adapter = _resolved_text(key, "adapter", res[2]),
                         pool_size = _resolved_int(key, "pool_size", res[3]))
+  elseif res isa Dict{String,Any}
+    _register_resolved_dict!(key, res)
+  elseif res isa Dict{String,String}
+    _register_resolved_dict!(key, res)
   elseif res isa AbstractDict
-    url = get(res, "url", nothing)
-    url === nothing && return nothing
-    register_connection(key, _resolved_text(key, "url", url);
-                        adapter = _resolved_text(key, "adapter", get(res, "adapter", "PostgreSQL")),
-                        pool_size = _resolved_int(key, "pool_size", get(res, "pool_size", 3)),
-                        postgres_driver = _cfg_text(get(res, "postgres_driver", nothing)),
-                        env = _cfg_text(get(res, "env", nothing)),
-                        change_db = _resolved_bool(key, "change_db", get(res, "change_db", false)),
-                        change_data = _resolved_bool(key, "change_data", get(res, "change_data", false)))
+    _register_resolved_other!(key, res)
   end
   return nothing
 end
+# The `Dict` answer, read at its concrete type (#1599, layer 1): `_register_resolved!` hands over the
+# shapes a `Dict(...)` literal makes (`Dict{String,Any}`, or `Dict{String,String}` when every entry is
+# text), so each `get` below is static. Any other `AbstractDict` takes the one dynamic call in
+# `_register_resolved_other!`.
+function _register_resolved_dict!(key::String, res::AbstractDict)::Nothing
+  url = get(res, "url", nothing)
+  url === nothing && return nothing
+  register_connection(key, _resolved_text(key, "url", url);
+                      adapter = _resolved_text(key, "adapter", get(res, "adapter", "PostgreSQL")),
+                      pool_size = _resolved_int(key, "pool_size", get(res, "pool_size", 3)),
+                      postgres_driver = _cfg_text(get(res, "postgres_driver", nothing)),
+                      env = _cfg_text(get(res, "env", nothing)),
+                      change_db = _resolved_bool(key, "change_db", get(res, "change_db", false)),
+                      change_data = _resolved_bool(key, "change_data", get(res, "change_data", false)))
+  return nothing
+end
+@noinline _register_resolved_other!(key::String, @nospecialize(res::AbstractDict))::Nothing =
+  _register_resolved_dict!(key, res)
 function _resolved_text(key::String, entry::String, @nospecialize(v))::String
   v isa AbstractString && return something(_cfg_text(v), "")
   throw(InvalidConfigurationError("the connection resolver's \"$(entry)\" for \"$(key)\" must be text."))
@@ -2244,18 +2339,20 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     change_data = change_data,
   )
   
-  settings.db_config_settings = Dict{String, Any}(
-    "adapter" => adapter,
-    "url" => url,
-    "pool_size" => pool_size,
-    "sqlite_split_read_write" => sqlite_split_read_write,
-    "idle_timeout" => idle_timeout,
-    "max_lifetime" => max_lifetime,
-    "pool_timeout" => pool_timeout,
-    "leak_detection_threshold" => leak_detection_threshold,
-    "fail_fast_on_connect" => fail_fast_on_connect
-  )
-  postgres_driver === nothing || (settings.db_config_settings["postgres_driver"] = postgres_driver)
+  # One `setindex!` per entry, not `Dict{String,Any}(pairs...)`: the pairs have different value types,
+  # and the constructor's loop over them read each as an abstract `Pair`, a dynamic call (#1599, layer 1).
+  block = Dict{String, Any}()
+  block["adapter"] = adapter
+  block["url"] = url
+  block["pool_size"] = pool_size
+  block["sqlite_split_read_write"] = sqlite_split_read_write
+  block["idle_timeout"] = idle_timeout
+  block["max_lifetime"] = max_lifetime
+  block["pool_timeout"] = pool_timeout
+  block["leak_detection_threshold"] = leak_detection_threshold
+  block["fail_fast_on_connect"] = fail_fast_on_connect
+  postgres_driver === nothing || (block["postgres_driver"] = postgres_driver)
+  settings.db_config_settings = block
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
@@ -2619,7 +2716,9 @@ Run the `before_connect` hook before opening a physical connection: the key's ow
 `load(key; before_connect = f)` (#1232), else the one registered with `set_before_connect_hook`.
 When no hook is registered, connection setup proceeds normally.
 """
-function ensure_before_connect!(pool::_SQLEngine)::Bool
+function ensure_before_connect!(@nospecialize(pool::_SQLEngine))::Bool
+  # `pool` is not specialized (#1599, layer 1): it is only compared by identity, and a method per pool
+  # type made one copy of the hook call, a call on a `Function` value, per pool type.
   key = connection_key_for_pool(pool)
   # #1229: an offline entry renders SQL and never connects. Refused here, before the hook and before
   # any driver sees its placeholder connection string.

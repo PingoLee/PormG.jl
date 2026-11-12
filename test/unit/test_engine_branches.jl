@@ -26,9 +26,10 @@ using Test
 using PormG
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
-# `x isa PormGSQLite`, `x isa Union{PormGPostgres, …}`, `isa(x, PormGSQLite)`, and an adapter string compare.
+# `x isa PormGSQLite`, `x isa Union{PormGPostgres, …}`, `isa(x, PormGSQLite)`, and an adapter string compare
+# (`adapter == "SQLite"`, or the typed `_cfg_equals(adapter, "SQLite")` of #1599 layer 1).
 # MySQL (#1130) counts like the other two: a branch naming it is one more engine decided by name.
-const _EB_PATTERN = r"isa\s+(PormG\.)?PormG(Postgres|SQLite|MySQL)\b|isa\s+Union\{[^}]*PormG(Postgres|SQLite|MySQL)|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite|MySQL)\b|adapter == \"(SQLite|PostgreSQL|MySQL)\""
+const _EB_PATTERN = r"isa\s+(PormG\.)?PormG(Postgres|SQLite|MySQL)\b|isa\s+Union\{[^}]*PormG(Postgres|SQLite|MySQL)|isa\([^,()]+,\s*(PormG\.)?PormG(Postgres|SQLite|MySQL)\b|adapter == \"(SQLite|PostgreSQL|MySQL)\"|_cfg_equals\(adapter, \"(SQLite|PostgreSQL|MySQL)\"\)"
 
 const _EB_REVIEWED = Dict(
   # #1129 item 2 (PR B): ConnectionPool, Configuration and migrations ask engine facts too
@@ -41,13 +42,16 @@ const _EB_REVIEWED = Dict(
   #     driver extension `load` checks, and leaves any other adapter to the reader that refuses it
   #     (three); `_build_connection_pool!` builds each adapter's own pool and refuses any other
   #     (three; the scan sees them since #1606 reads `adapter` typed, where it indexed the dict);
+  #     `_check_configured_extensions!` probes extensions on PostgreSQL only and warns on any other
+  #     adapter (one; an `adapter != …` the scan did not see until #1599 layer 1 spelled it
+  #     `_cfg_equals(adapter, …)`, the typed compare `_builtin_ignores_for_adapter` uses too);
   #   - ConnectionPool: waiting for the SQLite worker before closing a handle, and SQLite's benign
   #     "no transaction is active" rollback — quirks whose other arm is the engine-neutral path;
   #   - planner: SQLite's reserved `sqlite_` index prefix, and its three `ADD COLUMN` limits, whose
   #     other arm is the plain `ADD COLUMN` every engine has;
   #   - importers: the SQLite-only and MySQL-only importers' capability refusals (each reads its own
   #     catalog, so the other arm is a refusal, not another engine's path); tools: the setup wizard's choice.
-  "src/Configuration.jl" => 14,
+  "src/Configuration.jl" => 15,
   "src/ConnectionPool.jl" => 2,
   "src/migrations/importers.jl" => 2,
   "src/migrations/planner.jl" => 4,

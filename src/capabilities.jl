@@ -248,7 +248,13 @@ end
 # MySQL's row came with phase 2b (#1130), the phase that decides what an expression MEANS there: every
 # `_MEANING_DEPARTURES` row places each backend listed here (`test/unit/test_meaning_departures.jl`),
 # and `docs/src/backends.md` carries a column for each.
-const _BACKENDS = ("PostgreSQL" => PormGPostgres, "SQLite" => PormGSQLite, "MySQL" => PormGMySQL)
+#
+# Each row is a `Pair{String, Type{B}}`, not the `Pair{String, DataType}` that `"name" => B` builds: a
+# `DataType` value hides which backend it is, so `_supporting_backends`' `_has_feature(last(p), …)` was a
+# dynamic call (#1599, layer 1). Typed, each row's backend is a constant in its own call.
+_backend_row(name::String, ::Type{B}) where {B<:PormGBackend} = Pair{String, Type{B}}(name, B)
+const _BACKENDS = (_backend_row("PostgreSQL", PormGPostgres), _backend_row("SQLite", PormGSQLite),
+                   _backend_row("MySQL", PormGMySQL))
 _backend_name(conn) = begin
   i = findfirst(p -> conn isa last(p), _BACKENDS)
   i === nothing ? string(nameof(typeof(conn))) : first(_BACKENDS[i])

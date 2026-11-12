@@ -14,7 +14,8 @@ query (the walls left are in #1599's tables).
 
 ## Drivers
 
-The fixture runs on SQLite; a MySQL variant is in `mysql/` (see "The MySQL variant" below). For PostgreSQL in a `juliac --trim` build, use Postgres.jl
+The fixture runs on SQLite; a MySQL variant is in `mysql/` (see "The MySQL variant" below). For
+PostgreSQL in a `juliac --trim` build, use Postgres.jl
 (`register_connection(…; adapter = "PostgreSQL", postgres_driver = "Postgres")`). A copy of this
 fixture switched to it (not committed) builds, and has not been run. A binary built with LibPQ 1.18
 aborts before `main` with `InitError(:Infinity, MethodError(!, (false,)))`: the `__init__` of

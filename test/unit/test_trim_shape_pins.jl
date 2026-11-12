@@ -2872,8 +2872,12 @@ end
   #   (`backend_num_rows(pool, fetch(pool, sql))`, the extension probe's shape, #1771) and in the method's
   #   body; then the count itself, for the driver's `Result` and for any other value (the open arm).
   # Expected: no dynamic call at the call site or in the body, the open arm one; the same count.
-  # Why: the method specialized on an `Any` result, so the call stayed a dispatch although it is the only
-  #   method that matches, and its `length` was one more (#1771's residue, #1599 layer 2).
+  #   Also: `backend_execute` still returns the driver's `Result`, the type the fast arm names, and the
+  #   affected-row count at the same call shape is static.
+  # Why: the method specialized on an `Any` result and was not inlined (its own `length` was dynamic), so
+  #   the call stayed a dispatch although it is the only method that matches (#1771's residue, #1599
+  #   layer 2). If the statement path stopped returning `Postgres.Result`, every count would take the open
+  #   arm again with no other test noticing.
   @testset "a Postgres.jl result's row count is a static call (#1599 layer 2)" begin
     pgx = Base.get_extension(PormG, :PormGPostgresExt)
     P = PormG.ConnectionPool.PostgresConnectionPool{:postgres}
@@ -2882,6 +2886,8 @@ end
     @test _dynamic_calls(count_on, (P, String)) == String[]
     @test _dynamic_calls(PormG.backend_num_rows, (P, Any)) == String[]
     @test length(_dynamic_calls(pgx._num_rows_other, (Any,))) == 1
+    @test Base.return_types(PormG.backend_execute, (P, PormG.backend_handle_type(P), String, Any)) == [Postgres.Result]
+    @test _dynamic_calls(PormG.backend_num_affected_rows, (P, Any)) == String[]
     pool = PormG.ConnectionPool.PostgresConnectionPool("host=127.0.0.1 port=1 dbname=f1"; pool_size = 1, driver = :postgres)
     @test PormG.backend_num_rows(pool, [(1, "Senna"), (2, "Prost")]) == 2   # the open arm, as before
   end

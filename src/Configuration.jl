@@ -1950,15 +1950,17 @@ end
 # that window — that is an `@error`, not a footnote: the operator otherwise sees only an
 # unexplained failure in whatever request was holding one. The close itself logs a second line
 # (`@warn`, with the count it actually force-closed) if any were still out when the window expired.
+#
+# The count is read through the pool (#1756). It used to call a `pool_stats` that is not bound here
+# (since #550), inside a bare `catch` that swallowed the `UndefVarError`, so `in_use` was always 0 and
+# the `@error` below never fired. No `catch` now: every caller names a key it holds, and the count is
+# a lock and two counts. A stand-in pool with no slots (a test's `struct X <: PormGPostgres end`, which
+# `close_pool!` also passes over, #147) counts 0, as it did, rather than raising from `load`.
 function _warn_pool_takeover(msg::String, path::String, existing::String,
                              config::Dict{String,Settings})
-  in_use = 0
-  try
-    pool = config[existing].connections
-    pool === nothing || (in_use = pool_stats(pool).in_use)
-  catch
-    # swallows any error from the in-use count: a diagnostic must never break the load it describes.
-  end
+  pool = config[existing].connections
+  in_use = pool === nothing ? 0 :
+    getfield(parentmodule(@__MODULE__), :ConnectionPool).with_pool(_takeover_in_use, pool)::Int
   if in_use > 0
     @error(msg * " Connections are currently checked out of that pool and will be closed; " *
            "in-flight queries using them will fail. Load configurations at boot, before traffic.",
@@ -1968,6 +1970,14 @@ function _warn_pool_takeover(msg::String, path::String, existing::String,
   end
   return nothing
 end
+
+# `with_pool`'s callee for the count above, at the pool's concrete type (#1622), out of line as
+# `_count_rows_on` is. The pool types are defined in ConnectionPool.jl, included after this file, so
+# they cannot be named here: a pool is counted when its type has the slots `pool_stats` reads, a test
+# decided per type when the call is compiled.
+@noinline _takeover_in_use(pool::P) where {P<:_SQLEngine} =
+  _has_pool_slots(P) ? getfield(parentmodule(@__MODULE__), :ConnectionPool).pool_stats(pool).in_use::Int : 0
+_has_pool_slots(::Type{P}) where {P} = hasfield(P, :lock) && hasfield(P, :available) && hasfield(P, :connections)
 
 # `implicit = true` is `Models.set_models`' channel and nobody else's: it records on the new entry
 # that the application did not choose this configuration (#553). `Models._pick_connect_key` and

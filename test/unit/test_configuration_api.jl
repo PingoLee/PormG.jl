@@ -108,6 +108,55 @@ PormG.backend_num_rows(pool::_CfgProbePool, ::Symbol) = pool.rows
     end
 end
 
+@testset "a pool takeover with a connection checked out logs @error (#1756)" begin
+    # What: `_warn_pool_takeover`, the line `load` logs before it closes an entry's pool to replace it
+    #   (a reload with another environment or folder, a folder already loaded under another key).
+    # Expected SQL: none (an SQLite `:memory:` pool; the lease opens a handle and runs no statement).
+    #   With a connection leased the line is the `@error` naming the checked-out connections, with
+    #   `in_use = 1`; once it is released, and for an entry with no pool, it is the plain `@warn`.
+    # Why: the count called a `pool_stats` not bound in Configuration (since #550), and a bare `catch`
+    #   swallowed the `UndefVarError`, so `in_use` was always 0: the `@error` could never fire, and an
+    #   operator whose in-flight queries died in a takeover saw only the `@warn` (#1756, decision 1).
+    CP = PormG.ConnectionPool
+    key = "cfg1756_takeover"
+    msg = "PormG: a takeover of an entry that is already loaded."
+    takeover(entries) = first(Test.collect_test_logs() do
+        PormG.Configuration._warn_pool_takeover(msg, "f1_models", key, entries)
+    end)
+    try
+        PormG.Configuration.register_connection(key, ":memory:"; adapter = "SQLite", env = "test", pool_size = 1)
+        pool = PormG.config[key].connections
+        conn = CP.acquire_connection(pool)
+        released = false
+        try
+            logs = takeover(PormG.config)
+            @test length(logs) == 1
+            @test logs[1].level == Logging.Error
+            @test occursin("Connections are currently checked out of that pool and will be closed", string(logs[1].message))
+            @test logs[1].kwargs[:in_use] == 1
+            @test logs[1].kwargs[:existing_key] == key
+            CP.release_connection(pool, conn)
+            released = true
+            logs = takeover(PormG.config)
+            @test length(logs) == 1
+            @test logs[1].level == Logging.Warn
+            @test logs[1].message == msg
+            @test !haskey(logs[1].kwargs, :in_use)
+        finally
+            released || CP.release_connection(pool, conn)
+        end
+        # An entry with no pool built has nothing checked out.
+        logs = takeover(Dict{String, PormG.Configuration.Settings}(key => PormG.Configuration.Settings()))
+        @test length(logs) == 1 && logs[1].level == Logging.Warn
+        # A stand-in pool with no slots (#147) counts 0: the `@warn`, not a `FieldError` from `load`.
+        logs = takeover(Dict{String, PormG.Configuration.Settings}(
+            key => PormG.Configuration.Settings(connections = _CfgProbePool(0))))
+        @test length(logs) == 1 && logs[1].level == Logging.Warn
+    finally
+        haskey(PormG.config, key) && PormG.Configuration.unregister_connection(key)
+    end
+end
+
 @testset "Explicit env reload keeps Settings synchronized" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")

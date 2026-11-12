@@ -784,6 +784,20 @@ end
     @test length(_dynamic_calls(Configuration._count_rows_on, (CP.PostgresConnectionPool{:postgres}, String))) == 1
   end
 
+  # What: `_warn_pool_takeover`, the line `load` logs before it replaces an entry's pool, and its count.
+  # Expected: no dynamic call in either; the count is `with_pool(_takeover_in_use, pool)`.
+  # Why: it called a `pool_stats` not bound in Configuration, a dynamic call that raised `UndefVarError`
+  #   under a bare `catch` (#1756, decision 1); its log line is pinned by test_configuration_api.jl.
+  @testset "the pool takeover reads its in-use count through the pool (#1756, decision 1)" begin
+    S = Configuration.Settings
+    CP = PormG.ConnectionPool
+    @test isempty(_dynamic_calls(Configuration._warn_pool_takeover, (String, String, String, Dict{String,S})))
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test isempty(_dynamic_calls(Configuration._takeover_in_use, (P,)))
+    end
+  end
+
   # What: the pool's calls into code that may be defined later than the task making them (the SQLite
   #   worker's `backend_execute`, a deferred or reaped `close`).
   # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its

@@ -957,6 +957,10 @@ _whole_number(x, instruc::SQLInstruction) = _integral_valued(x, instruc) || _con
 _whole_kind(::Union{CInt16,CInt32,CInt64}) = true
 _whole_kind(k::CDecimal) = k.scale == 0
 _whole_kind(::Any) = false
+# `_whole_kind(k)` for a kind a caller holds at the abstract `CanonicalType` (#1599 layer 5): one arm per
+# method above, each call static.
+@noinline _whole_kind_any(@nospecialize(k))::Bool =
+  k isa Union{CInt16,CInt32,CInt64} ? _whole_kind(k) : k isa CDecimal ? _whole_kind(k) : false
 
 # #1040 — the scale a declared numeric type rounds to, or `nothing` for a type with none. PostgreSQL
 # rounds a value cast to `numeric(p, s)` to `s` digits (half away from zero) and `numeric(p)` to a
@@ -1962,7 +1966,9 @@ end
 # with the vector's columns and config renders it.
 function _render_alias_search(v::SQLTypeOper, source, label::AbstractString, instruc::SQLInstruction)
   (source isa SQLTypeField && _is_fts_node(source.field, "SEARCH_VECTOR")) || return nothing
-  vector = source.field
+  # #1599 layer 5: `_is_fts_node` is `true` only for an `FObject`, so the assertion names the type the slot
+  # read already has, and the vector renders, and `Dialect.search` is called, statically.
+  vector = source.field::FObject
   v.operator == "search" || throw(FilterError(
     "The projection alias \e[31m$(label)\e[0m is a SearchVector, and the only lookup on it is " *
     "\e[32m@search\e[0m: \e[32m\"$(label)__@search\" => SearchQuery(…)\e[0m. A tsvector has no order or " *

@@ -116,14 +116,14 @@ end
 #
 # #1599 slice A: typed #1604's `AnyField`, which both lookups hold, not the abstract `PormGField`, so a
 # call on the answer is static (#1735).
-function _operand_column_field(field_name, instruc::SQLInstruction)::Union{Models.AnyField,Nothing}
+function _operand_column_field(@nospecialize(field_name), instruc::SQLInstruction)::Union{Models.AnyField,Nothing}
   if field_name isa String
     model = instruc.object.model
     haskey(model.fields, field_name) && return model.fields[field_name]
     return memo_field(instruc, memo_key(:base, field_name))   # #474: base-model namespace
   end
   field_name isa JoinedReference && return memo_field(instruc, memo_key(field_name))
-  field_name isa FExpression && return _operand_column_field(field_name.field_name, instruc)
+  field_name isa FExpression && return _operand_column_field(_fexpr_left(field_name), instruc)
   return nothing
 end
 
@@ -157,7 +157,7 @@ end
 # is precisely the defect this closes.
 #
 # One lookup, two policies, each named for its job — not two implementations of one rule.
-function _projection_column_kind(field_name, instruc::SQLInstruction)::TemporalKind
+function _projection_column_kind(@nospecialize(field_name), instruc::SQLInstruction)::TemporalKind
   f = _operand_column_field(field_name, instruc)
   f === nothing && return nothing
   return field_canonical_kind(f)
@@ -231,24 +231,30 @@ end
 # folding sub-second components into a single fractional `:second`. Zero-valued components are
 # dropped. Month/Year are kept as calendar units (SQL renders them natively) rather than rejected
 # the way `_duration_to_nanoseconds` does — nanosecond conversion is ambiguous, SQL interval math is not.
-function _decompose_period(period::Union{Dates.Period, Dates.CompoundPeriod})
-  cp = period isa Dates.CompoundPeriod ? period : Dates.CompoundPeriod(period)
+#
+# #1599 layer 5: one compiled body (`@nospecialize`), since every caller holds the period untyped (an
+# `FExpression` operand, an `Interval`'s slot). `Dates.periods` is a `Vector{Period}`, an abstract element
+# type, so each arm reads its component's value at the concrete type it tested: `Dates.value` on the
+# abstract element dispatched at run time. `CompoundPeriod(Period[p])` is what `CompoundPeriod(p)` builds.
+# A component of another `Period` type has its value read first, as before, then is refused.
+function _decompose_period(@nospecialize(period::Union{Dates.Period, Dates.CompoundPeriod}))
+  cp = period isa Dates.CompoundPeriod ? period : Dates.CompoundPeriod(Dates.Period[period])
   acc = Dict{Symbol, Int}()
   frac_nanos = Int64(0)
   for p in Dates.periods(cp)
-    val = Dates.value(p)
-    if     p isa Year        ; acc[:year]   = get(acc, :year, 0)   + val
-    elseif p isa Quarter     ; acc[:month]  = get(acc, :month, 0)  + 3 * val
-    elseif p isa Month       ; acc[:month]  = get(acc, :month, 0)  + val
-    elseif p isa Week        ; acc[:week]   = get(acc, :week, 0)   + val
-    elseif p isa Day         ; acc[:day]    = get(acc, :day, 0)    + val
-    elseif p isa Hour        ; acc[:hour]   = get(acc, :hour, 0)   + val
-    elseif p isa Minute      ; acc[:minute] = get(acc, :minute, 0) + val
-    elseif p isa Second      ; acc[:second] = get(acc, :second, 0) + val
-    elseif p isa Millisecond ; frac_nanos += Int64(val) * 1_000_000
-    elseif p isa Microsecond ; frac_nanos += Int64(val) * 1_000
-    elseif p isa Nanosecond  ; frac_nanos += Int64(val)
+    if     p isa Year        ; acc[:year]   = get(acc, :year, 0)   + Dates.value(p)
+    elseif p isa Quarter     ; acc[:month]  = get(acc, :month, 0)  + 3 * Dates.value(p)
+    elseif p isa Month       ; acc[:month]  = get(acc, :month, 0)  + Dates.value(p)
+    elseif p isa Week        ; acc[:week]   = get(acc, :week, 0)   + Dates.value(p)
+    elseif p isa Day         ; acc[:day]    = get(acc, :day, 0)    + Dates.value(p)
+    elseif p isa Hour        ; acc[:hour]   = get(acc, :hour, 0)   + Dates.value(p)
+    elseif p isa Minute      ; acc[:minute] = get(acc, :minute, 0) + Dates.value(p)
+    elseif p isa Second      ; acc[:second] = get(acc, :second, 0) + Dates.value(p)
+    elseif p isa Millisecond ; frac_nanos += Int64(Dates.value(p)) * 1_000_000
+    elseif p isa Microsecond ; frac_nanos += Int64(Dates.value(p)) * 1_000
+    elseif p isa Nanosecond  ; frac_nanos += Int64(Dates.value(p))
     else
+      _period_value_other(p)
       throw(InvalidValueError("Unsupported duration component $(typeof(p)) in F-expression date arithmetic"))
     end
   end
@@ -264,6 +270,9 @@ function _decompose_period(period::Union{Dates.Period, Dates.CompoundPeriod})
   end
   return comps
 end
+
+# `Dates.value(p)` on a component of a `Period` type no arm above names: the one dynamic call.
+@noinline _period_value_other(@nospecialize(p)) = (Dates.value(p); nothing)
 
 # #564 — the kind an expression evaluates to, given the kind its LEFT SIDE evaluates to and the
 # duration components applied to it. One rule, one line, no walk.
@@ -335,7 +344,7 @@ _difference_result_kind(_, _) = nothing
 # way `_projection_column_kind` can answer for one. Type first and every joined temporal column silently
 # becomes `nothing` — on PostgreSQL that is `timestamptz + bigint`, a hard error; on SQLite it is a
 # `date()` truncation nobody sees.
-function _render_left_typed(value::Any, operation::String, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+function _render_left_typed(@nospecialize(value), operation::String, instruc::SQLInstruction)::Tuple{String,_RenderKind}
   # #985: a comparison's left side, inside an ON clause; arithmetic inherits the side it sits on.
   if operation in _COMPARISON_OPERATIONS && (side = _join_side_change(instruc, :left)) !== nothing
     return _with_render_scope(() -> _render_left_typed(value, operation, instruc), instruc; join_side = side)
@@ -391,7 +400,25 @@ _side_kind(value::_TemporalLiteral, ::SQLInstruction) = literal_canonical_kind(v
 # #1553 — a duration on the LEFT (`Hour(1) - F("time")`, `Minute(3) / F("lap")`) is an interval value, so
 # the render and the walk both send it to the interval-on-the-left arm (`_render_interval_left`,
 # `_interval_left_kind`), as a `DurationField` column goes there.
-_side_kind(d::_DurationOperand, ::SQLInstruction) = CInterval(_has_calendar_part(d))   # #1583: a month
+_side_kind(@nospecialize(d::_DurationOperand), ::SQLInstruction) = CInterval(_has_calendar_part(d))   # #1583: a month
+# `_side_kind(value, instruc)` for a side a caller holds untyped (#1599 layer 5): an `FExpression` side.
+# One arm per method above, each call static: the concrete members of the abstract families those methods
+# take (`FObject` and `WindowFunction` for `SQLTypeFunction`, the three temporal literals, the durations).
+# A function type defined elsewhere takes the one dynamic call, behind `@noinline`; anything else is the
+# `::Any` method, the column lookup.
+@noinline function _side_kind_any(@nospecialize(value), instruc::SQLInstruction)
+  value isa String && return _side_kind(value, instruc)
+  value isa FObject && return _side_kind(value, instruc)
+  value isa WindowFunction && return _side_kind(value, instruc)
+  value isa SQLTypeFunction && return _side_kind_other(value, instruc)
+  value isa CTEReference && return _side_kind(value, instruc)
+  value isa Dates.Date && return _side_kind(value, instruc)
+  value isa Dates.DateTime && return _side_kind(value, instruc)
+  value isa TimeZones.ZonedDateTime && return _side_kind(value, instruc)
+  value isa _DurationOperand && return _side_kind(value, instruc)
+  return _projection_column_kind(value, instruc)
+end
+@noinline _side_kind_other(@nospecialize(value), instruc::SQLInstruction) = _side_kind(value, instruc)
 
 # #882 — A SIDE IS TYPED ONLY BY A TEMPORAL KIND. The walk names every type, and a side of the render's
 # arithmetic and comparisons reads only its temporal ones: a date, a timestamp, a time, an interval. An
@@ -430,8 +457,8 @@ end
 # A bare column only — `F("points") * 2` is arithmetic over one, and a ForeignKey or an ID is an
 # integer that is not a quantity of anything. Both stay untyped, and an untyped side combined with a
 # date is refused on SQLite (`_refuse_untyped_date_operand`).
-function _day_count_column_kind(side, kind::_RenderKind, instruc::SQLInstruction)::_RenderKind
-  kind === nothing && _is_bare_column(side) || return kind
+function _day_count_column_kind(@nospecialize(side), @nospecialize(kind::_RenderKind), instruc::SQLInstruction)::_RenderKind
+  kind === nothing && _is_bare_column_any(side) || return kind
   f = _operand_column_field(side, instruc)
   # The whole integer family a quantity is declared as. SMALLINT needs no cast: PostgreSQL reaches
   # `date ± integer` through its implicit int2 -> int4 (measured on db_2).
@@ -442,13 +469,23 @@ function _day_count_column_kind(side, kind::_RenderKind, instruc::SQLInstruction
 end
 _is_bare_column(s::String) = !occursin("__@", s)
 _is_bare_column(::JoinedReference) = true
-_is_bare_column(x::FExpression) = x.operation === nothing && _is_bare_column(x.field_name)
+_is_bare_column(x::FExpression) = x.operation === nothing && _is_bare_column_any(_fexpr_left(x))
 # #1285 — a CTE column, as a `Joined` handle is: the outer query reads the column the body projected,
 # and a SQLite body leaves an interval as its text (`Dialect._sqlite_interval_text` over a computed
 # one), so `_sqlite_interval_ms` converts it once, exactly. A transform on it (`__@…`) is no column.
 # `_operand_column_field` has no CTE arm, so the day-count and number-side readers still type nothing.
 _is_bare_column(r::CTEReference) = !occursin("__@", r.path)
 _is_bare_column(::Any) = false
+# `_is_bare_column(x)` for a value read from an abstract slot (#1599 layer 5): an `FExpression` side, an
+# untyped operand. One arm per method above, so each call is static; anything else is the `::Any` method's
+# `false`. `@noinline`, so the one body is what every caller reaches.
+@noinline function _is_bare_column_any(@nospecialize(x))::Bool
+  x isa String && return _is_bare_column(x)
+  x isa JoinedReference && return _is_bare_column(x)
+  x isa FExpression && return _is_bare_column(x)
+  x isa CTEReference && return _is_bare_column(x)
+  return false
+end
 
 # A day count's SQL as a day shift reads it. Only a `BIGINT` count on PostgreSQL changes.
 _day_count_sql(sql::AbstractString, kind::TemporalKind, instruc::SQLInstruction) =
@@ -614,15 +651,16 @@ end
 # microseconds), bound as an integer and typed `_IntervalMs`, so the #881 arithmetic takes it as it
 # takes a timestamp difference. A month or a year has no such count and is refused there as the
 # `calendar_intervals` capability. One method per engine and no fallback, as `_temporal_shift_sql`.
-_render_duration_value(d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
-  _duration_value_sql(instruc.connection, d, instruc)
-function _duration_value_sql(::PormGPostgres, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+# #1599 layer 5: the duration is untyped in one compiled body, so the call splits over the engines only.
+_render_duration_value(@nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+  _duration_value_sql(instruc.connection, Base.inferencebarrier(d), instruc)
+function _duration_value_sql(::PormGPostgres, @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind}
   args = _pg_interval_args(_decompose_period(d isa Interval ? d.period : d), instruc)
   return "make_interval($(something(args, "")))", CInterval(_has_calendar_part(d))   # #1583
 end
-_duration_value_sql(conn::PormGSQLite, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+_duration_value_sql(conn::PormGSQLite, @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
-_duration_value_sql(conn::PormGMySQL, d::_DurationOperand, instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+_duration_value_sql(conn::PormGMySQL, @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
 # #1576 — A MONTH OR A YEAR AS A VALUE IS SCALED BY A WHOLE NUMBER ONLY, AND NEVER DIVIDED, on every
 # engine. A month has 28 to 31 days, so 1.5 months, or a year over 7, has no single answer: PostgreSQL
@@ -648,15 +686,23 @@ _duration_value_sql(conn::PormGMySQL, d::_DurationOperand, instruc::SQLInstructi
 # The render (`_render_interval_left`, `_render_interval_right`) and the walk (`_temporal_result_kind`,
 # `_interval_left_kind`) ask `_calendar_scale_refused`, so the SQL and the kind cannot disagree.
 _calendar_comps(comps)::Bool = any(c -> first(c) in (:year, :month), comps)
-_has_calendar_part(d::_DurationOperand)::Bool = _calendar_comps(_decompose_period(d isa Interval ? d.period : d))
+# #1599 layer 5: the duration and the two sides are taken unspecialized (one compiled body each), since a
+# caller holds them as `FExpression` operands, at the slot's abstract union; the calls on them go through
+# the closed walks (`_infer_kind_any`, `_arithmetic_side_kind_any`).
+_has_calendar_part(@nospecialize(d::_DurationOperand))::Bool =
+  _calendar_comps(_decompose_period(d isa Interval ? d.period : d))
 _may_hold_calendar_part(d::_DurationOperand, ::SQLInstruction)::Bool = _has_calendar_part(d)
 _may_hold_calendar_part(x, instruc::SQLInstruction)::Bool =
   (k = _expression_kind(x, instruc)) isa CInterval && k.calendar
+# `_may_hold_calendar_part` over an untyped value: its two methods as two arms.
+@noinline _may_hold_calendar_part_any(@nospecialize(x), instruc::SQLInstruction)::Bool =
+  x isa _DurationOperand ? _has_calendar_part(x) :
+  (k = _infer_kind_any(x, instruc, _AllKinds())::Union{CanonicalType,Nothing}) isa CInterval && k.calendar
 # `interval` scaled (`op` is `*`) or divided (`/`) by `factor`. The factor is read first: a whole one,
 # the common case, never asks the interval's kind.
-_calendar_scale_refused(interval, op::AbstractString, factor, instruc::SQLInstruction)::Bool =
-  (op == "/" || !_whole_kind(_arithmetic_side_kind(factor, instruc, _AllKinds()))) &&
-  _may_hold_calendar_part(interval, instruc)
+_calendar_scale_refused(@nospecialize(interval), op::AbstractString, @nospecialize(factor), instruc::SQLInstruction)::Bool =
+  (op == "/" || !_whole_kind_any(_arithmetic_side_kind_any(factor, instruc, _AllKinds()))) &&
+  _may_hold_calendar_part_any(interval, instruc)
 _calendar_scale_error() =
   QueryBuildError("A month or a year has no fixed length, so as an interval value it is multiplied by a " *
                   "whole number only, and never divided: 1.5 months, or a year over 7, has no single " *
@@ -666,7 +712,7 @@ _calendar_scale_error() =
 
 # A zero-length duration is zero whatever its unit (`Month(0)` too), as the shift's identity treats it,
 # so only a duration with a calendar component reaches the `calendar_intervals` refusal.
-_duration_operand_units(d::_DurationOperand, conn)::Int64 =
+_duration_operand_units(@nospecialize(d::_DurationOperand), conn)::Int64 =
   isempty(_decompose_period(d isa Interval ? d.period : d)) ? Int64(0) : _duration_units(d, conn)
 
 # #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being the rule's answer (`_arith_result_kind`).
@@ -740,10 +786,14 @@ _value_kind(k) = k isa _IntervalMs ? CInterval() : k
 # `_render_function_operand_typed`). Any other interval — a `Case`, a window function — is text whose
 # SQL may carry parameters, and has no millisecond form here. On an engine that stores the integer
 # (`_stores_interval_as_units`, MySQL) every interval is its own integer form.
-function _interval_ms_sql(sql::AbstractString, side, kind::_RenderKind, instruc::SQLInstruction)::Union{String,Nothing}
+#
+# #1599 layer 5: `side` and `kind` are only asked `isa` questions or handed to a closed walk, so the one
+# compiled body takes them unspecialized; a caller holds `side` as an `FExpression` operand.
+function _interval_ms_sql(sql::AbstractString, @nospecialize(side), @nospecialize(kind::_RenderKind),
+                          instruc::SQLInstruction)::Union{String,Nothing}
   kind isa _IntervalMs && return String(sql)
   kind isa CInterval && _stores_interval_as_units(instruc.connection) && return String(sql)
-  kind isa CInterval && _is_bare_column(side) && return _interval_text_as_ms(sql, instruc.connection)
+  kind isa CInterval && _is_bare_column_any(side) && return _interval_text_as_ms(sql, instruc.connection)
   return nothing
 end
 
@@ -784,10 +834,10 @@ _interval_shift_sql(::PormGMySQL, date_side::AbstractString, ::Union{CDate,CDate
 # `interval` keeps months apart for the same reason): the `calendar_intervals` capability (#1553), the
 # one refusal for a month beside an interval, a timestamp difference's and a duration value's alike. It
 # was a `QueryBuildError` that printed the period until #1553; it names no value now (#971).
-function _duration_units(p, conn)::Int64
+function _duration_units(@nospecialize(p), conn)::Int64
   period = p isa Interval ? p.period : p
   ns = try
-    Models._duration_to_nanoseconds(period)
+    _period_nanoseconds(period)
   catch e
     e isa InvalidValueError || rethrow()
     throw(_capability_error(conn, :calendar_intervals, "A duration of months or years in interval arithmetic";
@@ -796,6 +846,30 @@ function _duration_units(p, conn)::Int64
   end
   return _ns_to_units(ns, _interval_unit_ns(conn))
 end
+# `Models._duration_to_nanoseconds(x)` for a duration a caller holds untyped (#1599 layer 5): an
+# `FExpression` operand, an `Interval`'s period. That function has a method for the abstract `Period` and
+# one for `CompoundPeriod`, so a call on a value held untyped dispatches at run time; here each concrete
+# `Dates` period is one arm and the call is static. A month, a quarter or a year raises in it as before.
+# Any other value (a `Period` defined elsewhere, or no period at all) takes the one dynamic call it always
+# took, behind `@noinline`, so it raises what it raised.
+@noinline function _period_nanoseconds(@nospecialize(x))::Int64
+  x isa Dates.CompoundPeriod && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Nanosecond && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Microsecond && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Millisecond && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Second && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Minute && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Hour && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Day && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Week && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Month && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Quarter && return Models._duration_to_nanoseconds(x)
+  x isa Dates.Year && return Models._duration_to_nanoseconds(x)
+  return _period_nanoseconds_other(x)
+end
+@noinline _period_nanoseconds_other(@nospecialize(x))::Int64 = Models._duration_to_nanoseconds(x)
+# The duration string parser on an `AbstractString` other than `String` (a `SubString`): one dynamic call.
+@noinline _duration_string_nanoseconds_other(@nospecialize(x))::Int64 = Models._duration_string_nanoseconds(x)
 # The unit `_interval_unit_ns` names, as the refusal above says it.
 _interval_unit_name(conn)::String = _interval_unit_ns(conn) == 1_000_000 ? "milliseconds" : "microseconds"
 function _ns_to_units(ns::Int64, unit::Int64)::Int64
@@ -807,13 +881,15 @@ end
 # engine's unit, as `_duration_units`), or `nothing` when it is not a duration: a `Period`, an
 # `Interval`, or a duration string in a `DurationField`'s accepted forms. `nothing` sends the caller
 # back to the text comparison, so a value that is not a duration still raises what it always raised there.
-function _duration_value_units(x, conn)::Union{Int64,Nothing}
+function _duration_value_units(@nospecialize(x), conn)::Union{Int64,Nothing}
   x isa Interval && (x = x.period)
   ns = try
     if x isa Union{Dates.Period,Dates.CompoundPeriod}
-      Models._duration_to_nanoseconds(x)   # a month or a year has no fixed length: `nothing`
-    elseif x isa AbstractString
+      _period_nanoseconds(x)   # a month or a year has no fixed length: `nothing`
+    elseif x isa String
       Models._duration_string_nanoseconds(x)
+    elseif x isa AbstractString
+      _duration_string_nanoseconds_other(x)
     else
       return nothing
     end
@@ -1069,17 +1145,29 @@ end
 # an aggregate over outer columns to the outer query — so only a window is refused. Its value can
 # still be used on SQLite once it is a column: project it in a CTE or a subquery first.
 _has_window_function(::WindowFunction) = true
-_has_window_function(x::FExpression) = _has_window_function(x.field_name) || _has_window_function(x.operand)
+_has_window_function(x::FExpression) = _has_window_function_any(_fexpr_left(x)) || _has_window_function_any(_fexpr_right(x))
 # `kwargs` too: `When(…; then = Lag(…))` keeps its branch value there, not in `column`.
-_has_window_function(x::FObject) = _has_window_function(x.column) || any(_has_window_function, values(x.kwargs))
-_has_window_function(x::SQLField) = _has_window_function(x.field)
-_has_window_function(x::AbstractVector) = any(_has_window_function, x)
+_has_window_function(x::FObject) = _has_window_function_any(x.column) || _any_in(_has_window_function_any, values(x.kwargs))
+_has_window_function(x::SQLField) = _has_window_function_any(x.field)
+_has_window_function(x::AbstractVector) = _any_in_vector(_has_window_function_any, x)
 _has_window_function(::Any) = false
+# `_has_window_function(x)` for a value read from an abstract slot (#1599 layer 5): an `FExpression`
+# side, `FObject.column` and its keyword values, `SQLField.field`. One arm per method above, each call
+# static; anything else is the `::Any` method's `false`. The vectors go through `_any_in_vector`, which
+# names the ones the query state holds, in `any`'s order and with its short-circuit.
+@noinline function _has_window_function_any(@nospecialize(x))::Bool
+  x isa WindowFunction && return _has_window_function(x)
+  x isa FExpression && return _has_window_function(x)
+  x isa FObject && return _has_window_function(x)
+  x isa SQLField && return _has_window_function(x)
+  x isa AbstractVector && return _has_window_function(x)
+  return false
+end
 
-function _refuse_window_in_interval(left, right, instruc::SQLInstruction)
+function _refuse_window_in_interval(@nospecialize(left), @nospecialize(right), instruc::SQLInstruction)
   # Not where the engine stores the integer (MySQL): there is no text, and no subquery to see one row.
   _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) &&
-    (_has_window_function(left) || _has_window_function(right)) || return nothing
+    (_has_window_function_any(left) || _has_window_function_any(right)) || return nothing
   throw(QueryBuildError("A window function (Lag, Lead, FirstValue, …) cannot be a side of a timestamp " *
                         "difference, or of arithmetic on one, on SQLite: the interval is turned into text in " *
                         "a subquery, where the window sees one row. Project the window value in a CTE first " *
@@ -1116,7 +1204,7 @@ end
 # values, so the rows a filter keeps would differ from PostgreSQL's. Equality still compares the text.
 # Never reached on an engine that stores the integer (`_stores_interval_as_units`), where every interval
 # has that form.
-_unordered_interval_error(op, conn) = _interval_error(
+_unordered_interval_error(op::String, conn) = _interval_error(
   "Ordering (`$(op)`) an interval with no millisecond form (a `Case` whose value is a duration, a " *
   "function over one, or a window function such as `Lag`)", conn)
 
@@ -1247,12 +1335,12 @@ end
 # (PostgreSQL has no `interval * varchar`). Review of #881.
 const _NUMERIC_FIELDS = Union{Models.sIntegerField, Models.sPositiveIntegerField, Models.sPositiveSmallIntegerField,
                               Models.sBigIntegerField, Models.sFloatField, Models.sDecimalField}
-function _is_number_side(side, kind::_RenderKind, instruc::SQLInstruction)::Bool
+function _is_number_side(@nospecialize(side), @nospecialize(kind::_RenderKind), instruc::SQLInstruction)::Bool
   kind isa Union{CInt32,CInt64,CDecimal} && return true
   kind === nothing || return false
   side isa Bool && return false                                        # `Bool <: Integer`, but not a number
   side isa String && !_is_field_path(side, instruc) && return false   # a text literal
-  _is_bare_column(side) || return true                                 # untyped arithmetic, a function
+  _is_bare_column_any(side) || return true                             # untyped arithmetic, a function
   f = _operand_column_field(side, instruc)
   return f === nothing || f isa _NUMERIC_FIELDS
 end
@@ -1272,18 +1360,19 @@ end
 # its milliseconds since #894.
 function _render_interval_left(v::FExpression, left_side::String, left_kind::_RenderKind,
                                instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  lhs, rhs = _fexpr_left(v), _fexpr_right(v)   # #1599 layer 5: untyped, see `_fexpr_left`
   op = v.operation
   sqlite = _interval_as_ms(instruc.connection)
   bind_kind = left_kind isa _IntervalMs ? CInterval() : left_kind   # what the binder may see
-  expr_right = v.operand isa FExpression || (v.operand isa String && _is_field_path(v.operand, instruc))
+  expr_right = rhs isa FExpression || (rhs isa String && _is_field_path(rhs, instruc))
 
-  if op in _COMPARISON_OPERATIONS
+  if op isa String && op in _COMPARISON_OPERATIONS
     if expr_right
-      right_side, right_kind = _render_operand_typed(v.operand, v.field_name, op, instruc; left_kind = bind_kind)
+      right_side, right_kind = _render_operand_typed(rhs, lhs, op, instruc; left_kind = bind_kind)
       _is_interval_kind(right_kind) || _refuse_interval_against_number(op, instruc)
       if sqlite && (left_kind isa _IntervalMs || right_kind isa _IntervalMs)
-        lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
-        rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
+        lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
+        rms = _interval_ms_sql(right_side, rhs, right_kind, instruc)
         lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
         op in _ORDERING_OPERATIONS &&
           throw(_interval_error("Ordering (`$(op)`) an interval against a value with no millisecond form", instruc.connection))
@@ -1291,8 +1380,8 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       # #894: two `DurationField` columns ORDERED against each other compare their milliseconds too.
       # Equality keeps the text: it is exact for a canonical value, and `==` on a column stays sargable.
       if sqlite && op in _ORDERING_OPERATIONS && left_kind isa CInterval && right_kind isa CInterval
-        lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
-        rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
+        lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
+        rms = _interval_ms_sql(right_side, rhs, right_kind, instruc)
         lms !== nothing && rms !== nothing && return "($(lms) $(op) $(rms))", nothing
       end
       # #1301: past the two arms above, one of two intervals has no millisecond form (a `Case` over
@@ -1307,12 +1396,12 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     # renders once (a `Subquery` binds), to the SQL `_set_update_query_operand` gives it, so a right
     # side that is not a duration keeps the comparison it had.
     if sqlite && (op in _ORDERING_OPERATIONS || _stores_interval_as_units(instruc.connection)) &&
-       left_kind isa Union{CInterval,_IntervalMs} && v.operand isa Union{CTEReference,SubqueryObject}
+       left_kind isa Union{CInterval,_IntervalMs} && rhs isa Union{CTEReference,SubqueryObject}
       # #985: on a join condition the right side renders on the right, as `_set_update_query_operand`'s does.
-      right_side, right_ms, right_interval = _on_join_right(() -> _render_interval_operand(v.operand, instruc), instruc)
+      right_side, right_ms, right_interval = _on_join_right(() -> _render_interval_operand(rhs, instruc), instruc)
       right_interval === nothing && _refuse_interval_against_number(op, instruc)
       if right_interval !== nothing
-        lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
+        lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
         lms !== nothing && right_ms !== nothing && return "($(lms) $(op) $(right_ms))", nothing
         lms === nothing && throw(_unordered_interval_error(op, instruc.connection))   # #1301
       end
@@ -1321,19 +1410,19 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       return "($(left_side) $(op) $(right_side))", nothing
     end
     if sqlite && left_kind isa _IntervalMs
-      if v.operand isa Union{Dates.Period,Dates.CompoundPeriod}
-        return "($(left_side) $(op) $(add_parameter!(instruc, _duration_operand_units(v.operand, instruc.connection))))", nothing
+      if rhs isa Union{Dates.Period,Dates.CompoundPeriod}
+        return "($(left_side) $(op) $(add_parameter!(instruc, _duration_operand_units(rhs, instruc.connection))))", nothing
       end
       # #1130: where the interval IS its integer (MySQL) there is no text to compare: a duration string
       # binds its count, and anything else is refused as no interval, rather than a text bound against
       # a number (MySQL reads `'00:01:00'` as `0`).
-      if _stores_interval_as_units(instruc.connection) && !(v.operand isa Union{Nothing,Missing})
-        units = _duration_value_units(v.operand, instruc.connection)
+      if _stores_interval_as_units(instruc.connection) && !(rhs isa Union{Nothing,Missing})
+        units = _duration_value_units(rhs, instruc.connection)
         units === nothing && _refuse_interval_against_number(op, instruc)
         return "($(left_side) $(op) $(add_parameter!(instruc, units)))", nothing
       end
       op in _ORDERING_OPERATIONS &&
-        throw(_interval_error("Ordering (`$(op)`) an interval against $(typeof(v.operand))", instruc.connection))
+        throw(_interval_error("Ordering (`$(op)`) an interval against $(typeof(rhs))", instruc.connection))
       # Equality against any other literal compares the text, exactly as before #881, and the binder
       # raises what it always raised for a literal that is not a duration.
       left_side = _as_interval_text(left_side, left_kind, instruc.connection)
@@ -1344,28 +1433,28 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
     # #1130: where the column IS the integer (MySQL), equality binds the duration's count too.
     if sqlite && left_kind isa CInterval &&
        (op in _ORDERING_OPERATIONS || _stores_interval_as_units(instruc.connection)) &&
-       (lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)) !== nothing &&
-       (ms = _duration_value_units(v.operand, instruc.connection)) !== nothing
+       (lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)) !== nothing &&
+       (ms = _duration_value_units(rhs, instruc.connection)) !== nothing
       return "($(lms) $(op) $(add_parameter!(instruc, ms)))", nothing
     end
     # #1301: an interval with no millisecond form ordered against a duration would compare its
     # `HH:MM:SS` text, which is numeric order only below 100 hours and for non-negative values.
     sqlite && left_kind isa CInterval && op in _ORDERING_OPERATIONS &&
-      _interval_ms_sql(left_side, v.field_name, left_kind, instruc) === nothing &&
-      _duration_value_units(v.operand, instruc.connection) !== nothing &&
+      _interval_ms_sql(left_side, lhs, left_kind, instruc) === nothing &&
+      _duration_value_units(rhs, instruc.connection) !== nothing &&
       throw(_unordered_interval_error(op, instruc.connection))
-    return "($(left_side) $(op) $(_set_update_query_operand(v.operand, v.field_name, op, instruc; left_kind = bind_kind)))", nothing
+    return "($(left_side) $(op) $(_set_update_query_operand(rhs, lhs, op, instruc; left_kind = bind_kind)))", nothing
   end
 
-  if op in _ARITHMETIC_OPERATIONS
-    right_side, right_kind = _render_operand_typed(v.operand, v.field_name, op, instruc; left_kind = bind_kind)
+  if op isa String && op in _ARITHMETIC_OPERATIONS
+    right_side, right_kind = _render_operand_typed(rhs, lhs, op, instruc; left_kind = bind_kind)
     # #1553: a duration literal on the left takes an interval under `-` and a number under `/` (`+` and
     # `*` commute and never put one here). Everything else is refused on EVERY engine: PostgreSQL would
     # render `interval - integer` or `interval / interval`, which fail when the statement runs. A date
     # under `-` reaches the refusal below, which says why.
-    if v.field_name isa _DurationOperand
+    if lhs isa _DurationOperand
       takes = op == "-" ? (_is_interval_kind(right_kind) || right_kind isa Union{CDate,CDateTime}) :
-              op == "/" && _is_number_side(v.operand, right_kind, instruc)
+              op == "/" && _is_number_side(rhs, right_kind, instruc)
       takes || throw(_duration_left_error(op))
     end
     if op in ("+", "-")
@@ -1375,15 +1464,15 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
                                 "the date instead: F(\"date\") - (F(\"date\") - F(\"dob\")), or " *
                                 "F(\"date\") - Day(30)."))
         kind = _arith_result_kind(v, left_kind, right_kind, instruc)
-        return _render_interval_shift(right_side, kind, left_side, v.field_name, left_kind, "+", false, instruc)
+        return _render_interval_shift(right_side, kind, left_side, lhs, left_kind, "+", false, instruc)
       end
       if _is_interval_kind(right_kind)
         sqlite || return "($(left_side) $(op) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
-        lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
-        rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
+        lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
+        rms = _interval_ms_sql(right_side, rhs, right_kind, instruc)
         (lms === nothing || rms === nothing) &&
           throw(_interval_error("`$(op)` with an interval that is not a timestamp difference or a DurationField column", instruc.connection))
-        _refuse_window_in_interval(v.field_name, v.operand, instruc)
+        _refuse_window_in_interval(lhs, rhs, instruc)
         return "($(lms) $(op) $(rms))", _IntervalMs()
       end
       # #1572: no meaning on any engine. PostgreSQL rendered `interval + bigint`, which fails when the
@@ -1391,14 +1480,14 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       throw(_interval_error("`$(op)` between an interval and a number", instruc.connection))
     end
     # `*` and `/`, by a number only.
-    if _is_number_side(v.operand, right_kind, instruc)
+    if _is_number_side(rhs, right_kind, instruc)
       # #1576: a month the left carries, divided or scaled by a factor that is not whole.
-      _calendar_scale_refused(v.field_name, op, v.operand, instruc) && throw(_calendar_scale_error())
+      _calendar_scale_refused(lhs, op, rhs, instruc) && throw(_calendar_scale_error())
       sqlite || return "($(left_side) $(op) $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
-      lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
+      lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
       lms === nothing &&
         throw(_interval_error("`$(op)` on an interval that is not a timestamp difference or a DurationField column", instruc.connection))
-      _refuse_window_in_interval(v.field_name, v.operand, instruc)
+      _refuse_window_in_interval(lhs, rhs, instruc)
       product = op == "*" ? "($(lms)) * ($(right_side))" : "($(lms)) * 1.0 / ($(right_side))"
       return _interval_round_sql(product, instruc.connection), _IntervalMs()
     end
@@ -1412,7 +1501,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
   # #1581: a bitwise operator (the only other binary operator) has no interval meaning on any engine.
   # It kept "the interval is its text", as before #881: PostgreSQL rendered `interval & bigint`, which
   # fails when the statement runs, and SQLite and MySQL computed on the text or the stored integer.
-  op in _BITWISE_OPERATIONS && throw(_bitwise_interval_error(op, instruc.connection))
+  op isa String && op in _BITWISE_OPERATIONS && throw(_bitwise_interval_error(op, instruc.connection))
   throw(_interval_error("`$(op)` on an interval", instruc.connection))
 end
 
@@ -1420,8 +1509,9 @@ end
 # by the walk, after it rendered (`_expression_kind` names a joined path once its join resolved).
 _bitwise_interval_error(op::AbstractString, conn) =
   _interval_error("`$(op)` (a bitwise operator) on an interval", conn)
-_refuse_bitwise_interval(op::AbstractString, side, instruc::SQLInstruction) =
-  _expression_kind(side, instruc) isa CInterval ? throw(_bitwise_interval_error(op, instruc.connection)) : nothing
+_refuse_bitwise_interval(op::AbstractString, @nospecialize(side), instruc::SQLInstruction) =
+  _infer_kind_any(side, instruc, _AllKinds())::Union{CanonicalType,Nothing} isa CInterval ?
+    throw(_bitwise_interval_error(op, instruc.connection)) : nothing
 
 # #1553 — `x * d`, a duration literal scaled by a number side, an interval value. The left renders first
 # (the order rule), then the duration as its value (`_render_duration_value`), and the product is #881's
@@ -1430,9 +1520,10 @@ _refuse_bitwise_interval(op::AbstractString, side, instruc::SQLInstruction) =
 # has no meaning and is refused on every engine before any SQL is written (PostgreSQL has no
 # `date * interval` or `interval * interval`).
 function _render_duration_product(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
-  left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
-  _is_number_side(v.field_name, left_kind, instruc) || throw(_duration_scale_error())
-  right_side, right_kind = _render_duration_value(v.operand, instruc)
+  lhs, rhs = _fexpr_left(v), _fexpr_right(v)   # #1599 layer 5: untyped, see `_fexpr_left`
+  left_side, left_kind = _render_left_typed(lhs, v.operation, instruc)
+  _is_number_side(lhs, left_kind, instruc) || throw(_duration_scale_error())
+  right_side, right_kind = _render_duration_value(rhs, instruc)
   return _render_interval_right(v, left_side, left_kind, right_side, right_kind, instruc)
 end
 _duration_scale_error() =
@@ -1452,17 +1543,18 @@ _duration_left_error(op::AbstractString) =
 function _render_interval_right(v::FExpression, left_side::String, left_kind::_RenderKind,
                                 right_side::String, right_kind::_RenderKind,
                                 instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  lhs, rhs = _fexpr_left(v), _fexpr_right(v)   # #1599 layer 5: untyped, see `_fexpr_left`
   op = v.operation
   sqlite = _interval_as_ms(instruc.connection)
-  if op == "*" && _is_number_side(v.field_name, left_kind, instruc)
+  if op == "*" && _is_number_side(lhs, left_kind, instruc)
     # #1576: a month the right carries (a duration value, or arithmetic over one), scaled by a factor
     # that is not whole.
-    _calendar_scale_refused(v.operand, op, v.field_name, instruc) && throw(_calendar_scale_error())
+    _calendar_scale_refused(rhs, op, lhs, instruc) && throw(_calendar_scale_error())
     sqlite || return "($(left_side) * $(right_side))", _arith_result_kind(v, left_kind, right_kind, instruc)
-    rms = _interval_ms_sql(right_side, v.operand, right_kind, instruc)
+    rms = _interval_ms_sql(right_side, rhs, right_kind, instruc)
     rms === nothing &&
       throw(_interval_error("`*` on an interval that is not a timestamp difference or a DurationField column", instruc.connection))
-    _refuse_window_in_interval(v.field_name, v.operand, instruc)
+    _refuse_window_in_interval(lhs, rhs, instruc)
     return _interval_round_sql("($(left_side)) * ($(rms))", instruc.connection), _IntervalMs()
   end
   if sqlite
@@ -1486,11 +1578,12 @@ const _TEMPORAL_PAIR_REFUSED_OPERATIONS = ("+", "*", "/")
 
 # The DURATION spelling (#25): `F(date) ± <a Dates period or an Interval>`.
 function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
-  period = v.operand isa Interval ? v.operand.period : v.operand
+  lhs, rhs = _fexpr_left(v), _fexpr_right(v)   # #1599 layer 5: untyped, see `_fexpr_left`
+  period = rhs isa Interval ? rhs.period : rhs
   comps  = _decompose_period(period)
 
   # Resolve the left side FIRST — see `_render_temporal_shift`'s note on why the order is the fix.
-  left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+  left_side, left_kind = _render_left_typed(lhs, v.operation, instruc)
   # #881: `d ± Hour(1)` on a SQLite interval is millisecond arithmetic. A zero-length duration is the
   # identity and binds nothing, as `_render_temporal_shift` does on both engines.
   if left_kind isa _IntervalMs
@@ -1507,7 +1600,7 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
   # text as a date, and MySQL's `+ INTERVAL … HOUR` would add an hour to a count of microseconds.
   if left_kind isa CInterval
     if _interval_as_ms(instruc.connection)
-      lms = _interval_ms_sql(left_side, v.field_name, left_kind, instruc)
+      lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
       lms === nothing &&
         throw(_interval_error("`$(v.operation)` a duration on an interval that is not a timestamp difference or a " *
                               "DurationField column", instruc.connection))
@@ -1519,17 +1612,17 @@ function _render_date_period_arithmetic(v::FExpression, instruc::SQLInstruction)
 
   # Soft validation (#25, best-effort): a duration only makes sense on a date/time column. Only
   # throw when the field is known AND known to be non-date; stay silent for unresolved/nested lefts.
-  if v.field_name isa String && _field_type_known(v.field_name, instruc) &&
-     _date_field_type(v.field_name, instruc) === nothing
-    throw(InvalidValueError("F(\"$(v.field_name)\") ± a duration requires a DATE/TIMESTAMP field; \"$(v.field_name)\" is not a date/time column"))
+  if lhs isa String && _field_type_known(lhs, instruc) &&
+     _date_field_type(lhs, instruc) === nothing
+    throw(InvalidValueError("F(\"$(lhs)\") ± a duration requires a DATE/TIMESTAMP field; \"$(lhs)\" is not a date/time column"))
   end
   # #1539: a CTE column, by the kind its body recorded. Unchecked, `CTE("g", "n") + Day(1)` over an
   # integer rendered `date("n", '+1 days')` on SQLite, reading the integer as a Julian day number with no
   # error. A kind the record does not name stays silent, as an unresolved left does above.
-  if v.field_name isa CTEReference
-    cte_kind = _cte_column_kind(v.field_name, instruc, _AllKinds())
+  if lhs isa CTEReference
+    cte_kind = _cte_column_kind(lhs, instruc, _AllKinds())
     cte_kind === nothing || cte_kind isa Union{CDate,CDateTime} ||
-      throw(InvalidValueError("CTE(\"$(v.field_name.name)\", \"$(v.field_name.path)\") ± a duration requires a " *
+      throw(InvalidValueError("CTE(\"$(lhs.name)\", \"$(lhs.path)\") ± a duration requires a " *
                               "DATE/TIMESTAMP column; that CTE column is not a date/time column"))
   end
 
@@ -1940,43 +2033,44 @@ _refuse_json_key_in_arithmetic(v::FExpression, instruc::SQLInstruction) =
     _refuse_uncast_json_key(_JSONKeyArithmetic(v.operation, :quoted), (v.field_name, v.operand), instruc) : nothing
 
 function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{String,_RenderKind}
+  lhs, rhs = _fexpr_left(v), _fexpr_right(v)   # #1599 layer 5: untyped, see `_fexpr_left`
   if v.operation === nothing
     # Resolve the field using existing logic for joins and modifiers
-    if v.field_name isa String
+    if lhs isa String
       # Render before typing: resolving the path is what populates the memo the kind lookup reads.
       # The column's TRUE kind, not the arithmetic-narrowed one: a bare `F(col)` projection over a
       # `TimeField` or a `DurationField` has a representation the read path must undo. Each CONSUMER
       # states which kinds it can act on, rather than the producer pre-narrowing for all of them.
-      sql = _get_filter_query(v.field_name, instruc)
-      return sql, _side_kind(v.field_name, instruc)
-    elseif v.field_name isa Integer
+      sql = _get_filter_query(lhs, instruc)
+      return sql, _side_kind(lhs, instruc)
+    elseif lhs isa Integer
       # A bare integer is a value, not a column — no representation to carry.
-      return add_parameter!(instruc, v.field_name; sql_type=_infer_parameter_sql_type(v.field_name, instruc)), nothing
+      return add_parameter!(instruc, lhs; sql_type=_infer_parameter_sql_type(lhs, instruc)), nothing
     else
       # Recursive call for nested expressions
-      return _render_left_typed(v.field_name, "", instruc)
+      return _render_left_typed(lhs, "", instruc)
     end
   elseif v.operation == "~"
     # Unary NOT operator. Bitwise, never temporal; a signed integer on every engine (`_bitwise_not_sql`).
-    left_side = _set_update_query_left(v.field_name, v.operation, instruc)
-    _refuse_bitwise_interval("~", v.field_name, instruc)   # #1581
+    left_side = _set_update_query_left(lhs, v.operation, instruc)
+    _refuse_bitwise_interval("~", lhs, instruc)   # #1581
     return _bitwise_not_sql(instruc.connection, left_side), nothing
   elseif v.operation == "xor"
     # Bitwise, never temporal. Each engine's own spelling (`_xor_sql`), which may name a side twice, so
     # the sides render on each call.
-    sides = () -> (_set_update_query_left(v.field_name, v.operation, instruc),
-                   _set_update_query_operand(v.operand, v.field_name, v.operation, instruc))
+    sides = () -> (_set_update_query_left(lhs, v.operation, instruc),
+                   _set_update_query_operand(rhs, lhs, v.operation, instruc))
     sql = _xor_sql(instruc.connection, sides)
     # #1581: an interval on either side has no bits; asked once the sides have rendered.
-    _refuse_bitwise_interval("xor", v.field_name, instruc)
-    _refuse_bitwise_interval("xor", v.operand, instruc)
+    _refuse_bitwise_interval("xor", lhs, instruc)
+    _refuse_bitwise_interval("xor", rhs, instruc)
     return sql, nothing
-  elseif v.operation in ("+", "-") && v.operand isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
+  elseif v.operation in ("+", "-") && rhs isa Union{Dates.Period, Dates.CompoundPeriod, Interval}
     # Date arithmetic with an explicit Julia duration type (#25). Handled ahead of the generic
     # infix branch: a Period operand must NOT reach `_set_update_query_operand`, which would try to
     # bind it as a raw SQL parameter.
     return _render_date_period_arithmetic(v, instruc)
-  elseif v.operation == "*" && v.operand isa _DurationOperand
+  elseif v.operation == "*" && rhs isa _DurationOperand
     # #1553: a duration scaled by a number, an interval value. Ahead of the generic branch for the
     # reason the shift is: a period must not reach `_set_update_query_operand`.
     return _render_duration_product(v, instruc)
@@ -1987,7 +2081,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # negotiable: rendering is what populates `instruc.tab_field_cache` for a dotted join key, so
     # `F("driverid__dob") + 30` can only be typed afterwards. Deciding first types every joined
     # temporal column as `nothing` and silently drops it to plain arithmetic.
-    left_side, left_kind = _render_left_typed(v.field_name, v.operation, instruc)
+    left_side, left_kind = _render_left_typed(lhs, v.operation, instruc)
 
     # #1511 — a comparison over a JSON key lookup compares as the key lookup does, read once the left
     # has rendered (the record of rendered key lookups is what names it).
@@ -2001,7 +2095,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # bind is what used to break PostgreSQL: it stamped `$n::bigint` on the parameter before anything
     # asked whether the left was temporal, and `timestamp with time zone + bigint` has no operator.
     #
-    # The two implementations this replaces both gated on `v.field_name isa String`, while the
+    # The two implementations this replaces both gated on the left side being a `String`, while the
     # DURATION path gates on the OPERAND's type. That asymmetry was the whole of #568: a duration
     # composes over nesting and an integer did not, so `(F(c) + 7) + 3` fell through to plain numeric
     # addition — a silent `2012` on SQLite (TEXT with NUMERIC affinity), a hard error on PostgreSQL.
@@ -2017,7 +2111,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     #     node, so `x = F("dob") + 7` must still report `operand == 7`. The node stays faithful to
     #     what the user wrote; only the rendering is unified.
     #
-    # `!(v.operand isa Bool)` because `Bool <: Integer` in Julia: without it `F("ts") + true` would
+    # `!(… isa Bool)` on the operand because `Bool <: Integer` in Julia: without it `F("ts") + true` would
     # become `Day(true)` rather than staying the arithmetic the user wrote. `Dates.Day(n)` is exact —
     # a bare integer on a date column has meant whole days since #25 — and `_decompose_period` folds
     # `Day(0)` to an empty list, so `F(c) + 0` short-circuits to the identity and binds nothing.
@@ -2025,8 +2119,8 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # `TimeField` or a `DurationField` is a temporal representation but never the left of a day
     # shift, and must keep falling through to ordinary arithmetic exactly as it did before #568.
     if left_kind isa Union{CDate,CDateTime} && v.operation in ("+", "-") &&
-       v.operand isa Integer && !(v.operand isa Bool)
-      comps = _decompose_period(Dates.Day(v.operand))
+       rhs isa Integer && !(rhs isa Bool)
+      comps = _decompose_period(_whole_days(rhs))
       kind  = _arith_result_kind(v, left_kind, nothing, instruc)   # whole days never promote (#1034 step 5b: the one copy)
       return _render_temporal_shift(left_side, kind, v.operation, comps, instruc), kind
     end
@@ -2038,21 +2132,21 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
       # #814: a TEXT literal on the right is refused on both engines. It bound as text: PostgreSQL has
       # no `date - text` and failed at execution, and SQLite subtracted the leading years of the two
       # strings, silently. The literal it meant is a `Date`, which is typed and bound as one.
-      if v.operand isa String && !_is_field_path(v.operand, instruc)
+      if rhs isa String && !_is_field_path(rhs, instruc)
         throw(QueryBuildError("`F(...) $(v.operation) \"…\"`: a String on the right of date " *
                               "arithmetic is text, not a date. Pass a date instead — " *
                               "F(\"date\") - Date(2009, 3, 1) — or a field name, F(\"date\") - \"dob\"."))
       end
-      right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
+      right_side, right_kind = _render_operand_typed(rhs, lhs, v.operation, instruc;
                                                      left_kind = left_kind)
       # #1549: a literal on the left takes its PostgreSQL cast now that the right is typed.
-      v.field_name isa _TemporalLiteral && (left_side = _cast_temporal_left(left_side, left_kind, right_kind, instruc))
+      lhs isa _TemporalLiteral && (left_side = _cast_temporal_left(left_side, left_kind, right_kind, instruc))
       # #882: an integer column on the right is a day count, typed once it has rendered.
-      v.operation in ("+", "-") && (right_kind = _day_count_column_kind(v.operand, right_kind, instruc))
+      v.operation in ("+", "-") && (right_kind = _day_count_column_kind(rhs, right_kind, instruc))
       if right_kind isa Union{CDate,CDateTime}
         if v.operation == "-"
           kind = _arith_result_kind(v, left_kind, right_kind, instruc)
-          kind isa CInterval && _refuse_window_in_interval(v.field_name, v.operand, instruc)
+          kind isa CInterval && _refuse_window_in_interval(lhs, rhs, instruc)
           return _render_temporal_difference(left_side, right_side, kind, instruc)
         end
         throw(QueryBuildError("`$(v.operation)` between two date/timestamp values has no meaning; only " *
@@ -2067,7 +2161,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
                                          v.operation, true, instruc), kind
         end
         _is_interval_kind(right_kind) &&
-          return _render_interval_shift(left_side, kind, right_side, v.operand, right_kind,
+          return _render_interval_shift(left_side, kind, right_side, rhs, right_kind,
                                         v.operation, true, instruc)
         # #882: anything else beside a date used only the date's year on SQLite.
         _refuse_untyped_date_operand(v.operation, instruc)
@@ -2091,9 +2185,9 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # #882: an integer column on the left is a count too (`F("points") + F("seen")`). Typed for this
     # branch only; the right still renders against the left's own kind, so an integer column with a
     # non-temporal right binds exactly as it did.
-    count_kind = v.operation in ("+", "-") ? _day_count_column_kind(v.field_name, left_kind, instruc) : left_kind
+    count_kind = v.operation in ("+", "-") ? _day_count_column_kind(lhs, left_kind, instruc) : left_kind
     if count_kind isa Union{CInt32,CInt64} && v.operation in ("+", "-")
-      right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc;
+      right_side, right_kind = _render_operand_typed(rhs, lhs, v.operation, instruc;
                                                      left_kind = left_kind)
       # #881: no meaning on any engine. #1572: PostgreSQL too, which has no `integer ± interval` and
       # failed when the statement ran.
@@ -2112,8 +2206,8 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # and rendered as a bare `-`, it would subtract a year on SQLite and fail on PostgreSQL; refused
     # instead, naming the sides that are typed. `-` only: a date literal is also a COMPARISON operand
     # (#494), and `F("seen") > Date(…)` arrives here too.
-    if v.operation == "-" && v.operand isa _TemporalLiteral
-      throw(QueryBuildError("Subtracting a date (a $(typeof(v.operand))) needs a date or timestamp on the left: a " *
+    if v.operation == "-" && rhs isa _TemporalLiteral
+      throw(QueryBuildError("Subtracting a date (a $(typeof(rhs))) needs a date or timestamp on the left: a " *
                             "DateField or DateTimeField, a shift of one (F(\"date\") + Day(1)), " *
                             "Max/Min of one, or a `__@date` path. The left side here is none of those."))
     end
@@ -2128,15 +2222,15 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
        v.operation in ("=", "!=") && _stores_interval_as_units(instruc.connection)
       # #907: a function on the right is typed too (`F("points") * Sum("time")`), as it is on the left;
       # #1465: a window function too (`F("grid") * Lag("fastestlaptime", over = …)`).
-      if _typed_right_operand(v.operand, instruc)
-        right_side, right_kind = _render_operand_typed(v.operand, v.field_name, v.operation, instruc)
+      if _typed_right_operand(rhs, instruc)
+        right_side, right_kind = _render_operand_typed(rhs, lhs, v.operation, instruc)
         # #881: an interval on the right (`F("points") * d`, `F("points") > d`).
         _is_interval_kind(right_kind) &&
           return _render_interval_right(v, left_side, left_kind, right_side, right_kind, instruc)
         # #1549: a number LITERAL on the left of `-` (#1476's `10 - F("date")`) is a count minus a date,
         # which has no meaning on any engine. SQLite and MySQL refused it below as an untyped side, and
         # PostgreSQL rendered `$1::bigint - date`, which fails when the statement runs.
-        v.operation == "-" && v.field_name isa Union{Integer,Float64} && right_kind isa Union{CDate,CDateTime} &&
+        v.operation == "-" && lhs isa Union{Integer,Float64} && right_kind isa Union{CDate,CDateTime} &&
           throw(_count_minus_date_error())
         # #882: a date on the right of `+`/`-` whose left PormG cannot type (a text column, `Sum(...)`,
         # `F("points") * 2`). Every typed left was handled above, so this left is not a count.
@@ -2153,16 +2247,16 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
 
     # #564: the left's kind travels to the binder, so the representation the literal binds and the
     # one the wrapper renders come from the same value rather than from two resolvers that agree.
-    right_side = _set_update_query_operand(v.operand, v.field_name, v.operation, instruc; left_kind = left_kind)
+    right_side = _set_update_query_operand(rhs, lhs, v.operation, instruc; left_kind = left_kind)
     # #1130: a `Subquery` is typed only once it has rendered; where an interval is its integer (MySQL),
     # one holding an interval compared with this left, which is none, is refused. (A `CTE(...)` handle
     # is a typed right side since #1581, so it never reaches here under a comparison on MySQL, nor under
     # `+`/`-`, where #1549 refused a CTE date beside an untyped left after the fact.)
-    v.operation in _COMPARISON_OPERATIONS && v.operand isa SubqueryObject &&
-      _expression_kind(v.operand, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
+    v.operation in _COMPARISON_OPERATIONS && rhs isa SubqueryObject &&
+      _expression_kind(rhs, instruc) isa CInterval && _refuse_interval_against_number(v.operation, instruc)
     # #1581: an interval on the right of a bitwise operator has no meaning on any engine (the left was
     # decided by `_render_interval_left`). Asked once the right has rendered, the order rule.
-    v.operation in _BITWISE_OPERATIONS && _refuse_bitwise_interval(v.operation, v.operand, instruc)
+    v.operation in _BITWISE_OPERATIONS && _refuse_bitwise_interval(v.operation, rhs, instruc)
 
     if v.operation == "/"
       _refuse_json_key_in_arithmetic(v, instruc)

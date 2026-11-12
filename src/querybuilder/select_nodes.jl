@@ -424,8 +424,17 @@ end
 # single column (nested aggregate, F-expression, multi-column) — the fan-out guard treats `nothing`
 # as ambiguous and conservatively refuses. PostgreSQL and SQLite quote identifiers with double quotes,
 # MySQL with backticks (#1130); each doubles its own quote inside a name.
-function _extract_leading_alias(s)
-  s isa AbstractString || return nothing
+#
+# #1599 layer 5: one compiled body (`@nospecialize`), since the caller holds the rendered column as a merged
+# `Any` (a string, or the vector a variadic function renders). A `String` is matched statically; any other
+# `AbstractString` takes the one dynamic call, behind `@noinline`.
+function _extract_leading_alias(@nospecialize(s))
+  s isa String && return _extract_leading_alias_str(s)
+  s isa AbstractString && return _extract_leading_alias_other(s)
+  return nothing
+end
+@noinline _extract_leading_alias_other(@nospecialize(s)) = _extract_leading_alias_str(s)
+function _extract_leading_alias_str(s::AbstractString)
   m = match(r"^\"((?:[^\"]|\"\")+)\"\.(?:\"(?:[^\"]|\"\")+\"|\*)$", s)
   m === nothing || return replace(m.captures[1], "\"\"" => "\"")
   m = match(r"^`((?:[^`]|``)+)`\.(?:`(?:[^`]|``)+`|\*)$", s)

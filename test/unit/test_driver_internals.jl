@@ -48,6 +48,8 @@ const PINNED_NAMES = _NamePin[
   # Postgres.jl: `Connection{Statement{S}, S}` is what its constructor builds, so the extension names it to
   # register the concrete handle type (#1683). `test_trim_shape_pins.jl` checks it against inference.
   (name = "Postgres.Statement",                 status = :internal,   reader = "_Conn (PormG.backend_handle_type)"),
+  # #1599 layer 2: the row count reads the driver's result at its type (`backend_num_rows`, #1771's residue).
+  (name = "Postgres.Result",                    status = :internal,   reader = "PormG.backend_num_rows"),
   # LibPQ.jl
   (name = "LibPQ.Connection",                   status = :documented, reader = "PormG.backend_execute, backend_is_alive, backend_cancel_query!, …"),
   (name = "LibPQ.Result",                       status = :documented, reader = "_raise_if_failed, _server_named_failure, _copy_completed"),

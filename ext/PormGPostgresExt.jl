@@ -857,7 +857,13 @@ end
 # so it binds the protocol's 65535, as libpq does, and core's `::PormGPostgres` fallback answers.
 # `test/unit/test_postgres_ext.jl` checks that against the driver's own `API.MAX_BIND_PARAMS`.
 
-PormG.backend_num_rows(pool::_Pool, result) = length(result)
+# #1599 layer 2 (#1771's residue): core asks the count of a result it holds untyped (a `Task`'s value),
+# and a method that specializes on an `Any` argument stays a dynamic call even when it is the only one
+# that matches. So the result is `@nospecialize`, and the driver's `Result` is counted at its type; any
+# other value takes the open arm, one dynamic call to `length`, as before.
+PormG.backend_num_rows(pool::_Pool, @nospecialize(result)) =
+  result isa Postgres.Result ? length(result) : _num_rows_other(result)
+@noinline _num_rows_other(@nospecialize(result)) = length(result)
 
 # Postgres.jl reports `nothing` for a command tag without a count (CREATE, SET, …); core needs an Int.
 PormG.backend_num_affected_rows(pool::_Pool, result) = something(Postgres.rows_affected(result), 0)

@@ -765,9 +765,9 @@ end
   #   callee (`_count_rows_on`), not by passing the driver's result through `with_pool`.
   # Expected: no dynamic call in `_check_configured_extensions!`'s keyword body (base had two:
   #   `with_pool(backend_num_rows, pool, result)` with the result untyped, and the `> 0` on its answer),
-  #   and none in `_count_rows_on` at the pool types whose count resolves. The Postgres.jl pool keeps one:
-  #   `backend_num_rows(::PostgresConnectionPool{:postgres}, ::Any)` is dynamic in the base shape too,
-  #   and its method is the extension's (layer 2), not this file's. The query, `fetch` and the count are
+  #   and none in `_count_rows_on` at any pool type. The Postgres.jl pool's count was one until its method
+  #   took the result `@nospecialize` (#1771's residue, closed in the extension; its own pin is the
+  #   "a Postgres.jl result's row count is a static call" testset). The query, `fetch` and the count are
   #   the ones base ran; the probe's answers (installed, not installed) are pinned with a stand-in pool
   #   in test_configuration_api.jl, and its "Could not verify" warning by the #1570 testset there.
   # Why: the driver's result is untyped (#1770, decision 2), and `with_pool`'s vararg specialized on
@@ -777,11 +777,10 @@ end
     CP = PormG.ConnectionPool
     body = Base.bodyfunction(only(methods(Configuration._check_configured_extensions!)))
     @test isempty(_dynamic_calls(body, (Bool, typeof(Configuration._check_configured_extensions!), S)))
-    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.MySQLConnectionPool)
-      @test isempty(_dynamic_calls(Configuration._count_rows_on, (P, String)))
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(Configuration._count_rows_on, (P, String))) == (P, String[])
     end
-    # Discrimination: the pin does see a dynamic count. The Postgres.jl pool's is the extension's one.
-    @test length(_dynamic_calls(Configuration._count_rows_on, (CP.PostgresConnectionPool{:postgres}, String))) == 1
   end
 
   # What: `_warn_pool_takeover`, the line `load` logs before it replaces an entry's pool, and its count.
@@ -2867,6 +2866,24 @@ end
             (B, String[])
     end
     @test _dynamic_calls(myx._interrupt_in_causes, (Any, Int)) == String[]
+  end
+
+  # What: the row count core asks of a Postgres.jl result it holds untyped (`fetch`'s), at the call site
+  #   (`backend_num_rows(pool, fetch(pool, sql))`, the extension probe's shape, #1771) and in the method's
+  #   body; then the count itself, for the driver's `Result` and for any other value (the open arm).
+  # Expected: no dynamic call at the call site or in the body, the open arm one; the same count.
+  # Why: the method specialized on an `Any` result, so the call stayed a dispatch although it is the only
+  #   method that matches, and its `length` was one more (#1771's residue, #1599 layer 2).
+  @testset "a Postgres.jl result's row count is a static call (#1599 layer 2)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    P = PormG.ConnectionPool.PostgresConnectionPool{:postgres}
+    count_on(pool::Q, sql::String) where {Q} =
+      PormG.backend_num_rows(pool, PormG.ConnectionPool.fetch(pool, sql))::Int
+    @test _dynamic_calls(count_on, (P, String)) == String[]
+    @test _dynamic_calls(PormG.backend_num_rows, (P, Any)) == String[]
+    @test length(_dynamic_calls(pgx._num_rows_other, (Any,))) == 1
+    pool = PormG.ConnectionPool.PostgresConnectionPool("host=127.0.0.1 port=1 dbname=f1"; pool_size = 1, driver = :postgres)
+    @test PormG.backend_num_rows(pool, [(1, "Senna"), (2, "Prost")]) == 2   # the open arm, as before
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

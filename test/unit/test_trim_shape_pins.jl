@@ -2848,6 +2848,24 @@ end
     end
   end
 
+  # What: `_run` at both bound shapes, and the cause walk `_with_bare_interrupt` uses.
+  # Expected: no dynamic call in `_run` or its closures (`_materialize` is pinned above; the server-error
+  #   open arm, #1714, is skipped), none in `_interrupt_in_causes`.
+  # Why: `_run` read `e.errno` through the abstract `ServerError` and passed `execute` a
+  #   `Union{Tuple{}, Vector{Any}}`, and `_interrupt_in_causes` read `.cause` by name on an `Any`: 6 rows
+  #   in the MySQL trim fixture (#1599 layer 2). MySQL.jl's own `param_code` over the bound `Vector{Any}`
+  #   stays: typing what MySQL.jl receives is a maintainer decision.
+  @testset "the MySQL statement runner and its cause walk make no dynamic call (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    skip = (myx._materialize, myx._other_server_errno, PormG._unowned_field, Base.print_to_string)
+    in_ext(s) = occursin("PormGMySQLExt.", first(split(s, "}: "; limit = 2)))
+    for B in (Nothing, Vector{Any})
+      @test (B, filter(in_ext, _dynamic_calls_deep(myx._run, (MySQL.Connection, String, B); depth = 3, skip))) ==
+            (B, String[])
+    end
+    @test _dynamic_calls(myx._interrupt_in_causes, (Any, Int)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -548,10 +548,13 @@ end
 # read bare (with an older Reseau, MySQL.jl turns it into a `ProtocolError` without it, MySQL.jl#247).
 # This guards a transport error that keeps the interrupt as its `cause`, rethrowing it bare: the
 # Postgres.jl extension's rule, on the same socket layer.
-function _interrupt_in_causes(e, depth::Int = 4)::Bool
+#
+# `@nospecialize`, and the field read through core's `_unowned_field` (#1599 layer 2), as the Postgres.jl
+# extension does: every call hands it a caught exception or a cause, typed `Any`.
+function _interrupt_in_causes(@nospecialize(e), depth::Int = 4)::Bool
   e isa InterruptException && return true
   depth > 0 || return false
-  cause = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
+  cause = PormG._unowned_field(e, :cause)
   return cause !== nothing && _interrupt_in_causes(cause, depth - 1)
 end
 
@@ -584,12 +587,12 @@ function _run(conn::MySQL.Connection, sql::String, bound)
       stmt = try
         DBInterface.prepare(conn, sql)
       catch e
-        (e isa MySQL.Protocol.ServerError && Int(e.errno) == _UNPREPARABLE_ERRNO) || rethrow()
+        (e isa MySQL.Protocol.ServerError && _server_errno(e) == _UNPREPARABLE_ERRNO) || rethrow()
         nothing
       end
       if stmt !== nothing
         try
-          cursor = DBInterface.execute(stmt, bound === nothing ? () : bound)
+          cursor = bound === nothing ? DBInterface.execute(stmt, ()) : DBInterface.execute(stmt, bound)
           return _materialize(cursor, Bool[_is_binary_column(c) for c in stmt.columns])
         finally
           DBInterface.close!(stmt)

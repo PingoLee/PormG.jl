@@ -746,11 +746,22 @@ end
 # it started: a driver extension loaded later, a Revise reload, a unit test's mock handle. The SQLite
 # worker lives forever, and a deferred or reaped close can run long after the code that scheduled it.
 # Every call they make into code that may be redefined goes through here, so the reason is written
-# once. A static image has no later world, and `juliac --trim` does not verify the builtin: the #1622
-# probe's verifier flags this call ("trim verification not yet implemented for builtin
-# `Core.invokelatest`"), even on a concrete signature (#1609, still open). A trimmed build that needs a
-# direct call changes it here, in one place. `Vararg{Any,N}` so the tail is specialized.
-@inline _call_latest(f::F, args::Vararg{Any,N}) where {F,N} = Base.invokelatest(f, args...)
+# once. `Vararg{Any,N}` so the tail is specialized.
+#
+# A trimmed build calls `f(args...)` directly, and JuliaC decides that, not PormG. The verifier does not
+# accept the builtin on any signature ("trim verification not yet implemented for builtin
+# `Core.invokelatest`"), and a static image has no later world, so `juliac --trim` rebinds
+# `Base.invokelatest` to a direct call before it compiles the image (`juliac-trim-base.jl`). Measured in
+# the `test/trim` fixture: with `@inline` here, 13 verifier rows named the builtin at four of the six
+# sites; with `@noinline`, none (#1609). The likely mechanism: the rebinding invalidates nothing, so it
+# reaches only code inferred after it. juliac reuses the IR a package image stored (an inlined copy of
+# this body, a small method's own IR) and re-infers only what has none, and Julia stores no IR for a
+# `@noinline` method, so this one is re-inferred with the direct call and every caller calls it. If a
+# future JuliaC stops rebinding `Base.invokelatest`, or Julia starts storing IR for `@noinline` methods,
+# the builtin comes back as a verifier row at these sites (and a `MethodError` in a trimmed binary). The
+# fixture build catches that; the unit pin in `test_trim_shape_pins.jl` simulates the build, it does not
+# run it. Under the JIT this costs one call frame beside the dynamic dispatch `invokelatest` already is.
+@noinline _call_latest(f::F, args::Vararg{Any,N}) where {F,N} = Base.invokelatest(f, args...)
 
 # ── The handle at its concrete type (#1683) ──────────────────────────────────
 #

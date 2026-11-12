@@ -569,13 +569,14 @@ end
   # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its
   #   arguments and result and holds no dynamic call (the builtin is not one).
   # Why: six call sites each carried their own copy of the world-age reason (#1609, I11). One owner
-  #   keeps the reason in one place, and the one place a trimmed build would change: `juliac --trim`
-  #   does not verify the `invokelatest` builtin (#1609's trim item, still open).
+  #   keeps the reason in one place, and it is the one method JuliaC's `--trim` rebinding of
+  #   `Base.invokelatest` has to reach (pinned by the #1609 testset after the #1714 one).
   @testset "invokelatest has one owner in ConnectionPool.jl (#1609)" begin
     path = joinpath(pkgdir(PormG), "src", "ConnectionPool.jl")
     sites = [l for l in eachline(path) if occursin("invokelatest(", l) && !startswith(lstrip(l), "#")]
     @test length(sites) == 1
     @test occursin("_call_latest(", only(sites))
+    @test occursin("@noinline", only(sites))   # the build reaches it only out of line (#1609)
     @test PormG.ConnectionPool._call_latest(+, 1, 2) === 3
     @test isempty(_dynamic_calls(PormG.ConnectionPool._call_latest, (typeof(+), Int, Int)))
   end
@@ -1609,6 +1610,104 @@ end
     @test PormG.backend_classify_error(my, MySQL.Protocol.Error(UInt32(9999), "x", "40001")) === :operational
     @test PormG.backend_classify_error(pj, Postgres.Error("ERROR", "4", "one char", nothing, nothing, nothing,
       nothing, nothing, nothing, "public", nothing, nothing, nothing, nothing, nothing, nothing, nothing)) === :statement
+  end
+
+  # What: `_call_latest`, the pool's one call into the latest world (the SQLite worker's statements, a
+  #   deferred, reaped, retired or abandoned close), under the JIT and under a simulation of the build
+  #   `juliac --trim` makes: JuliaC rebinds `Base.invokelatest` to a direct call (`juliac-trim-base.jl`)
+  #   before it compiles, which invalidates nothing, so stored IR keeps the builtin.
+  # Expected: no caller holds an inlined copy of it (the close helper `:invoke`s it). In a child process,
+  #   the package image stores no IR for `_call_latest(close, SQLite.DB)`, and after JuliaC's two lines the
+  #   walk (stored IR where there is some, a fresh inference where there is none) finds the builtin in no
+  #   PormG function `_call_latest` is reached through. Under the JIT it still calls the builtin, and a
+  #   method defined after a task started is seen from that task.
+  # Why: the verifier does not accept the builtin on any signature. With `@inline _call_latest`, 13 rows
+  #   at four of the six sites in the trimmed fixture on main named it, every one through stored IR that
+  #   held an inlined copy; with `@noinline`, none (#1609). The pin simulates the build, it does not run
+  #   it: the `test/trim` fixture build is the measurement.
+  @testset "a trimmed build calls _call_latest's function directly; the JIT keeps the latest world (#1609)" begin
+    CP = PormG.ConnectionPool
+    P = CP.SQLiteConnectionPool
+    code(f, tt) = only(code_typed(f, tt; optimize = true))[1].code
+    builtin(st) = st isa Expr && st.head === :call && (st.args[1] === Core.invokelatest ||
+      (st.args[1] isa GlobalRef && isdefined(st.args[1].mod, st.args[1].name) &&
+       getglobal(st.args[1].mod, st.args[1].name) === Core.invokelatest))
+    calls(f, tt, g) = any(st -> st isa Expr && st.head === :invoke &&
+      (mi = st.args[1]; mi isa Core.CodeInstance ? mi.def : mi).def === only(methods(g)), code(f, tt))
+    # The JIT: the builtin is in `_call_latest`, and the close helper calls it rather than inlining it.
+    # With `--inline=no` every caller calls it whatever the annotation, so those two checks say nothing
+    # there and are skipped (coverage and `-O0` keep inlining on).
+    @test any(builtin, code(CP._call_latest, (typeof(close), SQLite.DB)))
+    if Base.JLOptions().can_inline == 0
+      @test_skip calls(CP._handle_close_latest, (P, SQLite.DB), CP._call_latest)
+      @test_skip !any(builtin, code(CP._handle_close_latest, (P, SQLite.DB)))
+    else
+      @test calls(CP._handle_close_latest, (P, SQLite.DB), CP._call_latest)
+      @test !any(builtin, code(CP._handle_close_latest, (P, SQLite.DB)))
+    end
+    # The latest world, from a task started before the method existed.
+    late = Core.eval(Main, :(function $(gensym(:tsp_late)) end))
+    go = Channel{Nothing}(1)
+    t = Threads.@spawn (take!(go); (CP._call_latest(late, 1), try late(1) catch e; e end))
+    Core.eval(Main, :($(nameof(late))(x::Int) = x + 41))
+    put!(go, nothing)
+    via_helper, direct = fetch(t)
+    @test via_helper === 42
+    @test direct isa MethodError   # the task's own world predates the method, so the check has teeth
+
+    # The trimmed build, simulated in a child: what the image stored, then JuliaC's two lines verbatim.
+    script = """
+      using PormG, SQLite
+      const CP = PormG.ConnectionPool
+      const P = CP.SQLiteConnectionPool
+      # What the image stored for `_call_latest(close, SQLite.DB)`, before anything here infers it: "ir"
+      # (IR a build would reuse, builtin included), "nothing" (a build re-infers it), or "none" (no entry).
+      function stored(mi)
+        ci = isdefined(mi, :cache) ? mi.cache : nothing
+        ci === nothing && return "none"
+        while ci !== nothing
+          (ci.inferred isa String || ci.inferred isa Core.CodeInfo) && return "ir"
+          ci = isdefined(ci, :next) ? ci.next : nothing
+        end
+        return "nothing"
+      end
+      println("stored=", stored(Base.method_instance(CP._call_latest, (typeof(close), SQLite.DB))))
+      builtin(st) = st isa Expr && st.head === :call && (st.args[1] === Core.invokelatest ||
+        (st.args[1] isa GlobalRef && isdefined(st.args[1].mod, st.args[1].name) &&
+         getglobal(st.args[1].mod, st.args[1].name) === Core.invokelatest))
+      # The PormG methods whose optimized code holds the builtin, following `:invoke`s four levels down.
+      # `code_typed` returns the stored IR where there is some and infers afresh where there is none.
+      function holders(tt, d = 4, seen = Set{Any}())
+        tt in seen && return String[]
+        push!(seen, tt)
+        out = String[]
+        for (ci, _) in Base.code_typed_by_type(tt; optimize = true), st in ci.code
+          builtin(st) && push!(out, string(tt))
+          (st isa Expr && st.head === :invoke && d > 0) || continue
+          mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+          (mi isa Core.MethodInstance && mi.def isa Method && PormG in (mi.def.module, parentmodule(mi.def.module))) &&
+            append!(out, holders(mi.specTypes, d - 1, seen))
+        end
+        return out
+      end
+      sigs = (Tuple{typeof(CP.release_connection), P, Any},
+              Tuple{typeof(CP._with_handle), typeof(CP._handle_close_latest), P, Any},
+              Tuple{typeof(CP._handle_close_latest), P, SQLite.DB},
+              Tuple{typeof(CP._call_latest), typeof(close), SQLite.DB})
+      before = [!isempty(holders(s)) for s in sigs]
+      @eval Base begin
+        invokelatest_trimmed(f, args...; kwargs...) = f(args...; kwargs...)
+        const invokelatest = invokelatest_trimmed
+      end
+      after = unique!(reduce(vcat, [holders(s) for s in sigs]))
+      println("before=", join(before, ","))
+      println("after=", join(after, ";"))
+      """
+    out = read(`$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) -e $script`, String)
+    # A Julia that stores IR for a `@noinline` method turns this red: a build would reuse it, builtin included.
+    @test occursin(r"^stored=(nothing|none)$"m, out)
+    @test occursin("before=true,true,true,true", out)   # the walk sees the builtin before the rebinding
+    @test occursin(r"^after=$"m, out)
   end
 
   # What: the pool-keyed registries, the waiter queues (`_POOL_WAITERS`, #124) and the monitor state

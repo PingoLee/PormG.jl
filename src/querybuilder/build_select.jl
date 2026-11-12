@@ -116,7 +116,8 @@ function _projection_copy(v::ProjectionNode)
   v isa SQLText && return v
   return _field_copy(v::SQLField)
 end
-# One method, so a call on an abstract `SQLTypeField` slot (`SQLOrder.field`) is still static. Narrowed
+# One method, so a call on an abstract `SQLTypeField` value is still static (`SQLOrder.field` is `SQLField` since
+# #1599 slice C). Narrowed
 # to `SQLField`, the one `SQLTypeField` in src/, `deepcopy` is the one-level `Base.deepcopy(::SQLTypeField)`
 # in types.jl, called statically (and the slots the memo keys read stay that method's to copy, #1004).
 function _field_copy(v::SQLTypeField)
@@ -452,9 +453,14 @@ _orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
   _expression_kind(term.field, instruc) isa CInterval
 _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 
-function get_order_query(object::SQLObject, instruc::SQLInstruction)
+# #1599 slice C: the terms through `with_order_terms`, so each is an `SQLOrder` read statically, or, for a caller's
+# own `SQLTypeOrder`, the slot itself through the open arm, which renders it exactly as before.
+get_order_query(object::SQLObject, instruc::SQLInstruction) =
+  (with_order_terms(_render_order_terms, object, object, instruc); nothing)
+
+function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::SQLInstruction)
   from_columns = nothing   # #1130: the FROM tables' column names, read on the first term that needs them
-  for v in _order_nodes(object)   # each term an `SQLOrder` (#1599 slice C)
+  for v in terms
     found_in_select = false
     v_field_copy = _field_copy(v.field)   # #1612: one level, per concrete type (see `_projection_copy`)
 

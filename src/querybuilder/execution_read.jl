@@ -970,9 +970,10 @@ function _degenerate_aggregate(object::SQLObjectQuery)::Bool
     name === nothing || push!(names, String(name))
   end
   any_agg || return false
-  return all(o -> o.field._as !== nothing && !_is_labelled_term(o.field) &&
-                  String(o.field._as) in names, _order_nodes(object))   # each term an `SQLOrder` (#1599 slice C)
+  return with_order_terms(_orders_name_projections, object, names)::Bool   # #1599 slice C
 end
+_orders_name_projections(terms, names::Vector{String})::Bool =
+  all(o -> o.field._as !== nothing && !_is_labelled_term(o.field) && String(o.field._as) in names, terms)
 
 # A kept projection that built as an aggregate with no GROUP BY and no HAVING: exactly one row whatever
 # matched, so any answer about its rows is a constant.
@@ -1722,14 +1723,16 @@ end
 # stays default so the renderer keeps its orientation-derived NULLS placement). #540: `SQLOrder` is
 # an immutable struct, so this cannot write into the caller's term — which is the point: the term
 # is a value the caller may still hold, and `last()` works on a copy of the handler anyway.
-# Non-SQLOrder ordering terms are returned as-is (best effort). `_last` reads the terms through the closed
-# view since #1599 slice C, so a term outside `SQLOrder` is refused there (`_order_node`) before this runs.
+# Non-SQLOrder ordering terms are returned as-is (best effort). Reached from `last()` for a caller's own
+# `SQLTypeOrder` (`with_order_terms`' open arm, #1599 slice C), which `last()` therefore does not invert: it returns
+# `first()`'s row. That is a silent wrong answer kept as it was on main; changing it is decision D-C3 in the PR.
 function _invert_order(o::SQLOrder)::SQLOrder
   # One conditional, NOT two flips in sequence: :first→:last followed by :last→:first is a no-op.
   nulls = o.nulls === :first ? :last : o.nulls === :last ? :first : o.nulls
   return SQLOrder(o.field, o.order, o.orientation == "DESC" ? "ASC" : "DESC", o._as, nulls)
 end
 _invert_order(o) = o
+_invert_orders_into!(terms, dest::Vector{SQLTypeOrder}) = map!(_invert_order, dest, terms)
 
 """
     last(objct::SQLObjectHandler; show_query::Symbol = :execute)
@@ -1769,8 +1772,9 @@ Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show
     # Reverse the existing ordering; the reversed ORDER BY's first row is the original's last.
     # #540: rebuild the copy's own order list from constructed terms — nothing is written into an
     # `SQLOrder`, which is a `struct` now.
-    # #1599 slice C: read through the closed view, so `_invert_order` is called at `SQLOrder`.
-    map!(_invert_order, _order_terms(q.object), _order_nodes(q.object))
+    # #1599 slice C: read through `with_order_terms`, so `_invert_order` is called at `SQLOrder`; a caller's own
+    # `SQLTypeOrder` takes the open arm, where `_invert_order(o) = o` leaves it as it was.
+    with_order_terms(_invert_orders_into!, q.object, _order_terms(q.object))
   end
   q.limit(1)
   res = _list_owned(q, format; show_query=show_query)

@@ -24,12 +24,29 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, CharField
 using PormG.QueryBuilder: SQLField, SQLOrder
+using PormG.Functions: Rank, WindowOver
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── Mock backend for full-render tests ──────────────────────────────────────────────────────
 # A mock PostgreSQL marker (no DB round-trip), mirroring the pattern in test_order_by_nulls.jl,
 # so the render-time guard can be exercised through the public order_by/list(show_query=:sql) path.
 struct MockPG_OrientGuard <: PormG.PormGPostgres end
+
+# Ordering terms of the test's own types, for the #1599 slice C testset: `SQLOrder`'s slots, one slot short, none.
+struct OrientOwnOrder <: PormG.SQLTypeOrder
+  field::SQLField
+  order::Union{Integer,Nothing}
+  orientation::String
+  _as::Union{String,Nothing}
+  nulls::Union{Symbol,Nothing}
+end
+struct OrientOwnOrderNoNulls <: PormG.SQLTypeOrder
+  field::SQLField
+  order::Union{Integer,Nothing}
+  orientation::String
+  _as::Union{String,Nothing}
+end
+struct OrientOwnBare <: PormG.SQLTypeOrder end
 
 DriverOrientModel = Model("drivers_orientation",
   id = IDField(),
@@ -156,6 +173,38 @@ PormG.config["orientation_guard_pg"] = PormG.Configuration.Settings(
     @test !occursin("NULLS FIRST", sql)
     @test q.object.order[1].orientation == "ASC"
     @test q.object.order[1].nulls === :first
+  end
+
+  # What: an ordering term of a type the caller defines (`<: SQLTypeOrder`, which is exported), handed to
+  #   `order_by` and to a window's `order_by`, through `list`, `last` and `first` (#1599 slice C).
+  # Expected: what 7720d2b45 gives, measured there with these spellings: a term with `SQLOrder`'s slots renders
+  #   by them exactly as the `SQLOrder` would; `last()` leaves it un-inverted (`_invert_order(o) = o`); a term
+  #   missing a slot raises Julia's `FieldError` naming that slot, where the reader reads it.
+  # Why: slice C reads `SQLObjectQuery.order` through a closed view of `SQLOrder` terms. Such a term is a public
+  #   spelling that worked, so it keeps the old formula through an open arm (`with_order_terms`), and whether to
+  #   refuse it is the maintainer's decision (D-C1), not a side effect of the typing.
+  @testset "a caller's own SQLTypeOrder renders by its slots, as before (#1599 slice C)" begin
+    q() = DriverOrientModel.objects
+    mine = OrientOwnOrder(SQLField("surname", "surname"), nothing, "DESC", nothing, nothing)
+    own_sql = (qq = q(); qq.order_by(mine); qq.list(show_query=:sql))
+    pormg_sql = (qq = q(); qq.order_by(SQLOrder("surname"; orientation="DESC")); qq.list(show_query=:sql))
+    @test own_sql == pormg_sql == "SELECT\n    *\nFROM \"drivers_orientation\" as \"Tb\"\nORDER BY \"Tb\".\"surname\" DESC NULLS FIRST\n"
+    @test (qq = q(); qq.order_by("id", mine); qq.list(show_query=:sql)) ==
+          "SELECT\n    *\nFROM \"drivers_orientation\" as \"Tb\"\nORDER BY \"Tb\".\"id\" ASC NULLS LAST, \n  \"Tb\".\"surname\" DESC NULLS FIRST\n"
+    # `last()` does not invert a term it does not know, and `first()` renders the same order: a silent wrong
+    # answer on main, kept as it was (fixing it changes a result: decision D-C3 in the slice's PR).
+    last_sql = (qq = q(); qq.order_by(mine); qq.last(show_query=:sql))
+    @test last_sql == (qq = q(); qq.order_by(mine); qq.first(show_query=:sql))
+    @test occursin("ORDER BY \"Tb\".\"surname\" DESC NULLS FIRST", last_sql)
+    @test (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [mine]))); qq.list(show_query=:sql)) ==
+          (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [SQLOrder("surname"; orientation="DESC")]))); qq.list(show_query=:sql))
+    # A slot missing: Julia's `FieldError`, naming it.
+    err = try (qq = q(); qq.order_by(OrientOwnOrderNoNulls(SQLField("surname", "surname"), nothing, "DESC", nothing)); qq.list(show_query=:sql)) catch e; e end
+    @test err isa FieldError && err.field === :nulls
+    err = try (qq = q(); qq.order_by(OrientOwnBare()); qq.list(show_query=:sql)) catch e; e end
+    @test err isa FieldError && err.field === :field
+    err = try (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [OrientOwnBare()]))); qq.list(show_query=:sql)) catch e; e end
+    @test err isa FieldError && err.field === :field
   end
 
 end

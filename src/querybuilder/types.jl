@@ -1314,8 +1314,8 @@ OuterRef(::OuterRefObject) = throw(QueryBuildError(
 # admits. A node struct a builder or a renderer adds later joins its union AND its walk;
 # `test/unit/test_trim_shape_pins.jl` reads both and fails on a concrete subtype that is in neither.
 #
-# Phase 2 (#1698), still abstract: `SQLObjectQuery.order` (`SQLTypeOrder`, read through the closed view
-# `_order_nodes` below the struct, #1599 slice C) and the recursive fields inside the nodes (`QObject.filters`,
+# Phase 2 (#1698), still abstract: `SQLObjectQuery.order` (`SQLTypeOrder`, read through
+# `with_order_terms` below the struct, #1599 slice C) and the recursive fields inside the nodes (`QObject.filters`,
 # `QorObject.or`, `FObject.column`, `FExpression`'s operands, `OperObject.column`/`values`, `SQLField.field`).
 # A field of a recursive node cannot name a struct defined after it, so those keep `FilterType`/`FieldPart`
 # until their own walk. `SQLOrder.field` is closed: `SQLField` (slice C).
@@ -1493,16 +1493,21 @@ mutable struct SQLObjectQuery <: SQLObject
 end
 
 # `SQLObjectQuery.order` (#1698 phase 2, #1599 slice C): the query's ORDER BY terms. The slot stays
-# `Vector{SQLTypeOrder}`: `order_by(x)` stores an `x::SQLTypeOrder` as it is, and `SQLTypeOrder` is exported,
-# so narrowing the slot would refuse a caller's own subtype at `order_by` instead of at the build (decision
-# D-C1 in the slice's PR). Its readers go through a closed view instead. `SQLOrder` is the one concrete
-# `SQLTypeOrder` (`test_trim_shape_pins.jl` checks it), so each term is handed on at that type and every call
-# on it resolves statically, whatever the callee's method count (#1735): no walk is needed.
-#   - `_order_nodes(q)` is the view readers take: an `AbstractVector{SQLOrder}` over the slot, so it goes
-#     wherever the vector went (a walker's `AbstractVector` arm, `all`, `foreach`, a comprehension) with the
-#     same elements and order.
+# `Vector{SQLTypeOrder}`: `order_by(x)` stores an `x::SQLTypeOrder` as it is, and `SQLTypeOrder` is exported.
+# A caller's own subtype holding `SQLOrder`'s slots renders through them (the readers read `field`,
+# `orientation`, `nulls` off it), and one missing a slot raises Julia's `FieldError` where the reader reads it.
+# That stays as it was (closing it is decision D-C1 in the slice's PR). `SQLOrder` is the one concrete
+# `SQLTypeOrder` PormG defines (`test_trim_shape_pins.jl` checks it), so the readers take two paths:
+#   - `with_order_terms(f, q, args...)` calls `f(terms, args...)` with `terms` the closed view
+#     (`OrderTermView`, an `AbstractVector{SQLOrder}`) when every term is an `SQLOrder`, which is every query a
+#     public spelling builds with PormG's own types. Every call on a term then resolves statically, whatever
+#     the callee's method count (#1735): no walk is needed.
+#   - Otherwise it hands the slot itself to `f` through `_order_terms_open`, a `@noinline` barrier whose call
+#     is dynamic on purpose: `f` runs over `Vector{SQLTypeOrder}` exactly as it did before, specialized at run
+#     time on the caller's type, so its SQL, its errors and their order are unchanged. Nothing for that type is
+#     compiled into a `juliac --trim` image, where the call is the one verifier row each reader keeps.
+#   - `with_order_term(f, t, args...)` is the same split for one term (a window's `order_by` entry).
 #   - `_order_terms(q)` is the slot itself, for the writers (`push!`, `map!`, a copy) and `isempty`.
-#   - `_order_node(x)` narrows one term read some other way (a window's `order_by` entry).
 """
     _order_node(x::SQLTypeOrder) -> SQLOrder
 
@@ -1528,17 +1533,51 @@ Base.size(v::OrderTermView) = size(v.terms)
 Base.IndexStyle(::Type{OrderTermView}) = IndexLinear()
 Base.@propagate_inbounds Base.getindex(v::OrderTermView, i::Int)::SQLOrder = _order_node(v.terms[i])
 
+# Whether every ORDER BY term is PormG's own `SQLOrder`, which is when a reader takes the closed view.
+_all_sqlorder(terms::Vector{SQLTypeOrder})::Bool = all(t -> t isa SQLOrder, terms)
+
+"""
+    with_order_terms(f, q::SQLObjectQuery, args...) -> f(terms, args...)
+
+`f(terms, args...)` over the query's ORDER BY terms: the closed view (`_order_nodes`) when every term is an
+`SQLOrder`, the slot itself otherwise, through a dynamic call (`_order_terms_open`), so a caller's own
+`SQLTypeOrder` is read as it was. Write `f` for either: it is the formula the reader always ran.
+"""
+function with_order_terms(f::F, q::SQLObjectQuery, args::Vararg{Any,N}) where {F,N}
+  terms = _order_terms(q)
+  _all_sqlorder(terms) && return f(OrderTermView(terms), args...)
+  return _order_terms_open(f, terms, args...)
+end
+# The open arm: dynamic by design (see above). `@nospecialize` and `@noinline`, so nothing for the slot's
+# abstract element is compiled from the typed path.
+@noinline _order_terms_open(f::F, @nospecialize(terms), args::Vararg{Any,N}) where {F,N} = f(terms, args...)
+
+"""
+    with_order_term(f, t::SQLTypeOrder, args...) -> f(t, args...)
+
+`f(t, args...)` with `t` at `SQLOrder`, or, for a caller's own `SQLTypeOrder`, through the dynamic call
+`_order_term_open`, which runs `f` on it as before.
+"""
+function with_order_term(f::F, t::SQLTypeOrder, args::Vararg{Any,N}) where {F,N}
+  t isa SQLOrder && return f(t, args...)
+  return _order_term_open(f, t, args...)
+end
+@noinline _order_term_open(f::F, @nospecialize(t), args::Vararg{Any,N}) where {F,N} = f(t, args...)
+# An ordering term's field, for `with_order_term`: `getproperty`, as the readers always read it.
+_order_term_field(o) = o.field
+
 """
     _order_terms(q::SQLObjectQuery) -> Vector{SQLTypeOrder}
 
-The ORDER BY terms of a query: the slot itself, for a writer. A reader takes `_order_nodes`.
+The ORDER BY terms of a query: the slot itself, for a writer. A reader takes `with_order_terms`.
 """
 _order_terms(q::SQLObjectQuery)::Vector{SQLTypeOrder} = q.order
 
 """
     _order_nodes(q::SQLObjectQuery) -> OrderTermView
 
-The ORDER BY terms of a query, each at its concrete type.
+The ORDER BY terms of a query, each at its concrete type. Only for a query whose terms are all `SQLOrder`
+(`with_order_terms` checks); any other term raises `_order_node`'s `MethodError`.
 """
 _order_nodes(q::SQLObjectQuery)::OrderTermView = OrderTermView(_order_terms(q))
 

@@ -919,7 +919,7 @@ end
     # fall-through error were junk. It WAS junk — `QueryBuildError: The field 'CharField()' does not
     # have a 'how' property` named the field's type object and an internal property, and never
     # mentioned `notalookup` — and this line was `broken = true` until #28 rewrote that message
-    # (`_determine_join_type`), because an `ArrayField` index reached the same dead end. It now names
+    # (`_refuse_not_a_relation`), because an `ArrayField` index reached the same dead end. It now names
     # the column and the segment, which is what this asserts; the wording itself is not pinned.
     @test occursin("notalookup", msg)
     @test occursin("forename", msg)

@@ -5,8 +5,9 @@
 # #1599 slice A: positional. It was the keyword function `_determine_join_type`, and the hops pass the previous
 # hop's join type and the segment after this one as `Union`s; a `Union` value in a keyword call makes its
 # `NamedTuple` abstract, so the whole call dispatched at run time (#1711's rule). The hops call it over
-# `Models.sRelationalColumn` only (the two structs with a `how`), so it is compiled for those two; a
-# model field outside them gets the refusal from `_no_how_join_type`, which never names the field.
+# `Models.sRelationalColumn` only (the two structs with a `how`), so it is compiled for those two. A
+# model field outside them is answered without the field: at the first hop by `_refuse_not_a_relation`,
+# at the reverse hop by `_no_how_join_type`.
 function _hop_join_type(field::PormGField, previus_how::Union{String, Nothing}, second_fild_name::Union{String, Nothing},
                         column_name::Union{String, Nothing})::String
   # if the previous join was a LEFT JOIN, the current join must be a LEFT JOIN
@@ -998,7 +999,6 @@ function _build_row_join(field::Vector{String}, instruct::SQLInstruction; as::Bo
     # A `cjoin(field = …)` entry on this path supplies the link field itself; the first hop is the
     # only one that can carry such an override. `_segment_field` is the one place that reads it
     # (#977), so `on()`, the #962 check and this hop agree on which relation a segment is.
-    #
     #
     # #1599 slice A (row 34): `_segment_field` answers the abstract `PormGField`, because a `cjoin` link
     # is stored as one (`PathJoin.field`), so this call dispatched at run time, and a trimmed build

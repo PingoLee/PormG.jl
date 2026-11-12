@@ -37,7 +37,11 @@ Register a connection pool manually at any time using a connection string or ada
     `"./db"` bind to the static one. Prefer keys that cannot be read as paths.
 
     Re-registering an existing *dynamic* key is still allowed — it closes the old pool first and
-    logs a warning, so make sure nothing is still borrowing a connection from it.
+    logs a warning, so make sure nothing is still borrowing a connection from it. A re-registration
+    that is refused (an unsupported `adapter`, a MySQL URL that does not parse, no environment, or a
+    `postgres_driver` that names no driver) raises before the old pool is touched, so it keeps
+    serving ([#1256](https://github.com/PingoLee/PormG.jl/issues/1256),
+    [#1768](https://github.com/PingoLee/PormG.jl/issues/1768)).
 
 ```julia
 # PostgreSQL

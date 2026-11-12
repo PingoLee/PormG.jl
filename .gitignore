@@ -33,6 +33,10 @@ test/integration/db_sl/migrations/*
 test/integration/db_sl/f1.sqlite*
 test/performance/snoop_out/*
 
+# The trim fixture's run directory: test/trim/README.md seeds it from the repository root with
+# `test/trim/prep.jl run` (run/f1.sqlite), and the binary reads it there.
+/run/
+
 # Reload unit-test scratch (generated at runtime by test_reload.jl)
 test/unit/db_r/
 

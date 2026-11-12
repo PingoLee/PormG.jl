@@ -81,6 +81,82 @@ end
     @test_logs (:warn, r"only supported for PostgreSQL") PormG.Configuration._check_configured_extensions!(sl; generating = false)
 end
 
+# A stand-in PostgreSQL pool whose extension probe answers `rows` rows, with no server (#1770).
+struct _CfgProbePool <: PormG.PormGPostgres
+    rows::Int
+end
+PormG.ConnectionPool.fetch(::_CfgProbePool, ::String; kwargs...) = :probe_result
+PormG.backend_num_rows(pool::_CfgProbePool, ::Symbol) = pool.rows
+
+@testset "the extension probe answers installed or not through its pool (#1770, decision 2)" begin
+    # What: `_check_configured_extensions!` on a PostgreSQL entry with `extensions: [unaccent]` and a
+    #   stand-in pool whose probe returns 1 row, then 0 rows.
+    # Expected SQL: `SELECT 1 FROM pg_extension WHERE extname = 'unaccent';`, answered by the stand-in.
+    #   One row: no warning. No rows: the "is not installed" warning. Never "Could not verify".
+    # Why: the count moved into `with_pool`'s callee (`_count_rows_on`) so the driver's untyped result
+    #   no longer crosses `with_pool`; the #1570 testset reaches only the no-pool path, so this pins that
+    #   the probe still gives the answer it gave.
+    for (rows, installed) in ((1, true), (0, false))
+        s = PormG.Configuration.Settings()
+        s.db_config_settings = Dict{String, Any}("adapter" => "PostgreSQL", "extensions" => ["unaccent"])
+        s.connections = _CfgProbePool(rows)
+        logs = first(Test.collect_test_logs() do
+            PormG.Configuration._check_configured_extensions!(s; generating = false)
+        end)
+        @test !any(l -> occursin("Could not verify", string(l.message)), logs)
+        @test any(l -> occursin("is not installed", string(l.message)), logs) == !installed
+    end
+end
+
+@testset "a pool takeover with a connection checked out logs @error (#1756)" begin
+    # What: `_warn_pool_takeover`, the line `load` logs before it closes an entry's pool to replace it
+    #   (a reload with another environment or folder, a folder already loaded under another key).
+    # Expected SQL: none (an SQLite `:memory:` pool; the lease opens a handle and runs no statement).
+    #   With a connection leased the line is the `@error` naming the checked-out connections, with
+    #   `in_use = 1`; once it is released, and for an entry with no pool, it is the plain `@warn`.
+    # Why: the count called a `pool_stats` not bound in Configuration (since #550), and a bare `catch`
+    #   swallowed the `UndefVarError`, so `in_use` was always 0: the `@error` could never fire, and an
+    #   operator whose in-flight queries died in a takeover saw only the `@warn` (#1756, decision 1).
+    CP = PormG.ConnectionPool
+    key = "cfg1756_takeover"
+    msg = "PormG: a takeover of an entry that is already loaded."
+    takeover(entries) = first(Test.collect_test_logs() do
+        PormG.Configuration._warn_pool_takeover(msg, "f1_models", key, entries)
+    end)
+    try
+        PormG.Configuration.register_connection(key, ":memory:"; adapter = "SQLite", env = "test", pool_size = 1)
+        pool = PormG.config[key].connections
+        conn = CP.acquire_connection(pool)
+        released = false
+        try
+            logs = takeover(PormG.config)
+            @test length(logs) == 1
+            @test logs[1].level == Logging.Error
+            @test occursin("Connections are currently checked out of that pool and will be closed", string(logs[1].message))
+            @test logs[1].kwargs[:in_use] == 1
+            @test logs[1].kwargs[:existing_key] == key
+            CP.release_connection(pool, conn)
+            released = true
+            logs = takeover(PormG.config)
+            @test length(logs) == 1
+            @test logs[1].level == Logging.Warn
+            @test logs[1].message == msg
+            @test !haskey(logs[1].kwargs, :in_use)
+        finally
+            released || CP.release_connection(pool, conn)
+        end
+        # An entry with no pool built has nothing checked out.
+        logs = takeover(Dict{String, PormG.Configuration.Settings}(key => PormG.Configuration.Settings()))
+        @test length(logs) == 1 && logs[1].level == Logging.Warn
+        # A stand-in pool with no slots (#147) counts 0: the `@warn`, not a `FieldError` from `load`.
+        logs = takeover(Dict{String, PormG.Configuration.Settings}(
+            key => PormG.Configuration.Settings(connections = _CfgProbePool(0))))
+        @test length(logs) == 1 && logs[1].level == Logging.Warn
+    finally
+        haskey(PormG.config, key) && PormG.Configuration.unregister_connection(key)
+    end
+end
+
 @testset "Explicit env reload keeps Settings synchronized" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")
@@ -2233,5 +2309,72 @@ end
         finally
             PormG.Configuration.unregister_connection("cfg1256_off")
         end
+    end
+end
+
+# ── #1768: a bad PostgreSQL driver is refused before the old pool is closed ──────────────────────
+# What it tests: re-registering a dynamic PostgreSQL key with a `postgres_driver` that names no driver,
+#   by the kwarg or by `PORMG_POSTGRES_DRIVER`, raises `InvalidConfigurationError` and leaves the old
+#   entry serving: no "Closing old pool" warning, the same pool object, its driver unchanged. A valid
+#   re-registration still closes the old pool (the control), and with the environment missing too the
+#   environment refusal still fires first (the refusals keep their order).
+# Expected SQL: none. A PostgreSQL pool connects lazily, so registering one contacts no server.
+# Why it matters: the driver was resolved in the PostgreSQL arm, after `close_pool!(key)`, so the refusal
+#   closed every connection the old pool had out, breaking the #1256 rule that a refused re-registration
+#   leaves its pool serving. `close_pool!` keeps the pool object usable (its slots re-materialize), so
+#   "serving" is read off the close's warning, as the #1256 testset does.
+@testset "register_connection refuses a bad PostgreSQL driver before closing the old pool (#1768)" begin
+    CP = PormG.ConnectionPool
+    key = "cfg1768_pg"
+    url = "postgresql://u@localhost/d"
+    refused(f) = Test.collect_test_logs() do
+        try
+            f()
+            nothing
+        catch e
+            e
+        end
+    end
+    closed_old(logs) = any(l -> occursin("Closing old pool", string(l.message)), logs)
+    try
+        withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => nothing) do
+            PormG.Configuration.register_connection(key, url; env = "test")
+            old_pool = PormG.config[key].connections
+            @test old_pool isa CP.PostgresConnectionPool{:libpq}
+
+            # The kwarg.
+            logs, err = refused(() -> PormG.Configuration.register_connection(key, url; env = "test",
+                                                                              postgres_driver = "bogus"))
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("register_connection: `postgres_driver` must be one of", sprint(showerror, err))
+            @test !closed_old(logs)                                        # still serving
+            @test PormG.config[key].connections === old_pool
+
+            # The environment variable.
+            logs, err = withenv(PormG.Configuration.POSTGRES_DRIVER_ENV => "bogus") do
+                refused(() -> PormG.Configuration.register_connection(key, url; env = "test"))
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("environment variable $(PormG.Configuration.POSTGRES_DRIVER_ENV)", sprint(showerror, err))
+            @test !closed_old(logs)
+            @test PormG.config[key].connections === old_pool
+
+            # The order: with no environment stated either, the environment refusal comes first.
+            logs, err = withenv("PORMG_ENV" => nothing) do
+                _cfg_with_interactive(false) do
+                    refused(() -> PormG.Configuration.register_connection(key, url; postgres_driver = "bogus"))
+                end
+            end
+            @test err isa PormG.InvalidConfigurationError
+            @test occursin("No environment was selected for the dynamic connection \"$(key)\"", sprint(showerror, err))
+            @test !closed_old(logs)
+
+            # Discrimination: an accepted re-registration does close the old pool.
+            logs, err = refused(() -> PormG.Configuration.register_connection(key, url; env = "test"))
+            @test err === nothing
+            @test closed_old(logs)
+        end
+    finally
+        haskey(PormG.config, key) && PormG.Configuration.unregister_connection(key)
     end
 end

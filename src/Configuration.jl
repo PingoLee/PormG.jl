@@ -1526,8 +1526,8 @@ function _check_configured_extensions!(settings::PormGSettings;
     if extension == "unaccent"
       # Literal name only — never interpolate the raw YAML value into SQL.
       installed = try
-        CP.with_pool(backend_num_rows, settings.connections,   # #1622: the pool at its concrete type
-                     CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
+        CP.with_pool(_count_rows_on, settings.connections,   # #1622: the pool at its concrete type
+                     "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';") > 0
       catch e
         @warn "Could not verify PostgreSQL extension state" extension=extension db_def_folder=settings.db_def_folder exception=e
         continue
@@ -1540,6 +1540,14 @@ function _check_configured_extensions!(settings::PormGSettings;
   end
   return nothing
 end
+
+# The extension probe's row count, run inside `with_pool`'s callee at the pool's concrete type (#1599,
+# layer 1). It was `with_pool(backend_num_rows, pool, fetch(settings, sql))`: the driver's result is
+# untyped, and `with_pool`'s vararg specialized on it, a dynamic call. Inside the callee the result
+# never crosses `with_pool`. The pool-level `fetch`, not `fetch(settings, …)`: that one runs its own
+# `with_pool`, and a `with_pool` frame inside another is the #1693 recursion.
+@noinline _count_rows_on(pool::P, sql::String) where {P<:_SQLEngine} =
+  backend_num_rows(pool, getfield(parentmodule(@__MODULE__), :ConnectionPool).fetch(pool, sql))::Int
 
 function _install_configured_extensions!(settings::PormGSettings)::Nothing
   extensions = _configured_extensions(settings)
@@ -1942,15 +1950,17 @@ end
 # that window — that is an `@error`, not a footnote: the operator otherwise sees only an
 # unexplained failure in whatever request was holding one. The close itself logs a second line
 # (`@warn`, with the count it actually force-closed) if any were still out when the window expired.
+#
+# The count is read through the pool (#1756). It used to call a `pool_stats` that is not bound here
+# (since #550), inside a bare `catch` that swallowed the `UndefVarError`, so `in_use` was always 0 and
+# the `@error` below never fired. No `catch` now: every caller names a key it holds, and the count is
+# a lock and two counts. A stand-in pool with no slots (a test's `struct X <: PormGPostgres end`, which
+# `close_pool!` also passes over, #147) counts 0, as it did, rather than raising from `load`.
 function _warn_pool_takeover(msg::String, path::String, existing::String,
                              config::Dict{String,Settings})
-  in_use = 0
-  try
-    pool = config[existing].connections
-    pool === nothing || (in_use = pool_stats(pool).in_use)
-  catch
-    # swallows any error from the in-use count: a diagnostic must never break the load it describes.
-  end
+  pool = config[existing].connections
+  in_use = pool === nothing ? 0 :
+    getfield(parentmodule(@__MODULE__), :ConnectionPool).with_pool(_takeover_in_use, pool)::Int
   if in_use > 0
     @error(msg * " Connections are currently checked out of that pool and will be closed; " *
            "in-flight queries using them will fail. Load configurations at boot, before traffic.",
@@ -1960,6 +1970,14 @@ function _warn_pool_takeover(msg::String, path::String, existing::String,
   end
   return nothing
 end
+
+# `with_pool`'s callee for the count above, at the pool's concrete type (#1622), out of line as
+# `_count_rows_on` is. The pool types are defined in ConnectionPool.jl, included after this file, so
+# they cannot be named here: a pool is counted when its type has the slots `pool_stats` reads, a test
+# decided per type when the call is compiled.
+@noinline _takeover_in_use(pool::P) where {P<:_SQLEngine} =
+  _has_pool_slots(P) ? getfield(parentmodule(@__MODULE__), :ConnectionPool).pool_stats(pool).in_use::Int : 0
+_has_pool_slots(::Type{P}) where {P} = hasfield(P, :lock) && hasfield(P, :available) && hasfield(P, :connections)
 
 # `implicit = true` is `Models.set_models`' channel and nobody else's: it records on the new entry
 # that the application did not choose this configuration (#553). `Models._pick_connect_key` and
@@ -2466,7 +2484,8 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(config[key].db_def_folder)'."))
   end
   # Every refusal comes before the existing entry is closed below, so a refused re-registration
-  # leaves its pool serving (#1256): the adapter, a MySQL URL, then the environment.
+  # leaves its pool serving (#1256): the adapter, a MySQL URL, the environment, then the PostgreSQL
+  # driver.
   # The value is not echoed (#1606 review): a resolver answer with its entries swapped would put the
   # connection URL, password included, into the message.
   adapter in ("PostgreSQL", "SQLite", "MySQL") || throw(InvalidConfigurationError(
@@ -2481,6 +2500,11 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     nothing
   end
   app_env = _registered_env(env, key)
+  # #1768: the driver is resolved here, among the refusals, not in the PostgreSQL arm below: a bad
+  # `postgres_driver` (or `PORMG_POSTGRES_DRIVER`) raised after the close, so the refusal closed the old
+  # pool's connections. After the environment, so the refusals still fire in the order they always did.
+  pg_driver = adapter == "PostgreSQL" ?
+    _resolve_postgres_driver(postgres_driver; source = "register_connection") : :libpq
 
   if haskey(config, key)
     @warn "Dynamic connection '$(key)' already exists. Closing old pool before re-registering."
@@ -2529,9 +2553,8 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   # on it would be a dynamic one — the reason `_build_connection_pool!` is written the same way.
   timers = (Float64(idle_timeout), Float64(max_lifetime), Float64(leak_detection_threshold))
   if adapter == "PostgreSQL"
-    driver = _resolve_postgres_driver(postgres_driver; source = "register_connection")
     return _install_registered_pool!(key, settings, timers,
-      CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver))
+      CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=pg_driver))
   elseif adapter == "SQLite"
     _is_unset(postgres_driver) ||
       @warn "register_connection: `postgres_driver` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key=key

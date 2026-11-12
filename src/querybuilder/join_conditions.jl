@@ -51,7 +51,14 @@ function _require_bound_model(model::PormGModel, name::AbstractString)::PormGMod
 end
 
 # The model a target slot names: a model, or a binding name in the model's module.
-_relation_target(model::PormGModel, to) = to isa PormGModel ? to : _require_bound_model(model, String(to))
+# #1599 layer 5: `to` is a relation field's `to` slot (`Union{Nothing, String, PormGModel}`), so the one
+# compiled body takes it unspecialized and narrows it; a name of another string type converts through the
+# one dynamic call `String(to)` was.
+function _relation_target(model::PormGModel, @nospecialize(to))
+  to isa PormGModel && return to
+  to isa String && return _require_bound_model(model, to)
+  return _require_bound_model(model, _string_other(to))
+end
 
 # One relation hop: `(canonical segment, model reached, kind)`, or `nothing` when `seg` is not a relation
 # from `model` — a plain column, a JSON/array value lookup, an unknown name. The canonical segment is the

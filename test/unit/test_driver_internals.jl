@@ -152,6 +152,7 @@ const PINNED_NAMES = _NamePin[
   # (`_COLUMN_BASE_TYPES`); `test_mysql_ext.jl` checks that walk against `juliatype` itself.
   (name = "MySQL.Bit",                          status = :documented, reader = "_COLUMN_BASE_TYPES, _CELL_TYPES"),
   (name = "MySQL.DecimalResult",                status = :documented, reader = "_COLUMN_BASE_TYPES"),
+  (name = "MySQL.Cursor",                       status = :documented, reader = "the `precompile` directives for `_materialize`"),
 ]
 
 # ── Fields — the hand audit; no scan can see these ─────────────────────────────────────────────────

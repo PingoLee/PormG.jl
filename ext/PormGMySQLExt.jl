@@ -278,17 +278,50 @@ _bind_value(v) = v
 # refuse it with a `ProtocolError`, which closes the connection and reads as a lost one, "may succeed on
 # retry", though it never can. The bulk writers chunk under the limit; anything else (a long `__@in`
 # list) is the caller's to split. The message counts the parameters and never shows one (#971).
-function _bind(pool::_Pool, params)
-  resolved = params isa AbstractPormGParam ? params.parameters : params
+#
+# #1599 layer 2: `params` is a collector (whose `parameters` slot is a `Vector{Any}` in practice, typed
+# `Union{AbstractVector, Tuple}`), raw params, or `nothing`, and every call on it was a dispatch at run
+# time. The collectors are a closed set (`QueryBuilder.ParamCollector`), read at their concrete types; a
+# `Vector{Any}` of values is checked and converted by a typed loop, with `_bind_value`'s three methods
+# as a walk. Any other collector or container takes the open arm, the code this was before.
+function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{Any}}
+  resolved = params isa PormG.QueryBuilder.ParamCollector ? params.parameters :
+             params isa AbstractPormGParam ? _other_param_values(params) : params
+  resolved isa Vector{Any} && return _bind_vector(pool, resolved)
+  return _bind_other(pool, resolved)
+end
+@noinline _other_param_values(@nospecialize(params)) = params.parameters
+
+function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector{Any}}
+  isempty(resolved) && return nothing
+  _check_parameter_count(pool, length(resolved))
+  bound = Vector{Any}(undef, length(resolved))
+  for i in eachindex(resolved)
+    bound[i] = _bind_value_any(resolved[i])
+  end
+  return bound
+end
+
+# The open arm: any other container, bound as before.
+@noinline function _bind_other(pool::_Pool, @nospecialize(resolved))::Union{Nothing, Vector{Any}}
   (resolved === nothing || isempty(resolved)) && return nothing
+  _check_parameter_count(pool, length(resolved))
+  return Any[_bind_value(v) for v in resolved]
+end
+
+function _check_parameter_count(pool::_Pool, n::Int)::Nothing
   limit = PormG.backend_mysql_parameter_limit(pool)
-  length(resolved) <= limit || throw(QueryBuildError(
-    "This statement binds $(length(resolved)) parameters, and MySQL.jl binds at most $(limit) in one " *
+  n <= limit || throw(QueryBuildError(
+    "This statement binds $(n) parameters, and MySQL.jl binds at most $(limit) in one " *
     "statement. Split the work into smaller statements (a long `__@in` list into several filters, a " *
     "many-to-many `remove` or `set` of that many rows into batches), or select the values with a " *
     "subquery; bulk_insert and bulk_update split themselves."))
-  return Any[_bind_value(v) for v in resolved]
+  return nothing
 end
+
+# `_bind_value`'s three methods: both typed ones take a concrete type, so the walk is exact.
+_bind_value_any(@nospecialize(v)) =
+  v isa Decimals.Decimal ? _bind_value(v) : v isa TimeZones.ZonedDateTime ? _bind_value(v) : v
 
 # DECIMAL text — an optional sign, digits, an optional fraction — as a `Decimals.Decimal`, built with
 # the three-argument constructor, the one spelling Decimals 0.4 and 0.5 share (`parse` throws on 0.4.1

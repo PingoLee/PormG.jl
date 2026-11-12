@@ -2783,6 +2783,46 @@ end
     end
   end
 
+  # What: the MySQL extension's `_bind` at each collector, raw values and `nothing`, and the statement
+  #   paths that call it (`backend_execute`, `backend_execute_async` and its statement closure); then what
+  #   it binds, against the comprehension it replaced: a `Vector{Any}` of `_bind_value` over the values.
+  # Expected: no dynamic call (the open arms for another collector or container are skipped), and the
+  #   same values in a `Vector{Any}`, `nothing` for no values, the same refusal past the limit.
+  # Why: the collector's `parameters` slot is `Union{AbstractVector, Tuple}`, so `isempty`, `length` and
+  #   the comprehension over `_bind_value`'s three methods were dispatched at run time, and the statement
+  #   closure captured `_bind`'s `Any`: 26 rows in the MySQL trim fixture (#1599 layer 2).
+  @testset "the MySQL binding reads the collector and its values at their types (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    P = PormG.ConnectionPool.MySQLConnectionPool
+    skip = (myx._other_param_values, myx._bind_other, PormG.Models._pg_decimal_text, Base.print_to_string)
+    in_ext(s) = occursin("PormGMySQLExt.", first(split(s, "}: "; limit = 2)))
+    for T in (QB.PgParameterizedQuery, QB.MySQLParameterizedQuery, QB.SQLiteParameterizedQuery, Vector{Any}, Nothing)
+      @test (T, filter(in_ext, _dynamic_calls_deep(myx._bind, (P, T); depth = 3, skip))) == (T, String[])
+    end
+    for T in (QB.PgParameterizedQuery, QB.MySQLParameterizedQuery)
+      @test (T, _dynamic_calls(PormG.backend_execute_async, (P, MySQL.Connection, String, T))) == (T, String[])
+      @test (T, _dynamic_calls(PormG.backend_execute, (P, MySQL.Connection, String, T))) == (T, String[])
+    end
+    pool = P("host='127.0.0.1' user='u' password='p' dbname='f1'"; pool_size = 1)
+    TZ, Dec = myx.TimeZones, myx.Decimals   # the extension's own imports
+    zdt = TZ.ZonedDateTime(Dates.DateTime(1991, 3, 10, 14, 30), TZ.TimeZone("America/Sao_Paulo"))
+    for vals in (Any[Dec.Decimal(0, 255, -1), zdt, "Senna", 3, missing, nothing], Any[1, 2], Any["Spa"])
+      expected = Any[myx._bind_value(v) for v in vals]
+      for params in (QB.PgParameterizedQuery("", vals, length(vals)), copy(vals))
+        bound = myx._bind(pool, params)
+        @test typeof(bound) === Vector{Any} && isequal(bound, expected)
+      end
+      mq = QB.MySQLParameterizedQuery(); append!(mq.where_params, vals)
+      @test isequal(myx._bind(pool, mq), expected)
+    end
+    @test myx._bind(pool, nothing) === nothing
+    @test myx._bind(pool, Any[]) === nothing
+    @test myx._bind(pool, QB.MySQLParameterizedQuery()) === nothing
+    @test myx._bind(pool, ("Imola", 1)) == Any["Imola", 1]   # a tuple takes the open arm, as before
+    @test myx._bind(pool, ()) === nothing
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

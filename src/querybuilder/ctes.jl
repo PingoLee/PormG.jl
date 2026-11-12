@@ -529,10 +529,8 @@ function _refuse_cte_string_in_join(x, q::SQLObject, context::String, depth::Int
   elseif x isa Pair
     _refuse_cte_string_in_join(x.first, q, context, depth + 1)
     _refuse_cte_string_in_join(x.second, q, context, depth + 1)
-  elseif x isa QObject
-    for f in x.filters; _refuse_cte_string_in_join(f, q, context, depth + 1); end
-  elseif x isa QorObject
-    for f in x.or; _refuse_cte_string_in_join(f, q, context, depth + 1); end
+  elseif x isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for f in _q_nodes(x); _refuse_cte_string_in_join(f, q, context, depth + 1); end
   elseif x isa OperObject
     _refuse_cte_string_in_join(_oper_column(x), q, context, depth + 1)
     # The RHS, swept the same as everything else — including a bare `String`.
@@ -630,10 +628,10 @@ function _bind_cte_filter(f, q::SQLObject, depth::Int = 0)
   depth > 32 && return f
   if f isa Pair
     return _bind_cte_filter(f.first, q, depth + 1) => f.second
-  elseif f isa QObject
-    return QObject(filters=FilterType[_bind_cte_filter(x, q, depth + 1) for x in f.filters])
+  elseif f isa QObject   # each term at its concrete type (#1698 phase 2)
+    return QObject(filters=FilterType[_bind_cte_filter(x, q, depth + 1) for x in _q_nodes(f)])
   elseif f isa QorObject
-    return QorObject(or=FilterType[_bind_cte_filter(x, q, depth + 1) for x in f.or])
+    return QorObject(or=FilterType[_bind_cte_filter(x, q, depth + 1) for x in _q_nodes(f)])
   elseif f isa OperObject
     col = _oper_column(f)
     col isa SQLField || return f

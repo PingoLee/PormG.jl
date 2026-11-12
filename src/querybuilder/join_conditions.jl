@@ -400,7 +400,7 @@ end
 function _cjoin_on_keyed!(keyed::Set{String}, f, alias::String, instruct::SQLInstruction, depth::Int)
   depth > 32 && return keyed   # a `push!(q, q)` cycle, as the condition walkers bound it
   if f isa QObject
-    for g in f.filters
+    for g in _q_nodes(f)   # each term at its concrete type (#1698 phase 2)
       _cjoin_on_keyed!(keyed, g, alias, instruct, depth + 1)
     end
   elseif f isa OperObject && f.operator == "="
@@ -496,10 +496,8 @@ function _refuse_lhs_past_hop(x, q::SQLObject, path::String, hop::String, depth:
     x.first isa String && _check_lhs_on_hop(x.first, q, path, hop)
   elseif x isa String
     _check_lhs_on_hop(x, q, path, hop)
-  elseif x isa QObject
-    for f in x.filters; _refuse_lhs_past_hop(f, q, path, hop, depth + 1); end
-  elseif x isa QorObject
-    for f in x.or; _refuse_lhs_past_hop(f, q, path, hop, depth + 1); end
+  elseif x isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for f in _q_nodes(x); _refuse_lhs_past_hop(f, q, path, hop, depth + 1); end
   elseif x isa OperObject
     _refuse_lhs_past_hop(_oper_column(x), q, path, hop, depth + 1)
   elseif x isa SQLField
@@ -788,10 +786,8 @@ function _guard_no_handle(filter, ::Type{T}, reject::Function, context::String, 
     #   ON … AND "R1_1"."product_sku" = ("R1"."note" = "R1_2"."sku")
     _guard_no_handle(filter.first, T, reject, context, depth + 1)
     _guard_no_handle(filter.second, T, reject, context, depth + 1)
-  elseif filter isa QObject
-    for f in filter.filters; _guard_no_handle(f, T, reject, context, depth + 1); end
-  elseif filter isa QorObject
-    for f in filter.or; _guard_no_handle(f, T, reject, context, depth + 1); end
+  elseif filter isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for f in _q_nodes(filter); _guard_no_handle(f, T, reject, context, depth + 1); end
   elseif filter isa OperObject
     col = _oper_column(filter)
     col isa T && reject(col, context)
@@ -837,10 +833,8 @@ end
 # in `values`; a comparison `FExpression` in `operand`. An `Exists(...)` contributes its `OuterRef`s.
 function _off_path_rhs_condition(f, q::SQLObject, path::String, depth::Int)
   depth > 32 && return nothing
-  if f isa QObject
-    for x in f.filters; _off_path_rhs_condition(x, q, path, depth + 1); end
-  elseif f isa QorObject
-    for x in f.or; _off_path_rhs_condition(x, q, path, depth + 1); end
+  if f isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for x in _q_nodes(f); _off_path_rhs_condition(x, q, path, depth + 1); end
   elseif f isa OperObject
     # A String (or a list of them) here is a bound literal — `"nationality" => "Brazilian"` — never a
     # column, so only an expression node is walked.
@@ -947,7 +941,7 @@ function _each_condition_column(visit::Function, x, depth::Int; f_slot::Bool = f
   elseif x isa Union{QObject,QorObject}
     # #977: a `When` over a `Q(...)` holds its conditions here. Inside a right-side value every column
     # is a right-side column, whichever side of its own comparison it sits on.
-    for v in (x isa QObject ? x.filters : x.or); _each_condition_column(visit, v, depth + 1); end
+    for v in _q_nodes(x); _each_condition_column(visit, v, depth + 1); end   # the closed view (#1698 phase 2)
   elseif x isa ExistsObject
     _each_outer_ref(visit, getfield(x.query, :object))
   elseif x isa SQLField
@@ -996,10 +990,8 @@ function _collect_outer_refs!(refs::Vector{String}, x, depth::Int)
     push!(refs, x.field_name)
   elseif x isa Pair
     _collect_outer_refs!(refs, x.first, depth + 1); _collect_outer_refs!(refs, x.second, depth + 1)
-  elseif x isa QObject
-    for v in x.filters; _collect_outer_refs!(refs, v, depth + 1); end
-  elseif x isa QorObject
-    for v in x.or; _collect_outer_refs!(refs, v, depth + 1); end
+  elseif x isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for v in _q_nodes(x); _collect_outer_refs!(refs, v, depth + 1); end
   elseif x isa OperObject
     # A literal holds no outer reference, so only the nodes are walked (a range of `OuterRef`s included).
     _collect_outer_refs!(refs, _oper_column(x), depth + 1)
@@ -1143,10 +1135,10 @@ function _prefix_join_filter(filter, prefix::String, foreign_model::Union{PormGM
       return _normalize_cjoin_filter_key(key, prefix, foreign_model) => filter.second
     end
     return filter
-  elseif filter isa QObject
-    return QObject(filters=[_prefix_join_filter(f, prefix, foreign_model; base = base) for f in filter.filters])
+  elseif filter isa QObject   # each term at its concrete type (#1698 phase 2)
+    return QObject(filters=FilterType[_prefix_join_filter(f, prefix, foreign_model; base = base) for f in _q_nodes(filter)])
   elseif filter isa QorObject
-    return QorObject(or=[_prefix_join_filter(f, prefix, foreign_model; base = base) for f in filter.or])
+    return QorObject(or=FilterType[_prefix_join_filter(f, prefix, foreign_model; base = base) for f in _q_nodes(filter)])
   elseif filter isa OperObject
     new_oper = deepcopy(filter)
 

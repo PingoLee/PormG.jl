@@ -24,6 +24,18 @@ function get_filter_query(object::SQLObjectQuery, instruc::SQLInstruction)::Noth
   return nothing
 end
 
+# The HAVING half of a split `Q`/`Qor` entry (#692), rendered under the `:having` bucket. A function of its
+# own so the closures below capture the part at its concrete type (#1698 phase 2): captured as the
+# `FilterNode` union, the closure's type was built at run time and `with_bucket` dispatched dynamically.
+function _push_having_part!(having_part::FilterNode, instruc::SQLInstruction)::Nothing
+  with_bucket(instruc, :having) do
+    push!(instruc.having, _with_render_scope(() -> _get_having_query(having_part, instruc), instruc;
+                                     phase = :group, having = true,   # #1367: promotes nothing
+                                     label = _having_subquery_label(string(_having_leaf_label(having_part)))))
+  end
+  return nothing
+end
+
 # One `filter()` entry rendered into WHERE or HAVING (`get_filter_query`'s loop body, #1698).
 function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
   _guard_no_aggregate_predicate(v, instruc)   # #537
@@ -120,15 +132,11 @@ function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
     # #692: an aggregate alias inside `Q`/`Qor` belongs in HAVING, as it does unwrapped. The split
     # hands back the original object on whichever side takes all of it, so a filter with no
     # aggregate-alias term renders exactly as it did before.
-    where_part, having_part = _split_having(v, instruc)
+    split = _split_having(v, instruc)
+    where_part = split.where_part
+    having_part = split.having_part
     where_part === nothing || push!(instruc._where, _get_where_query(where_part, instruc))
-    if having_part !== nothing
-      with_bucket(instruc, :having) do
-        push!(instruc.having, _with_render_scope(() -> _get_having_query(having_part, instruc), instruc;
-                                         phase = :group, having = true,   # #1367: promotes nothing
-                                         label = _having_subquery_label(string(_having_leaf_label(having_part)))))
-      end
-    end
+    having_part === nothing || _push_having_part!(having_part, instruc)
   end
   # No `else`: the three arms cover every `FilterNode` member (#1698). The refusal for any other entry
   # ("Invalid filter entry") could not be reached once the slot was closed; `_filter!` refuses at
@@ -219,12 +227,8 @@ function _guard_field_alias_collision(filter, instruc::SQLInstruction, depth::In
       _projects_column(projection, key) && return nothing
       _refuse_field_alias_collision(key, projection, instruc)
     end
-  elseif filter isa SQLTypeQ
-    for f in filter.filters
-      _guard_field_alias_collision(f, instruc, depth + 1)
-    end
-  elseif filter isa SQLTypeQor
-    for f in filter.or
+  elseif filter isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for f in _q_nodes(filter)
       _guard_field_alias_collision(f, instruc, depth + 1)
     end
   end
@@ -283,10 +287,8 @@ function _each_condition_leaf(f::Function, node, depth::Int = 0)
   depth > 32 && return nothing
   if node isa OperObject   # the only `SQLTypeOper`: `f` reads it through its accessors (#1599 round 10)
     f(node)
-  elseif node isa SQLTypeQ
-    foreach(x -> _each_condition_leaf(f, x, depth + 1), node.filters)
-  elseif node isa SQLTypeQor
-    foreach(x -> _each_condition_leaf(f, x, depth + 1), node.or)
+  elseif node isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    foreach(x -> _each_condition_leaf(f, x, depth + 1), _q_nodes(node))
   elseif node isa AbstractVector
     foreach(x -> _each_condition_leaf(f, x, depth + 1), node)
   elseif node isa Union{FObject,WindowFunction}
@@ -425,12 +427,8 @@ function _guard_no_aggregate_predicate(filter, instruc::SQLInstruction, depth::I
       "\e[4m\e[31mfilter(…)\e[0m — an expression containing a window function cannot be a WHERE " *
       "predicate: SQL evaluates windows after WHERE. " * _WINDOW_PREDICATE_ADVICE * " (#895)."))
     _resolved_contains_agg(filter, instruc) && throw(QueryBuildError(_AGGREGATE_EXPRESSION_ADVICE))
-  elseif filter isa SQLTypeQ
-    for f in filter.filters
-      _guard_no_aggregate_predicate(f, instruc, depth + 1)
-    end
-  elseif filter isa SQLTypeQor
-    for f in filter.or
+  elseif filter isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for f in _q_nodes(filter)
       _guard_no_aggregate_predicate(f, instruc, depth + 1)
     end
   end
@@ -485,10 +483,8 @@ end
 # entered: its aggregates belong to the inner statement. Depth cap as in `_guard_no_aggregate_predicate`.
 function _guard_no_aggregate_on_condition(condition, row::JoinRow, instruc::SQLInstruction, depth::Int = 0)
   depth > 32 && return nothing
-  if condition isa SQLTypeQ
-    foreach(f -> _guard_no_aggregate_on_condition(f, row, instruc, depth + 1), condition.filters)
-  elseif condition isa SQLTypeQor
-    foreach(f -> _guard_no_aggregate_on_condition(f, row, instruc, depth + 1), condition.or)
+  if condition isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    foreach(f -> _guard_no_aggregate_on_condition(f, row, instruc, depth + 1), _q_nodes(condition))
   else
     # The pair itself is asked too: a plain key naming a projection alias renders that projection,
     # and only the whole pair is a condition leaf `_reads_alias` resolves — `"n" => 1` over
@@ -577,12 +573,8 @@ function _guard_window_alias_in_q(filter, instruc::SQLInstruction, depth::Int = 
     key = memo_key(col)
     memo_projection(instruc, key) === nothing && return nothing
     _guard_window_alias_predicate(_projected_source(key, instruc), col.field, instruc)
-  elseif filter isa SQLTypeQ
-    for f in filter.filters
-      _guard_window_alias_in_q(f, instruc, depth + 1)
-    end
-  elseif filter isa SQLTypeQor
-    for f in filter.or
+  elseif filter isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for f in _q_nodes(filter)
       _guard_window_alias_in_q(f, instruc, depth + 1)
     end
   end
@@ -613,7 +605,8 @@ function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   return (key, cached)
 end
 
-# Split one `Q`/`Qor`/`F` filter into `(where_part, having_part)`, either of which may be `nothing`.
+# Split one `Q`/`Qor`/`F` filter into its `where_part` and `having_part` (a `HavingSplit`), either of which
+# may be `nothing`.
 #
 # - A leaf goes to HAVING when it is an aggregate-alias comparison, and to WHERE otherwise. An
 #   `ExistsObject` or an `F` expression is a WHERE leaf.
@@ -628,16 +621,26 @@ end
 # A node that goes wholly to one side is returned as it was, not rebuilt, so its render is
 # byte-identical to the one before #692. Depth cap as in `_guard_no_aggregate_predicate`; past it
 # a node stays in WHERE, which is where every node went before.
-function _split_having(filter, instruc::SQLInstruction, depth::Int = 0)
-  depth > 32 && return (filter, nothing)
+#
+# #1698 phase 2: each part is a term at its concrete type, in a concrete struct (`HavingSplit`), so the caller
+# and the loop over a group's parts call on it statically. The parts used to come back as the abstract
+# `FilterType`, in a vector whose element type was found at run time; a tuple of the two unions does not
+# fix it, because inference merges the tuples the branches return into `Tuple{Any, Any}` (measured).
+# Only a filter entry or a group's term reaches here.
+struct HavingSplit
+  where_part::Union{Nothing,FilterNode}
+  having_part::Union{Nothing,FilterNode}
+end
+function _split_having(filter::FilterNode, instruc::SQLInstruction, depth::Int = 0)::HavingSplit
+  depth > 32 && return HavingSplit(filter, nothing)
   if filter isa OperObject
-    return _aggregate_alias_leaf(filter, instruc) === nothing ? (filter, nothing) : (nothing, filter)
-  elseif filter isa Union{SQLTypeQ,SQLTypeQor}
-    parts = [_split_having(f, instruc, depth + 1) for f in (filter isa SQLTypeQ ? filter.filters : filter.or)]
-    all(p -> p[2] === nothing, parts) && return (filter, nothing)
-    all(p -> p[1] === nothing, parts) && return (nothing, filter)
-    if filter isa SQLTypeQor
-      label = _having_leaf_label(first(p[2] for p in parts if p[2] !== nothing))
+    return _aggregate_alias_leaf(filter, instruc) === nothing ? HavingSplit(filter, nothing) : HavingSplit(nothing, filter)
+  elseif filter isa Union{QObject,QorObject}
+    parts = HavingSplit[_split_having(f, instruc, depth + 1) for f in _q_nodes(filter)]
+    all(p -> p.having_part === nothing, parts) && return HavingSplit(filter, nothing)
+    all(p -> p.where_part === nothing, parts) && return HavingSplit(nothing, filter)
+    if filter isa QorObject
+      label = _having_leaf_label(first(p.having_part for p in parts if p.having_part !== nothing))
       throw(QueryBuildError(
         "\e[4m\e[31mQor(…)\e[0m mixes the aggregate alias \e[31m\"$(label)\"\e[0m with a condition on " *
         "rows. An aggregate alias filters groups (HAVING) and a column filters rows (WHERE), and an " *
@@ -646,21 +649,21 @@ function _split_having(filter, instruc::SQLInstruction, depth::Int = 0)
         "\e[4m\e[32mvalues(\"raceid\", \"n\" => Count(\"resultid\"), \"race\" => Max(\"raceid\")); " *
         "filter(Qor(\"n\" => 20, \"race\" => 1))\e[0m (#692)."))
     end
-    return (_and_of(FilterType[p[1] for p in parts if p[1] !== nothing]),
-            _and_of(FilterType[p[2] for p in parts if p[2] !== nothing]))
+    return HavingSplit(_and_of(FilterType[p.where_part for p in parts if p.where_part !== nothing]),
+                       _and_of(FilterType[p.having_part for p in parts if p.having_part !== nothing]))
   end
-  return (filter, nothing)
+  return HavingSplit(filter, nothing)
 end
 
 # One side of a split `Q`. A single term is returned bare, so `Q("c" => 1, "raceid" => 5)` renders
 # `HAVING COUNT(…) = ?` — the text the unwrapped `filter("c" => 1)` prints — not `HAVING (COUNT(…) = ?)`.
-_and_of(terms::Vector{FilterType}) = length(terms) == 1 ? only(terms) : QObject(filters = terms)
+_and_of(terms::Vector{FilterType})::FilterNode = length(terms) == 1 ? _filter_node(only(terms)) : QObject(filters = terms)
 
 # The alias the first HAVING leaf of a split part compares — for the mixed-`Qor` message.
 # Every HAVING leaf passed the alias test (`_aggregate_alias_leaf`), so its column is an `SQLField`.
 _having_leaf_label(v::SQLTypeOper) = (_oper_column(v)::SQLField).field
-_having_leaf_label(q::SQLTypeQ) = _having_leaf_label(first(q.filters))
-_having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(q.or))
+_having_leaf_label(q::SQLTypeQ) = _having_leaf_label(first(_q_nodes(q)))
+_having_leaf_label(q::SQLTypeQor) = _having_leaf_label(first(_q_nodes(q)))
 
 # Render the HAVING half of a split. Every leaf in it passed `_aggregate_alias_leaf`, so it renders
 # through the top-level alias branch's own code, `_render_alias_predicate`. The parentheses match
@@ -683,9 +686,9 @@ _having_subquery_label(alias::AbstractString) = "Subquery(…) in the HAVING fil
 _in_clause_phase(f, instruc::SQLInstruction, clause::Symbol, alias::AbstractString) =
   clause === :having ? _with_render_scope(f, instruc; phase = :group, having = true, label = _having_subquery_label(alias)) : f()
 _get_having_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
-  "(" * join([_get_having_query(v, instruc) for v in q.filters], " AND ") * ")"
+  "(" * join([_get_having_query(v, instruc) for v in _q_nodes(q)], " AND ") * ")"
 _get_having_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
-  "(" * join([_get_having_query(v, instruc) for v in q.or], " OR ") * ")"
+  "(" * join([_get_having_query(v, instruc) for v in _q_nodes(q)], " OR ") * ")"
 
 # #707 — the WHERE half of a split, rendered so a ROW-alias leaf takes the typed renderer the
 # top-level spelling takes. `Q("nm" => "hamilton")` over `Lower("surname")` rendered through
@@ -706,11 +709,11 @@ function _get_where_query(v::SQLTypeOper, instruc::SQLInstruction)::String
   return _render_alias_predicate(v, hit[1], hit[2], instruc)
 end
 _get_where_query(q::SQLTypeQ, instruc::SQLInstruction)::String =
-  "(" * join([_get_where_query(v, instruc) for v in q.filters], " AND ") * ")"
+  "(" * join([_get_where_query(v, instruc) for v in _q_nodes(q)], " AND ") * ")"
 # #1367: every arm of an OR must also see a parent with no row across a relation the arm reads — the
 # other arm may match it — so the arms render under `outer` (`_or_arm`, `_promote_outer_joins!`).
 _get_where_query(q::SQLTypeQor, instruc::SQLInstruction)::String =
-  "(" * join([_or_arm(() -> _get_where_query(v, instruc), instruc) for v in q.or], " OR ") * ")"
+  "(" * join([_or_arm(() -> _get_where_query(v, instruc), instruc) for v in _q_nodes(q)], " OR ") * ")"
 _get_where_query(v, instruc::SQLInstruction)::String = _get_filter_query(v, instruc)
 
 # Is a predicate's right-hand side an expression (rendered as SQL) rather than a value (bound)?

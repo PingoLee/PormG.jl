@@ -1528,14 +1528,14 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
   resp = []
-  for v in q.filters
+  for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
     push!(resp, _get_filter_query(v, instruc))
   end
   return "(" * join(resp, " AND ") * ")"
 end
 function _get_filter_query(q::SQLTypeQor, instruc::SQLInstruction)
   resp = []
-  for v in q.or
+  for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
     push!(resp, _or_arm(() -> _get_filter_query(v, instruc), instruc))
   end
   return "(" * join(resp, " OR ") * ")"

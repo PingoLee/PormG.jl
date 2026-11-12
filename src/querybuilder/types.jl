@@ -852,8 +852,9 @@ struct AliasJoin
   join_type::String                    # normalized; "INNER" by default
 end
 
+# Each element at its concrete type (`_filter_node`, #1698 phase 2), into a vector of the slot's own type.
 function Base.deepcopy(filter::Vector{FilterType})
-  return [deepcopy(f) for f in filter]
+  return FilterType[deepcopy(_filter_node(f)) for f in filter]
 end
 # `OperObject` (defined below; the only `SQLTypeOper`), read through its accessors (#1599 round 10). The
 # values are shared, not copied, when they are a queryset; the typed clone of the whole handler is #1684.
@@ -931,22 +932,22 @@ _op_expression_column(column, operator::String) = QueryBuildError(
   filters::Vector{FilterType} # filters to be used in the query
 end
 function Base.deepcopy(q::QObject)
-  return QObject(filters=deepcopy(q.filters))
+  return QObject(filters=deepcopy(_q_terms(q)))
 end
 
 @kwdef mutable struct QorObject <: SQLTypeQor
   or::Vector{FilterType} # filters to be used in the query
 end
 function Base.deepcopy(q::QorObject)
-  return QorObject(or=deepcopy(q.or))
+  return QorObject(or=deepcopy(_q_terms(q)))
 end
 
 function Base.push!(q::SQLTypeQ, x...)
   for v in x
     if isa(v, Pair)
-      push!(q.filters, _check_filter(v))
+      push!(_q_terms(q), _check_filter(v))
     elseif isa(v, FilterType)
-      push!(q.filters, _check_filter_node(v))   # #863
+      push!(_q_terms(q), _check_filter_node(v))   # #863
     else
       throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value) or a Q/Qor/OP object."))
     end
@@ -957,9 +958,9 @@ end
 function Base.push!(q::SQLTypeQor, x...)
   for v in x
     if isa(v, Pair)
-      push!(q.or, _check_filter(v))
+      push!(_q_terms(q), _check_filter(v))
     elseif isa(v, FilterType)
-      push!(q.or, _check_filter_node(v))   # #863
+      push!(_q_terms(q), _check_filter_node(v))   # #863
     else
       throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value) or a Q/Qor/OP object."))
     end
@@ -1225,8 +1226,7 @@ function _holds_agg(x, depth::Int = 0)::Bool
   depth > 32 && return false
   x isa AbstractVector && return any(v -> _holds_agg(v, depth + 1), x)
   x isa OperObject && return _holds_agg(_oper_column(x), depth + 1) || with_oper_value_node(_holds_agg, x, false, depth + 1)
-  x isa QObject && return _holds_agg(x.filters, depth + 1)
-  x isa QorObject && return _holds_agg(x.or, depth + 1)
+  x isa Union{QObject,QorObject} && return _holds_agg(_q_nodes(x), depth + 1)   # #1698 phase 2: the closed view
   return _is_agg(x)
 end
 _any_agg(args...)::Bool = any(_holds_agg, args)
@@ -1352,6 +1352,56 @@ function with_filter_node(f::F, @nospecialize(node), args::Vararg{Any,N}) where 
   node isa ExistsObject && return f(node, args...)
   return _unlisted_node(f, node, args...)
 end
+
+# `QObject.filters` / `QorObject.or` (#1698 phase 2, #1599 slice B): the terms of a `Q` / `Qor` group. The
+# slots stay `Vector{FilterType}`, a union of four abstract families and `ExistsObject`: both structs are
+# defined before `FExpression`, `OuterRefObject` and `ExistsObject`, so closing them waits on a reorder of
+# this file. Their readers go through a closed view instead. An element read at `FilterType` made every call
+# on it a run-time dispatch, and in a `juliac --trim` image a call with no compiled target; at `FilterNode`,
+# every concrete member the families have (`test_trim_shape_pins.jl` checks the two agree), a call splits
+# statically whether the callee has one method or many (`code_typed` on 1.13: a five-method callee gets six
+# `:invoke`s, and a member with no method becomes `Core.throw_methoderror`, the `MethodError` the dispatch
+# raised), so no walk is needed (#1735).
+#   - `_q_nodes(q)` is the view readers take: an `AbstractVector{FilterNode}` over the slot, so it goes
+#     wherever the vector went (a walker's `AbstractVector` arm, `any`, `foreach`, a comprehension) with
+#     the same elements, order and depth counting, each element at its concrete type.
+#   - `_q_terms(q)` is the slot itself, for the writers (`push!`, a term replaced in place, a copy).
+#   - `_filter_node(x)` narrows one element read some other way.
+"""
+    _filter_node(x::FilterType) -> FilterNode
+
+An element of a `Q`/`Qor` term vector at the closed set, so a call on it splits over the six concrete
+members. A value outside it (a subtype of the abstract families that PormG does not define) raises
+`TypeError`.
+"""
+_filter_node(x::FilterType)::FilterNode = x::FilterNode
+
+"""
+    QTermView <: AbstractVector{FilterNode}
+
+A read-only view of a `Q`/`Qor` term vector whose elements are `FilterNode` (`_q_nodes`).
+"""
+struct QTermView <: AbstractVector{FilterNode}
+  terms::Vector{FilterType}
+end
+Base.size(v::QTermView) = size(v.terms)
+Base.IndexStyle(::Type{QTermView}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(v::QTermView, i::Int)::FilterNode = _filter_node(v.terms[i])
+
+"""
+    _q_terms(q::QObject) / _q_terms(q::QorObject) -> Vector{FilterType}
+
+The terms of a `Q` (`filters`) or a `Qor` (`or`): the slot itself, for a writer. A reader takes `_q_nodes`.
+"""
+_q_terms(q::QObject)::Vector{FilterType} = q.filters
+_q_terms(q::QorObject)::Vector{FilterType} = q.or
+
+"""
+    _q_nodes(q::QObject) / _q_nodes(q::QorObject) -> QTermView
+
+The terms of a `Q` or a `Qor`, each at its concrete type.
+"""
+_q_nodes(q::Union{QObject,QorObject})::QTermView = QTermView(_q_terms(q))
 
 """
     with_collector(f, params, args...) -> f(params, args...)
@@ -2103,8 +2153,9 @@ _is_window_expr(values::Vector) = any(_is_window_expr, values)
 # then = 1)]))` passed the #895 WHERE guard and failed on the server. The same four node types
 # `_contains_agg` already enters. A subquery is still never entered — its windows belong to the inner
 # statement.
-_is_window_expr(q::QObject) = _is_window_expr(q.filters)
-_is_window_expr(q::QorObject) = _is_window_expr(q.or)
+# The view is not a `Vector`, so the terms are asked here rather than through the `Vector` method (#1698 phase 2).
+_is_window_expr(q::QObject) = any(_is_window_expr, _q_nodes(q))
+_is_window_expr(q::QorObject) = any(_is_window_expr, _q_nodes(q))
 _is_window_expr(o::OperObject) = _is_window_expr(_oper_column(o)) || with_oper_value_node(_is_window_expr, o, false)
 _is_window_expr(f::SQLField) = _is_window_expr(f.field)
 _is_window_expr(::Any) = false
@@ -2138,8 +2189,7 @@ function _contains_agg(x, depth::Int = 0)::Bool
   x isa FExpression && return _contains_agg(x.field_name, depth + 1) || _contains_agg(x.operand, depth + 1)
   x isa Union{SQLField,SQLOrder} && return _contains_agg(x.field, depth + 1)
   x isa OperObject && return _contains_agg(_oper_column(x), depth + 1) || with_oper_value_node(_contains_agg, x, false, depth + 1)
-  x isa QObject && return _contains_agg(x.filters, depth + 1)
-  x isa QorObject && return _contains_agg(x.or, depth + 1)
+  x isa Union{QObject,QorObject} && return _contains_agg(_q_nodes(x), depth + 1)   # #1698 phase 2: the closed view
   return false
 end
 

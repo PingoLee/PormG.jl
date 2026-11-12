@@ -230,33 +230,39 @@ function _node_subtypes(roots::Tuple)
 end
 _concrete_subtypes(roots::Tuple)::Set{DataType} = first(_node_subtypes(roots))
 
-# Every read of an `OperObject` slot (`.column`, `.values`) in the query builder outside the slot's own
-# accessors, as "<function> <file>:<line> .<slot> on <receiver type>" (#1599 round 10). It reads each
+# Every read of a node slot pinned to its accessors, in the query builder: `OperObject.column` / `.values`
+# (#1599 round 10) and `QObject.filters` / `QorObject.or` (#1599 slice B, #1698 phase 2). It reads each
 # method's optimized code with inlining off, so an accessor stays a call and a read is a `getproperty` or
-# `getfield` whose receiver is inferred as an `SQLTypeOper` (`OperObject` is the only one); the IR carries
-# the narrowing an `isa` test gives, which the unoptimized code does not. Not covered: a closure body (its
-# methods belong to the closure's type), a `Base` method the module extends (`Base.deepcopy(::SQLTypeOper)`:
-# `names` does not list it), and a receiver typed `Any` at the read.
+# `getfield` whose receiver is inferred as the slot's family (`SQLTypeOper`, `SQLTypeQ`, `SQLTypeQor`, each with
+# one concrete member); the IR carries the narrowing an `isa` test gives, which the unoptimized code does not.
+# The methods are every function the module names, plus the module's own methods of `Base.deepcopy` and
+# `Base.push!` (`names` does not list a `Base` function the module extends, and those two read the slots).
+# Not covered: a closure body (its methods belong to the closure's type), another `Base` function the module
+# extends, and a receiver typed `Any` at the read. One pass serves both pins (`_tsp_slot_reads`, memoized).
 const _TSP_OPER_ACCESSORS = (:_oper_column, :_oper_value_node, :with_oper_value_node, :_oper_literal,
                              :_oper_holds_expression, :_oper_holds_node)
+const _TSP_Q_ACCESSORS = (:_q_terms,)
+const _TSP_SLOT_RULES = ((:column, PormG.SQLTypeOper), (:values, PormG.SQLTypeOper),
+                         (:filters, PormG.SQLTypeQ), (:or, PormG.SQLTypeQor))
 function _tsp_ir_type(ci::Core.CodeInfo, @nospecialize(x))
   x isa Core.SSAValue && return Core.Compiler.widenconst(ci.ssavaluetypes[x.id])
   x isa Core.Argument && return Core.Compiler.widenconst(ci.slottypes[x.n])
   x isa Core.SlotNumber && return Core.Compiler.widenconst(ci.slottypes[x.id])
   return Core.Typeof(x)
 end
-function _oper_slot_reads()::Vector{String}
+const _TSP_SLOT_READS = Base.RefValue{Union{Nothing, Vector{@NamedTuple{fn::Symbol, slot::Symbol, text::String}}}}(nothing)
+function _tsp_slot_reads_all()
+  _TSP_SLOT_READS[] === nothing || return _TSP_SLOT_READS[]
   QB = PormG.QueryBuilder
   CC = Core.Compiler
   interp = CC.NativeInterpreter(; opt_params = CC.OptimizationParams(; inlining = false))
-  found = String[]
-  for name in names(QB; all = true)
-    isdefined(QB, name) || continue
-    f = getglobal(QB, name)
+  found = @NamedTuple{fn::Symbol, slot::Symbol, text::String}[]
+  fs = Any[getglobal(QB, name) for name in names(QB; all = true) if isdefined(QB, name)]
+  push!(fs, Base.deepcopy, Base.push!)
+  for f in fs
     f isa Function || continue
     for m in methods(f)
       (m.module === QB && occursin("querybuilder", String(m.file))) || continue
-      m.name in _TSP_OPER_ACCESSORS && continue
       for (ci, _) in Base.code_typed_by_type(m.sig; optimize = true, interp = interp)
         ci isa Core.CodeInfo || continue
         for stmt in ci.code
@@ -265,15 +271,49 @@ function _oper_slot_reads()::Vector{String}
           length(args) >= 3 || continue
           (args[1] isa GlobalRef && args[1].name in (:getproperty, :getfield)) || continue
           slot = args[3] isa QuoteNode ? args[3].value : args[3]
-          slot in (:column, :values) || continue
           T = _tsp_ir_type(ci, args[2])
-          (T !== Union{} && T <: PormG.SQLTypeOper) || continue
-          push!(found, "$(m.name) $(basename(String(m.file))):$(m.line) .$(slot) on $(nameof(T))")
+          T === Union{} && continue
+          any(r -> slot === r[1] && T <: r[2], _TSP_SLOT_RULES) || continue
+          push!(found, (fn = m.name, slot = slot,
+                        text = "$(m.name) $(basename(String(m.file))):$(m.line) .$(slot) on $(nameof(T))"))
         end
       end
     end
   end
-  return unique(found)
+  return _TSP_SLOT_READS[] = found
+end
+# The reads of `slots` outside `accessors`, as "<function> <file>:<line> .<slot> on <receiver type>".
+_tsp_slot_reads(slots::Tuple, accessors::Tuple)::Vector{String} =
+  unique(String[r.text for r in _tsp_slot_reads_all() if r.slot in slots && !(r.fn in accessors)])
+_oper_slot_reads()::Vector{String} = _tsp_slot_reads((:column, :values), _TSP_OPER_ACCESSORS)
+_q_slot_reads()::Vector{String} = _tsp_slot_reads((:filters, :or), _TSP_Q_ACCESSORS)
+
+# The dynamic calls in `tt`'s optimized code, following every `:invoke` `depth` levels down (closures, the
+# `any`/`foreach`/`collect` a reader hands a term to, keyword bodies), that take a `Q`/`Qor` term at an
+# abstract type (#1599 slice B): an argument typed within `Union{Nothing, FilterType}` but not within
+# `Union{Nothing, FilterNode}`, which is what an element read off `QObject.filters` / `QorObject.or` is
+# until it is narrowed. Calls on other slots' unions (`FieldPart`, `ColumnPart`) are not counted.
+function _q_term_calls(@nospecialize(tt); depth::Int = 5)::Vector{String}
+  QB = PormG.QueryBuilder
+  term_arg(@nospecialize(T)) = T !== Union{} && T <: Union{Nothing, QB.FilterType} && !(T <: Union{Nothing, QB.FilterNode})
+  found = String[]
+  seen = Set{Any}()
+  walk(tt, d) = begin
+    tt in seen && return
+    push!(seen, tt)
+    for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
+      stmt isa Expr || continue
+      if stmt.head === :call
+        _tsp_callee_type(ci, stmt.args[1]) <: Core.Builtin && continue
+        any(a -> term_arg(_tsp_ir_type(ci, a)), stmt.args) && push!(found, "$(tt): $(stmt)")
+      elseif stmt.head === :invoke && d > 0
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        mi isa Core.MethodInstance && walk(mi.specTypes, d - 1)
+      end
+    end
+  end
+  walk(tt, depth)
+  return found
 end
 
 # A visitor for the walk pins (#1698): a real call, not a builtin and not inlined, so a walk that reaches
@@ -865,6 +905,161 @@ end
     reads = _oper_slot_reads()
     @test isempty(reads)
     isempty(reads) || @info "raw OperObject slot reads" reads
+  end
+
+  # What: the closed view over a `Q`/`Qor` group's terms (#1599 slice B, #1698 phase 2): `_q_nodes` (an
+  #   `AbstractVector{FilterNode}` over the slot), `_q_terms` (the slot itself, for the writers) and
+  #   `_filter_node` (one element), and the rewritten readers whose result or copy changed shape: the HAVING
+  #   split's parts, the deep copy of a term vector, the window and aggregate questions.
+  # Expected: the slots keep their declared `Vector{FilterType}` (closing them is a reorder of `types.jl`, a
+  #   maintainer decision); the view infers `FilterNode` per element and yields the slot's own elements, in
+  #   order, identical; `deepcopy` gives a `Vector{FilterType}` of fresh copies; `_split_having` infers the
+  #   concrete `HavingSplit`; and the window and aggregate questions over a group give the answer they gave over
+  #   the slot.
+  # Why: an element read at `FilterType` (four abstract families and `ExistsObject`) was a run-time dispatch
+  #   on every reader and a call with no compiled target in a trimmed image: the verifier counted 60 rows on
+  #   these slots at 765139bf9. `FilterNode` is every concrete member, so the view refuses nothing PormG
+  #   builds, and a call over it splits statically. On 765139bf9 the names do not exist, so this testset
+  #   errors there.
+  @testset "QObject.filters / QorObject.or: a closed view over the terms (#1599 slice B, #1698 phase 2)" begin
+    QB = PormG.QueryBuilder
+    @test fieldtype(QB.QObject, :filters) === Vector{QB.FilterType}
+    @test fieldtype(QB.QorObject, :or) === Vector{QB.FilterType}
+    @test eltype(QB.QTermView) === QB.FilterNode
+    @test isconcretetype(QB.QTermView)
+    for G in (QB.QObject, QB.QorObject)
+      @test only(Base.return_types(QB._q_nodes, (G,))) === QB.QTermView
+      @test only(Base.return_types(QB._q_terms, (G,))) === Vector{QB.FilterType}
+    end
+    @test only(Base.return_types(getindex, (QB.QTermView, Int))) === QB.FilterNode
+    @test only(Base.return_types(QB._filter_node, (QB.FilterType,))) === QB.FilterNode
+    # A group holding five of the six members (an `Exists` needs a model; the family test covers it).
+    inner_or = QB.Qor("points__@gt" => 10, "grid" => 1)
+    inner_q = QB.Q("raceid" => 18, "statusid" => 1)
+    q = QB.Q("grid" => 1, inner_or, inner_q, QB.F("grid") > 3, QB.OuterRef("raceid"))
+    qor = QB.Qor(inner_q, "grid" => 2, QB.F("points") >= 1)
+    for g in (q, qor)
+      terms = QB._q_terms(g)
+      @test terms === (g isa QB.QObject ? g.filters : g.or)   # the slot itself, not a copy
+      nodes = QB._q_nodes(g)
+      @test length(nodes) == length(terms)
+      @test all(i -> nodes[i] === terms[i], eachindex(terms))
+      @test all(x -> QB._filter_node(x) === x, terms)
+      # The deep copy: the slot's own type, fresh elements of the same types.
+      c = deepcopy(terms)
+      @test c isa Vector{QB.FilterType}
+      @test map(typeof, c) == map(typeof, terms)
+      @test all(i -> !ismutable(terms[i]) || c[i] !== terms[i], eachindex(terms))   # `OuterRefObject` is immutable
+      cg = deepcopy(g)
+      @test typeof(cg) === typeof(g) && QB._q_terms(cg) !== terms && length(QB._q_terms(cg)) == length(terms)
+    end
+    @test map(typeof, QB._q_nodes(q)) == [QB.OperObject, QB.QorObject, QB.QObject, QB.FExpression, QB.OuterRefObject]
+    # `push!` writes through the slot.
+    g = QB.Q("grid" => 1)
+    push!(g, "raceid" => 18)
+    @test length(g.filters) == 2 && g.filters[2] isa QB.OperObject
+    # The split's parts are typed (`HavingSplit`, a concrete struct), whatever the term.
+    @test isconcretetype(QB.HavingSplit)
+    @test fieldtype(QB.HavingSplit, :where_part) === Union{Nothing, QB.FilterNode}
+    @test fieldtype(QB.HavingSplit, :having_part) === Union{Nothing, QB.FilterNode}
+    for G in (QB.QObject, QB.QorObject, QB.OperObject, QB.FilterNode)
+      @test only(Base.return_types(QB._split_having, (G, QB.InstructionObject, Int))) === QB.HavingSplit
+    end
+    # The window and aggregate questions, over a group, give the answer the old formula gave over the slot
+    # (`any` over the elements, each asked at its own type; `_holds_agg`/`_contains_agg` through the vector
+    # arm, which still counts the group's depth).
+    win = QB.Q(QB.OP(QB.Sum("points"), ">", 1), QB.Qor(QB.F("grid") > 1))
+    for g in (q, qor, win, QB.Q(), QB.Qor())
+      terms = QB._q_terms(g)
+      @test QB._is_window_expr(g) == any(x -> QB._is_window_expr(x), terms)
+      @test QB._holds_agg(g, 0) == any(x -> QB._holds_agg(x, 2), terms)
+      @test QB._contains_agg(g, 0) == any(x -> QB._contains_agg(x, 2), terms)
+    end
+    @test QB._holds_agg(win, 0) && QB._contains_agg(win, 0)
+    # Past the depth cap the vector arm answers `false` before reading the terms, as it did.
+    @test !QB._holds_agg(win, 32) && !QB._contains_agg(win, 32)
+  end
+
+  # What: every reader of a `Q`/`Qor` group's terms: the WHERE, HAVING and `Q` guards and renders, the
+  #   SELECT-side render, the join-condition and CTE walks, the grouping and path collectors, the copy, the
+  #   write-back and `push!`.
+  # Expected: no dynamic call taking a term at an abstract type, following every resolved call five levels
+  #   down (`_q_term_calls`); and the four main render readers make no dynamic call to the render or guard
+  #   they hand a term to, nor to `with_bucket` with a closure over one (`_named_dynamic_calls`): a closure
+  #   capturing a term at the `FilterNode` union gets its type at run time.
+  # Why: each read `q.filters` / `q.or` and called on the element at `FilterType`, a dispatch per call under
+  #   the JIT and a verifier row in a trimmed build (60 rows on 765139bf9, 12 of them `_split_having`'s
+  #   parts). Measured on 765139bf9 with the same detector: most of these readers make such a call there.
+  @testset "the Q / Qor term readers make no call on a term at its abstract type (#1599 slice B)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    Q = QB.QObject
+    R = QB.QorObject
+    SQ = QB.SQLObjectQuery
+    MT = PormG.Models.ModelType
+    tts = (Tuple{typeof(QB._guard_field_alias_collision), Q, I, Int},
+           Tuple{typeof(QB._each_condition_leaf), typeof(_tsp_visit), R, Int},
+           Tuple{typeof(QB._guard_no_aggregate_predicate), R, I, Int},
+           Tuple{typeof(QB._guard_no_aggregate_on_condition), Q, QB.ModelJoin, I, Int},
+           Tuple{typeof(QB._guard_window_alias_in_q), Q, I, Int},
+           Tuple{typeof(QB._split_having), R, I, Int},
+           Tuple{typeof(QB._having_leaf_label), R},
+           Tuple{typeof(QB._get_having_query), Q, I},
+           Tuple{typeof(QB._get_where_query), R, I},
+           Tuple{typeof(QB._where_node!), QB.FilterNode, I},
+           Tuple{typeof(QB._push_having_part!), QB.FilterNode, I},
+           Tuple{typeof(QB._check_function), Q},
+           Tuple{typeof(QB._collect_projected_paths!), Vector{String}, Q, Int},
+           Tuple{typeof(QB._mixed_node_signature), R, Int},
+           Tuple{typeof(QB._each_bare_column), typeof(_tsp_visit), Q, I, String, Int},
+           Tuple{typeof(QB._refuse_cte_string_in_join), Q, SQ, String, Int},
+           Tuple{typeof(QB._bind_cte_filter), R, SQ, Int},
+           Tuple{typeof(QB._get_filter_repr), Q},
+           Tuple{typeof(QB._projection_alias_in_filter), Q, Set{String}, Int},
+           Tuple{typeof(QB._get_filter_query), R, I},
+           Tuple{typeof(Core.kwcall), NamedTuple{(:_as,), Tuple{Nothing}}, typeof(QB._get_select_query), Q, I},
+           Tuple{typeof(QB._order_cte_names!), Set{String}, Q},
+           Tuple{typeof(QB._cjoin_on_keyed!), Set{String}, Q, String, I, Int},
+           Tuple{typeof(QB._refuse_lhs_past_hop), Q, SQ, String, String, Int},
+           Tuple{typeof(QB._guard_no_handle), R, Type{QB.CTEReference}, typeof(QB._reject_cte_in_join), String, Int},
+           Tuple{typeof(QB._off_path_rhs_condition), Q, SQ, String, Int},
+           Tuple{typeof(QB._each_condition_column), typeof(_tsp_visit), Q, Int},
+           Tuple{typeof(QB._collect_outer_refs!), Vector{String}, R, Int},
+           Tuple{typeof(Core.kwcall), NamedTuple{(:base,), Tuple{MT}}, typeof(QB._prefix_join_filter), R, String, MT},
+           Tuple{typeof(QB._holds_agg), Q, Int},
+           Tuple{typeof(QB._contains_agg), R, Int},
+           Tuple{typeof(QB._is_window_expr), Q},
+           Tuple{typeof(deepcopy), R},
+           Tuple{typeof(deepcopy), Vector{QB.FilterType}},
+           Tuple{typeof(push!), Q, Pair{String,Int}})
+    for tt in tts
+      calls = _q_term_calls(tt)
+      @test isempty(calls)
+      isempty(calls) || @info "calls on a Q/Qor term at an abstract type" tt calls
+    end
+    renders = ("_get_where_query", "_get_having_query", "_get_filter_query", "_get_select_query",
+               "_split_having", "_having_leaf_label", "_guard_no_aggregate_predicate",
+               "_guard_field_alias_collision", "_guard_window_alias_in_q", "with_bucket", "_push_having_part!")
+    for tt in (Tuple{typeof(QB._where_node!), QB.FilterNode, I},
+               Tuple{typeof(QB._get_where_query), R, I},
+               Tuple{typeof(QB._get_having_query), Q, I},
+               Tuple{typeof(QB._get_filter_query), R, I})
+      calls = _named_dynamic_calls(tt, renders)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic calls on a Q/Qor term" tt calls
+    end
+  end
+
+  # What: every read of `QObject.filters` and `QorObject.or` in `src/querybuilder/`, `Base.deepcopy` and
+  #   `Base.push!` included (`_q_slot_reads`).
+  # Expected: none outside the slot's accessor, `_q_terms` (the view `_q_nodes` reads through it).
+  # Why: as for `OperObject` (round 10): a raw read left on a path the fixture does not take is the next wall
+  #   on a query that does. Measured on 765139bf9 with the same scan: the reads are there in every file the
+  #   readers live in.
+  @testset "every QObject.filters / QorObject.or read goes through the accessor (#1599 slice B)" begin
+    reads = _q_slot_reads()
+    @test isempty(reads)
+    isempty(reads) || @info "raw Q/Qor slot reads" reads
   end
 
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s

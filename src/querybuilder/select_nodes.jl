@@ -229,8 +229,8 @@ _order_cte_names!(out::Set{String}, x::WindowFunction) =
 _order_cte_names!(out::Set{String}, x::OperObject) =
   (_order_cte_names!(out, _oper_column(x)); with_oper_value_node(_order_cte_names_rhs!, x, out, out))
 _order_cte_names_rhs!(x, out::Set{String}) = _order_cte_names!(out, x)
-_order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, x.filters)
-_order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, x.or)
+_order_cte_names!(out::Set{String}, x::QObject) = _order_cte_names!(out, _q_nodes(x))   # the closed view (#1698 phase 2)
+_order_cte_names!(out::Set{String}, x::QorObject) = _order_cte_names!(out, _q_nodes(x))
 _order_cte_names!(out::Set{String}, x::AbstractVector) = (foreach(v -> _order_cte_names!(out, v), x); out)
 _order_cte_names!(out::Set{String}, ::Any) = out
 
@@ -1375,7 +1375,7 @@ _len_operand_label(c::JoinedReference) = "Joined(\"$(c.alias)\", \"$(c.path)\")"
 _len_operand_label(::Any) = "this expression"
 function _get_select_query(q::SQLTypeQor, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
-  for v in q.or
+  for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
     push!(resp, _or_arm(() -> _get_select_query(v, instruc, _as=_as), instruc))   # #1367
   end
   return "(" * join(resp, " OR ") * ")"
@@ -1383,7 +1383,7 @@ end
 
 function _get_select_query(q::SQLTypeQ, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   resp = []
-  for v in q.filters
+  for v in _q_nodes(q)   # each term at its concrete type (#1698 phase 2)
     push!(resp, _get_select_query(v, instruc, _as=_as))
   end
   return "(" * join(resp, " AND ") * ")"

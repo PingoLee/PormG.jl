@@ -1390,8 +1390,8 @@ function _projection_alias_in_filter(f, names::Set{String}, depth::Int = 0)::Uni
   if f isa OperObject
     col = _oper_column(f)
     (col isa SQLTypeField && col.field isa String && col.field in names) && return col.field
-  elseif f isa Union{SQLTypeQ,SQLTypeQor}
-    for g in (f isa SQLTypeQ ? f.filters : f.or)
+  elseif f isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
+    for g in _q_nodes(f)
       hit = _projection_alias_in_filter(g, names, depth + 1)
       hit === nothing || return hit
     end

@@ -443,10 +443,8 @@ function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
     _collect_projected_paths!(out, _oper_column(x), depth + 1)
     rhs = _oper_value_node(x)   # `_is_rhs_expression`'s members that the slot can hold
     rhs isa Union{FExpression,FObject,SubqueryObject,ObjectHandler} && _collect_projected_paths!(out, rhs, depth + 1)
-  elseif x isa QObject
-    _collect_projected_paths!(out, x.filters, depth + 1)
-  elseif x isa QorObject
-    _collect_projected_paths!(out, x.or, depth + 1)
+  elseif x isa Union{QObject,QorObject}   # the closed view (#1698 phase 2)
+    _collect_projected_paths!(out, _q_nodes(x), depth + 1)
   elseif x isa FObject
     _collect_projected_paths!(out, x.column, depth + 1)
     for v in values(x.kwargs)
@@ -870,7 +868,7 @@ function _mixed_node_signature(x, depth::Int = 0)
     return (:op, x.operator, parts...)
   end
   if x isa Union{QObject,QorObject}
-    inner = _mixed_node_signature(x isa QObject ? x.filters : x.or, depth + 1)
+    inner = _mixed_node_signature(_q_nodes(x), depth + 1)   # the closed view (#1698 phase 2)
     return inner === nothing ? nothing : (x isa QObject ? :q : :qor, inner)
   end
   return nothing
@@ -976,10 +974,8 @@ function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::S
     _alias_filter_key(col, instruc) === nothing && walk(col; cover = _ -> false)
     rhs = _oper_value_node(node)
     rhs isa Union{FExpression,FObject,WindowFunction,CTEReference,JoinedReference} && walk(rhs)
-  elseif node isa QObject
-    walk(node.filters)
-  elseif node isa QorObject
-    walk(node.or)
+  elseif node isa Union{QObject,QorObject}   # the closed view (#1698 phase 2)
+    walk(_q_nodes(node))
   end
   return nothing
 end

@@ -100,7 +100,7 @@ end
           try
             sc1479_run(other, """ALTER TABLE "$(SC1479_TABLE)" ADD COLUMN "team" text""")
             if SC1479_DRIVER === :postgres
-              @test (@lock conn.lock conn.server_in_transaction)   # the field `_execute` reads (2.2.2–2.4.0)
+              @test (@lock conn.lock conn.server_in_transaction)   # the field `_execute` reads
               e = sc1479_raised(() -> sc1479_run(conn, SC1479_SELECT, [1]))
               @test e isa Postgres.Error
               @test e.code == "0A000"

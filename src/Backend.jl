@@ -169,9 +169,10 @@ function backend_mysql_parameter_limit end
 backend_mysql_parameter_limit(::PormGMySQL)::Int = 65535
 
 # The most parameters one PostgreSQL statement binds, per driver (#1447). The protocol counts them in an
-# unsigned 2-byte field of the Bind message, 65535, which is what libpq binds: this fallback's answer, so the
-# LibPQ extension needs no method, and a mock pool or a pool without its driver renders by it. The Postgres.jl
-# extension answers its driver's own, lower limit. Not in the loop above: rendering never needs the driver.
+# unsigned 2-byte field of the Bind message, 65535, which is what libpq binds and what every Postgres.jl
+# `[compat]` admits binds (#1662): this fallback's answer, so neither driver extension has a method, and a
+# mock pool or a pool without its driver renders by it. A driver that binds fewer answers its own limit in
+# its extension. Not in the loop above: rendering never needs the driver.
 function backend_postgres_parameter_limit end
 backend_postgres_parameter_limit(::PormGPostgres)::Int = 65535
 

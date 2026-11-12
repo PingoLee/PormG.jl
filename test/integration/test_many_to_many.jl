@@ -309,7 +309,7 @@ end
 end
 
 # What: `remove` with more ids than one statement binds, on each engine's real limit (SQLite 32766,
-# MySQL.jl 4096, PostgreSQL 65535 on LibPQ and 32767 on Postgres.jl, #1447).
+# MySQL.jl 4096, PostgreSQL 65535 under both drivers, #1447, #1662).
 # SQL: `DELETE … WHERE owner = ? AND related IN (?, …)` per group.
 # Why (#1355): it was one statement whatever the count, so the remove raised QueryBuildError on MySQL
 # before it was sent and failed at the driver on SQLite; split under the limit in one transaction, as the
@@ -323,13 +323,70 @@ end
     driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "limit1355")
     manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
     limit = PormG.QueryBuilder._backend_parameter_limit(PormG.config[PORMG_DB_FOLDER].connections)
-    @test limit == expected_parameter_limit()   # 32767 on Postgres.jl, 65535 on LibPQ (#1447)
+    @test limit == expected_parameter_limit()   # 65535 under both PostgreSQL drivers (#1447, #1662)
 
     manager.add(sponsor_a, sponsor_b, sponsor_c)
     # One parameter per id plus the owner's: `limit` ids no sponsor has, and two that are linked.
     ghosts = Any[10_000_000 + i for i in 1:limit]
     @test manager.remove(vcat(ghosts, Any[sponsor_a[:id], sponsor_b[:id]])) === nothing
     @test [row[:name] for row in manager.all().list()] == ["LimitC"]
+
+    M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+end
+
+# The DELETE statements `f()` sends, counted in this process (#1662). `remove` has no `show_query`, so a
+# method more specific than `fetch(settings, sql, params::Union{AbstractPormGParam, ManualParams})` — the
+# call each many-to-many write makes, with no keywords — counts each DELETE and hands it to that method
+# with `invoke`. It takes no keywords, so it adds no `Core.kwcall` method and a keyword call never reaches
+# it. It is deleted in the `finally`, whatever happens, so no later file runs with it; `f` runs through
+# `invokelatest` because a method defined mid-block is invisible to the block's own world (#211).
+const _M2M_FETCH_SIGNATURE = Tuple{PormG.PormGSettings, String,
+                                   Union{PormG.AbstractPormGParam, PormG.ConnectionPool.ManualParams}}
+function _m2m_count_deletes(f)
+    deletes = Threads.Atomic{Int}(0)
+    before = Set(methods(Base.fetch))
+    @eval function Base.fetch(settings::PormG.PormGSettings, sql::String, params::PormG.AbstractPormGParam)
+        startswith(sql, "DELETE ") && Threads.atomic_add!($deletes, 1)
+        return invoke(Base.fetch, $_M2M_FETCH_SIGNATURE, settings, sql, params)
+    end
+    added = collect(setdiff(Set(methods(Base.fetch)), before))
+    try
+        @assert length(added) == 1 "the counter adds exactly one `fetch` method"
+        result = Base.invokelatest(f)
+        return (result = result, deletes = deletes[])
+    finally
+        foreach(Base.delete_method, added)
+    end
+end
+
+# What: the statements one `remove` sends, counted: `limit - 1` ids and the owner fill one statement, `limit`
+# ids are two, and 32767 ids (32768 parameters, one past the ceiling PormG held Postgres.jl to) are
+# `cld(32767, limit - 1)`: one on PostgreSQL under either driver (65535), two on SQLite (32766), nine on
+# MySQL.jl (4096). Each time the linked targets named first and last are removed and the third stays.
+# SQL: `DELETE … WHERE owner = ? AND related IN (?, …)`, once per group of `limit - 1` ids.
+# Why (#1447, #1662): the bind limit decides how many statements a remove sends, and PormG held Postgres.jl
+# to 32767 parameters after the driver had started binding 65535, so a remove of 32767 to 65534 ids sent
+# two statements in a transaction where one does. The count derives from the engine's written-down limit
+# (`expected_parameter_limit`), never from `_backend_parameter_limit`, so a limit read too low fails here.
+@testset "Many-to-Many: a remove sends one DELETE per bind-limit group (#1662)" begin
+    M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
+    M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)
+    named_first = M.M2m_sponsor_scratch.objects.create("name" => "Limit1662First")
+    named_last = M.M2m_sponsor_scratch.objects.create("name" => "Limit1662Last")
+    kept = M.M2m_sponsor_scratch.objects.create("name" => "Limit1662Kept")
+    driver = M.M2m_driver_endorsement_scratch.objects.create("driverref" => "limit1662")
+    manager = M.M2m_driver_endorsement_scratch.sponsors(driver)
+    limit = expected_parameter_limit()
+
+    for n in (limit - 1, limit, 32767)
+        manager.add(named_first, named_last, kept)
+        ids = vcat(Any[named_first[:id]], Any[10_000_000 + i for i in 1:(n - 2)], Any[named_last[:id]])
+        run = _m2m_count_deletes(() -> manager.remove(ids))
+        @test run.result === nothing
+        @test run.deletes == cld(n, limit - 1)
+        @test [row[:name] for row in manager.all().list()] == ["Limit1662Kept"]
+    end
 
     M.M2m_driver_endorsement_scratch.objects.delete(allow_delete_all=true)
     M.M2m_sponsor_scratch.objects.delete(allow_delete_all=true)

@@ -75,8 +75,6 @@ struct NetClosingError <: Exception end
     (PormG.backend_num_affected_rows, (PostgresPool, Any)),
     (PormG.backend_num_rows, (PostgresPool, Any)),
     (PormG.backend_copy_in!, (PostgresPool, PgConn, String, Any)),
-    # Postgres.jl binds fewer parameters per statement than the protocol allows (#1447).
-    (PormG.backend_postgres_parameter_limit, (PostgresPool,)),
     # The handle type its pool holds, for the pool's handle barrier (#1683).
     (PormG.backend_handle_type, (Type{PostgresPool},)),
     # Keyed on the exception alone (#987) — no pool to fall back on, but Postgres.jl's reader is
@@ -92,19 +90,21 @@ struct NetClosingError <: Exception end
   # LibPQ's marker-typed method for a Postgres.jl pool. The engine-only ones are not PostgreSQL's: the
   # two version probes, MySQL's insert id (`INSERT … RETURNING` carries PostgreSQL's row, #1266), and
   # MySQL's bulk INSERT report and duplicate-key test (PostgreSQL counts rows and reads SQLSTATE, #1267),
-  # and MySQL's driver parameter limit (PostgreSQL's own is `backend_postgres_parameter_limit`, a row above),
-  # and MySQL's idle ping (#1548: only a backend with the `idle_validation` capability is ever pinged).
+  # and MySQL's driver parameter limit, and MySQL's idle ping (#1548: only a backend with the
+  # `idle_validation` capability is ever pinged). PostgreSQL's parameter limit is core's for both drivers
+  # (#1662): Postgres.jl binds the protocol's 65535, as libpq does, so it has no row and resolves to PormG.
   # `backend_execute_rows` (#1605) has core's fallback for every engine, the decode of
   # `backend_execute`'s materialized result, which is right for both PostgreSQL drivers. Only SQLite
   # adds a method, to decode without materializing; it never falls to LibPQ's marker-typed methods.
   @test which(PormG.backend_execute_rows, Tuple{PostgresPool, PgConn, String, Any, Any}).module === PormG
+  @test which(PormG.backend_postgres_parameter_limit, Tuple{PostgresPool}).module === PormG
   pg_generics = Set(nameof(f) for (f, _) in rows)
   for name in names(PormG; all = true)
     s = string(name)
     (startswith(s, "backend_") && name ∉ (:backend_sqlite_version, :backend_mysql_version, :backend_last_insert_id,
                                              :backend_insert_report, :backend_is_duplicate_key,
                                              :backend_mysql_parameter_limit, :backend_ping,
-                                             :backend_execute_rows) &&
+                                             :backend_execute_rows, :backend_postgres_parameter_limit) &&
      getfield(PormG, name) isa Function) || continue
     @test name in pg_generics
   end
@@ -116,27 +116,36 @@ struct NetClosingError <: Exception end
   @test which(PormG.backend_is_cancellation, Tuple{LibPQ.Errors.QueryCanceled}).module === LibPQExtMod
 end
 
-# What: the bind-parameter limit PormG sizes a PostgreSQL statement to is the driver's — 32767 on
-#   Postgres.jl, 65535 on LibPQ — and the writes it splits follow it: a many-to-many `remove`'s id groups,
-#   and a bulk statement's `fld(limit, 8)` rows of eight columns when no positive `chunk_size` is given
-#   (4095 on Postgres.jl, 8191 on LibPQ).
+# What: the bind-parameter limit PormG sizes a PostgreSQL statement to is the driver's, 65535 under both
+#   drivers, and it is the one the loaded Postgres.jl states (`API.MAX_BIND_PARAMS`, which must exist).
+#   The writes it splits follow it: a many-to-many `remove`'s id groups, and a bulk statement's
+#   `fld(limit, 8)` rows of eight columns when no positive `chunk_size` is given (8191 under both).
 # SQL: none — the limit decides how many statements a write splits into (`DELETE … IN (?, …)` per batch).
-# Why (#1447): Postgres.jl writes the Bind message's parameter count as an `Int16`, so a statement of
-#   32768–65535 parameters, which PormG sized against the protocol's 65535, raised `InexactError` at the
-#   driver instead of being split. LibPQ answers the core fallback, the protocol's limit, unchanged.
-@testset "the bind-parameter limit is the PostgreSQL driver's (#1447)" begin
+# Why (#1447, #1662): a statement past the driver's limit raises at the driver instead of being split, and
+#   one sized below it is split for nothing. Postgres.jl once wrote the Bind count as an `Int16`, so PormG
+#   held it to 32767; every release `[compat]` admits writes it as a `UInt16` and binds 65535, as libpq
+#   does. The constant is read here, never in `ext/` (it is the driver's internal), so a release that
+#   changes or renames it fails this test rather than a user's write.
+@testset "the bind-parameter limit is the PostgreSQL driver's (#1447, #1662)" begin
   pg = CP.PostgresConnectionPool("host=h"; driver = :postgres)
   lpq = CP.PostgresConnectionPool("host=h"; driver = :libpq)
-  @test PormG.QueryBuilder._backend_parameter_limit(pg) == 32767
+  @test PormG.QueryBuilder._backend_parameter_limit(pg) == 65535
   @test PormG.QueryBuilder._backend_parameter_limit(lpq) == 65535
+  @test isdefined(Postgres, :API) && isdefined(Postgres.API, :MAX_BIND_PARAMS)
+  @test PormG.backend_postgres_parameter_limit(pg) == Postgres.API.MAX_BIND_PARAMS
   @test which(PormG.backend_postgres_parameter_limit, Tuple{LibPQPool}).module === PormG
-  @test PormG.QueryBuilder._bulk_chunk_rows(pg, 0, 8, 0, :bulk_insert) == 4095
+  @test which(PormG.backend_postgres_parameter_limit, Tuple{PostgresPool}).module === PormG
+  @test PormG.QueryBuilder._bulk_chunk_rows(pg, 0, 8, 0, :bulk_insert) == 8191
   @test PormG.QueryBuilder._bulk_chunk_rows(lpq, 0, 8, 0, :bulk_insert) == 8191
   # The issue's own path: a many-to-many `remove` binds the owner and one parameter per id, so 32767 ids
-  # are two statements on Postgres.jl and one on LibPQ.
+  # (32768 parameters, one past the old Postgres.jl ceiling) are one statement under both drivers, and
+  # 65535 ids (65536 parameters) are two.
   remove_sizes(pool, n) = length.(PormG.QueryBuilder._m2m_id_chunks(pool, Any[1:n...], 1, 1, :many_to_many_remove))
-  @test remove_sizes(pg, 32767) == [32766, 1]
-  @test remove_sizes(lpq, 32767) == [32767]
+  for pool in (pg, lpq)
+    @test remove_sizes(pool, 32767) == [32767]
+    @test remove_sizes(pool, 65534) == [65534]
+    @test remove_sizes(pool, 65535) == [65534, 1]
+  end
 end
 
 @testset "no method ambiguity with both PostgreSQL extensions loaded (#788)" begin
@@ -157,8 +166,8 @@ end
   cases = [
     ("NUL byte", "host=localhost password=s3cr\0etNUL dbname=f1", ["s3cr", "etNUL"]),
     ("unquoted passphrase", "host=localhost password=corr3ct horse battery dbname=f1", ["horse", "battery"]),
-    # #1243: on Postgres.jl 2.2.2, URIs' `unescapeuri` raised Base's `invalid base 16 digit 'z' in "…"`,
-    # and the single-quoted character — the password's — was outside what `_mask_quoted` masks.
+    # #1243: URIs' `unescapeuri` raises Base's `invalid base 16 digit 'z' in "…"`, and when that reached
+    # PormG the single-quoted character — the password's — was outside what `_mask_quoted` masks.
     ("bad percent-escape URL", "postgresql://u:p%zzSECRET788@localhost/f1", ["SECRET788", "p%zz", "'z'"]),
     ("bad percent-escape in a realistic URL password", "postgresql://u:50%offSEC788@localhost/f1", ["SEC788", "'o'", "off"]),
     ("bad percent-escape in a URL user", "postgresql://SEC788%zz:p@localhost/f1", ["SEC788", "'z'"]),
@@ -338,8 +347,8 @@ end
   # What: `_checked_params` hands the string to the driver first, and reads it with PormG's tables only
   # once the driver has refused it. Expected: a key a later Postgres.jl accepts but PormG's table lacks
   # — `sslsni`, stood in for by a stub `parse` — connects through; PormG's own policy checks still run
-  # on what the driver parsed; and a refusal is still named from PormG's parse. Why: the tables match
-  # Postgres.jl 2.2.2 and 2.3.0, and run first they would refuse a valid string the day a release
+  # on what the driver parsed; and a refusal is still named from PormG's parse. Why: the tables copy one
+  # Postgres.jl release's, and run first they would refuse a valid string the day a release
   # accepted more; CI resolves the newest Postgres.jl, so a working configuration would stop connecting.
   # The parity fuzz below cannot see it: it generates only keys the tables already know.
   newer_driver(dsn) = Postgres.parse_dsn(replace(dsn, r"\s*sslsni=\S*" => ""))
@@ -501,8 +510,8 @@ end
     @test !occursin("SECv", msg)
   end
   # A Base `parse` error reaching it names the rejected character as a `Char` literal, outside the
-  # double quotes (#1243): on Postgres.jl 2.2.2, `?password=x=50%off…` with URIs 1.7, or a bracketed
-  # host holding `#`, gets past PormG's escape check. Every literal is masked, whatever the shape.
+  # double quotes (#1243): when the driver lets URIs' error through, `?password=x=50%off…` with URIs 1.7,
+  # or a bracketed host holding `#`, gets past PormG's escape check. Every literal is masked, whatever the shape.
   for (shape, char) in (("invalid base 16 digit 'o' in \"ffSECb\"", "'o'"),
                         ("invalid base 16 digit '\\'' in \"'fSECb\"", "'\\''"),
                         ("invalid base 16 digit '\\x01' in \"\\x01SECb\"", "'\\x01'"),

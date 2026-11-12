@@ -156,7 +156,7 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   column_hops(path) = (segs = split(String(first(split(lstrip(path, '-'), "__@"))), "__"); segs[1:end-1])
   hops = Iterators.flatten((
     (split(p, "__") for p in keys(object.custom_join)),
-    (column_hops(p) for p in _projected_paths(object.order)),
+    (column_hops(p) for p in _projected_paths(_order_nodes(object))),
     (segs[1:end-1] for segs in something(instruc.cjoin_on_paths, ()))))
   for segs in hops
     model = object.model
@@ -171,7 +171,7 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   # `_resolve_cte_string_paths` has made a `CTEReference` before ORDER BY, `CTE("br", "surname")`, or
   # one read inside a window, a `Case` condition or a function. What this walk misses is caught after
   # every join exists (`_refuse_late_shadowed_null_key`), so a gap is a refusal, never a wrong order.
-  _order_cte_names!(tables, object.order)
+  _order_cte_names!(tables, _order_nodes(object))   # each term an `SQLOrder` (#1599 slice C)
   candidates = PormGModel[object.model]
   for aj in values(object.alias_join)
     push!(tables, Models.model_table_name(aj.target))
@@ -254,7 +254,8 @@ function _refuse_late_shadowed_null_key(object::SQLObject, instruc::SQLInstructi
   return nothing
 end
 
-function _resolve_window_order(v::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
+function _resolve_window_order(t::SQLTypeOrder, instruc::SQLInstruction)::Tuple{String,String}
+  v = _order_node(t)   # at `SQLOrder`, so its slots are read at their concrete types (#1599 slice C)
   expr = string(_resolve_window_expression(v.field, instruc))
   _refuse_uncast_json_key(_JSONKeyOrdering("A window's `order_by`", :plain, false), v.field, instruc)   # #1497
   orientation = _normalize_window_orientation(v.orientation)
@@ -311,7 +312,7 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
     for order_field in over.order_by
       mark = parameter_mark(instruc)
       expr, term = _resolve_window_order(order_field, instruc)
-      order_node = order_field isa SQLTypeOrder ? order_field.field : order_field
+      order_node = order_field isa SQLTypeOrder ? _order_node(order_field).field : order_field   # #1599 slice C
       _resolved_contains_agg(order_node, instruc) || push!(_window_group_terms!(instruc), (expr, bound_since(mark)))
       push!(order_sql, term)
     end

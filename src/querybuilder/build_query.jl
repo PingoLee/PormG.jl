@@ -344,7 +344,7 @@ function build(object::SQLObjectQuery;   # #1698: the body stores it in `Instruc
           isempty(rel) || _declare_join_key!(instruct, rel)
         end
         if instruct.aggregate && instruct.join_reaches !== nothing
-          for p in _projected_paths(object.order)
+          for p in _projected_paths(_order_nodes(object))
             rel = _relation_prefix(object, lstrip(p, '-'))
             isempty(rel) || _order_join_key!(instruct, rel)
           end
@@ -937,7 +937,7 @@ function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::S
       _resolved_contains_agg(term, instruc) && walk(term, "PARTITION BY")
     end
     for term in node.over.order_by
-      t = term isa SQLTypeOrder ? term.field : term
+      t = term isa SQLTypeOrder ? _order_node(term).field : term   # an `SQLOrder`'s field (#1599 slice C)
       _resolved_contains_agg(t, instruc) && walk(t, "ORDER BY")
     end
     # The argument always (#809): nothing groups a plain one — `LAG("Tb"."raceid")` beside a `SUM` reads
@@ -964,7 +964,7 @@ function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::S
   elseif node isa SQLTypeField
     walk(node.field)
   elseif node isa SQLTypeOrder
-    walk(node.field)
+    walk(_order_node(node).field)   # at `SQLOrder`, whose field is an `SQLField` (#1599 slice C)
   elseif node isa OperObject
     # A condition's column is never matched structurally: a transformed one
     # (`When("born__@year__@gt" => …)`) arrives as `SQLField(EXTRACT(born), …)`, but the #352 sargable

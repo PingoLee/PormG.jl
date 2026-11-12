@@ -971,7 +971,7 @@ function _degenerate_aggregate(object::SQLObjectQuery)::Bool
   end
   any_agg || return false
   return all(o -> o.field._as !== nothing && !_is_labelled_term(o.field) &&
-                  String(o.field._as) in names, object.order)
+                  String(o.field._as) in names, _order_nodes(object))   # each term an `SQLOrder` (#1599 slice C)
 end
 
 # A kept projection that built as an aggregate with no GROUP BY and no HAVING: exactly one row whatever
@@ -1307,7 +1307,7 @@ _execute_select(q::SQLObjectHandler) = _execute_select(tuple, q)
 function _terminal_copy(h::SQLObjectHandler)::SQLObjectHandler
   q = h.object
   return ObjectHandler(object = SQLObjectQuery(model=q.model, connect_key=q.connect_key, values=q.values,
-    filter=copy(q.filter), insert=q.insert, limit=q.limit, offset=q.offset, order=copy(q.order), group=q.group,
+    filter=copy(q.filter), insert=q.insert, limit=q.limit, offset=q.offset, order=copy(_order_terms(q)), group=q.group,
     having=q.having, list_joins=q.list_joins, distinct=q.distinct, for_update=q.for_update, ctes=q.ctes,
     custom_join=q.custom_join, alias_join=q.alias_join, parameters=nothing, projection_kinds=q.projection_kinds))
 end
@@ -1722,7 +1722,8 @@ end
 # stays default so the renderer keeps its orientation-derived NULLS placement). #540: `SQLOrder` is
 # an immutable struct, so this cannot write into the caller's term — which is the point: the term
 # is a value the caller may still hold, and `last()` works on a copy of the handler anyway.
-# Non-SQLOrder ordering terms are returned as-is (best effort).
+# Non-SQLOrder ordering terms are returned as-is (best effort). `_last` reads the terms through the closed
+# view since #1599 slice C, so a term outside `SQLOrder` is refused there (`_order_node`) before this runs.
 function _invert_order(o::SQLOrder)::SQLOrder
   # One conditional, NOT two flips in sequence: :first→:last followed by :last→:first is a no-op.
   nulls = o.nulls === :first ? :last : o.nulls === :last ? :first : o.nulls
@@ -1750,7 +1751,7 @@ Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show
   _refuse_sliced(objct.object, "last()", "it reverses the ordering, which changes which rows the slice holds")
   # #199: copy-first like first/count/list — the ordering flip and limit(1) apply to the copy only.
   q = _terminal_copy(objct)
-  if isempty(q.object.order)
+  if isempty(_order_terms(q.object))
     # No ordering: fall back to primary-key DESC so last() is meaningful (Django parity).
     model = q.object.model
     pk_sym = try
@@ -1768,7 +1769,8 @@ Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show
     # Reverse the existing ordering; the reversed ORDER BY's first row is the original's last.
     # #540: rebuild the copy's own order list from constructed terms — nothing is written into an
     # `SQLOrder`, which is a `struct` now.
-    map!(_invert_order, q.object.order, q.object.order)
+    # #1599 slice C: read through the closed view, so `_invert_order` is called at `SQLOrder`.
+    map!(_invert_order, _order_terms(q.object), _order_nodes(q.object))
   end
   q.limit(1)
   res = _list_owned(q, format; show_query=show_query)

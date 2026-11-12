@@ -344,7 +344,8 @@ end
 # #533 change 2 — SQLOrder.field is narrowed, and every path runs through one funnel.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#533: SQLOrder.field admits only what its readers handle" begin
-  @test fieldtype(QBA.SQLOrder, :field) === PormG.SQLTypeField
+  # `SQLField` since #1599 slice C: the only concrete `SQLTypeField`, and what `_order_field` always returned.
+  @test fieldtype(QBA.SQLOrder, :field) === QBA.SQLField
 
   # #528's repro. It used to construct and then raise a raw `FieldError` naming `._as`.
   q = AD.Adm_child.objects

@@ -741,7 +741,13 @@ struct SQLOrder <: SQLTypeOrder
   # slot (#528). The inner constructor now routes every path through `_order_field`
   # (`object_manager.jl`), which NORMALIZES a String into the `SQLField` all four readers require —
   # so the spelling works instead of merely type-checking.
-  field::SQLTypeField
+  #
+  # #1599 slice C (#1698 phase 2): `SQLField`, not `SQLTypeField`. Every path through `_order_field` already
+  # returned an `SQLField` (it is the only concrete `SQLTypeField`, and every other value is refused), so the
+  # narrower declaration admits exactly what was stored. An element read at the abstract type made every call
+  # on it a run-time dispatch, and in a `juliac --trim` image a call with no compiled target. `SQLField` is
+  # defined above, so no definition moves.
+  field::SQLField
   order::Union{Integer,Nothing}
   orientation::String
   _as::OptionalString
@@ -1308,10 +1314,11 @@ OuterRef(::OuterRefObject) = throw(QueryBuildError(
 # admits. A node struct a builder or a renderer adds later joins its union AND its walk;
 # `test/unit/test_trim_shape_pins.jl` reads both and fails on a concrete subtype that is in neither.
 #
-# Phase 2 (#1698), still abstract: `SQLObjectQuery.order` (`SQLTypeOrder`) and the recursive fields inside
-# the nodes (`QObject.filters`, `QorObject.or`, `FObject.column`, `FExpression`'s operands,
-# `OperObject.column`/`values`, `SQLField.field`, `SQLOrder.field`). A field of a recursive node cannot
-# name a struct defined after it, so those keep `FilterType`/`FieldPart` until their own walk.
+# Phase 2 (#1698), still abstract: `SQLObjectQuery.order` (`SQLTypeOrder`, read through the closed view
+# `_order_nodes` below the struct, #1599 slice C) and the recursive fields inside the nodes (`QObject.filters`,
+# `QorObject.or`, `FObject.column`, `FExpression`'s operands, `OperObject.column`/`values`, `SQLField.field`).
+# A field of a recursive node cannot name a struct defined after it, so those keep `FilterType`/`FieldPart`
+# until their own walk. `SQLOrder.field` is closed: `SQLField` (slice C).
 
 # `SQLObjectQuery.values`: a column or expression (`SQLField`) or a `Value(x)` literal (`SQLText`).
 # `InstructionObject.select` holds the rendered projections, always `SQLField`.
@@ -1485,6 +1492,56 @@ mutable struct SQLObjectQuery <: SQLObject
     new(model, connect_key, values, filter, insert, limit, offset, order, group, having, list_joins, distinct, for_update, ctes, custom_join, alias_join, parameters, projection_kinds)
 end
 
+# `SQLObjectQuery.order` (#1698 phase 2, #1599 slice C): the query's ORDER BY terms. The slot stays
+# `Vector{SQLTypeOrder}`: `order_by(x)` stores an `x::SQLTypeOrder` as it is, and `SQLTypeOrder` is exported,
+# so narrowing the slot would refuse a caller's own subtype at `order_by` instead of at the build (decision
+# D-C1 in the slice's PR). Its readers go through a closed view instead. `SQLOrder` is the one concrete
+# `SQLTypeOrder` (`test_trim_shape_pins.jl` checks it), so each term is handed on at that type and every call
+# on it resolves statically, whatever the callee's method count (#1735): no walk is needed.
+#   - `_order_nodes(q)` is the view readers take: an `AbstractVector{SQLOrder}` over the slot, so it goes
+#     wherever the vector went (a walker's `AbstractVector` arm, `all`, `foreach`, a comprehension) with the
+#     same elements and order.
+#   - `_order_terms(q)` is the slot itself, for the writers (`push!`, `map!`, a copy) and `isempty`.
+#   - `_order_node(x)` narrows one term read some other way (a window's `order_by` entry).
+"""
+    _order_node(x::SQLTypeOrder) -> SQLOrder
+
+An ordering term at its concrete type. A value outside it (a subtype of `SQLTypeOrder` that PormG does not
+define) raises a `MethodError` naming `_order_node` and the value (`_unlisted_node`), the error class a dispatch
+with no method raised, as the slot walks refuse an outsider (#1698).
+"""
+function _order_node(x::SQLTypeOrder)::SQLOrder
+  x isa SQLOrder && return x
+  return _unlisted_node(_order_node, x)
+end
+
+"""
+    OrderTermView <: AbstractVector{SQLOrder}
+
+A read-only view of `SQLObjectQuery.order` whose elements are `SQLOrder` (`_order_nodes`). It prints
+differently from the slot, so never interpolate a view into a message, an error or a log.
+"""
+struct OrderTermView <: AbstractVector{SQLOrder}
+  terms::Vector{SQLTypeOrder}
+end
+Base.size(v::OrderTermView) = size(v.terms)
+Base.IndexStyle(::Type{OrderTermView}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(v::OrderTermView, i::Int)::SQLOrder = _order_node(v.terms[i])
+
+"""
+    _order_terms(q::SQLObjectQuery) -> Vector{SQLTypeOrder}
+
+The ORDER BY terms of a query: the slot itself, for a writer. A reader takes `_order_nodes`.
+"""
+_order_terms(q::SQLObjectQuery)::Vector{SQLTypeOrder} = q.order
+
+"""
+    _order_nodes(q::SQLObjectQuery) -> OrderTermView
+
+The ORDER BY terms of a query, each at its concrete type.
+"""
+_order_nodes(q::SQLObjectQuery)::OrderTermView = OrderTermView(_order_terms(q))
+
 function Base.deepcopy(obj::SQLObjectHandler)
   return ObjectHandler(object=deepcopy(obj.object))
 end
@@ -1554,7 +1611,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
       insert=deepcopy(obj.insert),
       limit=obj.limit,
       offset=obj.offset,
-      order=deepcopy(obj.order),
+      order=deepcopy(_order_terms(obj)),   # the slot (#1599 slice C)
       group=deepcopy(obj.group),
       having=deepcopy(obj.having),
       list_joins=deepcopy(obj.list_joins),

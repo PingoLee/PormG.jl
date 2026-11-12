@@ -343,9 +343,17 @@ end
 function _nulls_placement(orientation::AbstractString, nulls::Union{Symbol,Nothing})
   nulls === :first && return :first
   nulls === :last  && return :last
-  nulls === nothing || throw(QueryBuildError("Invalid nulls placement $(repr(nulls)); use :first or :last"))  # refusal-value-ok: an order_by keyword argument
+  nulls === nothing || _invalid_nulls_placement(nulls)
   return uppercase(strip(String(orientation))) == "DESC" ? :first : :last
 end
+# The refusal, spelled by `_symbol_text`, not `repr` (#1613): Base shows a `Symbol` through `show_unquoted(::Any)`,
+# which a `juliac --trim` build cannot resolve. It was 290 verifier rows once #1599 slice C made the call into
+# `_nulls_placement` static; the text is the same (`test_trim_shape_pins.jl` compares the two spellings).
+# Imported, not reached as `PormG.ConnectionPool._symbol_text`: `PormG` is a non-constant global here, so the
+# qualified spelling was itself a dynamic call.
+import PormG.ConnectionPool: _symbol_text
+@noinline _invalid_nulls_placement(nulls::Symbol) = throw(QueryBuildError(
+  "Invalid nulls placement $(_symbol_text(nulls)); use :first or :last"))  # refusal-value-ok: an order_by keyword argument
 
 # Render one ORDER BY term with explicit NULL placement, portable across backends (#75).
 #
@@ -446,7 +454,7 @@ _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 
 function get_order_query(object::SQLObject, instruc::SQLInstruction)
   from_columns = nothing   # #1130: the FROM tables' column names, read on the first term that needs them
-  for v in object.order
+  for v in _order_nodes(object)   # each term an `SQLOrder` (#1599 slice C)
     found_in_select = false
     v_field_copy = _field_copy(v.field)   # #1612: one level, per concrete type (see `_projection_copy`)
 

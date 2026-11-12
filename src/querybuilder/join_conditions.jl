@@ -973,7 +973,7 @@ _off_path_outer_refs(inner::SQLObject, q::SQLObject, path::String) =
 
 function _each_outer_ref(visit::Function, inner::SQLObject)
   refs = String[]
-  slots = Any[inner.values, inner.filter, [o.field for o in inner.order]]
+  slots = Any[inner.values, inner.filter, [o.field for o in _order_nodes(inner)]]   # #1599 slice C
   for cfg in values(inner.custom_join); push!(slots, cfg.filters); end
   for cfg in values(inner.alias_join); push!(slots, cfg.filters); end
   for s in slots; _collect_outer_refs!(refs, s, 0); end

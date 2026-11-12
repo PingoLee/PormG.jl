@@ -409,9 +409,10 @@ end
 #
 # CONSTRUCTS, never mutates: this node arrived through the public API, so it is replaced rather than
 # written into (the standing contract above, and #508's half of it).
-function _retag_cte_string_window_order(x::SQLTypeOrder, q::SQLObject, rewrote::Set{String})
+function _retag_cte_string_window_order(t::SQLTypeOrder, q::SQLObject, rewrote::Set{String})
+  x = _order_node(t)   # at `SQLOrder`, so its slots are read at their concrete types (#1599 slice C)
   # #533 removed the `x.field isa String` branch that stood here. `SQLOrder.field` is `SQLTypeField`
-  # now, so a String is normalized into an `SQLField` by `_order_field` at CONSTRUCTION and reaches
+  # now (`SQLField` since #1599 slice C, so the test below always holds), so a String is normalized into an `SQLField` by `_order_field` at CONSTRUCTION and reaches
   # this walker as one: `SQLOrder("ev__sku")` takes the branch below, where `_bind_cte_string!`
   # resolves the same CTE path.
   #
@@ -583,12 +584,10 @@ end
 # handler first; that copy is gone now that the build writes nothing.
 # #1612: an ORDER BY term's CTE-rooted path, bound on a one-level copy of its field (the field is the
 # caller's, #1624). The field is read once into a local, so the `isa` narrows it for the copy.
-function _bind_cte_order(o::SQLTypeOrder, q::SQLObject)::SQLTypeOrder
-  o isa SQLOrder || return o
-  f = o.field
-  f isa SQLField || return o
-  return SQLOrder(_bind_cte_string!(_field_copy(f), q), o.order, o.orientation, o._as, o.nulls)
-end
+# #1599 slice C: `o` is an `SQLOrder` (the closed view hands each term on at it), and its field an `SQLField`
+# (the slot's type), so the two `isa` guards that stood here, each returning `o` unchanged, could not fire.
+_bind_cte_order(o::SQLOrder, q::SQLObject)::SQLOrder =
+  SQLOrder(_bind_cte_string!(_field_copy(o.field), q), o.order, o.orientation, o._as, o.nulls)
 
 function _resolve_cte_string_paths(q::SQLObjectQuery)::SQLObjectQuery
   # A query with no CTE cannot have a CTE-rooted path, so it pays one `isempty` and nothing else.
@@ -599,7 +598,7 @@ function _resolve_cte_string_paths(q::SQLObjectQuery)::SQLObjectQuery
   values = ProjectionNode[v isa SQLField ? _bind_cte_string!(_field_copy(v), q) : v for v in q.values]
   # #1698: each element at its concrete type, through the slot's walk.
   filter = FilterNode[with_filter_node(_bind_cte_filter, f, q) for f in q.filter]
-  order = SQLTypeOrder[_bind_cte_order(o, q) for o in q.order]
+  order = SQLTypeOrder[_bind_cte_order(o, q) for o in _order_nodes(q)]   # the closed view (#1599 slice C)
 
   # Opposite policy, same registry: a CTE reached from a join's ON clause is refused, not resolved.
   # `custom_join` conditions are refused where they are bound (`_bind_join_conditions!`, #977): stored

@@ -693,6 +693,13 @@ end
 # leaves the statement running on the server (measured: an abandoned UPDATE committed later). The
 # worker then gets 1317 and its connection stays usable. The id is the driver's integer, never user
 # text. Best effort, never throws: the caller is a recovery task.
+#
+# Two outcomes stay at `@debug`, because nothing is left running (#1719). `connection_id` raises only
+# once MySQL.jl's `close` cleared the handle, and `close` takes the connection lock a running statement
+# holds; PormG sends its cancel before it closes or renews a connection, so a closed handle here is one
+# PormG had already finished with. And `KILL QUERY` raising 1094 (`Unknown thread id`): the session is
+# gone, and a statement runs in its session's thread, so it has ended too. Every other failure warns
+# (`_log_refused_cancel`).
 function PormG.backend_cancel_query!(pool::_Pool, conn::MySQL.Connection)
   id = try
     MySQL.connection_id(conn)
@@ -705,9 +712,31 @@ function PormG.backend_cancel_query!(pool::_Pool, conn::MySQL.Connection)
     side = _dial(pool)
     DBInterface.execute(side, "KILL QUERY $(Int(id))")
   catch e
-    @debug "MySQL refused the cancel request" exception = e
+    _log_refused_cancel(e)
   finally
     side === nothing || try; close(side); catch; end
+  end
+  return nothing
+end
+
+# MySQL's `ER_NO_SUCH_THREAD`: `KILL QUERY` named a session that no longer exists.
+const _ER_NO_SUCH_THREAD = 1094
+
+# A `@warn`, not a `@debug` (#1719): the second connection could not be opened, or the server refused
+# `KILL QUERY` (1095, not the owner of the session, among others), so the statement the caller abandoned
+# may still be running and holding its locks. A `KILL QUERY` that reaches a session after its statement
+# ended raises nothing (MySQL discards it, #1651), so it never gets here; the one harmless refusal, 1094,
+# stays at `@debug` (see `backend_cancel_query!`). An interrupt that lands during the cancel's own
+# connect is logged as refused too: the cancel was not sent, so the same consequence holds.
+#
+# The warning's cause goes through `_redacted_cause`, the one backstop that turns a connect failure into
+# text (`redact_secret`, #657), so nothing the driver quotes of the conninfo reaches the log, and no
+# backtrace is printed at warn level.
+function _log_refused_cancel(@nospecialize(e))
+  if e isa MySQL.Protocol.ServerError && _server_errno(e) == _ER_NO_SUCH_THREAD
+    @debug "MySQL: the session to cancel has already ended" exception = e
+  else
+    @warn "MySQL refused the cancel request; the statement may still be running on the server, holding its locks" cause = PormG.ConnectionPool._redacted_cause(e)
   end
   return nothing
 end
@@ -720,6 +749,42 @@ function PormG.backend_drain_connection!(pool::_Pool, conn::MySQL.Connection)
   catch
     return false
   end
+end
+
+# ── Driver floor (#1719) ─────────────────────────────────────────────────────
+#
+# `[compat]` holds `MySQL = "2.2.2"` (#1648), but Julia does not check a weak dependency's compat when it
+# loads an extension, so an environment resolved before that floor rose loads this file against an older
+# driver without a word: the 0.10.0 release gate ran on 2.2.0. Below 2.2.2 MySQL.jl's reaper task can
+# take a Ctrl+C and drop it, so the statement runs to its end and PormG never sends `KILL QUERY` (#1520).
+# `__init__` warns once and never refuses: an `__init__` that throws makes `using MySQL` fail, more than
+# a degraded cancel warrants (refusing is the maintainer's call, #1719). `test/unit/test_compat_guards.jl`
+# fails when `_DRIVER_FLOOR` and `[compat]` disagree.
+#
+# The version is read once, at precompile. This extension's cache file lists MySQL.jl's build id among
+# its required modules, and another MySQL.jl version is another package directory with its own cache and
+# build id, so Julia rejects this cache and rebuilds the extension: the constant is always the loaded
+# driver's. It also keeps `pkgversion`, which reads the driver's Project.toml from disk, out of the load
+# path of a trimmed image (#1599), which has no package directory to read.
+const _DRIVER_FLOOR = v"2.2.2"
+const _DRIVER_VERSION = pkgversion(MySQL)
+
+# Returns nothing and never throws.
+function _check_driver_floor(v::VersionNumber)
+  v < _DRIVER_FLOOR || return nothing
+  @warn "MySQL.jl $v is older than $_DRIVER_FLOOR, PormG's floor for it (#1648): the driver's reaper task can drop a Ctrl+C, so the statement runs to its end and is never cancelled (#1520). Update the driver with `Pkg.update()`."
+  return nothing
+end
+
+# Not while generating output. This extension's own precompile does not run `__init__`, but the
+# precompile of every package that loads PormG and the driver does, and Pkg reprints that worker's
+# output ("1 dependency had output during precompilation"): one stale driver would print the warning
+# once more per dependent package rebuilt (checked with a scratch package, #1719). The user's session is
+# where it belongs, once per `using`.
+function __init__()
+  Base.generating_output() && return nothing
+  _DRIVER_VERSION === nothing || _check_driver_floor(_DRIVER_VERSION)
+  return nothing
 end
 
 end # module PormGMySQLExt

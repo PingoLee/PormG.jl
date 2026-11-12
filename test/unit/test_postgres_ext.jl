@@ -875,3 +875,38 @@ end
   @test !stale(Postgres.PostgresInterfaceError("number of parameters provided (2) does not match"))
   @test !stale(EOFError())
 end
+
+# What: a refused cancel on Postgres.jl is logged at `@warn`, saying the statement may still be running,
+#   and the logger returns `nothing`. Postgres.jl's own refusal text, as 2.6 raises it, stands in for
+#   the driver error (no `Postgres.Connection` can be built without a server; see #1577's note).
+# Expected: one `:warn` record matching "refused the cancel request … may still be running on the
+#   server"; no SQL is sent.
+# Why (#1719): the refusal used to be a `@debug`, so a cancel that never reached the server (2.4's
+#   "connection not open" below the floor, a failed connect, refused TLS) was invisible while the
+#   abandoned statement ran on with its locks held.
+@testset "a refused PostgreSQL cancel warns that the statement may still be running (#1719)" begin
+  refusal = Postgres.PostgresInterfaceError("failed to deliver the cancel request to h:5432")
+  @test_logs (:warn, r"PostgreSQL refused the cancel request; the statement may still be running on the server") PGExt._log_refused_cancel(refusal)
+  @test (@test_logs (:warn,) PGExt._log_refused_cancel(EOFError())) === nothing
+end
+
+# What: `_check_driver_floor` warns when the loaded Postgres.jl is below the extension's floor, naming
+#   the version, the floor, the issue that set it and `Pkg.update()`, and is silent at or above it.
+#   `__init__` calls it on the version captured at precompile, behind the generating-output guard (read
+#   from the source: `__init__` runs once, at load, and a test cannot load the extension again).
+# Expected: `_check_driver_floor(v"2.4.0")` logs one `:warn` matching "2.4.0 … 2.6.0 … #1647 …
+#   Pkg.update()"; at `_DRIVER_FLOOR` and above, nothing at `:warn` or higher. `_DRIVER_VERSION` is the
+#   loaded driver's version, and `__init__`'s body is the guard followed by the check. No SQL.
+# Why (#1719): Julia does not check a weak dependency's `[compat]` when it loads an extension, so a stale
+#   manifest loaded Postgres.jl 2.4.0 silently, and five interrupt tests read as a code bug for days.
+@testset "a Postgres.jl below the floor warns once at load (#1719)" begin
+  @test PGExt._DRIVER_FLOOR == v"2.6.0"
+  @test PGExt._DRIVER_VERSION == pkgversion(Postgres)
+  @test_logs (:warn, r"Postgres\.jl 2\.4\.0 is older than 2\.6\.0.*#1647.*#1719.*Pkg\.update\(\)") PGExt._check_driver_floor(v"2.4.0")
+  @test (@test_logs min_level = Base.CoreLogging.Warn PGExt._check_driver_floor(PGExt._DRIVER_FLOOR)) === nothing
+  @test_logs min_level = Base.CoreLogging.Warn PGExt._check_driver_floor(v"2.7.0")
+  # The environment this suite runs in is at or above the floor, so loading the extension warned nothing.
+  @test PGExt._DRIVER_VERSION >= PGExt._DRIVER_FLOOR
+  src = read(joinpath(pkgdir(PormG), "ext", "PormGPostgresExt.jl"), String)
+  @test occursin(r"function __init__\(\)\n  Base\.generating_output\(\) && return nothing\n  _DRIVER_VERSION === nothing \|\| _check_driver_floor\(_DRIVER_VERSION\)\n", src)
+end

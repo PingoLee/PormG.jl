@@ -266,6 +266,10 @@ end
     "src/migrations/introspection.jl" => 1,
     # Not a gate: `register_offline` checks that a stated `server_version` is positive (#1452).
     "src/Configuration.jl" => 1,
+    # A driver package's version, not a server's: `_check_driver_floor` warns at load when the
+    # loaded Postgres.jl / MySQL.jl is below the `[compat]` floor Julia does not enforce (#1719).
+    "ext/PormGPostgresExt.jl" => 1,
+    "ext/PormGMySQLExt.jl" => 1,
   )
   found = Dict{String,Int}()
   for top in ("src", "ext"), (dir, _, files) in walkdir(joinpath(_CT_ROOT, top)), f in files

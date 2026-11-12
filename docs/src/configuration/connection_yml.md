@@ -168,6 +168,8 @@ dev:
 
 Load the driver package as you would LibPQ — `using PormG, Postgres` — so its extension loads. `register_connection(...; postgres_driver = "Postgres")` does the same for a dynamic connection, and `PORMG_POSTGRES_DRIVER=Postgres` switches every PostgreSQL pool that does not name a driver, which is how the test suite runs through it.
 
+PormG needs Postgres.jl 2.6 or newer. An older one still loads, because Julia does not check an extension's `[compat]`, so a manifest resolved before PormG raised the floor keeps it; PormG then warns once at `using Postgres`, naming the floor and the `Ctrl+C` cancellation that does not work below it ([#1719](https://github.com/PingoLee/PormG.jl/issues/1719)). `Pkg.update()` fixes it.
+
 [`PormG.setup()`](setup.md) asks for the driver when the adapter is PostgreSQL (`PostgreSQL driver (LibPQ or Postgres) [Default: LibPQ]`), accepting the same spellings as this key. The driver you type is written into each environment block (`postgres_driver: Postgres`, or `postgres_driver: LibPQ`). An empty answer writes no key, so `PORMG_POSTGRES_DRIVER` still decides there, then LibPQ; when the variable is set, the prompt says so.
 
 PormG opens Postgres.jl sessions the way LibPQ.jl opens its own — `DateStyle=ISO,YMD` and `TimeZone=UTC` — and decodes results to the same types (`Decimals.Decimal`, `ZonedDateTime` in UTC, `DateTime`). Server notices go to `@debug` rather than the log.

@@ -977,8 +977,25 @@ function PormG.backend_cancel_query!(pool::_Pool, conn::Postgres.Connection)
   try
     Postgres.cancel_query!(conn)
   catch e
-    @debug "PostgreSQL refused the cancel request" exception = e
+    _log_refused_cancel(e)
   end
+  return nothing
+end
+
+# A `@warn`, not a `@debug` (#1719): every error `cancel_query!` raises means the request did not reach
+# the server, so the statement the caller abandoned is still running and holding its locks. From 2.6 it
+# raises only when the cancel socket cannot be opened, when TLS or GSS encryption was required and the
+# server refused it (the driver will not send the key in the clear), or when the write failed. No
+# harmless case shares this catch: a cancel that arrives after the statement ended is delivered, and
+# PostgreSQL drops it without a reply. Below the floor, 2.4's "connection not open" lands here too,
+# which is exactly the silent failure #1719 found. An interrupt that lands during the cancel's own
+# connect is logged here too: the cancel was not sent, so the same consequence holds.
+#
+# The cause goes through `_redacted_cause`, the one backstop that turns a connect failure into text
+# (`redact_secret`, #657), so nothing the driver quotes of the connection string reaches the log, and no
+# backtrace is printed at warn level.
+function _log_refused_cancel(@nospecialize(e))
+  @warn "PostgreSQL refused the cancel request; the statement may still be running on the server, holding its locks" cause = PormG.ConnectionPool._redacted_cause(e)
   return nothing
 end
 
@@ -1032,6 +1049,43 @@ function PormG.backend_copy_in!(pool::_Pool, conn::Postgres.Connection, sql::Str
   payload = _copy_payload(data_itr)
   Postgres.copy_from(conn, sql, payload)
   return _csv_record_count(String(payload))
+end
+
+# ── Driver floor (#1719) ─────────────────────────────────────────────────────
+#
+# `[compat]` holds `Postgres = "2.6"` (#1647), but Julia does not check a weak dependency's compat when
+# it loads an extension, so an environment resolved before that floor rose loads this file against an
+# older driver without a word: the 0.10.0 release gate ran on 2.4.0. Below 2.6 `cancel_query!` refuses
+# a connection whose socket an interrupt closed (#1577), so a Ctrl+C stops the wait while the statement
+# runs on, and an interrupted autocommit write commits. `__init__` warns once and never refuses: an
+# `__init__` that throws makes `using Postgres` fail, more than a degraded cancel warrants (refusing is
+# the maintainer's call, #1719). `test/unit/test_compat_guards.jl` fails when `_DRIVER_FLOOR` and
+# `[compat]` disagree.
+#
+# The version is read once, at precompile. This extension's cache file lists Postgres.jl's build id
+# among its required modules, and another Postgres.jl version is another package directory with its own
+# cache and build id, so Julia rejects this cache and rebuilds the extension: the constant is always the
+# loaded driver's. It also keeps `pkgversion`, which reads the driver's Project.toml from disk, out of
+# the load path of a trimmed image (#1599), which has no package directory to read.
+const _DRIVER_FLOOR = v"2.6.0"
+const _DRIVER_VERSION = pkgversion(Postgres)
+
+# Returns nothing and never throws.
+function _check_driver_floor(v::VersionNumber)
+  v < _DRIVER_FLOOR || return nothing
+  @warn "Postgres.jl $v is older than $_DRIVER_FLOOR, PormG's floor for it (#1647): a Ctrl+C that closes a statement's connection does not cancel the statement on the server, which runs on holding its locks (#1719). Update the driver with `Pkg.update()`."
+  return nothing
+end
+
+# Not while generating output. This extension's own precompile does not run `__init__`, but the
+# precompile of every package that loads PormG and the driver does, and Pkg reprints that worker's
+# output ("1 dependency had output during precompilation"): one stale driver would print the warning
+# once more per dependent package rebuilt (checked with a scratch package, #1719). The user's session is
+# where it belongs, once per `using`. (A juliac build defers `__init__` to the image's start anyway.)
+function __init__()
+  Base.generating_output() && return nothing
+  _DRIVER_VERSION === nothing || _check_driver_floor(_DRIVER_VERSION)
+  return nothing
 end
 
 # ── Precompile workload: the terminals on an offline `PostgresConnectionPool{:postgres}` key (#1732)

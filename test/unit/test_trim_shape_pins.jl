@@ -97,6 +97,40 @@ function _dynamic_calls_deep(f, argtypes::Tuple; depth::Int = 6, skip = ())::Vec
   return found
 end
 
+# The calls in `f(argtypes...)`'s unoptimized typed body that hand a FUNCTION at its concrete type to a
+# callee whose compileable signature widens that argument (to `Function`), as "<callee>: arg <i> <T> -> <W>"
+# (#1599 layer 4). Julia does not specialize a method on a function argument it only passes on, so
+# `juliac` compiles the callee for `Function` and the call the callee makes with it is dynamic. The JIT's
+# inference keeps the concrete type and inlines the callee, so neither `_dynamic_calls` nor the `:invoke`
+# walks above see it: the verifier listed `with_collector(…, ::Function, …)` while both came back empty.
+function _widened_function_args(f, argtypes::Tuple)::Vector{String}
+  ci, _ = only(code_typed(f, argtypes; optimize = false))
+  typ(x) = x isa Core.SSAValue ? ci.ssavaluetypes[x.id] :
+           x isa Core.Argument ? ci.slottypes[x.n] :
+           x isa Core.SlotNumber ? ci.slottypes[x.id] :
+           x isa GlobalRef ? (isdefined(x.mod, x.name) ? Core.Typeof(getglobal(x.mod, x.name)) : Any) :
+           x isa QuoteNode ? Core.Typeof(x.value) : Core.Typeof(x)
+  found = String[]
+  for stmt in ci.code
+    (stmt isa Expr && stmt.head === :call) || continue
+    ts = map(a -> Core.Compiler.widenconst(typ(a)), stmt.args)
+    ts[1] <: Core.Builtin && continue
+    tt = Tuple{ts...}
+    ms = Base._methods_by_ftype(tt, -1, Base.get_world_counter())
+    (ms isa Vector && length(ms) == 1) || continue
+    m = only(ms)
+    sig = Core.Compiler.get_compileable_sig(m.method, tt, m.sparams)
+    sig === nothing && continue
+    wide = Base.unwrap_unionall(sig).parameters
+    for (i, T) in enumerate(tt.parameters)
+      i <= length(wide) || break
+      (T <: Function && isconcretetype(T) && !isconcretetype(wide[i])) &&
+        push!(found, "$(m.method.name): arg $(i) $(T) -> $(wide[i])")
+    end
+  end
+  return found
+end
+
 # The dynamic calls of `tt`'s optimized code (a signature type; a keyword body is followed as in
 # `_dynamic_calls_kw`) that take an ELEMENT OF A QUERY-STATE SLOT at an abstract type (#1698): an argument
 # whose type is not concrete and is a supertype of a slot's closed set (`ProjectionNode`, `FilterNode`,
@@ -1453,6 +1487,35 @@ end
     @test pq.parameters == Any[44, "Monaco", [1, 2], "\\x0102"] && pq.parameter_count == 4
     @test pq.parameters[3] isa Vector{Int64}   # the list is pushed untouched, element type included
     @test_throws MethodError QB.add_parameter!(QB.PgParameterizedQuery("", (), 0), 1)
+  end
+
+  # What: `with_bucket(f, instruc, context)`, which opens a clause's parameter bucket around `f` on an
+  #   instruction, read with its closure at a concrete type.
+  # Expected: no callee compiled with the closure widened to `Function` (`_widened_function_args`) and no
+  #   dynamic call; on a positional collector the bucket is `context` while `f` runs and the previous one
+  #   after, on PostgreSQL and without a collector `f` just runs.
+  # Why: the instruction form went through `with_collector`, whose `Vararg` passes the closure on, so Julia
+  #   compiled it for `Function` and the call into `_with_bucket_on` dispatched at run time: 6 verifier rows
+  #   on the typed read's WHERE and SELECT clauses (#1599 layer 4).
+  @testset "with_bucket on an instruction calls its closure statically (#1599 layer 4)" begin
+    QB = PormG.QueryBuilder
+    probe = () -> 7
+    @test isempty(_widened_function_args(QB.with_bucket, (typeof(probe), QB.InstructionObject, Symbol)))
+    # The control: the call the instruction form made before, which the detector must see.
+    # (Spelled through the global `PormG`: a captured `QB` would hide the callee from the typed code.)
+    old_form(f) = PormG.QueryBuilder.with_collector(PormG.QueryBuilder._with_bucket_on,
+                                                    PormG.QueryBuilder.SQLiteParameterizedQuery(), f, :where)
+    @test any(s -> startswith(s, "with_collector: arg 4"), _widened_function_args(old_form, (typeof(probe),)))
+    @test isempty(_dynamic_calls_deep(QB.with_bucket, (typeof(probe), QB.InstructionObject, Symbol); depth = 2))
+    model = PormG.Models.Model("tsp_bucket_race", raceid = PormG.Models.IDField())
+    instruction(params) = QB.InstructionObject(text = "", table_alias = QB.SQLTbAlias(), alias = "Tb",
+                                               object = QB.SQLObjectQuery(model = model), parameters = params)
+    sq = QB.SQLiteParameterizedQuery()
+    before = sq.current_context
+    seen = QB.with_bucket(() -> sq.current_context, instruction(sq), :where)
+    @test seen === :where && sq.current_context === before
+    @test QB.with_bucket(probe, instruction(QB.PgParameterizedQuery("", Any[], 0)), :where) == 7
+    @test QB.with_bucket(probe, instruction(nothing), :where) == 7
   end
 
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s

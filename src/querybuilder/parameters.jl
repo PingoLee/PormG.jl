@@ -150,8 +150,19 @@ function with_bucket(f, sq::PormGPositionalParam, context::Symbol)
     sq.current_context = prev
   end
 end
-with_bucket(f, instruc::SQLInstruction, context::Symbol) =
-  (p = instruc.parameters; p === nothing ? f() : with_collector(_with_bucket_on, p, f, context))
+# The collector's concrete types are walked here rather than through `with_collector` (#1599 layer 4):
+# a closure handed on through `with_collector`'s `Vararg` is not specialized on (Julia widens an
+# argument it only passes on to `Function`), so the call it made into `_with_bucket_on` dispatched at
+# run time, one verifier row per collector type. `F` keeps the closure's type. Any other value raises
+# the `MethodError` naming `_with_bucket_on` that `with_collector` raised.
+function with_bucket(f::F, instruc::SQLInstruction, context::Symbol) where {F}
+  p = instruc.parameters
+  p === nothing && return f()
+  p isa SQLiteParameterizedQuery && return with_bucket(f, p, context)
+  p isa PgParameterizedQuery && return with_bucket(f, p, context)
+  p isa MySQLParameterizedQuery && return with_bucket(f, p, context)
+  return _unlisted_node(_with_bucket_on, p, f, context)
+end
 # `with_bucket` with the collector first, the argument order `with_collector` calls in.
 _with_bucket_on(sq, f::F, context::Symbol) where {F} = with_bucket(f, sq, context)
 

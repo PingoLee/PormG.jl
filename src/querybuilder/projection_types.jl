@@ -1767,7 +1767,9 @@ end
 # (INT / FLOA in the name). `integer unsigned` is a plain integer: PostgreSQL renders it `integer`, and
 # no cast enforces the sign. Widening this also widens the alias filter: a value compared with
 # `Cast(x, "int8")` is now checked as a number, where it used to bind unchecked.
-function _sql_type_field(type_name::AbstractString)::Union{PormGField,Nothing}
+#
+# #1599 slice A: typed #1604's `AnyField`, which every arm builds, not the abstract `PormGField` (#1735).
+function _sql_type_field(type_name::AbstractString)::Union{Models.AnyField,Nothing}
   Base.endswith(strip(type_name), "]") && return nothing
   base = lowercase(strip(first(split(type_name, '('))))
   base == "text" && return Models.TextField()

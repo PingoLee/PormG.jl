@@ -933,6 +933,69 @@ end
     end
   end
 
+  # What: the join walk (`_build_row_join`), its forward hop (`_forward_fk_hop`), `_insert_join`'s alias,
+  #   and the date-part check's key field (`_relation_key_field`, `_temporal_reads`, read from
+  #   `_check_temporal_operand`). These are the query builder's statements that passed a model field on
+  #   as the abstract `PormGField`, or that a static first hop reaches next.
+  # Expected:
+  #   - the hop infers `Tuple{ModelJoin, ModelType, <: Union{Nothing, AnyField}}`;
+  #   - `_relation_key_field` infers a subtype of `Union{Nothing, AnyField}`;
+  #   - `_insert_join` infers `String`;
+  #   - none of the four makes a dynamic call to the names listed for it below;
+  #   - `_temporal_reads` makes no dynamic call, and answers as the `in` formula it replaced did, over a
+  #     matrix of fields and part rows.
+  # Why: the trimmed typed read stopped at row 34, a `kwcall` to `_forward_fk_hop` whose field came from
+  #   `_segment_field(…)::PormGField`. The call is static over #1604's `AnyField` (one method, so no walk,
+  #   #1735). A `cjoin` link of a caller's own field type takes an open arm (DECISIONS: closing it changes
+  #   what `cjoin` accepts). Once the first hop was static, the verifier read the code behind it:
+  #   - each `Union` keyword value (`prev_how`, the segment after the hop) made its call dynamic, so those
+  #     values are positional now;
+  #   - `last_field` was declared `PormGField`;
+  #   - the hop's target was the abstract `PormGModel`;
+  #   - `_insert_join`'s dedup branch read `alias_b` off the abstract `JoinRow`.
+  #   `_relation_key_field`, untyped, merged its 28 split answers into `PormGField`. Measured on main
+  #   0b5a460d4: the `_relation_key_field`, `_insert_join`, both name checks and the `_temporal_reads` check
+  #   fail, and the hop check errors (its signature differs).
+  @testset "the join walk and the date-part check hand on a model field as AnyField (#1599 slice A, row 34)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    I = QB.InstructionObject
+    @test only(Base.return_types(QB._relation_key_field, (M.AnyField, I))) <: Union{Nothing, M.AnyField}
+    @test only(Base.return_types(QB._insert_join, (Vector{QB.JoinRow}, QB.ModelJoin, I, String))) === String
+    # Two answers stated `PormGField` though every value is a model's field or one PormG builds. Inference
+    # already saw through the annotation on main, so these two guard the retype rather than prove it.
+    @test only(Base.return_types(QB._operand_column_field, (String, I))) <: Union{Nothing, M.AnyField}
+    @test only(Base.return_types(QB._sql_type_field, (String,))) <: Union{Nothing, M.AnyField}
+    for (tt, names) in (
+        (Tuple{typeof(QB._build_row_join), Vector{String}, I},
+         ("_forward_fk_hop", "_reverse_hop", "_apply_many_to_many_branch", "_hop_join_type", "memo_field!", "_finish_hop!")),
+        (Tuple{typeof(QB._check_temporal_operand), QB.FObject, I},
+         ("_relation_key_field", "_temporal_reads", "hasproperty", "_field_label")))
+      calls = _named_dynamic_calls(tt, names)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic field-hop calls" tt calls
+    end
+    @test isempty(_dynamic_calls(QB._temporal_reads, (M.AnyField, Tuple{Vararg{Symbol}})))
+    # The answer `in` gave: the field's temporal kind is among the part's reads, or the part reads only a
+    # zoned timestamp and the field is one.
+    old_reads(f, reads) = QB._temporal_kind(f) in reads || (:timestamptz in reads && f.type == "TIMESTAMPTZ")
+    fields = (M.DateField(), M.DateTimeField(), M.DateTimeField(type = "TIMESTAMP"), M.TimeField(),
+              M.DurationField(), M.IntegerField(), M.CharField())
+    rows = ((:date, :datetime), (:datetime, :time), (:timestamptz,), (:interval,), (:date,), ())
+    for f in fields, reads in rows
+      @test QB._temporal_reads(f, reads) === old_reads(f, reads)
+    end
+    # Last, because its keyword body is found by the hop's signature, which has `prev_how` positional. The
+    # caller splits its call over `AnyField`, so the body is read at one member, as each split call runs it.
+    hop = Base.bodyfunction(which(QB._forward_fk_hop, (I, M.ModelType, String, String, String, M.sForeignKey, Vector{String}, Nothing)))
+    hop_args = (String, typeof(QB._forward_fk_hop), I, M.ModelType, String, String, String, M.sForeignKey, Vector{String}, Union{Nothing, String})
+    @test only(Base.return_types(hop, hop_args)) <: Tuple{QB.ModelJoin, M.ModelType, Union{Nothing, M.AnyField}}
+    calls = _named_dynamic_calls(Tuple{typeof(hop), hop_args...},
+      ("_hop_join_type", "_determine_join_type", "_forward_join_model", "_forward_target_not_unique", "ModelJoin"))
+    @test isempty(calls)
+    isempty(calls) || @info "dynamic calls in the forward hop" calls
+  end
+
   # What: `Models._relation_from_many_to_many`, which builds a many-to-many relation at registration and
   #   in the migration planner, read as both callers specialize it: `set_models` passes `_module`, the
   #   planner's `synthesize_many_to_many_through_models` passes `model_map`.

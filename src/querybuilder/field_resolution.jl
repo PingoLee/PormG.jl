@@ -71,7 +71,9 @@ function _insert_join(
         # which the dedup invariant forbids.
         error(_emsg("PormG internal error in _insert_join: duplicate deduplicated join rows for $(row.a) → $(row.b) (alias $(row.alias_a)) — please report this."))
       end
-      return check[1].alias_b
+      # #1599 slice A: asserted, because `check` holds the abstract `JoinRow` and the read is `Any`, which
+      # made every caller's alias `Any`. Every `JoinRow` struct declares `alias_b::String`, so it holds.
+      return check[1].alias_b::String
     end
   end
 end

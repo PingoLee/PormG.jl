@@ -572,8 +572,20 @@ const _TEMPORAL_KIND_FIELDS = Dict(:date => "DateField", :datetime => "DateTimeF
                                    :timestamptz => "DateTimeField with a time zone (the default `TIMESTAMPTZ`)")
 # A row reads `:timestamptz` when only a zoned timestamp will do (`EXTRACT(TIMEZONE …)`): PostgreSQL
 # rejects it over a `DateTimeField(type = "TIMESTAMP")`, which is a `:datetime` all the same.
-_temporal_reads(field, reads) = _temporal_kind(field) in reads ||
-                                (:timestamptz in reads && getproperty(field, :type) == "TIMESTAMPTZ")
+#
+# #1599 slice A: `reads` is `_TemporalRow`'s `Tuple{Vararg{Symbol}}`, an abstract type, so a call that
+# specializes on it dispatched at run time; `@nospecialize` makes the call static, and the search is
+# written with builtins (`nfields`, `getfield`) because `in` over it dispatches too. The answer is `in`'s.
+function _temporal_reads(field::Models.AnyField, @nospecialize(reads::Tuple{Vararg{Symbol}}))::Bool
+  kind = _temporal_kind(field)
+  zoned = false
+  for i in 1:nfields(reads)
+    r = getfield(reads, i)::Symbol
+    r === kind && return true
+    zoned |= r === :timestamptz
+  end
+  return zoned && getproperty(field, :type) == "TIMESTAMPTZ"
+end
 
 # A bare `F("col")` or `SQLField("col")` names a column as plainly as `"col"` does, so it is checked as
 # that column. Anything with an operation is an expression, and stays unchecked (fail open).
@@ -586,14 +598,19 @@ _temporal_operand(x) = x
 # `EXTRACT(YEAR FROM <integer>)`, which PostgreSQL refuses and SQLite answers from the text. A key
 # that is itself a relation (a one-to-one primary key) is followed in turn. `nothing` — fail open —
 # for a target PormG cannot resolve here; the join walk reports that one when it needs the model.
-function _relation_key_field(field::PormGField, instruc::SQLInstruction)
+#
+# #1599 slice A: typed #1604's `AnyField` in and out, and the target tested as `ModelType` (the one
+# `PormGModel`), so the key field read off it is `AnyField` too. Untyped, the caller merged the answers
+# of its 28 split calls into the abstract `PormGField`, and its `hasproperty`, `_temporal_reads` and
+# `_field_label` calls on the answer dispatched at run time.
+function _relation_key_field(field::Models.AnyField, instruc::SQLInstruction)::Union{Nothing, Models.AnyField}
   for _ in 1:8
     field isa Union{Models.sForeignKey, Models.sOneToOneField} || return field
     mod = instruc.object.model._module
     target = field.to isa PormGModel ? field.to :
              (field.to isa AbstractString && mod isa Module) ? Models._resolve_target_model(field.to, mod) :
              nothing
-    target isa PormGModel || return nothing
+    target isa Models.ModelType || return nothing
     pk = field.pk_field === nothing ? Models.get_model_pk_field(target) : field.pk_field
     pk === nothing && return nothing
     field = get(target.fields, String(pk), nothing)

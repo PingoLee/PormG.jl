@@ -1432,6 +1432,29 @@ end
     isempty(reads) || @info "raw ORDER BY slot reads" reads
   end
 
+  # What: `add_parameter!` on a PostgreSQL collector, for each kind of value a statement binds, and the helper
+  #   every push onto `PgParameterizedQuery.parameters` goes through (`_push_parameter!`).
+  # Expected: no dynamic call; the value is appended and the placeholder numbered as before; a collector
+  #   built over a `Tuple` raises the `MethodError` of `push!` on it, as before.
+  # Why: the slot is `Union{AbstractVector,Tuple}`, so `push!(pq.parameters, value)` dispatched at run time:
+  #   28 verifier rows (one per value type, two per build entry), each a `MethodError` in a trimmed binary
+  #   that binds on PostgreSQL (#1599 layer 4).
+  @testset "a PostgreSQL collector appends without a dynamic call (#1599 layer 4)" begin
+    QB = PormG.QueryBuilder
+    @test isempty(_dynamic_calls(QB._push_parameter!, (QB.PgParameterizedQuery, Any)))
+    for T in (Int64, Float64, String, Nothing, Dates.Date, Dates.DateTime, Vector{Int64}, PormG.PormGBytes)
+      @test isempty(_dynamic_calls_kw(QB.add_parameter!, (QB.PgParameterizedQuery, T)))
+    end
+    pq = QB.PgParameterizedQuery("", Any[], 0)
+    @test QB.add_parameter!(pq, 44) == "\$1"
+    @test QB.add_parameter!(pq, "Monaco"; sql_type = "text") == "\$2::text"
+    @test QB.add_parameter!(pq, [1, 2]) == "\$3"
+    @test QB.add_parameter!(pq, PormG.PormGBytes(UInt8[0x01, 0x02])) == "\$4"
+    @test pq.parameters == Any[44, "Monaco", [1, 2], "\\x0102"] && pq.parameter_count == 4
+    @test pq.parameters[3] isa Vector{Int64}   # the list is pushed untouched, element type included
+    @test_throws MethodError QB.add_parameter!(QB.PgParameterizedQuery("", (), 0), 1)
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete

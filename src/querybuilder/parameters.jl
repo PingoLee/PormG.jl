@@ -325,6 +325,18 @@ copy_parameters_to!(instruc::SQLInstruction, ctx::Symbol, values::Vector{Any}) =
 # each element to `byteain` — so the same text serves both positions.
 _pg_bytea_text(value::PormGBytes)::String = "\\x" * bytes2hex(value.bytes)
 
+# Every push onto a PostgreSQL collector goes through here (#1599 layer 4). The slot is typed
+# `Union{AbstractVector,Tuple}`, so `push!(pq.parameters, value)` was a call on an abstract container,
+# dispatched at run time for each value type a statement binds (28 verifier rows). Every collector PormG
+# builds holds a `Vector{Any}`, which takes the static arm; any other container takes the one dynamic
+# call it always took, behind `@noinline`, so a `Tuple` still raises the same `MethodError`.
+function _push_parameter!(pq::PormGPostgresParam, value)::Nothing
+  p = pq.parameters
+  p isa Vector{Any} ? push!(p, value) : _push_parameter_other!(p, value)
+  return nothing
+end
+@noinline _push_parameter_other!(@nospecialize(p), @nospecialize(value))::Nothing = (push!(p, value); nothing)
+
 # --- PostgreSQL ---
 function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
   contains && (throw(FilterError("Contains option is not supported for array parameters")))
@@ -336,7 +348,7 @@ function add_parameter!(pq::PormGPostgresParam, value::AbstractArray; contains::
   if any(v -> v isa PormGBytes, value)
     value = Any[v isa PormGBytes ? _pg_bytea_text(v) : v for v in value]
   end
-  push!(pq.parameters, value)
+  _push_parameter!(pq, value)
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
 end
 function add_parameter!(pq::PormGPostgresParam, value; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
@@ -344,7 +356,7 @@ function add_parameter!(pq::PormGPostgresParam, value; contains::Bool=false, ope
     value = _apply_like_wildcards(value, operator)
   end
   pq.parameter_count += 1
-  push!(pq.parameters, value)
+  _push_parameter!(pq, value)
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"  # PostgreSQL style
 end
 
@@ -386,7 +398,7 @@ end
 function add_parameter!(pq::PormGPostgresParam, value::PormGBytes; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   contains && throw(FilterError("Contains option is not supported for binary parameters"))
   pq.parameter_count += 1
-  push!(pq.parameters, _pg_bytea_text(value))
+  _push_parameter!(pq, _pg_bytea_text(value))
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
 end
 
@@ -409,7 +421,7 @@ end
 function add_parameter!(pq::PormGPostgresParam, value::PormGArrayLiteral; contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)::String
   contains && throw(FilterError("A pattern lookup does not apply to an array column; compare the whole array, or test its elements with a containment lookup."))
   pq.parameter_count += 1
-  push!(pq.parameters, value.literal)
+  _push_parameter!(pq, value.literal)
   return "\$$(pq.parameter_count)$(_postgres_parameter_cast(sql_type))"
 end
 # SQLite has no array type: `field_to_column` refuses an `ArrayField` there, so a value can only reach

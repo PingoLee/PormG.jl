@@ -527,24 +527,48 @@ const _CLOSED_CONNECTION_PREFIX = "mysql connection has been closed or disconnec
 const _LOST_SOCKET_ERRNOS = (Libc.ECONNRESET, Libc.EPIPE, Libc.ECONNABORTED, Libc.ENOTCONN,
                              Libc.ETIMEDOUT, Libc.EHOSTUNREACH, Libc.ENETUNREACH)
 
-function _is_lost_connection(e, depth::Int = 4)::Bool
-  e isa CompositeException && return any(inner -> _is_lost_connection(inner, depth), e.exceptions)
+# MySQL.jl's server errors (#1714). `ServerError` is abstract, so its fields read through it are
+# untyped; these two concrete types are every subtype MySQL.jl defines (`test_driver_internals.jl` fails
+# when it defines another), and each declares `errno::Cuint`, `msg::String` and `sqlstate::String`.
+const _ServerErrors = Union{MySQL.Protocol.Error, MySQL.Protocol.StmtError}
+# A server error's number and SQLSTATE at known types; a subtype a later MySQL.jl adds is read by name,
+# the one dynamic place, behind `@noinline`.
+_server_errno(@nospecialize(e::MySQL.Protocol.ServerError))::Int =
+  e isa _ServerErrors ? Int(e.errno) : _other_server_errno(e)
+_server_sqlstate(@nospecialize(e::MySQL.Protocol.ServerError))::String =
+  e isa _ServerErrors ? e.sqlstate : _other_server_text(e, :sqlstate)
+_server_msg(@nospecialize(e::MySQL.Protocol.ServerError))::String =
+  e isa _ServerErrors ? e.msg : _other_server_text(e, :msg)
+@noinline _other_server_errno(@nospecialize(e))::Int = Int(getproperty(e, :errno))
+@noinline _other_server_text(@nospecialize(e), field::Symbol)::String = PormG._unowned_string(getproperty(e, field))
+
+# `@nospecialize`: every caller holds the exception as `Any` (a `catch`), so one compiled body serves them
+# all and each call to it is static (#1714). The types this driver owns are read at their known types;
+# a wrapper this driver does not own is opened through core's open arm.
+function _is_lost_connection(@nospecialize(e), depth::Int = 4)::Bool
+  # A loop, not `any(closure, e.exceptions)`: over the `Vector{Any}` that is a dynamic call.
+  if e isa CompositeException
+    for inner in e.exceptions
+      _is_lost_connection(inner, depth) && return true
+    end
+    return false
+  end
   # The server or the driver named a number: trust it over any text.
-  e isa MySQL.Protocol.ServerError && return Int(e.errno) in _LOST_CONNECTION_ERRNOS
+  e isa MySQL.Protocol.ServerError && return _server_errno(e) in _LOST_CONNECTION_ERRNOS
   # A wire fault closes the connection (MySQL.jl's `ProtocolError` contract), and a client read or
   # write timeout closes it too.
   (e isa MySQL.Protocol.ProtocolError || e isa MySQL.Protocol.TimeoutError) && return true
-  # server-text-match-ok: MySQL.jl's own client-side text, not a server message
-  e isa ErrorException && return Base.startswith(e.msg, _CLOSED_CONNECTION_PREFIX)
+  if e isa ErrorException
+    client_text = e.msg   # declared `AbstractString`; MySQL.jl raises it with a `String`
+    # server-text-match-ok: MySQL.jl's own client-side text, not a server message
+    return Base.startswith(client_text isa String ? client_text : PormG._unowned_string(client_text), _CLOSED_CONNECTION_PREFIX)
+  end
   (e isa EOFError || e isa Base.IOError) && return true
   e isa SystemError && return e.errnum in _LOST_SOCKET_ERRNOS
   nameof(typeof(e)) === :NetClosingError && return true
   depth > 0 || return false
-  for field in (:cause, :err)
-    inner = hasproperty(e, field) ? getproperty(e, field) : nothing
-    inner isa Exception && return _is_lost_connection(inner, depth - 1)
-  end
-  return false
+  inner = PormG._unowned_inner(e)
+  return inner !== nothing && _is_lost_connection(inner, depth - 1)
 end
 
 PormG.backend_is_connection_error(pool::_Pool, @nospecialize(e)) = _is_lost_connection(e)
@@ -567,7 +591,7 @@ PormG.backend_is_connection_error(pool::_Pool, @nospecialize(e)) = _is_lost_conn
 const _NEVER_SENT_ERRNOS = (2006, 4031)
 
 PormG.backend_is_retry_safe(pool::_Pool, @nospecialize(e)) =
-  e isa MySQL.Protocol.ServerError ? Int(e.errno) in _NEVER_SENT_ERRNOS : PormG._default_retry_safe(pool, e)   # #1696
+  e isa MySQL.Protocol.ServerError ? _server_errno(e) in _NEVER_SENT_ERRNOS : PormG._default_retry_safe(pool, e)   # #1696
 
 # Permanent: the same configuration fails the same way on every retry. 1045 access denied, 1044 access
 # denied to the database, 1049 unknown database, 1130 host not allowed, 3159 an insecure transport the
@@ -580,7 +604,7 @@ function PormG.backend_is_permanent_connect_error(pool::_Pool, @nospecialize(e))
   e isa PormG.BackendCapabilityError && return true
   e isa ArgumentError && return true   # MySQL.jl's refusal of an option value (`ssl_mode`, `tls_version`, …)
   (e isa MySQL.Protocol.AuthError || e isa MySQL.Protocol.UnsupportedAuthError) && return true
-  return e isa MySQL.Protocol.ServerError && Int(e.errno) in _PERMANENT_CONNECT_ERRNOS
+  return e isa MySQL.Protocol.ServerError && _server_errno(e) in _PERMANENT_CONNECT_ERRNOS
 end
 
 # Constraint violations, by number only. SQLSTATE `23000` is not a fallback: MySQL files 1052 (an
@@ -612,9 +636,9 @@ function PormG.backend_classify_error(pool::_Pool, @nospecialize(e))
   (e isa MySQL.Protocol.AuthError || e isa MySQL.Protocol.UnsupportedAuthError ||
    e isa MySQL.Protocol.TLSNegotiationError) && return :operational
   e isa MySQL.Protocol.ServerError || return :unknown
-  errno = Int(e.errno)
+  errno = _server_errno(e)
   errno in _INTEGRITY_ERRNOS && return :integrity
-  (errno in _OPERATIONAL_ERRNOS || e.sqlstate == "40001") && return :operational
+  (errno in _OPERATIONAL_ERRNOS || _server_sqlstate(e) == "40001") && return :operational
   return :statement
 end
 
@@ -624,13 +648,21 @@ end
 const _SAFE_MESSAGE_ERRNOS = (1044, 1046, 1048, 1049, 1050, 1051, 1054, 1091, 1146, 1205, 1213, 1317,
                               1364, 1406, 1451, 1452, 2006, 2013, 3024, 3572, 3819, 4031)
 
-PormG.backend_error_fields(pool::_Pool, @nospecialize(e)) =
-  e isa MySQL.Protocol.ServerError ? PormG.backend_error_fields(e) : PormG._NO_ERROR_FIELDS
+# The pool-keyed reader splits the two concrete server errors, so its call is static (#1714); a server
+# error type a later MySQL.jl adds reaches the one-argument form by dispatch, behind `@noinline`.
+function PormG.backend_error_fields(pool::_Pool, @nospecialize(e))
+  e isa _ServerErrors && return PormG.backend_error_fields(e)
+  e isa MySQL.Protocol.ServerError && return _other_server_fields(e)
+  return PormG._NO_ERROR_FIELDS
+end
+@noinline _other_server_fields(@nospecialize(e))::PormG._ErrorFields = PormG.backend_error_fields(e)
 function PormG.backend_error_fields(e::MySQL.Protocol.ServerError)
-  sqlstate = isempty(e.sqlstate) ? nothing : e.sqlstate
-  message = Int(e.errno) in _SAFE_MESSAGE_ERRNOS && !isempty(e.msg) ? e.msg : nothing
-  table, constraint = Int(e.errno) == 1062 ? _duplicate_key_name(e.msg) : (nothing, nothing)
-  return (sqlstate = sqlstate, constraint = constraint, table = table, column = nothing, message = message)
+  sqlstate = _server_sqlstate(e)
+  errno = _server_errno(e)
+  msg = _server_msg(e)
+  message = errno in _SAFE_MESSAGE_ERRNOS && !isempty(msg) ? msg : nothing
+  table, constraint = errno == 1062 ? _duplicate_key_name(msg) : (nothing, nothing)
+  return PormG._error_record(isempty(sqlstate) ? nothing : sqlstate, constraint, table, nothing, message)
 end
 
 # 1062's text is `Duplicate entry '<value>' for key '<table>.<key>'` (the table since 8.0.19). The key

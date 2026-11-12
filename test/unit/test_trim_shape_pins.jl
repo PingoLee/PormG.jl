@@ -72,12 +72,15 @@ end
 # The same, following every `:invoke` `depth` levels down (#1706): a dynamic call inside a callee —
 # `WeakKeyDict`'s `isequal(pool, ::WeakRef)` under a registry lookup — is invisible to the one-level
 # scans above, which see only the resolved call into it.
-function _dynamic_calls_deep(f, argtypes::Tuple; depth::Int = 6)::Vector{String}
+# `skip` names functions not walked into: a reviewed open arm, whose dynamic call is the point (#1714).
+function _dynamic_calls_deep(f, argtypes::Tuple; depth::Int = 6, skip = ())::Vector{String}
   found = String[]
   seen = Set{Any}()
   walk(tt, d) = begin
     tt in seen && return
     push!(seen, tt)
+    F = Base.unwrap_unionall(tt).parameters[1]
+    (isdefined(F, :instance) && F.instance in skip) && return
     for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
       stmt isa Expr || continue
       if stmt.head === :call
@@ -241,6 +244,11 @@ struct _TspStandInPool <: PormG.PormGSQLite end
 # A stand-in under the PostgreSQL marker, and a test's own error with a one-argument reader (#1696).
 struct _TspStandInPGPool <: PormG.PormGPostgres end
 struct _TspFakeError <: Exception end
+# Exceptions no driver owns, for the open-arm rows (#1714): a text, and wrappers keeping a cause.
+struct _TspPlainError <: Exception; msg::String; end
+Base.showerror(io::IO, e::_TspPlainError) = print(io, e.msg)
+struct _TspWrap <: Exception; cause::Any; end
+struct _TspWrapErr <: Exception; err::Any; end
 # A pool nothing but the registry refers to, for the weak-key check (#1706).
 @noinline _tsp_insert_unreferenced!(r) = (r[PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)] = [5]; nothing)
 PormG.backend_error_fields(::_TspFakeError) =
@@ -1293,6 +1301,115 @@ end
     # A fields record that leaves a key out reads `nothing` for it, as the keyword constructors did.
     short = CP._as_database_error(lp, cases[7][2]; fields = (sqlstate = "23505", message = "duplicate key"))
     @test (short.sqlstate, short.constraint, short.table, short.column, short.message) == ("23505", N, N, N, "duplicate key")
+  end
+
+  # What: the bodies the #1696 testset above reaches, followed three `:invoke`s down (#1714): the five
+  #   extension classifiers and `_as_database_error`, at `(pool, Any)` on each pool type PormG builds,
+  #   and how they classify an exception their driver does not own.
+  # Expected: no dynamic call anywhere in them, except inside the named open arms (`_unowned_string`,
+  #   `_unowned_error_text`, `_unowned_inner`, MySQL's `_other_server_*`), which are not walked into: each
+  #   reads an exception the driver does not own the only way it can be read, by `string` or by a field
+  #   looked up by name. And the answers for such exceptions are the ones main gave (recorded there): a
+  #   foreign error's text still matches a phrase, LibPQ's `verbose_msg` is still read, a wrapper's
+  #   `.cause`/`.err` is still opened, four levels deep and no more.
+  # Why: #1696 made the calls INTO these bodies static; their own calls on the exception, or on a driver
+  #   field typed abstract (`SQLiteException.msg::AbstractString`, MySQL's abstract `ServerError`), were
+  #   still dynamic (23/21/4/14 on SQLite/LibPQ/Postgres.jl/MySQL), so a failing statement in a trimmed
+  #   image could end in a `MethodError` from the classification in place of the `IntegrityError`.
+  @testset "the classifier bodies make no dynamic call on the exception (#1714)" begin
+    CP = PormG.ConnectionPool
+    pools = (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+             CP.MySQLConnectionPool)
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    open_arms = (PormG._unowned_string, PormG._unowned_error_text, PormG._unowned_inner,
+                 myx._other_server_errno, myx._other_server_text, myx._other_server_fields)
+    for P in pools, f in (CP._as_database_error, PormG.backend_classify_error, PormG.backend_is_connection_error,
+                          PormG.backend_is_retry_safe, PormG.backend_is_permanent_connect_error, PormG.backend_error_fields)
+      dyn = _dynamic_calls_deep(f, (P, Any); depth = 3, skip = open_arms)
+      @test (P, nameof(f), dyn) == (P, nameof(f), String[])
+    end
+    # Every reader on a pool PormG builds returns the one record type, so `_as_database_error`'s
+    # constructors are static calls.
+    for P in pools
+      @test (P, Base.return_types(PormG.backend_error_fields, (P, Any))) == (P, Any[PormG._ErrorFields])
+    end
+
+    # The open arm is for what the driver does NOT own: at an owned exception type the text helpers do not
+    # reach it (a body that sent its own exceptions back through `string(e)` would pass the walk above,
+    # which does not look inside the open arms). At a foreign type they do, so the check can fail.
+    lpx = Base.get_extension(PormG, :PormGLibPQExt)
+    slx = Base.get_extension(PormG, :PormGSQLiteExt)
+    # The types of what the text helper hands to an open arm (`_unowned_*`): at an owned type only a message
+    # string may go there (SQLite's `msg` when it is not a `String`), never the exception itself.
+    function open_arm_args(f, T)
+      ci = only(code_typed(f, (T,); optimize = true))[1]
+      argtype(a) = a isa Core.SSAValue ? Core.Compiler.widenconst(ci.ssavaluetypes[a.id]) :
+                   a isa Core.Argument ? Core.Compiler.widenconst(ci.slottypes[a.n]) : Core.Typeof(a)
+      found = Any[]
+      for st in ci.code
+        (st isa Expr && st.head in (:invoke, :call) && occursin("_unowned_", string(st))) || continue
+        push!(found, argtype(st.args[end]))
+      end
+      return found
+    end
+    for (f, T) in ((slx._sqlite_text, SQLite.SQLiteException), (lpx._libpq_text, LibPQ.Errors.PQConnectionError),
+                   (lpx._libpq_text, LibPQ.Errors.PQResultError), (lpx._libpq_text, LibPQ.Errors.ConninfoParseError))
+      @test (nameof(f), T, all(A -> A <: AbstractString, open_arm_args(f, T))) == (nameof(f), T, true)
+    end
+    @test isempty(open_arm_args(lpx._libpq_text, LibPQ.Errors.PQConnectionError))
+    @test any(A -> !(A <: AbstractString), open_arm_args(slx._sqlite_text, ErrorException)) &&
+          any(A -> !(A <: AbstractString), open_arm_args(lpx._libpq_text, ErrorException))
+
+    # The answers for what a driver does not own, and for the shapes the narrowing reads, as main gave them.
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    lp = CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :libpq)
+    pj = CP.PostgresConnectionPool("host=x"; pool_size = 1, driver = :postgres)
+    my = CP.MySQLConnectionPool("host='x'"; pool_size = 1)
+    E = LibPQ.Errors
+    wrap(e, n = 1) = n == 0 ? e : wrap(_TspWrap(e), n - 1)
+    conn(p, e) = PormG.backend_is_connection_error(p, e)
+    perm(p, e) = PormG.backend_is_permanent_connect_error(p, e)
+    # SQLite: a foreign error's text, a message that is not a `String`, a message `show` would escape.
+    @test conn(sl, ErrorException("database is closed"))
+    @test perm(sl, _TspPlainError("unable to open database file"))
+    @test conn(sl, SQLite.SQLiteException("say \"database is closed\" twice\n"))
+    locked = SQLite.SQLiteException(SubString("xdatabase is lockedx", 2, 19))
+    @test PormG.backend_classify_error(sl, locked) === :operational
+    @test PormG.backend_error_fields(sl, locked) == (sqlstate = nothing, constraint = nothing, table = nothing,
+                                                    column = nothing, message = "database is locked")
+    # LibPQ: a foreign error's text; `verbose_msg` read; the codeless empty `UnknownError`, and not one with
+    # an empty `verbose_msg`; a phrase split between `msg` and `verbose_msg` matches neither.
+    @test conn(lp, ErrorException("server closed the connection unexpectedly"))
+    @test conn(lp, _TspPlainError("SSL SYSCALL error: EOF detected"))
+    @test perm(lp, ErrorException("password authentication failed for user x"))
+    @test conn(lp, E.PQResultError{E.CUN, E.EUNOWN}("x", "SSL connection has been closed unexpectedly"))
+    @test conn(lp, E.PQResultError{E.CUN, E.EUNOWN}(""))
+    @test !conn(lp, E.PQResultError{E.CUN, E.EUNOWN}("", ""))
+    @test !conn(lp, E.PQResultError{E.CUN, E.EUNOWN}("server closed the", "connection"))
+    # A malformed character (a server message in a LATIN1 locale) is classified, never raised: `lowercase`
+    # throws on one, and the classification must not replace the failure it reports (review).
+    latin1 = E.PQConnectionError("FATAL:  password authentication failed for user \"jos\xe7\"")
+    @test perm(lp, latin1)
+    @test conn(lp, E.PQResultError{E.CUN, E.EUNOWN}("server closed the connection unexpectedly \xe7"))
+    @test CP._as_database_error(lp, latin1) isa PormG.OperationalError
+    @test !PormG.backend_is_retry_safe(lp, latin1)
+    @test PormG.backend_error_fields(sl, SQLite.SQLiteException("database is locked \xe7")).message == "database is locked \xe7"
+    @test conn(sl, SQLite.SQLiteException("database is closed \xe7"))
+    @test PormG.backend_classify_error(sl, SQLite.SQLiteException("UNIQUE constraint failed: x \xe7")) === :integrity
+    # Postgres.jl and MySQL: wrappers opened four levels deep and no more; a socket error by name; a
+    # multi-result failure; MySQL.jl's own text when its message is not a `String`; the server errors.
+    for p in (pj, my)
+      @test conn(p, wrap(EOFError()))
+      @test conn(p, _TspWrapErr(SystemError("read", Libc.EPIPE)))
+      @test conn(p, wrap(EOFError(), 4)) && !conn(p, wrap(EOFError(), 5))
+      @test !conn(p, wrap(ErrorException("x"))) && !conn(p, wrap(1))
+      @test conn(p, CompositeException([ErrorException("a"), EOFError()]))
+    end
+    @test conn(my, ErrorException(SubString("xmysql connection has been closed or disconnected", 2)))
+    @test PormG.backend_classify_error(my, MySQL.Protocol.StmtError(UInt32(1205), "Lock wait timeout exceeded", "HY000")) === :operational
+    @test PormG.backend_classify_error(my, MySQL.Protocol.Error(UInt32(9999), "x", "40001")) === :operational
+    @test PormG.backend_classify_error(pj, Postgres.Error("ERROR", "4", "one char", nothing, nothing, nothing,
+      nothing, nothing, nothing, "public", nothing, nothing, nothing, nothing, nothing, nothing, nothing)) === :statement
   end
 
   # What: the pool-keyed registries, the waiter queues (`_POOL_WAITERS`, #124) and the monitor state

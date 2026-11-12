@@ -64,6 +64,7 @@ const PINNED_NAMES = _NamePin[
   (name = "LibPQ.Errors.LibPQException",        status = :documented, reader = "PormG.backend_classify_error, backend_is_retry_safe"),
   (name = "LibPQ.Errors.JLResultError",         status = :documented, reader = "PormG.backend_copy_in!"),
   (name = "LibPQ.Errors.JLConnectionError",     status = :documented, reader = "PormG.backend_is_connection_error"),
+  (name = "LibPQ.Errors.ConninfoParseError",    status = :documented, reader = "_libpq_text (#1714)"),
   (name = "LibPQ.Errors.PQConnectionError",     status = :documented, reader = "PormG.backend_classify_error, backend_is_retry_safe, backend_copy_in!, _drain_postgres_connection!"),
   (name = "LibPQ.Errors.PQResultError",         status = :documented, reader = "PormG.backend_classify_error, backend_error_fields, backend_is_connection_error, _raise_if_failed"),
   (name = "LibPQ.Errors.error_class",           status = :internal,   reader = "PormG.backend_classify_error"),
@@ -139,6 +140,8 @@ const PINNED_NAMES = _NamePin[
   (name = "MySQL.DataDecimals.AbstractDecimal", status = :internal,   reader = "_read_value"),
   (name = "MySQL.MySQLError",                   status = :documented, reader = "PormG.backend_classify_error"),
   (name = "MySQL.Protocol.ServerError",         status = :documented, reader = "PormG.backend_classify_error, backend_error_fields, _run, _is_lost_connection, …"),
+  (name = "MySQL.Protocol.Error",               status = :documented, reader = "_ServerErrors (#1714)"),
+  (name = "MySQL.Protocol.StmtError",           status = :documented, reader = "_ServerErrors (#1714)"),
   (name = "MySQL.Protocol.AuthError",           status = :documented, reader = "PormG.backend_classify_error, backend_is_permanent_connect_error"),
   (name = "MySQL.Protocol.UnsupportedAuthError", status = :documented, reader = "PormG.backend_classify_error, backend_is_permanent_connect_error"),
   (name = "MySQL.Protocol.TLSNegotiationError", status = :documented, reader = "PormG.backend_classify_error"),
@@ -171,6 +174,11 @@ const PINNED_FIELDS = _FieldPin[
   (type = LibPQ.ConnectionOption, fields = [:keyword, :val], status = :internal, reader = "_preflight_conninfo"),
   (type = LibPQ.Errors.PQConnectionError, fields = [:msg], status = :internal, reader = "PormG.backend_is_retry_safe"),
   (type = LibPQ.Errors.PQResultError, fields = [:msg], status = :internal, reader = "PormG.backend_error_fields"),
+  # #1714: the phrase tests read these at their known types, as `string(e)` printed them.
+  (type = LibPQ.Errors.PQResultError, fields = [:verbose_msg], status = :internal, reader = "_libpq_text"),
+  (type = LibPQ.Errors.ConninfoParseError, fields = [:msg], status = :internal, reader = "_libpq_text"),
+  (type = LibPQ.Errors.JLConnectionError, fields = [:msg], status = :internal, reader = "_libpq_text"),
+  (type = LibPQ.Errors.JLResultError, fields = [:msg], status = :internal, reader = "_libpq_text"),
   # SQLite.jl
   # `:lock` (read by `_release_leaked_db_lock!`, #1521) is not pinned: SQLite.jl added it in 1.9.0, and
   # the floor (1.6.1) has none, which the extension checks with `hasfield`. The #1521 testset in
@@ -188,6 +196,9 @@ const PINNED_FIELDS = _FieldPin[
   (type = MySQL.Protocol.ColumnDef, fields = [:charset, :type], status = :internal, reader = "_is_binary_column"),
   (type = MySQL.Protocol.Limits, fields = [:max_columns], status = :documented,
    reader = "PormG.backend_mysql_parameter_limit"),
+  # #1714: the server errors are read through their two concrete types (`_ServerErrors`).
+  (type = MySQL.Protocol.Error, fields = [:errno, :msg, :sqlstate], status = :documented, reader = "_server_errno, _server_msg, _server_sqlstate"),
+  (type = MySQL.Protocol.StmtError, fields = [:errno, :msg, :sqlstate], status = :documented, reader = "_server_errno, _server_msg, _server_sqlstate"),
   # #1618: the idle ping's bound reads the session's per-operation timeouts to restore them after it,
   # and its transport to clear the deadline the ping armed.
   (type = MySQL.Protocol.Session, fields = [:io, :transport], status = :internal, reader = "PormG.backend_ping"),
@@ -448,6 +459,19 @@ end
 # Why: a scanner that misses a form passes the guard above vacuously; one that reads prose would
 #      demand pins for "Postgres.jl" in every comment.
 # ─────────────────────────────────────────────────────────────────────────────
+# What: MySQL.jl's `ServerError` subtypes, against the union the MySQL extension reads them through (#1714).
+# Expected: `_ServerErrors` lists every one, and each declares `errno::Cuint`, `msg::String`, `sqlstate::String`.
+# Why: the classifiers read a server error's fields at those known types so no call dispatches on the
+#   abstract `ServerError`; a subtype MySQL.jl adds would be read by name, behind the extension's open arm,
+#   which is correct but dynamic, so it is reviewed here before it reaches a user.
+@testset "#1714: _ServerErrors lists every MySQL.jl server error" begin
+  myx = Base.get_extension(PormG, :PormGMySQLExt)
+  @test Set(subtypes(MySQL.Protocol.ServerError)) == Set(Base.uniontypes(myx._ServerErrors))
+  for T in Base.uniontypes(myx._ServerErrors)
+    @test (T, fieldtype(T, :errno), fieldtype(T, :msg), fieldtype(T, :sqlstate)) == (T, Cuint, String, String)
+  end
+end
+
 @testset "#1494: the scan reads code, never comments or strings" begin
   snippet = """
   import Postgres: DBInterface

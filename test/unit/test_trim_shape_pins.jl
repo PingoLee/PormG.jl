@@ -355,6 +355,8 @@ struct _TspOtherSettings <: PormG.PormGSettings end
 struct _TspStandInPool <: PormG.PormGSQLite end
 # A stand-in under the PostgreSQL marker, and a test's own error with a one-argument reader (#1696).
 struct _TspStandInPGPool <: PormG.PormGPostgres end
+# And under the MySQL marker, for the missing-driver fallbacks (#1599 layer 2).
+struct _TspStandInMyPool <: PormG.PormGMySQL end
 struct _TspFakeError <: Exception end
 # Exceptions no driver owns, for the open-arm rows (#1714): a text, and wrappers keeping a cause.
 struct _TspPlainError <: Exception; msg::String; end
@@ -2105,18 +2107,15 @@ end
       dyn = _dynamic_calls(caller, (P, Base.RefValue{Any}, S))
       @test (P, name, dyn) == (P, name, String[])
     end
-    # And the terminal that holds the lease: `with_advisory_lock` on a concrete pool makes one dynamic call,
-    # the abandon-only renewal (before #1708 it made one at each call that handed the leased handle on).
-    # That call passes the abandoned statement's handle, which `_LockAwaitState` holds as `Any`. Taking it
-    # `@nospecialize` in `_recover_abandoned_connection!` would move a dynamic call into the recovery's
-    # spawned task for two of the pool's callers, which pass it concretely; typing the state is not #1708's.
+    # And the terminal that holds the lease: `with_advisory_lock` on a concrete pool makes no dynamic call.
+    # #1708 left one, the abandon-only renewal, which passes the abandoned statement's handle that
+    # `_LockAwaitState` holds as `Any`. #1599 layer 2 took that handle `@nospecialize` in
+    # `_recover_abandoned_connection!`, and the recovery's `wait` on it names a `Task` (`_wait_handle`), so
+    # the callers that pass it concretely still make a static call there.
     body = () -> nothing
     for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool)
       dyn = _dynamic_calls_kw(PormG.AdvisoryLock.with_advisory_lock, (typeof(body), P, String))
-      renewal = filter(d -> occursin("_recover_abandoned_connection!", d), dyn)
-      @test (P, "with_advisory_lock", setdiff(dyn, renewal)) == (P, "with_advisory_lock", String[])
-      # present, so the exception above is the one the code has (one call; the `finally` is lowered twice)
-      @test (P, "the abandon-only renewal", !isempty(renewal)) == (P, "the abandon-only renewal", true)
+      @test (P, "with_advisory_lock", dyn) == (P, "with_advisory_lock", String[])
     end
   end
 
@@ -2528,6 +2527,191 @@ end
     @test isempty(CP._registry_pools(weak))
     weak[b] = [6]                                       # an insert purges what was collected
     @test length(weak.entries) == 1
+  end
+
+  # What: the "load the driver" fallbacks of the backend generics (Backend.jl's loop), called the way the
+  #   pool calls them: with a handle or a caught exception typed `Any`, positionally and with a keyword.
+  # Expected: on a pool type whose driver method does not apply (the three stand-ins), each call is
+  #   static, and it raises the `InvalidConfigurationError` it always raised, keyword or not.
+  # Why: a vararg method specializes on each argument, so a call with an `Any` argument dispatched at run
+  #   time: 54 rows of the SQLite fixture, on MySQL and PostgreSQL pools whose driver that binary does not
+  #   load (`_with_handle`'s execute and liveness probe, the classifiers). The keyword form is its own
+  #   `Core.kwcall` method, since `; kwargs...` on the positional one splats the untyped vararg into the
+  #   keyword body, a dynamic `_apply_iterate` (#1599 layer 2).
+  @testset "a missing driver's fallback is a static call, with and without keywords (#1599 layer 2)" begin
+    fns = (PormG.backend_connect, PormG.backend_renew_connection, PormG.backend_is_alive, PormG.backend_execute,
+           PormG.backend_execute_async, PormG.backend_is_connection_error, PormG.backend_is_permanent_connect_error,
+           PormG.backend_cancel_query!, PormG.backend_drain_connection!, PormG.backend_num_affected_rows,
+           PormG.backend_num_rows, PormG.backend_last_insert_id, PormG.backend_copy_in!, PormG.backend_insert_report,
+           PormG.backend_is_duplicate_key, PormG.backend_sqlite_version, PormG.backend_mysql_version)
+    checked = 0
+    for S in (_TspStandInPool, _TspStandInPGPool, _TspStandInMyPool), fn in fns
+      # Only where core's fallback is the one method that applies: the extensions define some generics on
+      # the markers themselves (`PormGSQLite`, `PormGPostgres`), and those answer for a stand-in.
+      # Each shape pinned below: only core's method may apply to it.
+      core_only(sig) = (ms = methods(fn, sig); length(ms) == 1 && only(ms).module === PormG)
+      (core_only((S, Any)) && core_only((S, Any, Any, String))) || continue
+      checked += 1
+      one(p, r::Base.RefValue{Any}) = fn(p, r[])
+      four(p, r::Base.RefValue{Any}) = fn(p, r[], r[], "SELECT 1")
+      kw(p, r::Base.RefValue{Any}) = fn(p, r[]; read_only = true)
+      for (shape, caller) in (("one", one), ("four", four), ("keyword", kw))
+        @test (S, fn, shape, _dynamic_calls(caller, (S, Base.RefValue{Any}))) == (S, fn, shape, String[])
+      end
+      @test_throws PormG.InvalidConfigurationError fn(S(), :handle)
+      @test_throws PormG.InvalidConfigurationError fn(S(), :handle, :x, "SELECT 1")
+      @test_throws PormG.InvalidConfigurationError fn(S(), :handle; read_only = true)
+    end
+    @test checked >= 30
+  end
+
+  # What: the NUL check at the execution funnel (`_refuse_nul`, #951) over each collector's values.
+  # Expected: no dynamic call in it, in the typed loop or in the walk it calls, for each collector type;
+  #   the walk answers what `_contains_nul` answers for every value shape a statement binds, and a NUL
+  #   in a raw-params tuple or a nested value is still refused with the parameter's position.
+  # Why: `_contains_nul` has seven methods and a collected value is typed `Any`, so the loop dispatched on
+  #   every value at run time: 12 rows of the trimmed fixture, one set per collector type (#1599 layer 2).
+  @testset "the NUL check walks the collected values without a dynamic call (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    QB = PormG.QueryBuilder
+    for T in (QB.PgParameterizedQuery, QB.SQLiteParameterizedQuery, QB.MySQLParameterizedQuery, Vector{Any})
+      @test (T, _dynamic_calls(CP._refuse_nul, (String, T))) == (T, String[])
+    end
+    @test _dynamic_calls(CP._refuse_nul_values, (Vector{Any},)) == String[]
+    @test _dynamic_calls(CP._contains_nul_value, (Any,)) == String[]
+    values = Any["Senna", SubString("Ayrton Senna", 8), 'x', '\0', 44, 1.5, true, nothing, missing, Int32(7), :monaco,
+                 PormG.PormGBytes(UInt8[0x00]), PormG.PormGArrayLiteral("{\"Monza\0\"}"), UInt8[0x00, 0x01], [1, 2],
+                 ["Monaco", "Monza\0"], Any["Spa", Any["Imola\0"]], ("Silverstone", "Suzuka\0"), "Interlagos\0"]
+    for v in values
+      @test (string(typeof(v)), CP._contains_nul_value(v)) == (string(typeof(v)), CP._contains_nul(v))
+    end
+    err = try CP._refuse_nul("SELECT ?, ?", ("Monaco", Any["Monza\0"])); nothing catch e; e end
+    @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
+    err = try CP._refuse_nul("SELECT ?, ?", Any[1, "Imola\0"]); nothing catch e; e end
+    @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
+    @test CP._refuse_nul("SELECT ?, ?", Any[1, "Imola"]) === nothing
+    # The open arm: a collector whose `parameters` is a tuple or a typed vector, checked in iteration order.
+    err = try CP._refuse_nul("SELECT ?, ?", QB.PgParameterizedQuery("", ("Monaco", "Monza\0"), 2)); nothing catch e; e end
+    @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
+    @test CP._refuse_nul("SELECT ?, ?", QB.PgParameterizedQuery("", ["Monaco", "Monza"], 2)) === nothing
+  end
+
+  # What: `await_result` on a `FetchTask` (which holds its pool typed `_SQLEngine`), the body it runs per
+  #   pool type, and the handle helpers it reaches (`_fetch_interruptible`, `_settle_probe`, the
+  #   abandoned-await recovery) with the handle typed `Any`, as `FetchTask` holds it.
+  # Expected: no dynamic call: `await_result` enters `with_pool`'s closed set once, so the release, the
+  #   error wrapping and the recovery take the pool at its concrete type (the stand-in pools' open arm,
+  #   `_with_unlisted_pool`, is the reviewed exception), and the handle's `fetch`/`wait` names a `Task` and
+  #   leaves any other handle to one open arm. `FetchTask` itself is unchanged, and awaits as before.
+  # Why: every call on the abstract `FetchTask.pool`, and the handle helpers specialized on an `Any`
+  #   handle, were dispatched at run time: 10 rows of the trimmed fixture's read (#1599 layer 2).
+  @testset "await_result reaches the pool at its concrete type (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    @test _dynamic_calls_deep(CP.await_result, (CP.FetchTask,); depth = 1, skip = (CP._with_unlisted_pool,)) == String[]
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(CP._await_on, (P, CP.FetchTask))) == (P, String[])
+      @test (P, _dynamic_calls_kw(CP._recover_abandoned_connection!, (P, Any, Any))) == (P, String[])
+    end
+    @test _dynamic_calls(CP._fetch_interruptible, (Any,)) == String[]
+    @test _dynamic_calls(CP._settle_probe, (Any,)) == String[]
+    @test isconcretetype(CP.FetchTask) && fieldtype(CP.FetchTask, :pool) === PormG.Kernel._SQLEngine
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    ft = CP.FetchTask(Threads.@spawn(41 + 1), sl, nothing, true)   # in a transaction: nothing is released
+    @test typeof(ft) === CP.FetchTask
+    @test CP.await_result(ft) == 42
+    @test CP.await_result(ft) == 42                                 # cached, as before
+  end
+
+  # What: the park branch of both `acquire_connection` twins (the wait for a handed slot), and the
+  #   handoff that delivers one (`_handoff_or_free!`), on each pool type.
+  # Expected: the waiter is read at `PoolWaiter`, so its `take!` is static; the delivered pair is a
+  #   `_Handed` (`slot`, `handle`), a concrete type, so the handoff's `put!` is static.
+  # Why: the waiter came out of the outcome tuple as `Any` (4 rows), and the pair was a `Tuple{Int,Any}`,
+  #   an abstract type that `put!` specializes on (8 rows of the trimmed fixture, #1599 layer 2).
+  @testset "the waiter's take! and the handoff's put! are static (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    owned = Base.RefValue{Union{Nothing, Tuple{Int, Any}}}
+    waits(dyn) = filter(s -> occursin("take!", s) || occursin(":chan", s), dyn)
+    @test waits(_dynamic_calls(CP._acquire_connection!, (CP.SQLiteConnectionPool, owned, Nothing, Int, Symbol))) == String[]
+    for P in (CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres}, CP.MySQLConnectionPool)
+      @test (P, waits(_dynamic_calls(CP._acquire_connection!, (P, owned, Nothing, Int)))) == (P, String[])
+    end
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls_kw(CP._handoff_or_free!, (P, Int))) == (P, String[])
+    end
+    @test isconcretetype(CP._Handed)
+  end
+
+  # What: `run_in_transaction` entered with a settings entry (`with_pool`'s closed set), the transaction
+  #   body, its rollback classifier and the slot-membership check, on each pool type.
+  # Expected: no dynamic call: the block reaches `with_pool` as the callee (`_InTransaction`), the
+  #   terminal release is a keyword call on the public `finalize_transaction_connection!` with a
+  #   `NamedTuple` whose type is written out (`_finalize_with`), the SQLite rollback test reads the text through
+  #   `_unowned_string`, and the membership check is a named function. `with_pool`'s open arm
+  #   (`_with_unlisted_pool`) is the reviewed exception. The answers are the ones before.
+  # Why: eight `with_pool` rows (a vararg slot holding a `Function` is not specialized), four `kwcall` rows
+  #   (a keyword call carrying two `Any` errors), eight in `_is_benign_rollback_error` and its callers' `!`,
+  #   and two on a `lock` closure capturing an untyped handle (#1599 layer 2, the fixture's write).
+  @testset "a transaction is entered and finished without a dynamic call (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    body = () -> 1
+    @test _dynamic_calls_deep(CP.run_in_transaction, (typeof(body), PormG.Kernel.Settings); depth = 1,
+                              skip = (CP._with_unlisted_pool,)) == String[]
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(CP._run_in_transaction_impl, (typeof(body), P))) == (P, String[])
+      @test (P, _dynamic_calls(CP._is_benign_rollback_error, (P, Any))) == (P, String[])
+      @test (P, _dynamic_calls(CP._slot_holds, (P, Any))) == (P, String[])
+      # one level into the keyword sorter: the keyword body it calls takes the two errors `@nospecialize`
+      @test (P, _dynamic_calls_deep(CP._finalize_with, (P, Any, Any, Bool, Any, Bool); depth = 1)) == (P, String[])
+    end
+    sl = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    @test CP._is_benign_rollback_error(sl, ErrorException("cannot rollback - no transaction is active"))
+    @test !CP._is_benign_rollback_error(sl, ErrorException("disk I/O error"))
+    c = CP.acquire_connection(sl)
+    @test CP._slot_holds(sl, c) && !CP._slot_holds(sl, :not_a_handle)
+    CP.release_connection(sl, c)
+  end
+
+  # What: the cause walks a classifier runs on a caught exception (`backend_is_cancellation` over a
+  #   `CompositeException`, `_unowned_inner`, the Postgres.jl extension's interrupt walk) and that
+  #   extension's parameter binding (`_bind`) on each collector type.
+  # Expected: no dynamic call but the reviewed ones: `backend_is_cancellation`'s recursion on an untyped
+  #   inner exception (a method per driver, so a dispatch by design), and the open arms (`_unowned_field`,
+  #   `_bind_other`, `_bind_value_other`), which are not walked. The answers are the ones before.
+  # Why: Base does not specialize `any` on a function argument (2 rows), a specializing walk called with an
+  #   `Any` exception is a dispatch per call (2 rows of the Postgres.jl fixture), and `_bind` mapped over
+  #   the abstract `parameters` slot (10 rows of the Postgres.jl fixture) (#1599 layer 2).
+  @testset "the cause walks and the Postgres.jl binding make no dynamic call (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    stmt(s) = split(s, "}: "; limit = 2)[end]
+    found = _dynamic_calls_deep(PormG.backend_is_cancellation, (CompositeException,); depth = 2)
+    @test filter(s -> !startswith(stmt(s), "PormG.backend_is_cancellation("), found) == String[]
+    @test !PormG.backend_is_cancellation(CompositeException(Any[ErrorException("x")]))
+    @test PormG.backend_is_cancellation(CompositeException(Any[ErrorException("x"),
+      CompositeException(Any[MySQL.Protocol.Error(UInt32(1317), "Query execution was interrupted", "70100")])]))
+    @test _dynamic_calls(PormG._unowned_inner, (Any,)) == String[]
+    @test PormG._unowned_inner(_TspWrap(ErrorException("x"))) isa ErrorException
+    @test PormG._unowned_inner(_TspWrapErr(ErrorException("x"))) isa ErrorException
+    @test PormG._unowned_inner(_TspWrap("not an exception")) === nothing
+    @test PormG._unowned_inner(ErrorException("x")) === nothing
+    @test _dynamic_calls(pgx._interrupt_in_causes, (Any, Int)) == String[]
+    @test pgx._interrupt_in_causes(InterruptException())
+    @test pgx._interrupt_in_causes(_TspWrap(_TspWrap(InterruptException())))
+    @test !pgx._interrupt_in_causes(_TspWrap(ErrorException("x")))
+    @test !pgx._interrupt_in_causes(foldl((e, _) -> _TspWrap(e), 1:5; init = InterruptException()))   # past 4 levels
+    for T in (QB.PgParameterizedQuery, QB.SQLiteParameterizedQuery, QB.MySQLParameterizedQuery, Nothing)
+      @test (T, _dynamic_calls(pgx._bind, (T,))) == (T, String[])
+    end
+    for vals in (Any[UInt8[1, 2], "Monaco", 3], Any[1, 2], Any["Spa", nothing])
+      bound = pgx._bind(QB.PgParameterizedQuery("", vals, length(vals)))
+      @test typeof(bound) == typeof(map(pgx._bind_value, vals)) && bound == map(pgx._bind_value, vals)
+    end
+    @test pgx._bind((UInt8[7], "Imola")) == ([7], "Imola")
+    @test pgx._bind(nothing) === nothing
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

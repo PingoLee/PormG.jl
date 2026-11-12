@@ -122,12 +122,57 @@ function _refuse_nul(sql::AbstractString, params)
     "The statement text contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
   params === nothing && return nothing
   values = params isa AbstractPormGParam ? params.parameters : params
+  # Every collector delivers a `Vector{Any}`, and so do raw params by the time they get here; any other
+  # container takes the open arm.
+  values isa Vector{Any} ? _refuse_nul_values(values) : _refuse_nul_values_other(values)
+  return nothing
+end
+
+# #1599 layer 2: `_contains_nul` has seven methods and a collected value is typed `Any`, so the loop
+# dispatched on every value at run time, a call a `juliac --trim` image could not resolve (12 rows, one
+# set per collector type). The walk names the value types a statement binds and calls `_contains_nul`
+# at each, so dispatch still picks the method; any other type takes the one dynamic call it always
+# took (#1735's rule: a walk where the callee has many methods, an open arm for the rest).
+function _refuse_nul_values(values::Vector{Any})
   for (i, v) in enumerate(values)
-    _contains_nul(v) && throw(InvalidValueError(
-      "Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
+    _contains_nul_value(v) && throw(_nul_parameter_error(i))
   end
   return nothing
 end
+# The open arm: the values copied, in iteration order, into a 1-based `Vector{Any}` (so each keeps the
+# position `enumerate` gave it, whatever the container's axes) and checked by the typed loop above. Only
+# a collector whose `parameters` is not a `Vector{Any}` (a hand-built tuple or typed vector) gets here:
+# `fetch` turns raw params into a `Vector{Any}` first.
+@noinline _refuse_nul_values_other(@nospecialize(values)) =
+  _refuse_nul_values(copyto!(Vector{Any}(undef, length(values)::Int), values))
+_nul_parameter_error(i::Int) =
+  InvalidValueError("Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul)
+
+function _contains_nul_value(@nospecialize(v))::Bool
+  v isa String && return _contains_nul(v)
+  v isa SubString{String} && return _contains_nul(v)
+  v isa Char && return _contains_nul(v)
+  v isa Int64 && return _contains_nul(v)
+  v isa Float64 && return _contains_nul(v)
+  v isa Bool && return _contains_nul(v)
+  v === nothing && return _contains_nul(v)
+  v isa Missing && return _contains_nul(v)
+  v isa PormG.PormGArrayLiteral && return _contains_nul(v)
+  v isa PormG.PormGBytes && return _contains_nul(v)
+  v isa Vector{UInt8} && return _contains_nul(v)
+  v isa Vector{Int64} && return _contains_nul(v)
+  v isa Vector{String} && return _contains_nul(v)
+  if v isa Vector{Any}   # nested: `any(_contains_nul, v)`, each element through the walk
+    for x in v
+      _contains_nul_value(x) && return true
+    end
+    return false
+  end
+  return _contains_nul_other(v)
+end
+# A typeassert, not a `::Bool` return declaration: that would `convert` an untyped result, a second
+# dynamic call. Every `_contains_nul` method answers a `Bool`.
+@noinline _contains_nul_other(@nospecialize(v)) = _contains_nul(v)::Bool
 
 # A pool starts at `pool_size` connections and may grow lazily (on demand) up to
 # `pool_size * POOL_EXPANSION_FACTOR` before acquisition fails with a PoolTimeoutError (#37).
@@ -287,15 +332,24 @@ Only thread 1 receives SIGINT, so a waiter on another thread (a server's request
 without the timer and pays nothing. What the fetch throws is unchanged: the interrupt reaches the
 caller as an `InterruptException`, which [`_await_abandoned`](@ref) recognises (#315).
 """
-function _fetch_interruptible(handle)
-  Threads.threadid() == 1 || return Base.fetch(handle)
+function _fetch_interruptible(@nospecialize(handle))
+  Threads.threadid() == 1 || return _fetch_handle(handle)
   keepalive = Timer(_INTERRUPT_KEEPALIVE_SECONDS; interval = _INTERRUPT_KEEPALIVE_SECONDS)
   try
-    return Base.fetch(handle)
+    return _fetch_handle(handle)
   finally
     close(keepalive)
   end
 end
+
+# #1599 layer 2: the handle comes from `FetchTask.async_result`, typed `Any`, so `_fetch_interruptible`
+# and `_settle_probe` take it `@nospecialize` (one compiled body, a static call), and the `fetch`/`wait`
+# on it names the handle SQLite's worker, Postgres.jl and MySQL hand back: a `Task`. Any other handle
+# (LibPQ's, a unit test's stand-in) takes the one dynamic call it always took.
+_fetch_handle(@nospecialize(handle)) = handle isa Task ? Base.fetch(handle) : _fetch_handle_other(handle)
+@noinline _fetch_handle_other(@nospecialize(handle)) = Base.fetch(handle)
+_wait_handle(@nospecialize(handle)) = handle isa Task ? Base.wait(handle) : _wait_handle_other(handle)
+@noinline _wait_handle_other(@nospecialize(handle)) = Base.wait(handle)
 const _INTERRUPT_KEEPALIVE_SECONDS = 3600.0
 
 """
@@ -819,6 +873,12 @@ PoolWaiter(mode::Symbol, retry::Bool = false) = PoolWaiter(mode, Channel{Any}(1)
 # Delivered to a waiter's channel when its timeout budget elapses (vs. a slot index on handoff).
 const _POOL_WAIT_TIMEOUT = :__pormg_pool_wait_timeout__
 
+# What a handoff delivers: the slot and the handle it held (#584), as one concrete type (#1599 layer 2).
+# A bare `(i, handle)` tuple is a `Tuple{Int,Any}` to the compiler, an abstract type, and `put!`
+# specializes on what it is given, so every handoff's `put!` was dispatched at run time (eight rows of
+# the trimmed fixture). A `NamedTuple` whose field types are written out is concrete whatever the handle.
+const _Handed = NamedTuple{(:slot, :handle), Tuple{Int, Any}}
+
 # Delivered instead when a waiter that parked after a FAILED connect is due to try again (#1518).
 const _POOL_WAIT_RETRY = :__pormg_pool_wait_retry__
 
@@ -963,7 +1023,7 @@ function _handoff_or_free!(pool, i::Int; skip_retry::Bool = false)
     w = ws[idx]
     w.done = true                 # win the race against this waiter's timeout Timer
     deleteat!(ws, idx)
-    put!(w.chan, (i, pool.connections[i]))   # cap-1 + empty → never blocks; slot stays leased (available[i]=false)
+    put!(w.chan, _Handed((i, pool.connections[i])))   # cap-1 + empty → never blocks; slot stays leased (available[i]=false)
   end
   return nothing
 end
@@ -1010,7 +1070,7 @@ function _abandon_wait!(pool, w::PoolWaiter, owned::_OwnedSlot)
         k === nothing || deleteat!(ws, k)
       elseif isready(w.chan)
         handed = take!(w.chan)
-        handed isa Tuple{Int, Any} && (owned[] = handed)
+        handed isa _Handed && (owned[] = (handed.slot, handed.handle))
       end
     end
   end
@@ -2112,7 +2172,7 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       end
       throw(err)
     else # :wait / :wait_retry — park until a slot is handed to us, the retry is due, or the deadline.
-      w = outcome[2]
+      w = outcome[2]::PoolWaiter   # the park branch made it (#1599 layer 2: a static `take!`)
       kind === :wait_retry && (retry_pass += 1)
       sentinel, wake_in = _waiter_wake(deadline, kind === :wait_retry ? retry_pass : 0)
       timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
@@ -2133,7 +2193,8 @@ function _acquire_connection!(pool::Union{PormGPostgres, PormGMySQL}, owned::_Ow
       elseif handed === _POOL_WAIT_RETRY
         continue                                         # scan and connect again (#1518)
       end
-      owned[] = handed::Tuple{Int, Any}                  # loop back to materialize the handed slot
+      h = handed::_Handed
+      owned[] = (h.slot, h.handle)                       # loop back to materialize the handed slot
       continue
     end
   end
@@ -2294,7 +2355,7 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
           "Timeout after $(to) seconds waiting for available SQLite connection") pool_size=pool.pool_size connection_string=redact_secret(pool.connection_string)
       throw(err)
     else # :wait / :wait_retry — see the PormGPostgres twin (#1518).
-      w = outcome[2]
+      w = outcome[2]::PoolWaiter   # the park branch made it (#1599 layer 2: a static `take!`)
       kind === :wait_retry && (retry_pass += 1)
       sentinel, wake_in = _waiter_wake(deadline, kind === :wait_retry ? retry_pass : 0)
       timer = Timer(_ -> _pool_wait_timeout!(pool, w, sentinel), wake_in)
@@ -2315,7 +2376,8 @@ function _acquire_connection!(pool::PormGSQLite, owned::_OwnedSlot,
       elseif handed === _POOL_WAIT_RETRY
         continue
       end
-      owned[] = handed::Tuple{Int, Any}
+      h = handed::_Handed
+      owned[] = (h.slot, h.handle)
       continue
     end
   end
@@ -2770,7 +2832,10 @@ is handed `rollback_error` values that already crossed a seam (`migrations/runne
 """
 _is_benign_rollback_error(pool::_SQLEngine, @nospecialize(e)) =
   pool isa PormGSQLite &&   # server-text-match-ok: SQLite only; it attaches no code here and never localizes
-  occursin("no transaction is active", string(_driver_cause(_unwrap_async_exception(e))))
+  occursin("no transaction is active", PormG._unowned_string(_driver_cause(_unwrap_async_exception(e))))
+# The text through `PormG._unowned_string` (#1599 layer 2), the one `@noinline` owner of `string` on an
+# exception no driver claims (#1714): a bare `string` on the untyped cause was a dynamic call, and its
+# untyped answer made the `occursin` and every caller's `!` dynamic too. Same text, same answer.
 
 """
     _finish_statement_connection!(pool, conn, handle; abandoned, rollback_failed) -> Nothing
@@ -2898,8 +2963,8 @@ error that reached you is another one (`run_in_transaction` does, for a body tha
 interrupt). Both are optional: without them the connection is returned exactly as before.
 """
 function finalize_transaction_connection!(pool::_SQLEngine, @nospecialize(conn);
-                                          rollback_error = nothing, renew::Bool = false,
-                                          body_error = nothing, abandoned_await::Bool = false)
+                                          @nospecialize(rollback_error = nothing), renew::Bool = false,
+                                          @nospecialize(body_error = nothing), abandoned_await::Bool = false)
   # The one gate for the cancel (#1588, #1638), shared by `run_in_transaction` and every hand-rolled
   # lifecycle (`delete()`, the migration precheck and apply). Postgres.jl closes its socket when an
   # interrupt lands in its read, so the ROLLBACK after an abandoned await fails at once on a lost
@@ -2927,6 +2992,18 @@ finalize_transaction_connection!(pool::PormGSettings, conn; rollback_error = not
 _finalize_on(pool::_SQLEngine, @nospecialize(conn), rollback_error, renew::Bool, body_error, abandoned_await::Bool) =
   finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = renew,
                                    body_error = body_error, abandoned_await = abandoned_await)
+
+# The keyword call this file makes with errors from a `catch` (#1599 layer 2). They are typed `Any`, so
+# `f(pool, conn; rollback_error = e, …)` builds a `NamedTuple` of an abstract type, and the call was
+# dispatched at run time (a `kwcall` row of the trimmed fixture's write). A `NamedTuple` whose field types
+# are written out is concrete, so the same keyword call, on the public generic (a method added for a
+# pool type is still the one called), is static; the two errors are `@nospecialize` keywords above, so
+# the keyword body it reaches is compiled once, for `Any`.
+const _FinalizeKeywords = NamedTuple{(:rollback_error, :renew, :body_error, :abandoned_await), Tuple{Any, Bool, Any, Bool}}
+_finalize_with(pool::_SQLEngine, @nospecialize(conn), @nospecialize(rollback_error), renew::Bool,
+               @nospecialize(body_error), abandoned_await::Bool) =
+  Core.kwcall(_FinalizeKeywords((rollback_error, renew, body_error, abandoned_await)),
+              finalize_transaction_connection!, pool, conn)
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
@@ -3178,11 +3255,11 @@ swallowed. Waiting here also CONSUMES that failure, which is what stops Julia pr
 One waiter, reused by every deadline: a query that never returns leaks exactly one parked task
 rather than one per wait, and it exits the moment the driver finally lets go.
 """
-function _settle_probe(handle)
+function _settle_probe(@nospecialize(handle))
   settled = Threads.Atomic{Bool}(false)
   Threads.@spawn begin
     try
-      Base.wait(handle)
+      _wait_handle(handle)
     catch
       # swallows the statement's own error: failed, cancelled or interrupted, the driver is done.
     finally
@@ -3271,7 +3348,7 @@ This is the same shape Go's `pgxpool` uses (`Conn.Release` destroys a connection
 not idle, and does it off the caller's goroutine) and psycopg's pool (state is verified on return;
 a broken connection is discarded and replaced).
 """
-function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), handle;
+function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), @nospecialize(handle);
                                         settle_seconds::Real = _ABANDON_SETTLE_SECONDS,
                                         close_seconds::Real = _ABANDON_CLOSE_SECONDS,
                                         force_renew::Bool = false)
@@ -3362,7 +3439,7 @@ function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), h
       # `release_connection` to throw, whose every internal step is itself guarded — so the cost of
       # threading the renewed handle out here is not worth paying for it.
       still_ours = try
-        Base.lock(() -> any(c -> c === conn, pool.connections), pool.lock)
+        _slot_holds(pool, conn)
       catch
         # swallows a failed membership check: `false` takes the `@debug` path below.
         false
@@ -3380,6 +3457,18 @@ function _recover_abandoned_connection!(pool::_SQLEngine, @nospecialize(conn), h
     end
   end
   return nothing
+end
+
+# Is `conn` still in one of the pool's slots? Under the pool lock, by identity. A named function, not a
+# `lock(() -> any(c -> c === conn, …))` closure (#1599 layer 2): a closure capturing the untyped handle has
+# a type the compiler cannot name, so the `lock` call on it was a dispatch at run time.
+function _slot_holds(pool, @nospecialize(conn))::Bool
+  Base.@lock pool.lock begin
+    for c in pool.connections
+      c === conn && return true
+    end
+    return false
+  end
 end
 
 # The `fetch`/`await_result` caller already owns all three pieces on a FetchTask; the transaction and
@@ -3404,7 +3493,14 @@ function await_result(ft::FetchTask)
     # Already completed, just return the cached result
     return ft.result_cache
   end
+  # The pool at its concrete type (#1599 layer 2): `FetchTask.pool` is typed `_SQLEngine`, an abstract
+  # union, so every call below that takes it (the release, the error wrapping, the abandoned-await
+  # recovery) was a dispatch at run time, which a `juliac --trim` image could not resolve. `with_pool`'s
+  # closed set hands it on concretely; a unit test's stand-in pool takes its open arm, as everywhere.
+  return with_pool(_await_on, ft.pool, ft)
+end
 
+function _await_on(pool::_SQLEngine, ft::FetchTask)
   err = try
     # Await the async result (works for every driver handle: each defines `Base.fetch`). Through
     # `_fetch_interruptible`, so a Ctrl-C reaches this task while the statement runs (#1512).
@@ -3420,7 +3516,7 @@ function await_result(ft::FetchTask)
     ft.abandoned = _await_abandoned(e)
     # Inside a transaction the block owns the connection, so the abandonment is recorded on it: its
     # cleanup reads the mark even if the body catches this error or raises its own (#1588).
-    ft.abandoned && ft.in_transaction && _mark_abandoned_await!(ft.pool)
+    ft.abandoned && ft.in_transaction && _mark_abandoned_await!(pool)
     # `rethrow()` when nothing changed: PormG's own errors (DoesNotExist, QueryBuildError,
     # PoolTimeoutError…) pass through `_as_database_error` untouched, and re-`throw`ing the same
     # object would discard the backtrace saying where it came from.
@@ -3429,7 +3525,7 @@ function await_result(ft::FetchTask)
     # `StatementError` wrapping the `InterruptException`, exactly as before this fix. That
     # relabelling is its own defect — `_as_database_error`'s docstring above forbids it — but
     # correcting it changes a caller-visible error contract, so it is tracked separately.
-    wrapped = _as_database_error(ft.pool, e)
+    wrapped = _as_database_error(pool, e)
     wrapped === e && rethrow()
     wrapped
   finally
@@ -3443,7 +3539,7 @@ function await_result(ft::FetchTask)
       # NEITHER state is visible to `backend_is_alive` — so the next borrower would inherit a
       # connection on which every statement fails. Recovery runs detached and owns the
       # release/renew/discard decision from here (#315).
-      ft.abandoned ? _recover_abandoned_connection!(ft) : release_connection(ft.pool, ft.conn)
+      ft.abandoned ? _recover_abandoned_connection!(pool, ft.conn, ft.async_result) : release_connection(pool, ft.conn)
     end
   end
   throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
@@ -4134,7 +4230,7 @@ function without_foreign_keys(f::F, pool::PormGSQLite; check_on_exit::Bool = tru
       end
     finally
       # renew=true: this handle has enforcement OFF and must never go back to the pool as-is.
-      finalize_transaction_connection!(pool, conn; rollback_error = rollback_error, renew = true)
+      _finalize_with(pool, conn, rollback_error, true, nothing, false)
     end
   end
 end
@@ -4396,19 +4492,26 @@ function _run_in_transaction_impl(f::F, pool::_SQLEngine) where {F<:Function}
       # holds the #1588 cancel gate, fed the body's error and the `await_result` mark: the mark covers
       # a body that caught the interrupt or raised its own error, `body_error` an abandoned await no
       # `FetchTask` saw (#1638).
-      finalize_transaction_connection!(pool, conn; rollback_error = rollback_error,
-                                       body_error = body_error, abandoned_await = abandoned_in_body[])
+      _finalize_with(pool, conn, rollback_error, false, body_error, abandoned_in_body[])
     end
   end
 end
 
 function run_in_transaction(f::F, db::String) where {F<:Function}
   settings::Settings = get_settings(db)
-  return with_pool(_run_in_transaction_on, settings.connections, f)
+  return with_pool(_InTransaction(f), settings.connections)
 end
 
-run_in_transaction(f::F, settings::PormGSettings) where {F<:Function} = with_pool(_run_in_transaction_on, settings.connections, f)
-_run_in_transaction_on(pool::_SQLEngine, f::F) where {F<:Function} = run_in_transaction(f, pool)
+run_in_transaction(f::F, settings::PormGSettings) where {F<:Function} = with_pool(_InTransaction(f), settings.connections)
+
+# The block handed to `with_pool` as the callee rather than as one of its `args` (#1599 layer 2): Julia
+# does not specialize a vararg slot holding a `Function`, so `with_pool(_run_in_transaction_on, pool, f)`
+# saw `f::Function` and called `_run_in_transaction_on(pool, ::Function)` at run time (eight rows of the
+# trimmed fixture's write). A struct field keeps the block's concrete type.
+struct _InTransaction{F}
+  f::F
+end
+(t::_InTransaction)(pool::_SQLEngine) = run_in_transaction(t.f, pool)
 
 """
     atomic(f::Function, db; durable::Bool=false) -> result

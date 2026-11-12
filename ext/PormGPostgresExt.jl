@@ -722,17 +722,27 @@ _bind_value(v) = v
 function _bind(params)
   resolved = params isa PormGPostgresParam ? params.parameters : params
   resolved === nothing && return nothing
-  return map(_bind_value, resolved)
+  # #1599 layer 2: the collector delivers a `Vector{Any}`, mapped with a walk over `_bind_value`'s two
+  # methods, so each value is converted without a dispatch at run time. Any other container (a collector
+  # whose `parameters` is a tuple or a typed vector) takes the open arm, the `map` this was before.
+  resolved isa Vector{Any} && return map(_bind_value_any, resolved)
+  return _bind_other(resolved)
 end
+@noinline _bind_other(@nospecialize(resolved)) = map(_bind_value, resolved)
+# `_bind_value`'s two methods: an `AbstractVector{UInt8}` is converted, anything else is passed as it is.
+_bind_value_any(@nospecialize(v)) =
+  v isa Vector{UInt8} ? _bind_value(v) : v isa AbstractVector{UInt8} ? _bind_value_other(v) : v
+@noinline _bind_value_other(@nospecialize(v)) = _bind_value(v)
 
 # An interrupt that lands during a TLS read reaches us wrapped in the TLS layer's own error, with the
 # `InterruptException` as its `cause`. Core recognises an abandoned await by the `InterruptException`
 # (#315), so it is rethrown bare. The chain is walked a few levels deep and nothing driver-specific is
-# named.
-function _interrupt_in_causes(e, depth::Int = 4)::Bool
+# named. `@nospecialize`, and the field read through core's `_unowned_field` (#1599 layer 2): every call
+# hands it a caught exception or a cause, typed `Any`, so the walk was a dispatch at run time per call.
+function _interrupt_in_causes(@nospecialize(e), depth::Int = 4)::Bool
   e isa InterruptException && return true
   depth > 0 || return false
-  cause = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
+  cause = PormG._unowned_field(e, :cause)
   return cause !== nothing && _interrupt_in_causes(cause, depth - 1)
 end
 

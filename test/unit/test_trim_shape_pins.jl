@@ -761,6 +761,29 @@ end
     end
   end
 
+  # What: `load`'s extension probe counts the rows of its `pg_extension` query inside `with_pool`'s
+  #   callee (`_count_rows_on`), not by passing the driver's result through `with_pool`.
+  # Expected: no dynamic call in `_check_configured_extensions!`'s keyword body (base had two:
+  #   `with_pool(backend_num_rows, pool, result)` with the result untyped, and the `> 0` on its answer),
+  #   and none in `_count_rows_on` at the pool types whose count resolves. The Postgres.jl pool keeps one:
+  #   `backend_num_rows(::PostgresConnectionPool{:postgres}, ::Any)` is dynamic in the base shape too,
+  #   and its method is the extension's (layer 2), not this file's. The query, `fetch` and the count are
+  #   the ones base ran; the probe's answers (installed, not installed) are pinned with a stand-in pool
+  #   in test_configuration_api.jl, and its "Could not verify" warning by the #1570 testset there.
+  # Why: the driver's result is untyped (#1770, decision 2), and `with_pool`'s vararg specialized on
+  #   it, a dynamic call on the boot path a trimmed image takes when `extensions:` is set (#1599, layer 1).
+  @testset "the extension probe counts inside the pool callee (#1770, decision 2)" begin
+    S = Configuration.Settings
+    CP = PormG.ConnectionPool
+    body = Base.bodyfunction(only(methods(Configuration._check_configured_extensions!)))
+    @test isempty(_dynamic_calls(body, (Bool, typeof(Configuration._check_configured_extensions!), S)))
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.MySQLConnectionPool)
+      @test isempty(_dynamic_calls(Configuration._count_rows_on, (P, String)))
+    end
+    # Discrimination: the pin does see a dynamic count. The Postgres.jl pool's is the extension's one.
+    @test length(_dynamic_calls(Configuration._count_rows_on, (CP.PostgresConnectionPool{:postgres}, String))) == 1
+  end
+
   # What: the pool's calls into code that may be defined later than the task making them (the SQLite
   #   worker's `backend_execute`, a deferred or reaped `close`).
   # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its

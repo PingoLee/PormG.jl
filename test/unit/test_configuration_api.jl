@@ -81,6 +81,33 @@ end
     @test_logs (:warn, r"only supported for PostgreSQL") PormG.Configuration._check_configured_extensions!(sl; generating = false)
 end
 
+# A stand-in PostgreSQL pool whose extension probe answers `rows` rows, with no server (#1770).
+struct _CfgProbePool <: PormG.PormGPostgres
+    rows::Int
+end
+PormG.ConnectionPool.fetch(::_CfgProbePool, ::String; kwargs...) = :probe_result
+PormG.backend_num_rows(pool::_CfgProbePool, ::Symbol) = pool.rows
+
+@testset "the extension probe answers installed or not through its pool (#1770, decision 2)" begin
+    # What: `_check_configured_extensions!` on a PostgreSQL entry with `extensions: [unaccent]` and a
+    #   stand-in pool whose probe returns 1 row, then 0 rows.
+    # Expected SQL: `SELECT 1 FROM pg_extension WHERE extname = 'unaccent';`, answered by the stand-in.
+    #   One row: no warning. No rows: the "is not installed" warning. Never "Could not verify".
+    # Why: the count moved into `with_pool`'s callee (`_count_rows_on`) so the driver's untyped result
+    #   no longer crosses `with_pool`; the #1570 testset reaches only the no-pool path, so this pins that
+    #   the probe still gives the answer it gave.
+    for (rows, installed) in ((1, true), (0, false))
+        s = PormG.Configuration.Settings()
+        s.db_config_settings = Dict{String, Any}("adapter" => "PostgreSQL", "extensions" => ["unaccent"])
+        s.connections = _CfgProbePool(rows)
+        logs = first(Test.collect_test_logs() do
+            PormG.Configuration._check_configured_extensions!(s; generating = false)
+        end)
+        @test !any(l -> occursin("Could not verify", string(l.message)), logs)
+        @test any(l -> occursin("is not installed", string(l.message)), logs) == !installed
+    end
+end
+
 @testset "Explicit env reload keeps Settings synchronized" begin
     mktempdir() do temp_root
         db_dir = joinpath(temp_root, "db")

@@ -1526,8 +1526,8 @@ function _check_configured_extensions!(settings::PormGSettings;
     if extension == "unaccent"
       # Literal name only — never interpolate the raw YAML value into SQL.
       installed = try
-        CP.with_pool(backend_num_rows, settings.connections,   # #1622: the pool at its concrete type
-                     CP.fetch(settings, "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';")) > 0
+        CP.with_pool(_count_rows_on, settings.connections,   # #1622: the pool at its concrete type
+                     "SELECT 1 FROM pg_extension WHERE extname = 'unaccent';") > 0
       catch e
         @warn "Could not verify PostgreSQL extension state" extension=extension db_def_folder=settings.db_def_folder exception=e
         continue
@@ -1540,6 +1540,14 @@ function _check_configured_extensions!(settings::PormGSettings;
   end
   return nothing
 end
+
+# The extension probe's row count, run inside `with_pool`'s callee at the pool's concrete type (#1599,
+# layer 1). It was `with_pool(backend_num_rows, pool, fetch(settings, sql))`: the driver's result is
+# untyped, and `with_pool`'s vararg specialized on it, a dynamic call. Inside the callee the result
+# never crosses `with_pool`. The pool-level `fetch`, not `fetch(settings, …)`: that one runs its own
+# `with_pool`, and a `with_pool` frame inside another is the #1693 recursion.
+@noinline _count_rows_on(pool::P, sql::String) where {P<:_SQLEngine} =
+  backend_num_rows(pool, getfield(parentmodule(@__MODULE__), :ConnectionPool).fetch(pool, sql))::Int
 
 function _install_configured_extensions!(settings::PormGSettings)::Nothing
   extensions = _configured_extensions(settings)

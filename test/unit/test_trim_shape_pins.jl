@@ -355,6 +355,8 @@ struct _TspOtherSettings <: PormG.PormGSettings end
 struct _TspStandInPool <: PormG.PormGSQLite end
 # A stand-in under the PostgreSQL marker, and a test's own error with a one-argument reader (#1696).
 struct _TspStandInPGPool <: PormG.PormGPostgres end
+# And under the MySQL marker, for the missing-driver fallbacks (#1599 layer 2).
+struct _TspStandInMyPool <: PormG.PormGMySQL end
 struct _TspFakeError <: Exception end
 # Exceptions no driver owns, for the open-arm rows (#1714): a text, and wrappers keeping a cause.
 struct _TspPlainError <: Exception; msg::String; end
@@ -2528,6 +2530,42 @@ end
     @test isempty(CP._registry_pools(weak))
     weak[b] = [6]                                       # an insert purges what was collected
     @test length(weak.entries) == 1
+  end
+
+  # What: the "load the driver" fallbacks of the backend generics (Backend.jl's loop), called the way the
+  #   pool calls them: with a handle or a caught exception typed `Any`, positionally and with a keyword.
+  # Expected: on a pool type whose driver method does not apply (the three stand-ins), each call is
+  #   static, and it raises the `InvalidConfigurationError` it always raised, keyword or not.
+  # Why: a vararg method specializes on each argument, so a call with an `Any` argument dispatched at run
+  #   time: 54 rows of the SQLite fixture, on MySQL and PostgreSQL pools whose driver that binary does not
+  #   load (`_with_handle`'s execute and liveness probe, the classifiers). The keyword form is its own
+  #   `Core.kwcall` method, since `; kwargs...` on the positional one splats the untyped vararg into the
+  #   keyword body, a dynamic `_apply_iterate` (#1599 layer 2).
+  @testset "a missing driver's fallback is a static call, with and without keywords (#1599 layer 2)" begin
+    fns = (PormG.backend_connect, PormG.backend_renew_connection, PormG.backend_is_alive, PormG.backend_execute,
+           PormG.backend_execute_async, PormG.backend_is_connection_error, PormG.backend_is_permanent_connect_error,
+           PormG.backend_cancel_query!, PormG.backend_drain_connection!, PormG.backend_num_affected_rows,
+           PormG.backend_num_rows, PormG.backend_last_insert_id, PormG.backend_copy_in!, PormG.backend_insert_report,
+           PormG.backend_is_duplicate_key, PormG.backend_sqlite_version, PormG.backend_mysql_version)
+    checked = 0
+    for S in (_TspStandInPool, _TspStandInPGPool, _TspStandInMyPool), fn in fns
+      # Only where core's fallback is the one method that applies: the extensions define some generics on
+      # the markers themselves (`PormGSQLite`, `PormGPostgres`), and those answer for a stand-in.
+      # Each shape pinned below: only core's method may apply to it.
+      core_only(sig) = (ms = methods(fn, sig); length(ms) == 1 && only(ms).module === PormG)
+      (core_only((S, Any)) && core_only((S, Any, Any, String))) || continue
+      checked += 1
+      one(p, r::Base.RefValue{Any}) = fn(p, r[])
+      four(p, r::Base.RefValue{Any}) = fn(p, r[], r[], "SELECT 1")
+      kw(p, r::Base.RefValue{Any}) = fn(p, r[]; read_only = true)
+      for (shape, caller) in (("one", one), ("four", four), ("keyword", kw))
+        @test (S, fn, shape, _dynamic_calls(caller, (S, Base.RefValue{Any}))) == (S, fn, shape, String[])
+      end
+      @test_throws PormG.InvalidConfigurationError fn(S(), :handle)
+      @test_throws PormG.InvalidConfigurationError fn(S(), :handle, :x, "SELECT 1")
+      @test_throws PormG.InvalidConfigurationError fn(S(), :handle; read_only = true)
+    end
+    @test checked >= 30
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

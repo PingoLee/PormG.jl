@@ -119,9 +119,24 @@ for fn in (:backend_connect, :backend_renew_connection, :backend_is_alive,
     # InvalidConfigurationError, not ErrorException: forgetting `using LibPQ`/`using SQLite` is a
     # setup mistake the docs' `catch PormGError` recipe must cover (audit finding — this fires from
     # ALL backend generics, i.e. the first thing a consumer hits with a missing driver).
-    $fn(pool::PormGPostgres, args...; kwargs...) = throw(InvalidConfigurationError(_pg_driver_hint(pool)))
-    $fn(pool::PormGSQLite, args...; kwargs...) = throw(InvalidConfigurationError(_SQLITE_DRIVER_HINT))
-    $fn(pool::PormGMySQL, args...; kwargs...) = throw(InvalidConfigurationError(_MYSQL_DRIVER_HINT))
+    #
+    # `@nospecialize(args...)` (#1599 layer 2): the pool hands these a driver handle or an exception
+    # read from an untyped place, typed `Any`. A vararg method specializes on each argument's type, so
+    # a call with an `Any` argument dispatched at run time, and a `juliac --trim` image built without
+    # that driver listed every such call (`_with_handle`'s execute and liveness probe on a MySQL or
+    # PostgreSQL pool in an SQLite-only binary, the classifiers on their exceptions). Compiled once,
+    # for `Any`, the call is static. The keyword form is its own `Core.kwcall` method rather than a
+    # `; kwargs...` on the positional one, whose lowering hands the untyped vararg on to the keyword
+    # body by a splat, a dynamic `_apply_iterate`. Either way the refusal is the one it always was.
+    $fn(pool::PormGPostgres, @nospecialize(args...)) = throw(InvalidConfigurationError(_pg_driver_hint(pool)))
+    $fn(pool::PormGSQLite, @nospecialize(args...)) = throw(InvalidConfigurationError(_SQLITE_DRIVER_HINT))
+    $fn(pool::PormGMySQL, @nospecialize(args...)) = throw(InvalidConfigurationError(_MYSQL_DRIVER_HINT))
+    Core.kwcall(@nospecialize(kwargs::NamedTuple), ::typeof($fn), pool::PormGPostgres, @nospecialize(args...)) =
+      throw(InvalidConfigurationError(_pg_driver_hint(pool)))
+    Core.kwcall(@nospecialize(kwargs::NamedTuple), ::typeof($fn), pool::PormGSQLite, @nospecialize(args...)) =
+      throw(InvalidConfigurationError(_SQLITE_DRIVER_HINT))
+    Core.kwcall(@nospecialize(kwargs::NamedTuple), ::typeof($fn), pool::PormGMySQL, @nospecialize(args...)) =
+      throw(InvalidConfigurationError(_MYSQL_DRIVER_HINT))
   end
 end
 

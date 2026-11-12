@@ -1523,7 +1523,7 @@ end
 """
     OrderTermView <: AbstractVector{SQLOrder}
 
-A read-only view of `SQLObjectQuery.order` whose elements are `SQLOrder` (`_order_nodes`). It prints
+A read-only view of `SQLObjectQuery.order` whose elements are `SQLOrder` (built by `with_order_terms`). It prints
 differently from the slot, so never interpolate a view into a message, an error or a log.
 """
 struct OrderTermView <: AbstractVector{SQLOrder}
@@ -1539,7 +1539,7 @@ _all_sqlorder(terms::Vector{SQLTypeOrder})::Bool = all(t -> t isa SQLOrder, term
 """
     with_order_terms(f, q::SQLObjectQuery, args...) -> f(terms, args...)
 
-`f(terms, args...)` over the query's ORDER BY terms: the closed view (`_order_nodes`) when every term is an
+`f(terms, args...)` over the query's ORDER BY terms: the closed view (`OrderTermView`) when every term is an
 `SQLOrder`, the slot itself otherwise, through a dynamic call (`_order_terms_open`), so a caller's own
 `SQLTypeOrder` is read as it was. Write `f` for either: it is the formula the reader always ran.
 """
@@ -1548,9 +1548,13 @@ function with_order_terms(f::F, q::SQLObjectQuery, args::Vararg{Any,N}) where {F
   _all_sqlorder(terms) && return f(OrderTermView(terms), args...)
   return _order_terms_open(f, terms, args...)
 end
-# The open arm: dynamic by design (see above). `@nospecialize` and `@noinline`, so nothing for the slot's
-# abstract element is compiled from the typed path.
-@noinline _order_terms_open(f::F, @nospecialize(terms), args::Vararg{Any,N}) where {F,N} = f(terms, args...)
+# The open arm: dynamic by design (see above). `@noinline` and unspecialized in every argument, the reader
+# included, so there is one compiled instance per arity (the readers pass 0 to 2 arguments) rather than one per
+# reader, each holding the one dynamic call, and nothing for the slot's abstract element is compiled from the
+# typed path. One method per arity, not a `Vararg`: an unspecialized splat would be a `Core._apply_iterate`.
+@noinline _order_terms_open(@nospecialize(f), @nospecialize(terms)) = f(terms)
+@noinline _order_terms_open(@nospecialize(f), @nospecialize(terms), @nospecialize(a)) = f(terms, a)
+@noinline _order_terms_open(@nospecialize(f), @nospecialize(terms), @nospecialize(a), @nospecialize(b)) = f(terms, a, b)
 
 """
     with_order_term(f, t::SQLTypeOrder, args...) -> f(t, args...)
@@ -1562,7 +1566,10 @@ function with_order_term(f::F, t::SQLTypeOrder, args::Vararg{Any,N}) where {F,N}
   t isa SQLOrder && return f(t, args...)
   return _order_term_open(f, t, args...)
 end
-@noinline _order_term_open(f::F, @nospecialize(t), args::Vararg{Any,N}) where {F,N} = f(t, args...)
+# The same, for one term.
+@noinline _order_term_open(@nospecialize(f), @nospecialize(t)) = f(t)
+@noinline _order_term_open(@nospecialize(f), @nospecialize(t), @nospecialize(a)) = f(t, a)
+@noinline _order_term_open(@nospecialize(f), @nospecialize(t), @nospecialize(a), @nospecialize(b)) = f(t, a, b)
 # An ordering term's field, for `with_order_term`: `getproperty`, as the readers always read it.
 _order_term_field(o) = o.field
 
@@ -1573,13 +1580,8 @@ The ORDER BY terms of a query: the slot itself, for a writer. A reader takes `wi
 """
 _order_terms(q::SQLObjectQuery)::Vector{SQLTypeOrder} = q.order
 
-"""
-    _order_nodes(q::SQLObjectQuery) -> OrderTermView
-
-The ORDER BY terms of a query, each at its concrete type. Only for a query whose terms are all `SQLOrder`
-(`with_order_terms` checks); any other term raises `_order_node`'s `MethodError`.
-"""
-_order_nodes(q::SQLObjectQuery)::OrderTermView = OrderTermView(_order_terms(q))
+# No `_order_nodes(q)` accessor on purpose: a reader that took the view without `with_order_terms`' check would
+# refuse a caller's own `SQLTypeOrder` (`_order_node`'s `MethodError`), which renders today (D-C1).
 
 function Base.deepcopy(obj::SQLObjectHandler)
   return ObjectHandler(object=deepcopy(obj.object))

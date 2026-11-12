@@ -1119,7 +1119,7 @@ end
   end
 
   # What: `SQLObjectQuery.order` and `SQLOrder.field` (#1698 phase 2): the slot types, the split the query's
-  #   terms are read through (`with_order_terms`: the closed view `_order_nodes`, or the slot through the open
+  #   terms are read through (`with_order_terms`: the closed view `OrderTermView`, or the slot through the open
   #   arm), the one-term split (`with_order_term`), and the writers.
   # Expected: `SQLOrder.field` is `SQLField`, which every constructor spelling stores; the query slot stays
   #   `Vector{SQLTypeOrder}`, and `SQLOrder` is the one concrete `SQLTypeOrder` PormG and its extensions define;
@@ -1139,7 +1139,8 @@ end
     @test isempty(open)
     @test eltype(QB.OrderTermView) === QB.SQLOrder
     @test isconcretetype(QB.OrderTermView)
-    @test only(Base.return_types(QB._order_nodes, (QB.SQLObjectQuery,))) === QB.OrderTermView
+    # No accessor hands out the view without the check (#1599 slice C review): only `with_order_terms` builds it.
+    @test !isdefined(QB, :_order_nodes)
     @test only(Base.return_types(QB._order_terms, (QB.SQLObjectQuery,))) === Vector{PormG.SQLTypeOrder}
     @test only(Base.return_types(getindex, (QB.OrderTermView, Int))) === QB.SQLOrder
     @test only(Base.return_types(QB._order_node, (PormG.SQLTypeOrder,))) === QB.SQLOrder
@@ -1155,20 +1156,20 @@ end
     model = PormG.Models.Model("tsp_order_race", raceid = PormG.Models.IDField(),
                                points = PormG.Models.IntegerField(), grid = PormG.Models.IntegerField())
     q = QB.SQLObjectQuery(model = model)
-    @test isempty(QB._order_nodes(q)) && QB._order_terms(q) === q.order
+    @test isempty(QB.OrderTermView(QB._order_terms(q))) && QB._order_terms(q) === q.order
     explicit = QB.SQLOrder("grid"; nulls = :first)
     QB._order_by!(q, ("-points", explicit, "raceid"))
     terms = QB._order_terms(q)
     @test terms === q.order && length(terms) == 3   # the slot itself, not a copy
-    nodes = QB._order_nodes(q)
+    nodes = QB.OrderTermView(QB._order_terms(q))
     @test length(nodes) == 3 && all(i -> nodes[i] === terms[i], eachindex(terms))
     @test nodes[2] === explicit
     @test [(n.field._as, n.orientation, n.nulls) for n in nodes] ==
           [("points", "DESC", nothing), ("grid", "ASC", :first), ("raceid", "ASC", nothing)]
     # `last()`'s inversion, through the view into the slot, against the old formula over the slot.
     old = map(QB._invert_order, copy(terms))
-    map!(QB._invert_order, QB._order_terms(q), QB._order_nodes(q))
-    @test [(n.field, n.orientation, n.nulls) for n in QB._order_nodes(q)] == [(n.field, n.orientation, n.nulls) for n in old]
+    map!(QB._invert_order, QB._order_terms(q), QB.OrderTermView(QB._order_terms(q)))
+    @test [(n.field, n.orientation, n.nulls) for n in QB.OrderTermView(QB._order_terms(q))] == [(n.field, n.orientation, n.nulls) for n in old]
     # The copies keep the slot's type.
     @test deepcopy(q).order isa Vector{PormG.SQLTypeOrder} && length(deepcopy(q).order) == 3
     # The split: the view for `SQLOrder` terms, the slot itself (the open arm) for a caller's own `SQLTypeOrder`.
@@ -1180,16 +1181,19 @@ end
     @test QB.with_order_terms((t, x) -> (t, x), q, 7) === (q.order, 7)   # the slot itself, not a copy
     @test QB.with_order_term((t, x) -> (t, x), _TspOutsiderOrder(), 7) === (_TspOutsiderOrder(), 7)
     # The view is for `SQLOrder` terms only: read directly, an outsider is refused (`_order_node`, #1698).
-    @test_throws MethodError QB._order_nodes(q)[2]
+    @test_throws MethodError QB.OrderTermView(QB._order_terms(q))[2]
     err = try QB._order_node(_TspOutsiderOrder()) catch e; e end
     @test err isa MethodError && err.f === QB._order_node && err.args == (_TspOutsiderOrder(),)
-    # Each open arm makes exactly one dynamic call, the reader's own, so an outsider runs the old formula. Read at
-    # `Any`, the specialization `@nospecialize` compiles (a concrete argument type would let inference resolve it).
-    for (open, tt) in ((QB._order_terms_open, (typeof(QB._render_order_terms), Any, QB.SQLObjectQuery, QB.InstructionObject)),
-                       (QB._order_term_open, (typeof(QB._order_term_field), Any)))
-      calls = _dynamic_calls(open, tt)
-      @test length(calls) == 1
-      length(calls) == 1 || @info "an open arm's dynamic calls" open calls
+    # Each open arm makes exactly one dynamic call, the reader's own, so an outsider runs the old formula. One
+    # method per arity, every argument unspecialized: read at `Any`, the one instance each compiles.
+    for open in (QB._order_terms_open, QB._order_term_open)
+      @test length(methods(open)) == 3
+      for m in methods(open)
+        @test m.nospecialize == 2^(m.nargs - 1) - 1   # every argument `@nospecialize`d
+        calls = _dynamic_calls(open, Tuple(Any for _ in 2:m.nargs))
+        @test length(calls) == 1
+        length(calls) == 1 || @info "an open arm's dynamic calls" open calls
+      end
     end
     # The NULL-placement refusal, reached statically now: the text `repr` gave, spelled without it (#1613).
     for s in (:middle, :end, :+, Symbol("a b"), Symbol(""))
@@ -1281,12 +1285,19 @@ end
       calls = _named_dynamic_calls(tt, callees)
       @test isempty(calls)
       isempty(calls) || @info "dynamic calls on an ORDER BY term" tt calls
+      # The open arm is reached at its one unspecialized instance, never one compiled for this reader.
+      for (ci, _) in Base.code_typed_by_type(tt; optimize = true), stmt in ci.code
+        (stmt isa Expr && stmt.head === :invoke) || continue
+        mi = stmt.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        (mi isa Core.MethodInstance && mi.def isa Method && mi.def.name in (:_order_terms_open, :_order_term_open)) || continue
+        @test all(T -> T === Any, Base.unwrap_unionall(mi.specTypes).parameters[2:end])
+      end
     end
   end
 
   # What: every read of `SQLObjectQuery.order` in `src/querybuilder/`, and every read of `SQLOrder.field` off a
   #   receiver that is not an `SQLOrder` (`_order_slot_reads`).
-  # Expected: none outside the slot's accessor, `_order_terms` (the view `_order_nodes` reads through it).
+  # Expected: none outside the slot's accessor, `_order_terms` (the view `with_order_terms` builds reads through it).
   # Why: as for `OperObject` and `Q`/`Qor`: a raw read left on a path the fixture does not take is the next wall on
   #   a query that does. Measured on 7720d2b45 with the same scan: the reads are there in nine files.
   @testset "every SQLObjectQuery.order read goes through the accessor, every SQLOrder.field read is at SQLOrder (#1599 slice C)" begin

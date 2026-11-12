@@ -24,7 +24,8 @@ using Test
 using PormG
 using PormG.Models: Model, IDField, CharField
 using PormG.QueryBuilder: SQLField, SQLOrder
-using PormG.Functions: Rank, WindowOver
+using PormG.Functions: Rank, WindowOver, Count
+using PormG.QueryBuilder: Subquery, OuterRef
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
 # ── Mock backend for full-render tests ──────────────────────────────────────────────────────
@@ -47,6 +48,24 @@ struct OrientOwnOrderNoNulls <: PormG.SQLTypeOrder
   _as::Union{String,Nothing}
 end
 struct OrientOwnBare <: PormG.SQLTypeOrder end
+
+# F1-shaped models in a registry, for the #1599 slice C cases that need a relation or a CTE: a mock SQLite pool
+# for the registry; the statements render on the PostgreSQL marker below (`inspect_query(q; connection = …)`).
+struct OrientMockSL <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::OrientMockSL) = 3045000
+PormG.config["orient_f1_mock"] = PormG.Configuration.Settings(connections = OrientMockSL(), change_data = true,
+                                                               db_def_folder = "orient_f1_mock")
+module OrientF1
+import PormG
+import PormG.Models
+Circuit::Models.ModelType = Models.Model("orient_circuit", circuitid = Models.IDField(), name = Models.CharField(),
+                                         country = Models.CharField())
+Race::Models.ModelType = Models.Model("orient_race", raceid = Models.IDField(), name = Models.CharField(),
+                                      year = Models.IntegerField(),
+                                      circuitid = Models.ForeignKey(Circuit, on_delete = "CASCADE", related_name = "races"))
+Models.@models Circuit Race
+PormG.Models.set_models(@__MODULE__, "orient_f1_mock")
+end
 
 DriverOrientModel = Model("drivers_orientation",
   id = IDField(),
@@ -205,6 +224,26 @@ PormG.config["orientation_guard_pg"] = PormG.Configuration.Settings(
     @test err isa FieldError && err.field === :field
     err = try (qq = q(); qq.values("id", "r" => Rank(over = WindowOver(order_by = [OrientOwnBare()]))); qq.list(show_query=:sql)) catch e; e end
     @test err isa FieldError && err.field === :field
+    # Through the rest of the read path (the review's cases, #1599 slice C), each statement as 7720d2b45 renders it.
+    F1 = OrientF1
+    own(p; o = "DESC") = OrientOwnOrder(SQLField(p, p), nothing, o, nothing, nothing)
+    sq(qq) = (r = PormG.QueryBuilder.inspect_query(qq; connection = MockPG_OrientGuard()); (r[:sql_text], r[:parameters]))
+    # count / exists over an aggregate projection: the degenerate-aggregate check reads the term's `field`.
+    err = try (qq = F1.Race.objects; qq.values("n" => Count("raceid")); qq.order_by(own("n"; o = "ASC")); qq.count(show_query=:sql)) catch e; e end
+    @test err isa PormG.QueryBuildError && err.msg == "count() cannot answer for this query: its values() projection is an aggregate with no GROUP BY and no HAVING, so it is exactly one row whatever matched (list() returns that one row, or none under a slice), and the answer would be a constant. To count the matched rows, drop the aggregate from values(); to keep the aggregate row only when it passes a condition, filter on its alias; to read the aggregate's value, use .aggregate(\"n\" => Count(...)) instead (#1100)."
+    err = try (qq = F1.Race.objects; qq.values("n" => Count("raceid")); qq.order_by("n", own("n"; o = "ASC")); qq.exists(show_query=:sql)) catch e; e end
+    @test err isa PormG.QueryBuildError && err.msg == "exists() cannot answer for this query: its values() projection is an aggregate with no GROUP BY and no HAVING, so it is exactly one row whatever matched (list() returns that one row, or none under a slice), and the answer would be a constant. To ask whether any row matched, drop the aggregate from values(); to keep the aggregate row only when it passes a condition, filter on its alias; to read the aggregate's value, use .aggregate(\"n\" => Count(...)) instead (#1100)."
+    # A CTE: the term passes through the CTE binding untouched.
+    @test sq((qq = F1.Race.objects; qq.with("c" => (c = F1.Race.objects; c.values("raceid", "name"); c), join_field = "raceid" => "raceid");
+              qq.values("year", "s" => PormG.CTE("c", "name")); qq.order_by(PormG.CTE("c", "name"), own("year")); qq)) ==
+          ("WITH \"c\" AS (\n  SELECT\n    \"Tb\".\"raceid\" as \"raceid\", \n  \"Tb\".\"name\" as \"name\"\nFROM \"orient_race\" as \"Tb\"\n\n)\nSELECT\n    \"R1\".\"year\" as \"year\", \n  \"R1_1\".\"name\" as \"s\"\nFROM \"orient_race\" as \"R1\"\n LEFT JOIN \"c\" AS \"R1_1\" ON \"R1\".\"raceid\" = \"R1_1\".\"raceid\" \nORDER BY \"R1_1\".\"name\" ASC NULLS LAST, \n  \"year\" DESC NULLS FIRST\n", Any[])
+    # A subquery's ORDER BY, beside an `OuterRef`.
+    @test sq((qq = F1.Race.objects; qq.values("name", "s" => Subquery((s = F1.Race.objects; s.filter("year" => OuterRef("year"));
+              s.values("name"); s.order_by(own("name"), "-raceid"); s.limit(1); s))); qq)) ==
+          ("SELECT\n    \"Tb\".\"name\" as \"name\", \n  (SELECT\n    \"R1\".\"name\" as \"name\"\nFROM \"orient_race\" as \"R1\"\nWHERE \"R1\".\"year\" = \"Tb\".\"year\"\nORDER BY \"name\" DESC NULLS FIRST, \n  \"R1\".\"raceid\" DESC NULLS FIRST\nLIMIT \$1 \n) as \"s\"\nFROM \"orient_race\" as \"Tb\"\n", Any[1])
+    # An aggregate over a join: the term's path is joined and grouped.
+    @test sq((qq = F1.Race.objects; qq.values("year", "n" => Count("raceid")); qq.order_by("circuitid__country", own("circuitid__name")); qq)) ==
+          ("SELECT\n    \"Tb\".\"year\" as \"year\", \n  COUNT(\"Tb\".\"raceid\") as \"n\"\nFROM \"orient_race\" as \"Tb\"\n INNER JOIN \"orient_circuit\" AS \"Tb_1\" ON \"Tb\".\"circuitid\" = \"Tb_1\".\"circuitid\" \nGROUP BY 1, \"Tb_1\".\"country\", \"Tb_1\".\"name\" \nORDER BY \"Tb_1\".\"country\" ASC NULLS LAST, \n  \"Tb_1\".\"name\" DESC NULLS FIRST\n", Any[])
   end
 
 end

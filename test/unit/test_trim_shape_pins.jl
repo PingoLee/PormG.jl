@@ -3001,6 +3001,92 @@ end
     end
   end
 
+  # What: the MySQL extension's `_bind` at each collector, raw values and `nothing`, and the statement
+  #   paths that call it (`backend_execute`, `backend_execute_async` and its statement closure); then what
+  #   it binds, against the comprehension it replaced: a `Vector{Any}` of `_bind_value` over the values.
+  # Expected: no dynamic call (the open arms for another collector or container are skipped), and the
+  #   same values in a `Vector{Any}`, `nothing` for no values, the same refusal past the limit.
+  # Why: the collector's `parameters` slot is `Union{AbstractVector, Tuple}`, so `isempty`, `length` and
+  #   the comprehension over `_bind_value`'s three methods were dispatched at run time, and the statement
+  #   closure captured `_bind`'s `Any`: 26 rows in the MySQL trim fixture (#1599 layer 2).
+  @testset "the MySQL binding reads the collector and its values at their types (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    P = PormG.ConnectionPool.MySQLConnectionPool
+    skip = (myx._other_param_values, myx._bind_other, PormG.Models._pg_decimal_text, Base.print_to_string)
+    in_ext(s) = occursin("PormGMySQLExt.", first(split(s, "}: "; limit = 2)))
+    # `Any` is the signature `@nospecialize` compiles; the collectors are what the statement paths pass.
+    for T in (Any, QB.PgParameterizedQuery, QB.MySQLParameterizedQuery, QB.SQLiteParameterizedQuery, Vector{Any}, Nothing)
+      @test (T, filter(in_ext, _dynamic_calls_deep(myx._bind, (P, T); depth = 3, skip))) == (T, String[])
+    end
+    for T in (QB.PgParameterizedQuery, QB.MySQLParameterizedQuery)
+      @test (T, _dynamic_calls(PormG.backend_execute_async, (P, MySQL.Connection, String, T))) == (T, String[])
+      @test (T, _dynamic_calls(PormG.backend_execute, (P, MySQL.Connection, String, T))) == (T, String[])
+    end
+    pool = P("host='127.0.0.1' user='u' password='p' dbname='f1'"; pool_size = 1)
+    TZ, Dec = myx.TimeZones, myx.Decimals   # the extension's own imports
+    zdt = TZ.ZonedDateTime(Dates.DateTime(1991, 3, 10, 14, 30), TZ.TimeZone("America/Sao_Paulo"))
+    for vals in (Any[Dec.Decimal(0, 255, -1), zdt, "Senna", 3, missing, nothing], Any[1, 2], Any["Spa"])
+      expected = Any[myx._bind_value(v) for v in vals]
+      for params in (QB.PgParameterizedQuery("", vals, length(vals)), copy(vals))
+        bound = myx._bind(pool, params)
+        @test typeof(bound) === Vector{Any} && isequal(bound, expected)
+      end
+      mq = QB.MySQLParameterizedQuery(); append!(mq.where_params, vals)
+      @test isequal(myx._bind(pool, mq), expected)
+    end
+    @test myx._bind(pool, nothing) === nothing
+    @test myx._bind(pool, Any[]) === nothing
+    @test myx._bind(pool, QB.MySQLParameterizedQuery()) === nothing
+    @test myx._bind(pool, ("Imola", 1)) == Any["Imola", 1]   # a tuple takes the open arm, as before
+    @test myx._bind(pool, ()) === nothing
+    # The open arm is one dynamic call (#1735), into the body that specializes on the container.
+    @test length(_dynamic_calls(myx._bind_other, (P, Any))) == 1
+  end
+
+  # What: `backend_mysql_version` and the reader of its result, `_version_text`, then what the reader
+  #   returns for the results it can get, against the read it replaced (`String(only(collect(r))[1])`).
+  # Expected: no dynamic call (the open arm, `_version_text_other`, is that read, kept for any other
+  #   result); the same text for one row, and the same error for none or two.
+  # Why: `fetch` returns the driver's result untyped, so `collect`, `only` and `String` on it were
+  #   dispatched at run time: 22 rows in the MySQL trim fixture (#1599 layer 2).
+  @testset "the MySQL server version is read from the result at its type (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    P = PormG.ConnectionPool.MySQLConnectionPool
+    @test _dynamic_calls(PormG.backend_mysql_version, (P,)) == String[]
+    @test _dynamic_calls(myx._version_text, (Any,)) == String[]
+    @test length(_dynamic_calls(myx._version_text_other, (Any,))) == 1   # the open arm (#1735)
+    R = myx.MySQLResult
+    old(r) = String(only(collect(r))[1])
+    err(f, r) = try f(r); nothing catch e; (typeof(e), sprint(showerror, e)) end
+    one = R([:v], AbstractVector[["8.4.11-log"]], 1, 0, UInt64(0), "")
+    @test myx._version_text(one) == old(one) == "8.4.11-log"
+    two_cols = R([:v, :w], AbstractVector[["8.4.0"], [1]], 1, 0, UInt64(0), "")
+    @test myx._version_text(two_cols) == old(two_cols)
+    for r in (R([:v], AbstractVector[String[]], 0, 0, UInt64(0), ""),
+              R([:v], AbstractVector[["8.4.0", "8.4.1"]], 2, 0, UInt64(0), ""),
+              R([:v], AbstractVector[Union{Missing, String}[missing]], 1, 0, UInt64(0), ""))
+      @test err(myx._version_text, r) == err(old, r)
+    end
+  end
+
+  # What: `_run` at both bound shapes, and the cause walk `_with_bare_interrupt` uses.
+  # Expected: no dynamic call in `_run` or its closures (`_materialize` is pinned above; the server-error
+  #   open arm, #1714, is skipped), none in `_interrupt_in_causes`.
+  # Why: `_run` read `e.errno` through the abstract `ServerError`, and `_interrupt_in_causes` read
+  #   `.cause` by name on an `Any`: 6 rows in the MySQL trim fixture (#1599 layer 2). MySQL.jl's own `param_code` over the bound `Vector{Any}`
+  #   stays: typing what MySQL.jl receives is a maintainer decision.
+  @testset "the MySQL statement runner and its cause walk make no dynamic call (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    skip = (myx._materialize, myx._other_server_errno, PormG._unowned_field, Base.print_to_string)
+    in_ext(s) = occursin("PormGMySQLExt.", first(split(s, "}: "; limit = 2)))
+    for B in (Nothing, Vector{Any})
+      @test (B, filter(in_ext, _dynamic_calls_deep(myx._run, (MySQL.Connection, String, B); depth = 3, skip))) ==
+            (B, String[])
+    end
+    @test _dynamic_calls(myx._interrupt_in_causes, (Any, Int)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

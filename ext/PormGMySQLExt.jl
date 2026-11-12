@@ -257,11 +257,25 @@ end
 PormG.backend_mysql_parameter_limit(::_Pool)::Int = min(65535, MySQL.Protocol.Limits().max_columns)
 
 function PormG.backend_mysql_version(pool::_Pool)::Int
-  text = only(collect(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v")))[1]
-  m = match(r"^(\d+)\.(\d+)\.(\d+)", String(text))
+  text = _version_text(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v"))
+  m = match(r"^(\d+)\.(\d+)\.(\d+)", text)
   m === nothing && throw(InvalidConfigurationError("the MySQL server reported a version PormG cannot read"))
   return _version_number(VersionNumber(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3])))
 end
+
+# #1599 layer 2: `fetch` hands the result on untyped. This driver's `MySQLResult` of one row whose first
+# column is a `Vector{String}` (what `_materialize` narrows `VERSION()` to) is read at its type; anything
+# else takes the open arm, which reads it as before and raises what it raised.
+function _version_text(@nospecialize(result))::String
+  if result isa MySQLResult && result.nrows == 1 && !isempty(result.columns)
+    column = result.columns[1]
+    column isa Vector{String} && return column[1]
+  end
+  return _version_text_other(result)
+end
+@noinline _version_text_other(@nospecialize(result))::String = _version_text_of(result)
+# The read this was before, specialized on the result, so the open arm is one dynamic call (#1735).
+_version_text_of(result)::String = String(only(collect(result))[1])
 
 # ── Execution ────────────────────────────────────────────────────────────────
 
@@ -278,16 +292,50 @@ _bind_value(v) = v
 # refuse it with a `ProtocolError`, which closes the connection and reads as a lost one, "may succeed on
 # retry", though it never can. The bulk writers chunk under the limit; anything else (a long `__@in`
 # list) is the caller's to split. The message counts the parameters and never shows one (#971).
-function _bind(pool::_Pool, params)
-  resolved = params isa AbstractPormGParam ? params.parameters : params
+#
+# #1599 layer 2: `params` is a collector (whose `parameters` slot is a `Vector{Any}` in practice, typed
+# `Union{AbstractVector, Tuple}`), raw params, or `nothing`, and every call on it was a dispatch at run
+# time. The collectors are a closed set (`QueryBuilder.ParamCollector`), read at their concrete types; a
+# `Vector{Any}` of values is checked and converted by a typed loop. `_bind_value` is called on each value
+# as it is: over its three methods the compiler splits the call into `isa` branches, so it is static, and
+# a fourth method would make it dynamic, which the trim pin catches. Any other collector or container
+# takes the open arm, the code this was before.
+function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{Any}}
+  resolved = params isa PormG.QueryBuilder.ParamCollector ? params.parameters :
+             params isa AbstractPormGParam ? _other_param_values(params) : params
+  resolved isa Vector{Any} && return _bind_vector(pool, resolved)
+  return _bind_other(pool, resolved)
+end
+@noinline _other_param_values(@nospecialize(params)) = params.parameters
+
+function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector{Any}}
+  isempty(resolved) && return nothing
+  _check_parameter_count(pool, length(resolved))
+  bound = Vector{Any}(undef, length(resolved))
+  for i in eachindex(resolved)
+    bound[i] = _bind_value(resolved[i])
+  end
+  return bound
+end
+
+# The open arm: any other container, bound as before. One dynamic call (#1735), into a body that
+# specializes on the container.
+@noinline _bind_other(pool::_Pool, @nospecialize(resolved))::Union{Nothing, Vector{Any}} =
+  _bind_container(pool, resolved)
+function _bind_container(pool::_Pool, resolved)::Union{Nothing, Vector{Any}}
   (resolved === nothing || isempty(resolved)) && return nothing
+  _check_parameter_count(pool, length(resolved))
+  return Any[_bind_value(v) for v in resolved]
+end
+
+function _check_parameter_count(pool::_Pool, nparams::Int)::Nothing
   limit = PormG.backend_mysql_parameter_limit(pool)
-  length(resolved) <= limit || throw(QueryBuildError(
-    "This statement binds $(length(resolved)) parameters, and MySQL.jl binds at most $(limit) in one " *
+  nparams <= limit || throw(QueryBuildError(
+    "This statement binds $(nparams) parameters, and MySQL.jl binds at most $(limit) in one " *
     "statement. Split the work into smaller statements (a long `__@in` list into several filters, a " *
     "many-to-many `remove` or `set` of that many rows into batches), or select the values with a " *
     "subquery; bulk_insert and bulk_update split themselves."))
-  return Any[_bind_value(v) for v in resolved]
+  return nothing
 end
 
 # DECIMAL text — an optional sign, digits, an optional fraction — as a `Decimals.Decimal`, built with
@@ -503,10 +551,13 @@ end
 # read bare (with an older Reseau, MySQL.jl turns it into a `ProtocolError` without it, MySQL.jl#247).
 # This guards a transport error that keeps the interrupt as its `cause`, rethrowing it bare: the
 # Postgres.jl extension's rule, on the same socket layer.
-function _interrupt_in_causes(e, depth::Int = 4)::Bool
+#
+# `@nospecialize`, and the field read through core's `_unowned_field` (#1599 layer 2), as the Postgres.jl
+# extension does: every call hands it a caught exception or a cause, typed `Any`.
+function _interrupt_in_causes(@nospecialize(e), depth::Int = 4)::Bool
   e isa InterruptException && return true
   depth > 0 || return false
-  cause = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
+  cause = PormG._unowned_field(e, :cause)
   return cause !== nothing && _interrupt_in_causes(cause, depth - 1)
 end
 
@@ -539,7 +590,7 @@ function _run(conn::MySQL.Connection, sql::String, bound)
       stmt = try
         DBInterface.prepare(conn, sql)
       catch e
-        (e isa MySQL.Protocol.ServerError && Int(e.errno) == _UNPREPARABLE_ERRNO) || rethrow()
+        (e isa MySQL.Protocol.ServerError && _server_errno(e) == _UNPREPARABLE_ERRNO) || rethrow()
         nothing
       end
       if stmt !== nothing

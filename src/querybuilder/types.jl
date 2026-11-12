@@ -409,7 +409,7 @@ _to_many(::JoinRow)::Bool = false
 _joins_cte(::Union{CteJoin,CrossJoin})::Bool = true
 _joins_cte(::JoinRow)::Bool = false
 
-# The join type the NEXT hop inherits (`_determine_join_type(previus_how = …)` turns a `LEFT`
+# The join type the NEXT hop inherits (`_hop_join_type`'s `previus_how` turns a `LEFT`
 # parent into a `LEFT` child). A `CrossJoin` has none: its dict row carried the sentinel `"CROSS"`
 # purely so a deep path after an unkeyed CTE reached the "not a foreign key" error instead of a
 # `KeyError`, and every consumer tests `== "LEFT"` only, so `nothing` renders identically.

@@ -43,7 +43,7 @@ _declared_join_aliases(object::SQLObject)::Vector{String} = collect(keys(object.
 function _insert_join(
   row_join::Vector{JoinRow},
   row::JoinRow,
-  instruct::InstructionObject, join_path::String; track_path::Bool=true)
+  instruct::InstructionObject, join_path::String; track_path::Bool=true)::String
   @pormg_debug false
   if size(row_join, 1) == 0
     push!(row_join, row)
@@ -71,8 +71,9 @@ function _insert_join(
         # which the dedup invariant forbids.
         error(_emsg("PormG internal error in _insert_join: duplicate deduplicated join rows for $(row.a) → $(row.b) (alias $(row.alias_a)) — please report this."))
       end
-      # #1599 slice A: asserted, because `check` holds the abstract `JoinRow` and the read is `Any`, which
-      # made every caller's alias `Any`. Every `JoinRow` struct declares `alias_b::String`, so it holds.
+      # #1599 slice A: the function returns `String`, and this read is asserted as well: `check` holds the
+      # abstract `JoinRow`, so the read is `Any`, and the return type alone would convert it with a dynamic
+      # `convert`. Every `JoinRow` struct declares `alias_b::String`, so the assertion holds.
       return check[1].alias_b::String
     end
   end

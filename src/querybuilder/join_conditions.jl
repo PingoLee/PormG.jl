@@ -1268,7 +1268,7 @@ function _on(q::SQLObject, join_path::String, filters::AbstractVector; join_type
   #
   # `nothing` is not a new shape: a `cjoin`-seeded entry has never carried one (`_cjoin` folds its
   # join type into `field.how`), so `_get_join_type_override` already had to answer `nothing` here.
-  # With no override the join keeps `_determine_join_type`'s answer — `field.how`, else
+  # With no override the join keeps `_hop_join_type`'s answer — `field.how`, else
   # `field.null ? "LEFT" : "INNER"` — including the `previus_how` LEFT-propagation a deep path
   # needs, which is knowledge this call site does not have and should not reproduce.
   #

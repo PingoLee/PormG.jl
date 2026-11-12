@@ -56,7 +56,7 @@ end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Precompile hints: the keyword-method body-function directives still resolve
-# The `add_parameter!` / `_determine_join_type` directives look the body function up with
+# The `add_parameter!` directives look the body function up with
 # `try Base.bodyfunction(which(…)) catch; missing end` and skip when it is `missing`, so a changed
 # positional signature turns them off with no message. Each lookup must succeed, and each
 # `precompile(fbody, …)` it guards must return `true`.

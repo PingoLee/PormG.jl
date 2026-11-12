@@ -103,6 +103,8 @@ end
 # `juliac` compiles the callee for `Function` and the call the callee makes with it is dynamic. The JIT's
 # inference keeps the concrete type and inlines the callee, so neither `_dynamic_calls` nor the `:invoke`
 # walks above see it: the verifier listed `with_collector(…, ::Function, …)` while both came back empty.
+# Two blind spots: a call whose argument types match more than one method is skipped, and in a signature
+# that ends in a `Vararg` only the positions before it are compared.
 function _widened_function_args(f, argtypes::Tuple)::Vector{String}
   ci, _ = only(code_typed(f, argtypes; optimize = false))
   typ(x) = x isa Core.SSAValue ? ci.ssavaluetypes[x.id] :
@@ -404,6 +406,11 @@ PormG.backend_error_fields(::_TspFakeError) =
 # An `F` node PormG does not define, for the Q/Qor view's refusal (#1599 slice B). `_node_subtypes` skips it:
 # it is not PormG's.
 struct _TspOutsiderF <: PormG.SQLTypeF end
+# A caller's own `SQLTypeFunction`, its `aggregate` not a `Bool` (#1599 layer 4): the aggregate walks read
+# it as they always did, through their open arm.
+struct _TspUserAgg <: PormG.SQLTypeFunction
+  aggregate::Int
+end
 # An ordering term PormG does not define, for the ORDER BY view's refusal (#1599 slice C); skipped the same way.
 struct _TspOutsiderOrder <: PormG.SQLTypeOrder end
 # A visitor taking an `OuterRef`'s two parts, for `_each_outer_ref` (#1599 slice C).
@@ -1475,10 +1482,11 @@ end
   #   that binds on PostgreSQL (#1599 layer 4).
   @testset "a PostgreSQL collector appends without a dynamic call (#1599 layer 4)" begin
     QB = PormG.QueryBuilder
-    @test isempty(_dynamic_calls(QB._push_parameter!, (QB.PgParameterizedQuery, Any)))
     for T in (Int64, Float64, String, Nothing, Dates.Date, Dates.DateTime, Vector{Int64}, PormG.PormGBytes)
       @test isempty(_dynamic_calls_kw(QB.add_parameter!, (QB.PgParameterizedQuery, T)))
     end
+    @test isdefined(QB, :_push_parameter!)
+    isdefined(QB, :_push_parameter!) && @test isempty(_dynamic_calls(QB._push_parameter!, (QB.PgParameterizedQuery, Any)))
     pq = QB.PgParameterizedQuery("", Any[], 0)
     @test QB.add_parameter!(pq, 44) == "\$1"
     @test QB.add_parameter!(pq, "Monaco"; sql_type = "text") == "\$2::text"
@@ -1516,6 +1524,19 @@ end
     @test seen === :where && sq.current_context === before
     @test QB.with_bucket(probe, instruction(QB.PgParameterizedQuery("", Any[], 0)), :where) == 7
     @test QB.with_bucket(probe, instruction(nothing), :where) == 7
+    # The walk names every collector, as `with_collector` does: one list in two places, so a collector added
+    # to `ParamCollector` and not here fails this rather than raising on every query that binds through it.
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "parameters.jl"), String)
+    start = findfirst("function with_bucket(f::F, instruc::SQLInstruction", src)
+    @test start !== nothing
+    if start !== nothing
+      body = src[start[1]:findnext("\nend", src, start[1])[end]]
+      members = Base.uniontypes(QB.ParamCollector)
+      for T in members
+        @test occursin("p isa $(nameof(T)) && return with_bucket(f, p, context)", body)
+      end
+      @test count("p isa ", body) == length(members)
+    end
   end
 
   # What: the aggregate walks, `_holds_agg` (the flag a wrapper stores) and `_contains_agg` (does the
@@ -1530,13 +1551,14 @@ end
     QB = PormG.QueryBuilder
     @test isempty(_dynamic_calls(QB._holds_agg, (Any, Int)))
     @test isempty(_dynamic_calls(QB._contains_agg, (Any, Int)))
-    @test isempty(_dynamic_calls(QB._is_agg_any, (Any,)))
-    @test length(methods(QB._is_agg)) == 4
     # Out of line, so the recursion always reaches the one `(Any, Int)` body: inlined into a caller that
     # knows the argument's type, it became calls on instances `juliac` does not compile ("unresolved invoke").
     for f in (QB._holds_agg, QB._contains_agg)
       @test only(code_lowered(f, (Any, Int))).inlining == 2   # `@noinline`
     end
+    # The closed arms cover `_is_agg`'s methods, these four.
+    @test Set(string(m.sig) for m in methods(QB._is_agg)) == Set(string(Tuple{typeof(QB._is_agg), T})
+                                                                for T in (QB.FExpression, PormG.SQLTypeFunction, Any, QB.WindowFunction))
     s = QB.Sum("points")
     lag = QB.Lag(s)
     @test QB._holds_agg(s) && QB._contains_agg(s)
@@ -1549,35 +1571,51 @@ end
     @test QB._contains_agg(QB.Case([QB.When("grid__@gte" => 1, then = s)]))
     @test !QB._contains_agg(QB.Case([QB.When("grid__@gte" => 1, then = 1)]))
     @test !QB._holds_agg(Any[s], 32) && !QB._contains_agg(Any[s], 32)   # the depth cap
-    for x in (s, lag, QB.F("grid"), QB.Rank(), "points", 1, nothing)
-      @test QB._is_agg_any(x) === QB._is_agg(x)
+    @test QB._contains_agg(QB.ProjectionNode[QB.SQLField("raceid"), QB.SQLField(s)]) ==
+          QB._contains_agg(QB.SQLField(s))                            # a query's projection
+    # The open arms: a vector type no arm names, and a caller's own `SQLTypeFunction`, whose `aggregate`
+    # each walk reads as it always did (`_holds_agg` converts it to `Bool`, `_contains_agg` tests it).
+    @test !QB._holds_agg([1, 2]) && QB._holds_agg(view(Any[s], 1:1)) && QB._contains_agg(view(Any[s], 1:1))
+    @test QB._holds_agg(_TspUserAgg(1)) && !QB._holds_agg(_TspUserAgg(0))
+    @test_throws InexactError QB._holds_agg(_TspUserAgg(2))
+    @test_throws TypeError QB._contains_agg(_TspUserAgg(1))
+    @test QB._holds_agg(Any[_TspUserAgg(1)])
+    @test isdefined(QB, :_is_agg_any)
+    if isdefined(QB, :_is_agg_any)
+      @test isempty(_dynamic_calls(QB._is_agg_any, (Any,)))
+      for x in (s, lag, QB.F("grid"), QB.Rank(), "points", 1, nothing)
+        @test QB._is_agg_any(x) === QB._is_agg(x)
+      end
     end
   end
 
   # What: `_is_window_expr` over the abstract slots it reads (`FExpression`'s two sides, `FObject.column`
   #   and its keyword values), through `_is_window_expr_any`.
-  # Expected: no dynamic call in the `FExpression` and `FObject` methods or the walk; `_is_window_expr` keeps
-  #   its nine methods, which the walk's arms cover; the answers are the ones before.
-  # Why: a call on those slots dispatched at run time over nine methods: 7 verifier rows on the WHERE
-  #   guard's path (#1599 layer 4).
+  # Expected: no dynamic call in the `FExpression` and `FObject` methods, the list methods or the walk; the
+  #   walk's arms cover `_is_window_expr`'s nine methods; the answers are the ones before.
+  # Why: a call on those slots dispatched at run time over nine methods, and `any(f, x)` over an array widens
+  #   `f` to `Function` in Base: 7 verifier rows on the WHERE guard's path (#1599 layer 4).
   @testset "the window question makes no dynamic call on an abstract slot (#1599 layer 4)" begin
     QB = PormG.QueryBuilder
-    @test isempty(_dynamic_calls(QB._is_window_expr, (QB.FExpression,)))
-    @test isempty(_dynamic_calls(QB._is_window_expr, (QB.FObject,)))
-    @test isempty(_dynamic_calls(QB._is_window_expr_any, (Any,)))
-    # The lists: `any(f, x)` over an array widens `f` to `Function` in Base, so they are walked by `_any_in`.
-    for T in (Vector{QB.FExpression}, Vector{Any}, QB.QObject, QB.QorObject)
+    for T in (QB.FExpression, QB.FObject, Vector{QB.FExpression}, Vector{Any}, QB.QObject, QB.QorObject)
       @test isempty(_dynamic_calls(QB._is_window_expr, (T,)))
     end
-    @test length(methods(QB._is_window_expr)) == 9
+    @test Set(string(m.sig) for m in methods(QB._is_window_expr)) ==
+          Set(string(Tuple{typeof(QB._is_window_expr), T}) for T in (QB.WindowFunction, QB.FExpression, QB.FObject,
+              Vector, QB.QObject, QB.QorObject, QB.OperObject, QB.SQLField, Any))
     rank = QB.Rank()
     @test QB._is_window_expr(QB.F("grid") + 1) == false
     @test QB._is_window_expr(QB.Coalesce(rank, QB.Value(0)))
     @test QB._is_window_expr(QB.Case([QB.When("grid__@gte" => 1, then = rank)]))
     @test !QB._is_window_expr(QB.Case([QB.When("grid__@gte" => 1, then = 1)]))
     @test QB._is_window_expr(QB.Case([QB.When(rank > 1, then = 1)]))
-    for x in (rank, QB.Sum("points"), QB.F("grid"), QB.Q("grid" => 1), [rank], Any["x", rank], Any[], "points", 1)
-      @test QB._is_window_expr_any(x) === QB._is_window_expr(x)
+    @test isdefined(QB, :_is_window_expr_any)
+    if isdefined(QB, :_is_window_expr_any)
+      @test isempty(_dynamic_calls(QB._is_window_expr_any, (Any,)))
+      for x in (rank, QB.Sum("points"), QB.F("grid"), QB.Q("grid" => 1), [rank], Any["x", rank], Any[], "points", 1,
+                [QB.Case([QB.When("grid__@gte" => 1, then = rank)])], view(Any[rank], 1:1))
+        @test QB._is_window_expr_any(x) === QB._is_window_expr(x)
+      end
     end
   end
 

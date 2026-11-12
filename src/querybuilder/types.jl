@@ -1248,11 +1248,14 @@ _any_agg(args...)::Bool = any(_holds_agg, args)
 # `any(v -> f(v, args...), x)` (#1599 layer 4). An unspecialized walk sees the vector as `AbstractVector`,
 # whose `iterate` dispatches at run time, so the vectors the query state holds are named here: the
 # wrappers' argument lists, the `Q`/`Qor` term view, the comparison value lists, a window's partition and
-# order parts, and `FObject.column`'s lists. Any other vector takes the same loop through one dynamic
-# call, behind `@noinline`.
+# order parts, `FObject.column`'s lists, and a query's projection (`SQLObjectQuery.values`, which
+# `count()` and `exists()` ask `_contains_agg` about). Any other vector takes the same loop through one
+# dynamic call, behind `@noinline`.
 function _any_in_vector(f::F, @nospecialize(x::AbstractVector), args::Vararg{Any,N})::Bool where {F,N}
   x isa Vector{Any} && return _any_in(f, x, args...)
   x isa QTermView && return _any_in(f, x, args...)
+  x isa Vector{ProjectionNode} && return _any_in(f, x, args...)
+  x isa Vector{WindowFunction} && return _any_in(f, x, args...)
   x isa Vector{FExpression} && return _any_in(f, x, args...)
   x isa Vector{OuterRefObject} && return _any_in(f, x, args...)
   x isa Vector{WindowPartitionPart} && return _any_in(f, x, args...)
@@ -2282,15 +2285,21 @@ _is_agg(::WindowFunction) = false
 # `_is_agg(x)` for a value of any type, without a dynamic call (#1599 layer 4): one arm per method of
 # `_is_agg` (`test/unit/test_trim_shape_pins.jl` fails when a method is added), each calling that method.
 # `FObject` and `WindowFunction` are the `SQLTypeFunction` structs PormG defines; a caller's own
-# `SQLTypeFunction` takes one dynamic call to the same method, behind `@noinline`.
-function _is_agg_any(@nospecialize(x))::Bool
+# `SQLTypeFunction` takes one dynamic call to the same method, behind `@noinline` (`other`). The two
+# callers read a caller's own `aggregate` slot as they always did, which differs when it does not hold a
+# `Bool`: `_holds_agg` returned it through its `::Bool` (a conversion: `1` is `true`, `2` an
+# `InexactError`), `_contains_agg` tested it with `&&` (a `TypeError` for anything but a `Bool`).
+function _is_agg_closed(@nospecialize(x), other::F)::Bool where {F}
   x isa FExpression && return _is_agg(x)
   x isa FObject && return _is_agg(x)
   x isa WindowFunction && return _is_agg(x)
-  x isa SQLTypeFunction && return _is_agg_other(x)
+  x isa SQLTypeFunction && return other(x)
   return false   # `_is_agg(::Any)`
 end
+_is_agg_any(@nospecialize(x))::Bool = _is_agg_closed(x, _is_agg_other)
+_agg_condition_any(@nospecialize(x))::Bool = _is_agg_closed(x, _agg_condition_other)
 @noinline _is_agg_other(@nospecialize(x::SQLTypeFunction))::Bool = _is_agg(x)
+@noinline _agg_condition_other(@nospecialize(x::SQLTypeFunction))::Bool = _is_agg(x) ? true : false
 _is_window_expr(::WindowFunction) = true
 _is_window_expr(f::FExpression) = _is_window_expr_any(f.field_name) || _is_window_expr_any(f.operand)
 # #756: the keyword slots too, because that is where `When`'s `then` and `Case`'s `else` live. A
@@ -2331,7 +2340,10 @@ _is_window_expr(::Any) = false
   x isa QorObject && return _is_window_expr(x)
   x isa OperObject && return _is_window_expr(x)
   x isa SQLField && return _is_window_expr(x)
-  x isa Vector && return _any_in_vector(_is_window_expr_any, x)   # `_is_window_expr(::Vector)`
+  # `_is_window_expr(::Vector)`. A `Case`'s `When` list first, through the typed method: an `FObject` is
+  # stored inline in its vector, and handing it to the unspecialized walk would box each one.
+  x isa Vector{FObject} && return _any_in(_is_window_expr, x)
+  x isa Vector && return _any_in_vector(_is_window_expr_any, x)
   return false   # `_is_window_expr(::Any)`
 end
 
@@ -2358,7 +2370,7 @@ end
 # dispatched at run time. Vectors and the keyword values are walked with loops, in `any`'s order.
 @noinline function _contains_agg(@nospecialize(x), depth::Int = 0)::Bool
   depth > 32 && return false
-  _is_agg_any(x) && return true
+  _agg_condition_any(x) && return true   # `_is_agg(x) && return true`, a non-Bool raising as it did
   x isa AbstractVector && return _any_in_vector(_contains_agg, x, depth + 1)
   x isa WindowFunction && return _contains_agg(x.column, depth + 1) ||
                                  _contains_agg(x.over.partition_by, depth + 1) ||

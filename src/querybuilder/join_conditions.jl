@@ -70,6 +70,16 @@ function _relation_step(q::SQLObject, @nospecialize(model::PormGModel), @nospeci
   return _relation_step_other(q, model, s, first_segment)
 end
 @noinline _string_other(@nospecialize(seg))::String = String(seg)
+# `hasproperty(field, :to) ? field.to : nothing` for the field a segment resolves to (#1599 layer 5). Of the
+# model fields PormG defines (`Models.AnyField`), the three relations have a `to` slot and the rest do not
+# (`test_trim_shape_pins.jl` checks it), so the answer is static; `hasproperty` on the 29-member union
+# dispatched at run time. A `cjoin` link of a field type defined elsewhere takes the one dynamic question.
+function _relation_to(@nospecialize(field))
+  field isa Union{Models.sForeignKey, Models.sOneToOneField, Models.sManyToManyField} && return field.to
+  field isa Models.AnyField && return nothing
+  return _relation_to_other(field)
+end
+@noinline _relation_to_other(@nospecialize(field)) = hasproperty(field, :to) ? field.to : nothing
 @noinline _relation_step_other(q::SQLObject, @nospecialize(model), seg::String, first_segment::Bool) =
   _relation_step_at(q, model, seg, first_segment)
 function _relation_step_at(q::SQLObject, model::PormGModel, seg::String, first_segment::Bool)
@@ -83,7 +93,7 @@ function _relation_step_at(q::SQLObject, model::PormGModel, seg::String, first_s
   end
   field = _segment_field(q, model, seg, first_segment)
   if field !== nothing
-    to = hasproperty(field, :to) ? field.to : nothing
+    to = _relation_to(field)
     to === nothing && return nothing
     # The resolved name either way: a `cjoin` link is keyed by the base field it links, which is that
     # field's own name, so `status` and `status_id` canonicalize alike with or without a link (#977

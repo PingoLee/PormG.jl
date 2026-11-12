@@ -73,7 +73,7 @@ end
     Models.REGISTERED_MODULES[placeholder] = key
 
     @test Models.ensure_model_initialized(bare) === false
-    @test get(Models._UNBOUND_SCAN, bare, nothing) == Models._unbound_scan_signature()
+    @test Models._unbound_scan_recorded(bare) == Models._unbound_scan_signature()
 
     # Swap the placeholder for a module that holds `bare`: same size, so the scan is skipped. Both
     # calls below go through `invokelatest`: the `Core.eval` binding is invisible to this running
@@ -100,21 +100,21 @@ end
     # registration reads bindings in the caller's world).
     _routed_sql() = Base.invokelatest(() -> PormG.inspect_query(routed.objects.db(key))[:sql_text])
     @test occursin("heal1250_routed", _routed_sql())
-    recorded = get(Models._UNBOUND_SCAN, routed, nothing)
+    recorded = Models._unbound_scan_recorded(routed)
     @test recorded == Models._unbound_scan_signature()
     @test occursin("heal1250_routed", _routed_sql())
-    @test get(Models._UNBOUND_SCAN, routed, nothing) === recorded
+    @test Models._unbound_scan_recorded(routed) === recorded
 
     # A model with a module goes through #1226/#1227's paths, and one with a key through case 1,
     # which reads `config`: neither is cached.
     owned = Model("heal1250_owned", id = IDField())
     owned._module = Module(:Heal1250Owner)
     Models.ensure_model_initialized(owned)
-    @test !haskey(Models._UNBOUND_SCAN, owned)
+    @test Models._unbound_scan_recorded(owned) === nothing
     keyed = Model("heal1250_keyed", id = IDField())
     keyed.connect_key = "heal1250_unloaded"
     @test Models.ensure_model_initialized(keyed) === false
-    @test !haskey(Models._UNBOUND_SCAN, keyed)
+    @test Models._unbound_scan_recorded(keyed) === nothing
   finally
     empty!(Models.REGISTERED_MODULES)
     merge!(Models.REGISTERED_MODULES, registered)

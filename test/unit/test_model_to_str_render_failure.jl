@@ -22,18 +22,14 @@ using PormG
 using PormG.Models: CharField, ArrayField, IntegerField
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 
-# A field whose RENDERING throws. Model_to_str derives a constructor name from a struct name by
-# stripping its first character (sCharField → CharField); a type outside PormG resolves to a name with
-# no binding inside the Models module, and the render helper raises UndefVarError at
-# `getfield(@__MODULE__, struct_name)()`. A model holds PormG's own field types only (#1604), so the
-# foreign type rides inside an `ArrayField`'s `base_field`, the one slot typed with the abstract
-# `PormGField`: the field is an ArrayField, and rendering its element type is what throws.
-struct _ThrowingRenderField <: PormG.PormGField
-  payload::Any
-end
+# A field whose RENDERING throws. A model holds PormG's own field types only (#1604), and since #1599's
+# layer-3 slice an `ArrayField`'s element is one of them too (`ArrayElementField`), so the failure is
+# made inside the render instead: an element that declares `unique` is refused when the render
+# rebuilds the `ArrayField` (`_model_to_str_array` → `ArrayField(base)` raises `FieldValidationError`).
+# The field is an ArrayField, and rendering it is what throws.
 function _throwing_field()
   af = ArrayField(IntegerField())
-  af.base_field = _ThrowingRenderField(nothing)
+  af.base_field.unique = true
   return af
 end
 
@@ -69,7 +65,7 @@ const RENDER_SETTINGS = PormG.Configuration.Settings()
   @testset "throwing field → warn + marker comment, healthy field kept" begin
     m = _mk_render_model(Dict{String, PormG.PormGField}(
       "surname" => CharField(),                       # healthy control field
-      "valid_until" => _throwing_field(),               # rendering raises UndefVarError
+      "valid_until" => _throwing_field(),               # rendering raises FieldValidationError
     ))
 
     # The warn must fire with the render-failure message — pinning the message ensures a
@@ -128,8 +124,8 @@ end
   # ─────────────────────────────────────────────────────────────────────────────
   @testset "all fields fail → definition commented out, file still loads (#134)" begin
     m = _mk_render_model(Dict{String, PormG.PormGField}(
-      "alpha" => _throwing_field(),              # rendering raises UndefVarError
-      "beta"  => _throwing_field(),              # rendering raises UndefVarError
+      "alpha" => _throwing_field(),              # rendering raises FieldValidationError
+      "beta"  => _throwing_field(),              # rendering raises FieldValidationError
     ))
 
     # Both fields fail, so both must still warn + surface their own marker (match_mode=:any tolerates

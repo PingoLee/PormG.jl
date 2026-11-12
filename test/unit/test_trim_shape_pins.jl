@@ -1139,6 +1139,132 @@ end
     @test !any(s -> s isa Expr && s.head === :call && s.args[1] == GlobalRef(Core, :_apply_iterate), ci.code)
   end
 
+  # What: the model-field code a trimmed build reaches below the query builder (#1599, layer 3):
+  #   `ArrayField`'s element slots (`sArrayField.base_field`, `ArrayFormatter.base`/`.kind`) and their
+  #   reader `array_element_kind`; `_accepted_field_kwargs`, which every field constructor calls; the
+  #   duration text `_duration_nanoseconds_to_string`; and #1250's per-model scan record, which
+  #   `ensure_model_initialized` reads on every `.objects`.
+  # Expected: the three slots are closed unions of concrete types, the element fields a subset of
+  #   `AnyField` and exactly the fields `array_element_kind` gives a kind; `field_canonical_kind` over an
+  #   `sArrayField`, `array_element_kind` over its element and the array-subscript memo write make no
+  #   dynamic call; `_accepted_field_kwargs` makes none and answers each row's set as it did; the duration
+  #   text invokes no method on an abstract signature; `ensure_model_initialized` reaches no `WeakKeyDict`.
+  #   The answers (element kinds, the importer's element check, keyword sets, duration texts, the scan
+  #   record) are the ones the code gave before.
+  # Why: each was a verifier row with its innermost frame in src/Models.jl or src/models/: the element
+  #   slot typed `PormGField` made `array_element_kind(f.base_field)` and `memo_field!` dynamic (class D);
+  #   the keyword row looked up by a run-time name typed the row as a union, so 16 rows read it; `lpad`
+  #   with a `Char` reaches `@invoke repeat(::Char, ::Integer)` (4 rows); the `WeakKeyDict` hashed and
+  #   compared its `WeakRef` keys as `Any` and registered a finalizer (7 rows). Measured on c60160d96
+  #   (#1599 slice A's head), every static check below fails.
+  @testset "the model-field code below the query builder is typed: ArrayField's element, keyword sets, durations, the scan record (#1599, layer 3)" begin
+    M = PormG.Models
+    QB = PormG.QueryBuilder
+    closed_union(T) = all(isconcretetype, Base.uniontypes(T))
+    base_t = fieldtype(M.sArrayField, :base_field)
+    @test closed_union(base_t)
+    @test closed_union(fieldtype(M.ArrayFormatter, :base))
+    @test closed_union(fieldtype(M.ArrayFormatter, :kind))
+    @test base_t <: M.AnyField && fieldtype(M.ArrayFormatter, :base) === base_t
+    # The element set is what `array_element_kind` answers a kind for: the same table `ArrayField`
+    # refuses from. Each field type built with no argument (the relations and `ArrayField` take one).
+    for T in Base.uniontypes(M.AnyField)
+      T in (M.sForeignKey, M.sOneToOneField, M.sManyToManyField, M.sArrayField) && continue
+      inst = getfield(M, Symbol(chopprefix(String(nameof(T)), "s")))()
+      @test (T, M.array_element_kind(inst) !== nothing) == (T, T <: base_t)
+    end
+    @test M.array_element_kind(M.ArrayField(M.IntegerField())) === nothing
+    @test M.array_element_kind(M.ForeignKey("Driver")) === nothing
+    @test M.array_element_kind(M.CharField(max_length = 12)) == PormG.CVarChar(12)
+    @test M.array_element_kind(M.DateTimeField(type = "TIMESTAMPTZ")) == PormG.CDateTime(true)
+    # The Django importer's element check asks which method a type reaches; its answers hold.
+    @test PormG.Migrations._array_element_kind_defined("CharField")
+    @test PormG.Migrations._array_element_kind_defined("UUIDField")
+    @test !PormG.Migrations._array_element_kind_defined("JSONField")
+    @test !PormG.Migrations._array_element_kind_defined("PositiveIntegerField")
+    # The readers. `value_repr.jl`'s `field_canonical_kind(::sArrayField)` and `build_joins.jl`'s memo write
+    # of the element, which take the slot as it is typed.
+    @test isempty(_dynamic_calls(PormG.field_canonical_kind, (M.sArrayField,)))
+    @test only(Base.return_types(M.array_element_kind, (base_t,))) <: PormG._ArrayElementKind
+    @test isempty(_dynamic_calls_deep(M.array_element_kind, (base_t,); depth = 2))
+    subscript_body = Base.bodyfunction(only(methods(QB._render_array_subscript)))
+    @test isempty(_named_dynamic_calls(Tuple{typeof(subscript_body), Bool, typeof(QB._render_array_subscript),
+                                             QB.InstructionObject, String, M.sArrayField, String,
+                                             Vector{String}, Vector{String}}, ("memo_field!",)))
+
+    # `_accepted_field_kwargs`: no dynamic call, the same set per row as the row's formula, a set of the
+    # caller's own, and the error a name that is no field type always raised.
+    no_spec = Tuple(getfield(M, n) for n in (:_no_field_kwarg_spec,) if isdefined(M, n))
+    @test isempty(_dynamic_calls_deep(M._accepted_field_kwargs, (String,); depth = 2, skip = no_spec))
+    for (name, spec) in pairs(M._FIELD_KWARG_SPECS)
+      want = Set{Symbol}(k for k in M._COMMON_FIELD_KWARGS if !(k in get(spec, :exclude, ())))
+      haskey(spec, :primary_key) && push!(want, :primary_key)
+      union!(want, keys(get(spec, :bools, NamedTuple())), get(spec, :extra, ()))
+      @test (name, M._accepted_field_kwargs(String(name))) == (name, want)
+    end
+    @test M._accepted_field_kwargs(SubString("xCharField", 2)) == M._accepted_field_kwargs("CharField")
+    @test M._accepted_field_kwargs("CharField") !== M._accepted_field_kwargs("CharField")
+    @test M._accepted_field_kwargs("ManyToManyField") == Set{Symbol}(M._M2M_KWARGS)
+    @test_throws FieldError M._accepted_field_kwargs("NoSuchField")
+
+    # The duration text: no `:invoke` that an `@invoke` redirected, two levels down, and the texts `lpad`
+    # gave. `lpad` with a `Char` pad holds `@invoke repeat(c::Char, r::Integer)`: the statement names
+    # `repeat(::Char, ::Int64)`, a signature its own dispatch sends to another method, so no code is
+    # compiled for it.
+    redirected(tt, d) = [string(mi.specTypes) for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+                         for st in ci.code if st isa Expr && st.head === :invoke
+                         for mi in ((st.args[1] isa Core.CodeInstance ? st.args[1].def : st.args[1]),)
+                         if mi isa Core.MethodInstance && mi.def isa Method
+                         for T in (which(mi.specTypes) !== mi.def ? (string(mi.specTypes),) :
+                                   d > 1 ? redirected(mi.specTypes, d - 1) : ())]
+    dur_tt = Base.signature_type(M._duration_nanoseconds_to_string, (Int64,))
+    @test isempty(redirected(dur_tt, 2))
+    function lpad_text(n)
+      s = n < 0 ? "-" : ""
+      h, r = divrem(abs(n), 3_600_000_000_000)
+      m, r = divrem(r, 60_000_000_000)
+      sec, ns = divrem(r, 1_000_000_000)
+      f = ns == 0 ? "" : "." * rstrip(lpad(string(ns), 9, '0'), '0')
+      return "$(s)$(lpad(string(h), 2, '0')):$(lpad(string(m), 2, '0')):$(lpad(string(sec), 2, '0'))$(f)"
+    end
+    for n in (Int64(0), Int64(1), Int64(1_500_000_000), Int64(3_723_000_000_123), -Int64(59_999_999_999),
+              Int64(360_000) * 1_000_000_000_000, typemax(Int64), typemin(Int64))
+      @test (n, M._duration_nanoseconds_to_string(n)) == (n, lpad_text(n))
+    end
+    @test M._duration_nanoseconds_to_string(Int64(3_723_000_000_123)) == "01:02:03.000000123"
+
+    # #1250's record: kept on the model, under a lock, so no `WeakKeyDict` (its `WeakRef` hash and
+    # compare, its finalizer) is reached from `ensure_model_initialized`.
+    weak_mis(tt, d) = [string(mi.specTypes) for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+                       for st in ci.code if st isa Expr && st.head === :invoke
+                       for mi in ((st.args[1] isa Core.CodeInstance ? st.args[1].def : st.args[1]),)
+                       if mi isa Core.MethodInstance
+                       for s in (occursin(r"WeakKeyDict|WeakRef", string(mi.specTypes)) ? (string(mi.specTypes),) :
+                                 d > 1 ? weak_mis(mi.specTypes, d - 1) : ())]
+    @test isempty(weak_mis(Base.signature_type(M.ensure_model_initialized, (M.ModelType,)), 2))
+    # The module-level `WeakKeyDict` is gone (an inlined lookup would leave no `:invoke` to find).
+    @test !isdefined(M, :_UNBOUND_SCAN)
+    # A generated `SearchVectorField`'s expression (#1032) copies its two `Tuple{Vararg{String}}` slots
+    # into vectors before the writer is called; the text is the one the comprehension built.
+    @test isempty(_dynamic_calls(M.generated_sql, (M.sSearchVectorField,)))
+    gen = M.SearchVectorField(generated_from = ("name", "surname"), config = "simple", weights = ("A", "B"))
+    @test M.generated_sql(gen) == "setweight(to_tsvector('simple'::regconfig, COALESCE((\"name\")::text, '')), 'A') || " *
+                                  "setweight(to_tsvector('simple'::regconfig, COALESCE((\"surname\")::text, '')), 'B')"
+    @test M.generated_sql(M.SearchVectorField(generated_from = ("name",), config = "english")) ==
+          "to_tsvector('english'::regconfig, COALESCE((\"name\")::text, ''))"
+    @test M.generated_sql(M.SearchVectorField()) === nothing
+    @test isdefined(M, :_unbound_scan_recorded) && isdefined(M, :_record_unbound_scan!)
+    if isdefined(M, :_record_unbound_scan!)
+      @test isempty(_dynamic_calls_deep(M._unbound_scan_recorded, (M.ModelType,); depth = 3))
+      @test isempty(_dynamic_calls_deep(M._record_unbound_scan!, (M.ModelType, Tuple{Int, Int}); depth = 3))
+      bare = M.Model("tsp_layer3_scan", id = M.IDField())
+      @test M._unbound_scan_recorded(bare) === nothing
+      M._record_unbound_scan!(bare, (3, 4))
+      @test M._unbound_scan_recorded(bare) === (3, 4)
+      @test copy(getfield(bare, :cache)).unbound_scan === nothing    # a copy is another model
+    end
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

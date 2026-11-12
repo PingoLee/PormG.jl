@@ -328,10 +328,10 @@ function _bind_container(pool::_Pool, resolved)::Union{Nothing, Vector{Any}}
   return Any[_bind_value(v) for v in resolved]
 end
 
-function _check_parameter_count(pool::_Pool, n::Int)::Nothing
+function _check_parameter_count(pool::_Pool, nparams::Int)::Nothing
   limit = PormG.backend_mysql_parameter_limit(pool)
-  n <= limit || throw(QueryBuildError(
-    "This statement binds $(n) parameters, and MySQL.jl binds at most $(limit) in one " *
+  nparams <= limit || throw(QueryBuildError(
+    "This statement binds $(nparams) parameters, and MySQL.jl binds at most $(limit) in one " *
     "statement. Split the work into smaller statements (a long `__@in` list into several filters, a " *
     "many-to-many `remove` or `set` of that many rows into batches), or select the values with a " *
     "subquery; bulk_insert and bulk_update split themselves."))

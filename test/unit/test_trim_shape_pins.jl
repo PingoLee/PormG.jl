@@ -2983,6 +2983,24 @@ end
     @test pgx._bind(nothing) === nothing
   end
 
+  # What: the MySQL extension's result cursor, `_materialize`, at the two cursors `_run` hands it (a
+  #   prepared statement's binary cursor with its charset flags, the text protocol's without), followed
+  #   six calls deep. The open arms (`_push_other_cell!`, a column type outside MySQL.jl's set;
+  #   `_store_other!`, a column the walk cannot name) are the reviewed dynamic calls, and
+  #   `print_to_string` is MySQL.jl's own error text (a conversion error, a stale row), not walked into.
+  # Expected: no dynamic call.
+  # Why: the cell's type is a run-time `Type`, so `getcolumn(row, j)` returned `Any` and the read value,
+  #   the charset swap, the push and the column's `identity.` narrowing were dispatched per cell: 148
+  #   verifier rows in the MySQL trim fixture (#1599 layer 2, #1614). Each cell now reads through a walk
+  #   over MySQL.jl's column types with the typed `getcolumn(row, T, j, name)`.
+  @testset "the MySQL result cursor reads each cell at its concrete type (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    skip = (myx._push_other_cell!, myx._store_other!, Base.print_to_string)
+    for tt in ((MySQL.Cursor{true, true}, Vector{Bool}), (MySQL.Cursor{false, true}, Nothing))
+      @test (tt, _dynamic_calls_deep(myx._materialize, tt; skip)) == (tt, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -14,7 +14,8 @@ query (the walls left are in #1599's tables).
 
 ## Drivers
 
-The fixture runs on SQLite. For PostgreSQL in a `juliac --trim` build, use Postgres.jl
+The fixture runs on SQLite; a MySQL variant is in `mysql/` (see "The MySQL variant" below). For
+PostgreSQL in a `juliac --trim` build, use Postgres.jl
 (`register_connection(…; adapter = "PostgreSQL", postgres_driver = "Postgres")`). A copy of this
 fixture switched to it (not committed) builds, and has not been run. A binary built with LibPQ 1.18
 aborts before `main` with `InitError(:Infinity, MethodError(!, (false,)))`: the `__init__` of
@@ -46,6 +47,31 @@ the end of the verifier report, which a spinner line overwrote (#1599 round 1). 
 `--trim=unsafe-warn` the verifier lists every dynamic call it cannot resolve ("Error #N"), and the
 binary still links; a call with no compiled target then raises a catchable `MethodError` at run
 time, which `main` prints with the function it missed.
+
+## The MySQL variant
+
+`mysql/` builds the same app with MySQL.jl in place of SQLite, to measure the MySQL extension
+(`ext/PormGMySQLExt.jl`), which no SQLite build compiles. Its entry, `mysql/main.jl`, boots through
+`register_connection("f1", "mysql://…@127.0.0.1:1/f1"; adapter = "MySQL")` (#1769), so no YAML is
+read, and then runs the typed read only, with no write. Nothing listens on port 1, so no database is
+needed: under the JIT the read raises `PoolConnectError`, and the binary stops wherever the trimmed
+read stops first. The write is left out for two reasons: it would fail at the same connect, and the
+binary's write stops at layer 7 before it reaches any driver code.
+
+The boot is in the entry, not in a package, because `juliac` builds a package from a copy of its own
+directory, where `../db/models.jl` is not found. From the repository root:
+
+```
+julia --project=test/trim/mysql -e 'using Pkg; Pkg.instantiate()'
+julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, PoolConnectError
+
+mkdir -p build-mysql && cd build-mysql
+JULIA_CPU_TARGET=native juliac --project ../test/trim/mysql --output-exe main \
+  --trim=unsafe-warn --experimental ../test/trim/mysql/main.jl 2>&1 | tee build.log
+./main
+```
+
+The scripts below read its `build.log` the same way.
 
 ## Reading the build log
 

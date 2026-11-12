@@ -554,6 +554,64 @@ end
   @test PormG.backend_insert_report(_my_pool(), r) === nothing
 end
 
+# What: every column type `MySQL.juliatype` can give — each wire type code, NOT NULL or not, signed or
+#   not, binary or not, 0 to 6 fractional digits — is one `_materialize`'s cell walk names
+#   (`_COLUMN_TYPES`), and each of its base types reads (`_read_value`, then `_by_charset` either way)
+#   as a type the column narrowing names (`_CELL_TYPES`).
+# Expected: no type left over on either side.
+# Why: the walks keep the result cursor free of dynamic calls in a trimmed build (#1599 layer 2). A
+#   type they miss still reads, through the open arm, so a later MySQL.jl adding one would pass every
+#   other test while that column went back to dynamic dispatch. This is where it shows.
+@testset "the result cursor's walks cover MySQL.jl's column types (#1599 layer 2)" begin
+  produced = Set{Any}()
+  for code in 0:255, notnull in (true, false), unsigned in (true, false), binary in (true, false), decimals in 0:6
+    push!(produced, MySQL.juliatype(code, notnull, unsigned, binary, decimals))
+  end
+  @test setdiff(produced, Set{Any}(_MyExt._COLUMN_TYPES)) == Set{Any}()
+  @test length(_MyExt._COLUMN_TYPES) == length(Set{Any}(_MyExt._COLUMN_TYPES))
+  read_types = Set{Any}()
+  for T in _MyExt._COLUMN_BASE_TYPES
+    R = Base.promote_op(_MyExt._read_value, T, Symbol)
+    push!(read_types, R)
+    # `_by_charset` turns text into bytes or bytes into text, so its result is a `Union` of both.
+    foreach(U -> push!(read_types, U), Base.uniontypes(Base.promote_op(_MyExt._by_charset, R, Bool)))
+  end
+  @test setdiff(read_types, Set{Any}(_MyExt._CELL_TYPES)) == Set{Any}()
+  # The extension precompiles `_materialize` at the two cursors `_run` hands it, so the walk's typed reads
+  # are in its image rather than inferred on a session's first statement (seconds). `precompile` returns
+  # `false` rather than throwing when a signature stops matching, so a renamed cursor type shows here.
+  @test precompile(_MyExt._materialize, (MySQL.Cursor{true, true}, Vector{Bool}))
+  @test precompile(_MyExt._materialize, (MySQL.Cursor{false, true}, Nothing))
+end
+
+# What: `_store_narrowed!`, which replaced `identity.(col)` in `_materialize`, against `identity.` itself:
+#   same element type and same values, for an empty column (returned as it is), all `missing`, mixed,
+#   every type a cell reads as, and the shapes a walk does not name (mixed types, `nothing`, `Bool`).
+# Expected: identical on every case.
+# Why: a column's element type is what `DataFrame(result)` and the typed read see; the narrowing must
+#   widen exactly as broadcast does (`Vector{Union{Missing, T}}`, `Vector{Missing}`), or a read would
+#   change type (#1599 layer 2: no change to what a read returns).
+@testset "the column narrowing gives what identity. gave (#1599 layer 2)" begin
+  narrow(col) = (columns = Vector{AbstractVector}(undef, 1); _MyExt._store_narrowed!(columns, 1, col); columns[1])
+  samples = Any[1, "Senna", Int32(7), Decimals.Decimal(0, 255, -1), Dates.Date(1991, 3, 10),
+                Dates.DateTime(1991, 3, 10, 14, 30), 1.5, UInt8[0x01, 0x02], Int8(1), Int16(2), UInt8(3),
+                UInt16(4), UInt32(5), UInt64(6), 2.5f0, Dates.Time(1, 2, 3), MySQL.Bit(0x05)]
+  @test Set{Any}(typeof.(samples)) == Set{Any}(_MyExt._CELL_TYPES)
+  cases = Any[Any[], Any[missing], Any[missing, missing], Any[1, 2.0], Any[1, "Senna"], Any[true, false],
+              Any[nothing], Any[missing, nothing], Any[missing, 1, nothing]]
+  for v in samples
+    push!(cases, Any[v], Any[v, v], Any[v, missing], Any[missing, v], Any[missing, v, missing])
+  end
+  for col in cases
+    expected = isempty(col) ? col : identity.(col)
+    got = narrow(col)
+    @test isequal((col, typeof(got)), (col, typeof(expected)))
+    @test isequal(got, expected)
+  end
+  empty = Any[]
+  @test narrow(empty) === empty
+end
+
 # What: a `Timestamp{Microsecond}` (a DATETIME(6) or TIMESTAMP(6) column) with digits below the
 #   millisecond is refused, with or without a column, by an `InvalidValueError` that names its
 #   precision and the rule (a `DateTimeField` declares `DATETIME(3)`, #1270), carries the column as

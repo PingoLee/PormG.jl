@@ -549,13 +549,31 @@ The keywords the `field_type` constructor accepts (#1333), read from its `_FIELD
 """
 function _accepted_field_kwargs(field_type::AbstractString)::Set{Symbol}
   field_type == "ManyToManyField" && return Set{Symbol}(_M2M_KWARGS)
-  spec = getfield(_FIELD_KWARG_SPECS, Symbol(field_type))
+  accepted = get(_ACCEPTED_FIELD_KWARGS, field_type, nothing)
+  accepted === nothing && _no_field_kwarg_spec(field_type)
+  return copy(accepted)   # the caller's own set, as when each call built it
+end
+
+# One row's accepted keywords, computed once per row at load time into `_ACCEPTED_FIELD_KWARGS`. The
+# row used to be looked up at call time by a name that arrives as a string, which typed it as the union
+# of every row's type, so each read of it was a dynamic call (#1599, layer 3).
+function _spec_accepted_kwargs(spec::NamedTuple)::Set{Symbol}
   exclude = get(spec, :exclude, ())
   accepted = Set{Symbol}(k for k in _COMMON_FIELD_KWARGS if !(k in exclude))
   haskey(spec, :primary_key) && push!(accepted, :primary_key)
   for k in keys(get(spec, :bools, NamedTuple())); push!(accepted, k); end
   for k in get(spec, :extra, ());                  push!(accepted, k); end
   return accepted
+end
+
+const _ACCEPTED_FIELD_KWARGS = Dict{String, Set{Symbol}}(
+  String(name) => _spec_accepted_kwargs(spec) for (name, spec) in pairs(_FIELD_KWARG_SPECS))
+
+# A name that is not a field type raises what it always raised (`FieldError`), from the lookup that
+# raised it. The `KeyError` after it is never reached: every row has its set.
+@noinline function _no_field_kwarg_spec(field_type::AbstractString)
+  getfield(_FIELD_KWARG_SPECS, Symbol(field_type))
+  throw(KeyError(field_type))
 end
 
 # The keywords that may still be passed to a constructor that does not take them, with a warning
@@ -3808,9 +3826,24 @@ The expression a generated column is computed from, with every column quoted, or
 column that is not generated (#1032). Rendered by the Kernel writer the query's `SearchVector` uses.
 """
 generated_sql(::PormGField)::Union{String, Nothing} = nothing
-generated_sql(f::sSearchVectorField)::Union{String, Nothing} =
-  f.generated_from === nothing ? nothing :
-  ts_generated_document_sql(["\"$(c)\"" for c in f.generated_from], f.config, f.weights)
+# `generated_from` and `weights` are `Tuple{Vararg{String}}`, an abstract type, so each is copied into
+# a `Vector{String}` by a loop here before the writer is called: a comprehension over the tuple, a call
+# with it or a helper taking it is dynamic (#1599, layer 3). The text is the same.
+function generated_sql(f::sSearchVectorField)::Union{String, Nothing}
+  from = f.generated_from
+  from === nothing && return nothing
+  columns = String[]
+  for c in from
+    push!(columns, string('"', c::String, '"'))
+  end
+  w = f.weights
+  w === nothing && return ts_generated_document_sql(columns, f.config, nothing)
+  weights = String[]
+  for x in w
+    push!(weights, x::String)
+  end
+  return ts_generated_document_sql(columns, f.config, weights)
+end
 
 # Whether PostgreSQL computes the column, so PormG never writes it (#1032).
 is_generated_field(f)::Bool = generated_sql(f) !== nothing
@@ -4097,6 +4130,13 @@ end
 # Array field (#28)
 # ============================================================================
 
+# The fields an `ArrayField` can hold, closed (#1599, layer 3): `sArrayField.base_field` and
+# `ArrayFormatter.base` are typed with it rather than the abstract `PormGField`, so reading an element
+# field's slot resolves at compile time. `array_element_kind` below gives each member its kind, and a
+# nested `ArrayField` is not a member.
+const ArrayElementField = Union{sCharField, sURLField, sSlugField, sTextField, sEmailField, sIntegerField,
+  sBigIntegerField, sFloatField, sDecimalField, sBooleanField, sDateField, sDateTimeField, sUUIDField}
+
 """
     array_element_kind(base::PormGField) -> Union{CanonicalType, Nothing}
 
@@ -4113,20 +4153,31 @@ Left out on purpose: keys and relations (no array form); `PositiveIntegerField`/
 `ImageField`/`FileField`/`PasswordField` (write-side behaviour of their own); the network fields; and
 `ArrayField` itself — `format_type` prints `integer[][]` as `integer[]`, so a nested array could not
 be told apart from a flat one by the migration planner.
+
+Two methods (#1599, layer 3): one over `ArrayElementField`, the fields that can be elements, and a
+`nothing` fallback for every other field. A call on an `sArrayField`'s `base_field` (typed
+`ArrayElementField`) then matches exactly one method. With one method per element type, that call
+matched thirteen, more than the compiler resolves statically, so it dispatched at run time. The Django
+importer asks which method a field type reaches (`Migrations._array_element_kind_defined`), and its
+answer is unchanged.
 """
-array_element_kind(f::sCharField) = CVarChar(f.max_length)
-array_element_kind(f::sURLField) = CVarChar(f.max_length)
-array_element_kind(f::sSlugField) = CVarChar(f.max_length)
-array_element_kind(::sTextField) = CText()
-array_element_kind(::sEmailField) = CText()   # rendered `text` on PostgreSQL (no length), see `Dialect._get_column_type`
-array_element_kind(::sIntegerField) = CInt32()
-array_element_kind(::sBigIntegerField) = CInt64()
-array_element_kind(::sFloatField) = CFloat64()
-array_element_kind(f::sDecimalField) = CDecimal(f.max_digits, f.decimal_places)
-array_element_kind(::sBooleanField) = CBool()
-array_element_kind(::sDateField) = CDate()
-array_element_kind(f::sDateTimeField) = CDateTime(f.type == "TIMESTAMPTZ")
-array_element_kind(::sUUIDField) = CUUID()
+@noinline function array_element_kind(f::ArrayElementField)::_ArrayElementKind
+  f isa sCharField && return CVarChar(f.max_length)
+  f isa sURLField && return CVarChar(f.max_length)
+  f isa sSlugField && return CVarChar(f.max_length)
+  f isa sTextField && return CText()
+  f isa sEmailField && return CText()   # rendered `text` on PostgreSQL (no length), see `Dialect._get_column_type`
+  f isa sIntegerField && return CInt32()
+  f isa sBigIntegerField && return CInt64()
+  f isa sFloatField && return CFloat64()
+  f isa sDecimalField && return CDecimal(f.max_digits, f.decimal_places)
+  f isa sBooleanField && return CBool()
+  f isa sDateField && return CDate()
+  f isa sDateTimeField && return CDateTime(f.type == "TIMESTAMPTZ")
+  f isa sUUIDField && return CUUID()
+  # Every member has its arm above, so nothing reaches this point. A member added to `ArrayElementField`
+  # without an arm would, and its `nothing` fails the return type.
+end
 array_element_kind(::PormGField) = nothing
 
 """
@@ -4140,8 +4191,8 @@ rather than a closure so `Model_to_str`, `display` and the kwargs snapshot can n
 (`nameof` → `format_array_sql`) and read the base field back off it.
 """
 struct ArrayFormatter <: Function
-  base::PormGField
-  kind::CanonicalType
+  base::ArrayElementField    # #1599: closed, and `kind` is `array_element_kind(base)`
+  kind::_ArrayElementKind
   size::Union{Int, Nothing}
 end
 Base.nameof(::ArrayFormatter) = :format_array_sql
@@ -4229,7 +4280,7 @@ mutable struct sArrayField <: PormGField
   editable::Bool
   type::String
   formatter::Function
-  base_field::PormGField
+  base_field::ArrayElementField   # #1599: the closed set `ArrayField` accepts, checked before it is stored
   size::Union{Int, Nothing}
   db_default::DbDefault
 end

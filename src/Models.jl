@@ -15,7 +15,7 @@ import PormG: PormGArrayLiteral  # an ArrayField value, bound as one array-liter
 # #28: the element kinds an `ArrayField` dispatches on (`models/pg_array.jl`) — the canonical column
 # IR's nouns (Kernel), bound into `PormG` before this module is included.
 import PormG: CanonicalType, CInt32, CInt64, CFloat64, CBool, CText, CDate, CUUID, CVarChar,
-              CDecimal, CDateTime, CArray
+              CDecimal, CDateTime, CArray, _ArrayElementKind
 import PormG: _emsg  # shared TTY-aware error-message strip helper (Kernel)
 import PormG: _canonical_folder_path, _folder_tag, _usable_folder_tag  # models-folder identity (#550, Kernel)
 # The "same parent?" rule (#360/#390), shared with the column IR's `reference_delta` and owned by
@@ -300,15 +300,19 @@ end
     Dict{String, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
   # A model read from a database: a column's live `db_index` index names (#325, a vector since #1341).
   index::Dict{String, Vector{String}} = Dict{String, Vector{String}}()
+  # Not metadata: #1250's record of the last registration scan that did not find this model, the
+  # `_unbound_scan_signature` it read (see `_UNBOUND_SCAN_LOCK`). `nothing` until such a scan.
+  unbound_scan::Union{Nothing, Tuple{Int, Int}} = nothing
 end
 
 # One level deep: the copy gets its own containers, so a write through either model — a relation
 # registered, a slot reassigned — never reaches the other. The old dict copy shared its inner dicts;
 # with every slot always present, that sharing would let a registration on the original write into a
-# copy `strip_many_to_many_fields` made before it.
+# copy `strip_many_to_many_fields` made before it. The copy is another model, so no scan has missed it
+# yet (`unbound_scan` starts empty, as a `WeakKeyDict` entry keyed by the original never covered it).
 Base.copy(c::ModelCache)::ModelCache = ModelCache(
   copy(c.many_to_many), c.many_to_many_auto, copy(c.unique_constraints), copy(c.check_constraints),
-  copy(c.composite_indexes), copy(c.composite_index_owners), copy(c.index))
+  copy(c.composite_indexes), copy(c.composite_index_owners), copy(c.index), nothing)
 
 """
     ModelType <: PormGModel
@@ -2230,8 +2234,13 @@ end
 # stores their sizes, `_unbound_scan_signature`, and skips the scan while they are the ones recorded
 # with the last "not found".
 #
-# Thread safety. `WeakKeyDict` serializes its reads and writes under its own lock, so concurrent
-# `.objects` calls never see a torn entry; a weak key does not keep a runtime-built model alive. The
+# Where it lives. The model's own `cache.unbound_scan` slot, so it goes away with the model, as the
+# `WeakKeyDict` it replaced let it (#1599, layer 3): that dictionary's `WeakRef` keys hashed and compared
+# the model as `Any`, and it registered a finalizer per entry, three calls a `juliac --trim` build cannot
+# compile.
+#
+# Thread safety. Reads and writes of the slot take `_UNBOUND_SCAN_LOCK`, as the `WeakKeyDict`'s were
+# serialized under its own lock, so concurrent `.objects` calls never see a torn entry. The
 # signature is taken BEFORE the scan and recorded only when the scan found nothing, so it describes
 # what the scan read: a registration racing with the scan changes a size and the next call scans
 # again, at the cost of one more scan, never a stale "not found". Binding the model — `set_models`,
@@ -2243,7 +2252,15 @@ end
 # A model with a `connect_key` or a `_module` is never cached: case 1 reads `config`, and a
 # registered model's misses go through #1227's rebind and #1226's refusal, which raise rather than
 # return `false`.
-const _UNBOUND_SCAN = WeakKeyDict{PormGModel, Tuple{Int, Int}}()
+const _UNBOUND_SCAN_LOCK = ReentrantLock()
+
+_unbound_scan_recorded(model::ModelType)::Union{Nothing, Tuple{Int, Int}} =
+  @lock _UNBOUND_SCAN_LOCK model.cache.unbound_scan
+
+function _record_unbound_scan!(model::ModelType, signature::Tuple{Int, Int})::Nothing
+  @lock _UNBOUND_SCAN_LOCK model.cache.unbound_scan = signature
+  return nothing
+end
 
 _unbound_scan_signature()::Tuple{Int, Int} = (length(REGISTERED_MODULES), length(Base.loaded_modules))
 
@@ -2271,10 +2288,10 @@ function ensure_model_initialized(model::PormGModel)
     end
 
     # #1250: a model with no module that the last scan did not find, with nothing it reads changed
-    # since, is not found again — see `_UNBOUND_SCAN`.
+    # since, is not found again — see `_UNBOUND_SCAN_LOCK`.
     signature = isnothing(model._module) && isnothing(model.connect_key) ?
         _unbound_scan_signature() : nothing
-    if signature !== nothing && get(_UNBOUND_SCAN, model, nothing) == signature
+    if signature !== nothing && _unbound_scan_recorded(model) == signature
         return false
     end
 
@@ -2386,7 +2403,7 @@ function ensure_model_initialized(model::PormGModel)
     end
 
     refusal === nothing || throw(refusal)
-    signature === nothing || (_UNBOUND_SCAN[model] = signature)
+    signature === nothing || _record_unbound_scan!(model, signature)
     return false
 end
 
@@ -4774,11 +4791,17 @@ function _duration_nanoseconds_to_string(total_nanoseconds::Int64)::String
 
   fraction = ""
   if nanoseconds != 0
-    fraction = "." * rstrip(lpad(string(nanoseconds), 9, '0'), '0')
+    fraction = "." * rstrip(_zero_pad(string(nanoseconds), 9), '0')
   end
 
-  return "$(sign)$(lpad(string(hours), 2, '0')):$(lpad(string(minutes), 2, '0')):$(lpad(string(seconds), 2, '0'))$(fraction)"
+  return "$(sign)$(_zero_pad(string(hours), 2)):$(_zero_pad(string(minutes), 2)):$(_zero_pad(string(seconds), 2))$(fraction)"
 end
+
+# `lpad(s, n, '0')` for the ASCII text above (digits, and a `-` only for `typemin(Int64)`), `n <= 9`.
+# Base's `lpad` with a `Char` pad reaches `repeat(::Char, ::Integer)` through an `@invoke` on the
+# abstract `Integer`, a call a `juliac --trim` build cannot compile (#1599, layer 3).
+_zero_pad(s::String, n::Int)::String =
+  (m = n - ncodeunits(s); m <= 0 ? s : SubString("000000000", 1, m) * s)
 
 function format_duration_sql(value::Union{Missing, Nothing})
   return missing

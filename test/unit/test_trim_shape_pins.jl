@@ -2823,6 +2823,31 @@ end
     @test myx._bind(pool, ()) === nothing
   end
 
+  # What: `backend_mysql_version` and the reader of its result, `_version_text`, then what the reader
+  #   returns for the results it can get, against the read it replaced (`String(only(collect(r))[1])`).
+  # Expected: no dynamic call (the open arm, `_version_text_other`, is that read, kept for any other
+  #   result); the same text for one row, and the same error for none or two.
+  # Why: `fetch` returns the driver's result untyped, so `collect`, `only` and `String` on it were
+  #   dispatched at run time: 22 rows in the MySQL trim fixture (#1599 layer 2).
+  @testset "the MySQL server version is read from the result at its type (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    P = PormG.ConnectionPool.MySQLConnectionPool
+    @test _dynamic_calls(PormG.backend_mysql_version, (P,)) == String[]
+    @test _dynamic_calls(myx._version_text, (Any,)) == String[]
+    R = myx.MySQLResult
+    old(r) = String(only(collect(r))[1])
+    err(f, r) = try f(r); nothing catch e; (typeof(e), sprint(showerror, e)) end
+    one = R([:v], AbstractVector[["8.4.11-log"]], 1, 0, UInt64(0), "")
+    @test myx._version_text(one) == old(one) == "8.4.11-log"
+    two_cols = R([:v, :w], AbstractVector[["8.4.0"], [1]], 1, 0, UInt64(0), "")
+    @test myx._version_text(two_cols) == old(two_cols)
+    for r in (R([:v], AbstractVector[String[]], 0, 0, UInt64(0), ""),
+              R([:v], AbstractVector[["8.4.0", "8.4.1"]], 2, 0, UInt64(0), ""),
+              R([:v], AbstractVector[Union{Missing, String}[missing]], 1, 0, UInt64(0), ""))
+      @test err(myx._version_text, r) == err(old, r)
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

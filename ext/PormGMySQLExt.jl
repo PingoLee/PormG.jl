@@ -257,11 +257,23 @@ end
 PormG.backend_mysql_parameter_limit(::_Pool)::Int = min(65535, MySQL.Protocol.Limits().max_columns)
 
 function PormG.backend_mysql_version(pool::_Pool)::Int
-  text = only(collect(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v")))[1]
-  m = match(r"^(\d+)\.(\d+)\.(\d+)", String(text))
+  text = _version_text(PormG.ConnectionPool.fetch(pool, "SELECT VERSION() AS v"))
+  m = match(r"^(\d+)\.(\d+)\.(\d+)", text)
   m === nothing && throw(InvalidConfigurationError("the MySQL server reported a version PormG cannot read"))
   return _version_number(VersionNumber(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3])))
 end
+
+# #1599 layer 2: `fetch` hands the result on untyped. This driver's `MySQLResult` of one row whose first
+# column is a `Vector{String}` (what `_materialize` narrows `VERSION()` to) is read at its type; anything
+# else takes the open arm, which reads it as before and raises what it raised.
+function _version_text(@nospecialize(result))::String
+  if result isa MySQLResult && result.nrows == 1 && !isempty(result.columns)
+    column = result.columns[1]
+    column isa Vector{String} && return column[1]
+  end
+  return _version_text_other(result)
+end
+@noinline _version_text_other(@nospecialize(result))::String = String(only(collect(result))[1])
 
 # ── Execution ────────────────────────────────────────────────────────────────
 

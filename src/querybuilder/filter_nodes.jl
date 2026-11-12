@@ -448,7 +448,7 @@ const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
 # everywhere (`Models.unranged_formatter`).
 const _RANGE_CHECKED_OPERATORS = ("=", "IN")
 
-function _format_filter_value(formatter, values, operator::AbstractString)
+function _format_filter_value(@nospecialize(formatter), @nospecialize(values), operator::AbstractString)
   operator in _RANGE_CHECKED_OPERATORS || (formatter = Models.unranged_formatter(formatter))
   return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
                                                                               formatter(values)
@@ -497,7 +497,11 @@ end
 # comparison — therefore raise `InvalidValueError` too, though no field formatter makes them.
 # A label that is not a name — an `F` expression on the left of a comparison — is not printed: its
 # `string` is a struct dump, operands included.
-function _locate_filter_refusal(e, label, type_label; subject::AbstractString = "field")
+# #1599 layer 5: the caught exception and the labels are taken unspecialized (one compiled body); an
+# exception is never of a type the compiler can name, so specialized on it the call had no compiled target,
+# and in a trimmed image the error it was handed was lost behind a `MethodError` on this function.
+function _locate_filter_refusal(@nospecialize(e), @nospecialize(label), @nospecialize(type_label);
+                                subject::AbstractString = "field")
   e isa InvalidValueError || rethrow(e)
   named = label isa AbstractString ? String(label) : label isa Symbol ? string(label) :
           # A CTE or `Joined` handle holds names only, so it is quoted as the caller wrote it.
@@ -534,8 +538,12 @@ _opt_label(x) = x === nothing ? nothing : string(x)   # refusal-value-ok: a fiel
 # carries `.type`, a projection alias carries only its own spelling and whichever formatter the
 # HAVING ladder resolved for it, and the transform ladder has an `FObject` with neither. `subject`
 # names what the message is talking about, so an alias is not told it is a field.
-_guarded_format(formatter, values, operator::AbstractString, label, type_label;
-                subject::AbstractString = "field") =
+#
+# #1599 layer 5: the formatter is a field's `formatter::Function`, an abstract type, so the one compiled
+# body takes it, the value and the labels unspecialized; specialized on them, the call had no compiled
+# target in a trimmed image. The call through the formatter stays a run-time dispatch (layer 3's).
+_guarded_format(@nospecialize(formatter), @nospecialize(values), operator::AbstractString, @nospecialize(label),
+                @nospecialize(type_label); subject::AbstractString = "field") =
   try
     _format_filter_value(formatter, values, operator)
   catch e

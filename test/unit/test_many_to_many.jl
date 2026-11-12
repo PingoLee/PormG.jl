@@ -231,7 +231,7 @@ end
 # `fields`/`field_names` filtered, and carry the untouched slots onto the clone the planner then
 # works from — `name`, `related_objects`, `_module`, `connect_key` and `cache`. The one carried
 # slot with a proven downstream reader is `cache`: `declared_composites`
-# (`src/migrations/column_spec.jl`) pulls `cache["unique_constraints"]` off this returned model, so
+# (`src/migrations/column_spec.jl`) pulls `cache.unique_constraints` off this returned model, so
 # dropping the copy silently deletes every user-declared UniqueConstraint from the CREATE TABLE plan
 # — a regression `test_unique_constraints.jl` catches and this file's assertions below also trip.
 # It must also leave its input alone: that input is the user's live registered model, which the
@@ -246,9 +246,9 @@ end
   @test haskey(source.fields, "drivers")      # there IS a M2M field to drop
   @test source._module !== nothing            # set_models ran, so the carried slots hold real values
   @test source.connect_key !== nothing
-  # The relation cache is populated. This key is query-builder state, NOT something the planner
-  # reads — planner code touches only "many_to_many_auto", "unique_constraints" and "index".
-  @test haskey(source.cache, "many_to_many")
+  # The relation cache is populated. This slot is query-builder state, NOT something the planner
+  # reads — planner code touches only `many_to_many_auto`, `unique_constraints` and `index`.
+  @test !isempty(source.cache.many_to_many)
   # This model's `related_objects` is EMPTY: nothing points an FK at `driver_championships`, and a
   # M2M installs its reverse accessor on the *related* model (`src/Models.jl:1733`), i.e. on `Driver`.
   # So any `related_objects` assertion here would pass vacuously — the honest carry-over check for
@@ -274,14 +274,16 @@ end
   @test stripped.name == "driver_championships"
   @test stripped._module === source._module
   @test stripped.connect_key === source.connect_key
-  # `copy(model.cache)` is shallow, so the inner relation table is the SAME object — which is why the
-  # relation still resolves off the stripped model even though the field that declared it is gone.
-  # (The through table itself does NOT depend on this: the second loop of
+  # `copy(model.cache)` copies each slot's container one level (#1687): the relation table is the
+  # stripped model's own, holding the SAME relations — which is why the relation still resolves off
+  # the stripped model even though the field that declared it is gone. Before #1687 the cache was a
+  # `Dict` of `Dict`s and its shallow copy SHARED the inner tables; with a typed slot that is always
+  # present, sharing would let a relation registered on the live model after the copy appear on the
+  # clone. (The through table itself does NOT depend on this: the second loop of
   # `synthesize_many_to_many_through_models` rebuilds it from the ORIGINAL unstripped model and sets
-  # `cache["many_to_many_auto"]` on a freshly-built through model. Nor does `declared_composites`
-  # depend on identity — it needs only that the outer Dict was copied at all. Inner-table identity is
-  # what the next two assertions pin, and nothing else.)
-  @test stripped.cache["many_to_many"] === source.cache["many_to_many"]
+  # `cache.many_to_many_auto` on a freshly-built through model. Nor does `declared_composites`.)
+  @test stripped.cache.many_to_many !== source.cache.many_to_many
+  @test stripped.cache.many_to_many == source.cache.many_to_many
   @test Models.get_many_to_many_relation(stripped, "drivers") ===
         Models.get_many_to_many_relation(source, "drivers")
 
@@ -291,7 +293,7 @@ end
   @test stripped !== source
   @test stripped.fields !== source.fields
   @test stripped.field_names !== source.field_names
-  @test stripped.cache !== source.cache      # outer Dict copied; inner tables shared, asserted above
+  @test stripped.cache !== source.cache      # a ModelCache of its own, with its own containers (above)
 
   # ── …and the live input is untouched ──
   @test sort(collect(keys(source.fields))) == ["drivers", "id", "name"]
@@ -383,7 +385,7 @@ function _m2m_detach_module(model::PormGModel)
     related_objects = model.related_objects,
     connect_key = model.connect_key,
     _module = nothing,
-    cache = Dict{String, Any}(),
+    cache = Models.ModelCache(),
   )
 end
 
@@ -618,7 +620,7 @@ end
   # `Dict` subtype. What this line pins is that `.fields` resolves to the STRUCT FIELD rather than
   # an M2M accessor — the container type is incidental to that.
   @test M2M.Driver_championship.fields isa AbstractDict
-  @test M2M.Driver_championship.cache isa Dict   # internal struct field, not M2M
+  @test M2M.Driver_championship.cache isa Models.ModelCache   # internal struct field, not M2M
 
   # M2M accessors (forward direction) reachable (sym not in fieldnames → M2M branch)
   @test Models.has_many_to_many_accessor(M2M.Driver_championship, "drivers")
@@ -1336,10 +1338,10 @@ end
 
   # The unique index names both columns, so it is a real composite constraint rather than the same
   # column repeated (which capped each row at a single link).
-  auto = through.cache["many_to_many_auto"]
-  @test auto["owner_column"] == "from_teammate_id"
-  @test auto["related_column"] == "to_teammate_id"
-  @test auto["unique_index"] == "teammate_teammates_from_teammate_id_to_teammate_id_uniq"
+  auto = through.cache.many_to_many_auto
+  @test auto.owner_column == "from_teammate_id"
+  @test auto.related_column == "to_teammate_id"
+  @test auto.unique_index == "teammate_teammates_from_teammate_id_to_teammate_id_uniq"
 
   # And it reaches the emitted DDL, not just the cache.
   plan = Migrations.get_migration_plan(PormGModel[], current_schema, M2MMockPostgres(), settings, interactive=false)
@@ -1423,7 +1425,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # ManyToManyField (#364): on a self-relation the reverse accessor may not collide with a field.
 # The two accessors for a self-relation land on ONE model but in two different dicts — the forward in
-# `model.cache["many_to_many"]`, the reverse in `related_objects` — so the pre-existing duplicate
+# `model.cache.many_to_many`, the reverse in `related_objects` — so the pre-existing duplicate
 # `related_name` check cannot see a collision between them. Since every reader resolves the cache (and
 # the join builder resolves `fields`) FIRST, an equal name leaves the reverse relation permanently
 # shadowed, and the manager then traverses the join table backwards while reporting no error at all.

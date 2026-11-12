@@ -2956,8 +2956,8 @@ end
     begin
       intro = Dict(lowercase(string(m.name)) => m for m in PormG.Migrations.convert_schema_to_models(pool))
       live = intro["idx347"]
-      @test haskey(live.cache, "composite_indexes")
-      live_ix = live.cache["composite_indexes"]["indexes"]
+      @test !isempty(live.cache.composite_indexes)
+      live_ix = live.cache.composite_indexes
       @test length(live_ix) == 1
       @test live_ix[1].fields == ["raceid", "lap"]   # declared ORDER, not table order
       @test live_ix[1].name == "idx347_race_lap_idx" # the live name, so a re-migration reproduces it

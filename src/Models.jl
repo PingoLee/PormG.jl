@@ -237,6 +237,79 @@ end
   model_resolved::PormGModel  # the CHILD model itself
 end
 
+# The three declarations `Model(constraints = …, indexes = …)` takes. Only the structs live here, ahead of
+# `ModelType`, because `ModelCache` below holds them in typed slots (#1687); their keyword constructors,
+# with the docstrings, stay in the sections that validate them (*Model-level constraints*, *Model-level
+# indexes*).
+struct UniqueConstraint
+  fields::Vector{String}
+  name::Union{String, Nothing}
+  # #934: a unique FUNCTIONAL index's members (exclusive with `fields`) and a unique PARTIAL index's
+  # `WHERE` — SQL text under `Index`'s contract (#29 part 2), owned through the same hashed marker.
+  expressions::Vector{String}
+  condition::Union{String, Nothing}
+end
+
+struct CheckConstraint
+  condition::String
+  name::String
+end
+
+struct Index
+  fields::Vector{String}
+  name::Union{String, Nothing}
+  method::String
+  descending::Vector{Bool}
+  opclasses::Vector{Union{String, Nothing}}
+  # #29 part 2: the SQL text of a functional index's members (exclusive with `fields`) and of a
+  # partial index's WHERE clause. Both are sent verbatim, the `CheckConstraint` contract.
+  expressions::Vector{String}
+  condition::Union{String, Nothing}
+  # #934: a covering index's payload — field names, stored in the index but not part of its key.
+  # PostgreSQL-only (`INCLUDE (…)`).
+  include::Vector{String}
+end
+
+# An auto many-to-many join table's own unique index (#911, #1267): the declaring field's name, the two
+# key columns, and the index name PormG gives it. Written once, by `synthesize_many_to_many_through_models`,
+# which always knows all four.
+struct AutoJoinTable
+  field::String
+  owner_column::String
+  related_column::String
+  unique_index::String
+end
+
+# The metadata a model derives, one typed slot per kind (#1687). It was a `Dict{String, Dict{String, Any}}`
+# under string keys, so every read returned `Any` and each consumer dispatched at run time — a `juliac
+# --trim` verifier row wherever the write, query or migration paths reach one (#1599).
+#
+# "Absent" is an empty slot (`nothing` for `many_to_many_auto`), which is how every reader already treated
+# a missing key: no writer stores an empty list.
+@kwdef mutable struct ModelCache
+  # Forward many-to-many relations by accessor (`_cache_many_to_many_relation!`); the reverse ones are in
+  # `related_objects`.
+  many_to_many::Dict{String, ManyToManyRelation} = Dict{String, ManyToManyRelation}()
+  # Set on a synthesized join table only — its presence is what marks one (`_is_auto_join_table`).
+  many_to_many_auto::Union{Nothing, AutoJoinTable} = nothing
+  unique_constraints::Vector{UniqueConstraint} = UniqueConstraint[]
+  check_constraints::Vector{CheckConstraint} = CheckConstraint[]
+  composite_indexes::Vector{Index} = Index[]
+  # A model read from a database: each advanced index's live marker and comment, by index name (#29).
+  composite_index_owners::Dict{String, Tuple{Union{String, Nothing}, Union{String, Nothing}}} =
+    Dict{String, Tuple{Union{String, Nothing}, Union{String, Nothing}}}()
+  # A model read from a database: a column's live `db_index` index names (#325, a vector since #1341).
+  index::Dict{String, Vector{String}} = Dict{String, Vector{String}}()
+end
+
+# One level deep: the copy gets its own containers, so a write through either model — a relation
+# registered, a slot reassigned — never reaches the other. The old dict copy shared its inner dicts;
+# with every slot always present, that sharing would let a registration on the original write into a
+# copy `strip_many_to_many_fields` made before it.
+Base.copy(c::ModelCache)::ModelCache = ModelCache(
+  copy(c.many_to_many), c.many_to_many_auto, copy(c.unique_constraints), copy(c.check_constraints),
+  copy(c.composite_indexes), copy(c.composite_index_owners), copy(c.index))
+
 """
     ModelType <: PormGModel
 
@@ -264,7 +337,7 @@ registration has `connect_key === nothing` and no reverse relations.
 | `field_names` | `Model(...)` | The subset that owns a real column — many-to-many fields are excluded |
 | `related_objects` | `set_models` | Reverse accessors installed by relations pointing *at* this model: accessor name → a `ReverseRelation` (a foreign key on another model) or a `ManyToManyRelation` (a many-to-many, reversed). Each carries the resolved child model, so a reverse join never re-derives a Julia binding from a name (#343) |
 | `_module` / `connect_key` | `set_models` | The defining module and the connection key it registered under |
-| `cache` | `set_models`, `Model(constraints = …, indexes = …)` | Derived metadata: many-to-many relations, declared unique constraints, declared composite indexes |
+| `cache` | `set_models`, `Model(constraints = …, indexes = …)`, introspection | Derived metadata, one typed slot per kind: forward many-to-many relations, declared unique and check constraints, declared composite indexes, and what a model read from a database records about its live indexes |
 
 `deepcopy` **shares** rather than clones (`deepcopy(model) === model`): a model is resolved schema
 state treated as an immutable shared reference, and recursion would otherwise descend into
@@ -301,7 +374,8 @@ See also [`Model`](@ref), [`set_models`](@ref), [`UniqueConstraint`](@ref), [`In
     Dict{String, Union{ReverseRelation, ManyToManyRelation}}()
   _module::Union{Module, Nothing} = nothing # needed to create sql queries with joins
   connect_key::Union{String, Nothing} = nothing # needed to get the connection
-  cache::Dict{String, Dict{String, Any}} = Dict{String, Dict{String, Any}}()
+  # One typed slot per kind (#1687), not a `Dict{String, Dict{String, Any}}`.
+  cache::ModelCache = ModelCache()
 end
 
 
@@ -1884,7 +1958,7 @@ function _register_models!(record::ModelSet, path::Union{Nothing, String}, conne
   for model in models
     model._module = _module
     empty!(model.related_objects)
-    haskey(model.cache, "many_to_many") && delete!(model.cache, "many_to_many")
+    model.cache.many_to_many = Dict{String, ManyToManyRelation}()
   end
   # #303: self-contradicting field declarations are ACCUMULATED across every model and every
   # field, then raised once below. See `_render_contradictions` for the ordering contract.
@@ -2931,14 +3005,6 @@ CREATE UNIQUE INDEX "uniq_constructor_year"
 
 See also [`Model`](@ref).
 """
-struct UniqueConstraint
-  fields::Vector{String}
-  name::Union{String, Nothing}
-  # #934: a unique FUNCTIONAL index's members (exclusive with `fields`) and a unique PARTIAL index's
-  # `WHERE` — SQL text under `Index`'s contract (#29 part 2), owned through the same hashed marker.
-  expressions::Vector{String}
-  condition::Union{String, Nothing}
-end
 function UniqueConstraint(; fields = nothing, expressions = nothing, condition = nothing,
                           name::Union{AbstractString, Nothing} = nothing)
   # Django's rule, as for `Index`: over fields OR over expressions — never both, never neither.
@@ -3041,10 +3107,6 @@ Result::Models.ModelType = Models.Model("result";
 
 See also [`Model`](@ref), [`UniqueConstraint`](@ref).
 """
-struct CheckConstraint
-  condition::String
-  name::String
-end
 function CheckConstraint(; condition::Union{AbstractString, Nothing} = nothing,
                          name::Union{AbstractString, Nothing} = nothing)
   (name === nothing || isempty(strip(name))) && throw(ModelDefinitionError(
@@ -3091,14 +3153,13 @@ end
 
 # The names a model's constraints already hold, of either kind — one namespace per model, so a
 # UniqueConstraint and a CheckConstraint cannot share a name whichever is applied first.
-_declared_unique_constraints(model::PormGModel) =
-  get(get(model.cache, "unique_constraints", Dict{String, Any}()), "constraints", UniqueConstraint[])
+_declared_unique_constraints(model::PormGModel)::Vector{UniqueConstraint} = model.cache.unique_constraints
 # The `(owner, related)` columns of an auto many-to-many join table's own unique index, or `nothing`
 # for any other model: the index PormG adds there is no declared constraint (#1267 reads it as a key).
 function _auto_join_unique_columns(model::PormGModel)::Union{Tuple{String, String}, Nothing}
-  auto = model.cache === nothing ? nothing : get(model.cache, "many_to_many_auto", nothing)
+  auto = model.cache.many_to_many_auto
   auto === nothing && return nothing
-  return (String(auto["owner_column"]), String(auto["related_column"]))
+  return (auto.owner_column, auto.related_column)
 end
 _constraint_names(model::PormGModel, kind::Symbol)::Set{String} = kind === :unique ?
   Set{String}(String(c.name) for c in _declared_unique_constraints(model) if c.name !== nothing) :
@@ -3109,17 +3170,15 @@ _constraint_names(model::PormGModel, kind::Symbol)::Set{String} = kind === :uniq
 
 The [`CheckConstraint`](@ref)s `model` declares, in declaration order; empty when it declares none.
 """
-declared_check_constraints(model::PormGModel)::Vector{CheckConstraint} =
-  get(get(model.cache, "check_constraints", Dict{String, Any}()), "constraints", CheckConstraint[])
+declared_check_constraints(model::PormGModel)::Vector{CheckConstraint} = model.cache.check_constraints
 
-# Validate declared UniqueConstraints against the built model and stash them in the
-# general-purpose `cache` (the same mechanism the ManyToManyField auto-index uses, so
-# `deepcopy`/`strip_many_to_many_fields` carry them for free — no new struct field, no
-# `deepcopy` positional-enumeration edit). Each referenced field must exist on the model
-# and be a concrete column (not a ManyToManyField, which has no column of its own).
+# Validate declared UniqueConstraints against the built model and store them in `cache`'s
+# `unique_constraints` slot (so `strip_many_to_many_fields` carries them with the rest of the
+# cache). Each referenced field must exist on the model and be a concrete column (not a
+# ManyToManyField, which has no column of its own).
 #
 # Only the UniqueConstraints of the list (#742): a CheckConstraint is `_apply_check_constraints!`'s,
-# and a list holding only checks leaves the `"unique_constraints"` key unset, as no constraints did.
+# and a list holding only checks leaves the slot empty, as no constraints did.
 function _apply_unique_constraints!(model::ModelType, constraints)::ModelType
   list = UniqueConstraint[c for c in _as_constraint_vector(constraints) if c isa UniqueConstraint]
   isempty(list) && return model
@@ -3143,7 +3202,7 @@ function _apply_unique_constraints!(model::ModelType, constraints)::ModelType
       push!(seen_names, c.name)
     end
   end
-  model.cache["unique_constraints"] = Dict{String, Any}("constraints" => list)
+  model.cache.unique_constraints = list
   return model
 end
 
@@ -3162,7 +3221,7 @@ function _apply_check_constraints!(model::ModelType, constraints)::ModelType
       "unique within a model"))
     push!(seen, c.name)
   end
-  model.cache["check_constraints"] = Dict{String, Any}("constraints" => list)
+  model.cache.check_constraints = list
   return model
 end
 
@@ -3296,20 +3355,6 @@ Models.Index(fields = ("surname",), opclasses = ("varchar_pattern_ops",),
 
 See also [`Model`](@ref), [`UniqueConstraint`](@ref).
 """
-struct Index
-  fields::Vector{String}
-  name::Union{String, Nothing}
-  method::String
-  descending::Vector{Bool}
-  opclasses::Vector{Union{String, Nothing}}
-  # #29 part 2: the SQL text of a functional index's members (exclusive with `fields`) and of a
-  # partial index's WHERE clause. Both are sent verbatim, the `CheckConstraint` contract.
-  expressions::Vector{String}
-  condition::Union{String, Nothing}
-  # #934: a covering index's payload — field names, stored in the index but not part of its key.
-  # PostgreSQL-only (`INCLUDE (…)`).
-  include::Vector{String}
-end
 function Index(; fields = nothing, expressions = nothing, condition = nothing,
                name::Union{AbstractString, Nothing} = nothing,
                method::Union{AbstractString, Symbol} = "btree", opclasses = nothing, include = nothing)
@@ -3608,14 +3653,11 @@ function _as_index_vector(is)::Vector{Index}
   return out
 end
 
-# Validate declared Indexes against the built model and stash them in `cache`, exactly as
-# `_apply_unique_constraints!` does one section up — so `deepcopy`/`strip_many_to_many_fields`
-# carry them for free.
+# Validate declared Indexes against the built model and store them in `cache`, exactly as
+# `_apply_unique_constraints!` does one section up.
 #
-# The cache key is "composite_indexes", NOT "indexes": `cache["index"]` is already taken by
-# introspection's physical-column ⇒ index-name map for per-field `db_index` (#325), and two keys
-# one letter apart, holding unrelated shapes, is a trap. The INNER key is "indexes", mirroring
-# `unique_constraints`'s inner "constraints".
+# The slot is `composite_indexes`, NOT `index`: `cache.index` is introspection's physical-column ⇒
+# index-name map for per-field `db_index` (#325), an unrelated shape.
 function _apply_indexes!(model::ModelType, indexes)::ModelType
   list = _as_index_vector(indexes)
   isempty(list) && return model
@@ -3638,7 +3680,7 @@ function _apply_indexes!(model::ModelType, indexes)::ModelType
       push!(seen_names, ix.name)
     end
   end
-  model.cache["composite_indexes"] = Dict{String, Any}("indexes" => list)
+  model.cache.composite_indexes = list
   return model
 end
 
@@ -4210,7 +4252,7 @@ function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vecto
   # #742: CheckConstraints go in the SAME list — a second `constraints =` keyword would not parse — and
   # a model declaring only checks still gets one. A check's condition is SQL over physical columns, so
   # the field-rename map below does not apply to it: it is emitted verbatim.
-  if fields != "" && (haskey(model.cache, "unique_constraints") || haskey(model.cache, "check_constraints"))
+  if fields != "" && (!isempty(model.cache.unique_constraints) || !isempty(model.cache.check_constraints))
     ucs = _declared_unique_constraints(model)
     ccs = declared_check_constraints(model)
     if !isempty(ucs) || !isempty(ccs)
@@ -4255,8 +4297,8 @@ function Model_to_str(model::Union{ModelType, PormGModel}; contants_julia::Vecto
   # never reached the output) and `renamed` (a field the loop above re-spelled to a legal Julia
   # identifier) for the same two reasons the constraints block does: either one would otherwise emit
   # a declaration `_apply_indexes!` rejects on reload, so the generated file would not load.
-  if fields != "" && haskey(model.cache, "composite_indexes")
-    ixs = get(model.cache["composite_indexes"], "indexes", Index[])
+  if fields != "" && !isempty(model.cache.composite_indexes)
+    ixs = model.cache.composite_indexes
     if !isempty(ixs)
       rendered_indexes = String[]
       for ix in ixs
@@ -5616,8 +5658,7 @@ function _reverse_many_to_many_relation(relation::ManyToManyRelation, reverse_ac
 end
 
 function _cache_many_to_many_relation!(model::PormGModel, accessor::String, relation::ManyToManyRelation)
-  cache = get!(model.cache, "many_to_many", Dict{String, Any}())
-  cache[accessor] = relation
+  model.cache.many_to_many[accessor] = relation
   return relation
 end
 
@@ -5652,7 +5693,7 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
   #
   # The self case is this same rule with `related_model === model`, and it was the only one #364
   # could reach: a self-relation puts both accessors on ONE model but in two DIFFERENT dicts — the
-  # forward one in `model.cache["many_to_many"]` (written just above), the reverse one in
+  # forward one in `model.cache.many_to_many` (written just above), the reverse one in
   # `related_objects` — and the readers consult the cache FIRST
   # (`has_many_to_many_accessor` / `get_many_to_many_relation`). That is not a merely dead accessor:
   # the manager's `_m2m_query` filters on `inverse_accessor`, so every `.all()` would traverse the
@@ -5686,15 +5727,15 @@ function _register_many_to_many_relation!(_module::Module, settings::PormGSettin
 end
 
 function has_many_to_many_accessor(model::PormGModel, accessor::String)::Bool
-  if haskey(model.cache, "many_to_many") && haskey(model.cache["many_to_many"], accessor)
+  if haskey(model.cache.many_to_many, accessor)
     return true
   end
   return haskey(model.related_objects, accessor) && model.related_objects[accessor] isa ManyToManyRelation
 end
 
 function get_many_to_many_relation(model::PormGModel, accessor::String)::ManyToManyRelation
-  if haskey(model.cache, "many_to_many") && haskey(model.cache["many_to_many"], accessor)
-    return model.cache["many_to_many"][accessor]::ManyToManyRelation
+  if haskey(model.cache.many_to_many, accessor)
+    return model.cache.many_to_many[accessor]
   elseif haskey(model.related_objects, accessor) && model.related_objects[accessor] isa ManyToManyRelation
     return model.related_objects[accessor]::ManyToManyRelation
   end
@@ -5782,19 +5823,16 @@ function synthesize_many_to_many_through_models(current_schema::Dict{Symbol, Dic
       through_model.managed = model_is_managed(source_model) || model_is_managed(target_model)
       # `field` is the declaring field's name, which the table name ends in (`<model>_<field>`): the
       # planner's rename-follow uses it to tell the same relation from another one (#911).
-      through_model.cache["many_to_many_auto"] = Dict{String, Any}(
-        "field" => field_name,
-        "owner_column" => relation.owner_column,
-        "related_column" => relation.related_column,
-        "unique_index" => "$(relation.through_table)_$(relation.owner_column)_$(relation.related_column)_uniq",
-      )
+      through_model.cache.many_to_many_auto = AutoJoinTable(
+        field_name, relation.owner_column, relation.related_column,
+        "$(relation.through_table)_$(relation.owner_column)_$(relation.related_column)_uniq")
       through_key = Symbol(relation.through_table)
       if haskey(expanded, through_key)
         existing = expanded[through_key][:model]
-        existing_auto = existing.cache !== nothing ? get(existing.cache, "many_to_many_auto", nothing) : nothing
+        existing_auto = existing.cache.many_to_many_auto
         if existing_auto === nothing ||
-           get(existing_auto, "owner_column", nothing) != relation.owner_column ||
-           get(existing_auto, "related_column", nothing) != relation.related_column
+           existing_auto.owner_column != relation.owner_column ||
+           existing_auto.related_column != relation.related_column
           throw(ModelDefinitionError(
             "Auto-generated through table $(relation.through_table) for $(source_model.name).$(field_name) " *
             "collides with an existing model or another ManyToManyField. " *

@@ -2416,7 +2416,7 @@ end
         @test enrolment.name == "enrolment"
 
         # ...and so do the constraints, including the FK `_id` resolution and the Django name.
-        rc = modelof(:Engineer).cache["unique_constraints"]["constraints"]
+        rc = modelof(:Engineer).cache.unique_constraints
         @test length(rc) == 3                                   # #934: the partial and functional ones too
         @test rc[1].fields == ["licence_no", "crew_ref_id"]
         @test rc[1].name == "uniq_engineer_licence_crew"

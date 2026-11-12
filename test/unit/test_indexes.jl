@@ -117,20 +117,20 @@ end
   @test occursin("Index fields must be Symbol or String", sprint(showerror, err))
 
   # Applied to a model → validated + stashed in cache. The key is "composite_indexes", NOT
-  # "indexes": `cache["index"]` is introspection's per-field column⇒index-name map (#325).
+  # "indexes": `cache.index` is introspection's per-field column⇒index-name map (#325).
   m = Models.Model("widget_idx",
     id = Models.IDField(),
     a = Models.IntegerField(),
     b = Models.IntegerField(),
     indexes = [Models.Index(fields = ("a", "b"))],
   )
-  @test haskey(m.cache, "composite_indexes")
-  @test length(m.cache["composite_indexes"]["indexes"]) == 1
-  @test m.cache["composite_indexes"]["indexes"][1].fields == ["a", "b"]
+  @test !isempty(m.cache.composite_indexes)
+  @test length(m.cache.composite_indexes) == 1
+  @test m.cache.composite_indexes[1].fields == ["a", "b"]
 
   # A model with no indexes has no cache entry (no churn on the common path).
   plain = Models.Model("plain_idx", id = Models.IDField(), a = Models.IntegerField())
-  @test !haskey(plain.cache, "composite_indexes")
+  @test isempty(plain.cache.composite_indexes)
 
   # The idiomatic NO-positional-name form (table inferred from the binding via set_models) must
   # also accept indexes= — it uses a distinct Model(; ...) method, so the peel is duplicated.
@@ -140,8 +140,8 @@ end
     b = Models.IntegerField(),
     indexes = [Models.Index(fields = ("a", "b"))],
   )
-  @test haskey(noname.cache, "composite_indexes")
-  @test noname.cache["composite_indexes"]["indexes"][1].fields == ["a", "b"]
+  @test !isempty(noname.cache.composite_indexes)
+  @test noname.cache.composite_indexes[1].fields == ["a", "b"]
 
   # `constraints=` and `indexes=` are independent options and must not eat each other.
   both = Models.Model("both_idx",
@@ -151,8 +151,8 @@ end
     constraints = [Models.UniqueConstraint(fields = ("a", "b"), name = "both_uq")],
     indexes = [Models.Index(fields = ("b", "a"), name = "both_ix")],
   )
-  @test both.cache["unique_constraints"]["constraints"][1].name == "both_uq"
-  @test both.cache["composite_indexes"]["indexes"][1].name == "both_ix"
+  @test both.cache.unique_constraints[1].name == "both_uq"
+  @test both.cache.composite_indexes[1].name == "both_ix"
 
   # Referencing an unknown field is rejected, naming the offender.
   @test_throws PormG.ModelDefinitionError Models.Model("bad_unknown_idx",
@@ -414,18 +414,18 @@ end
   @test occursin("Models.Index(fields = (\"raceid\",), name = \"result_cov_race\", condition = \"grid > 0\", " *
                  "include = (\"points\",))", src)
   back = _ix_reload(src)
-  @test only(back.cache["composite_indexes"]["indexes"]).include == ["points"]
+  @test only(back.cache.composite_indexes).include == ["points"]
 
   # inspectdb: a live covering index is written as declared, payload included.
   m = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField(), pts = Models.FloatField())
   live = LiveComposite("result_cov_race", ["raceid"], false, false, "btree", [false],
                        Union{String, Nothing}["int4_ops"], [true], nothing, nothing; include = ["pts"])
   _attach_composite_indexes!(m, [live])
-  @test only(m.cache["composite_indexes"]["indexes"]).include == ["pts"]
+  @test only(m.cache.composite_indexes).include == ["pts"]
   # …and one whose payload column the model lacks is skipped, not half-declared.
   m2 = Models.Model("result_cov", id = Models.IDField(), raceid = Models.IntegerField())
   _attach_composite_indexes!(m2, [live])
-  @test !haskey(m2.cache, "composite_indexes")
+  @test isempty(m2.cache.composite_indexes)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -529,9 +529,9 @@ end
     a = Models.IntegerField(),
     b = Models.IntegerField(),
   )
-  derived.cache["composite_indexes"] = Dict{String, Any}("indexes" => [
+  derived.cache.composite_indexes = [
     Models.Index(fields = ("a", "b")), Models.Index(fields = ("a", "b")),
-  ])
+  ]
   schema2 = Dict{Symbol, Dict{Symbol, Union{Bool, PormGModel}}}(
     :clash_derived => Dict{Symbol, Union{Bool, PormGModel}}(:model => derived, :exist => false),
   )
@@ -693,8 +693,8 @@ end
   @test occursin("Models.Index(expressions = (\"lower(surname)\", \"surname COLLATE \\\"C\\\"\",), name = \"rt_lower\")", str)
   @test occursin("Models.Index(fields = (\"surname\", \"-code\",), name = \"rt_partial\", condition = \"code <> '\\\$\\\$'\")", str)
   @test occursin("name = \"rt_gin\", method = \"gin\", condition = \"code IS NOT NULL\")", str)
-  r = _ix_reload(str).cache["composite_indexes"]["indexes"]
-  @test [Models._index_shape(ix) for ix in r] == [Models._index_shape(ix) for ix in m.cache["composite_indexes"]["indexes"]]
+  r = _ix_reload(str).cache.composite_indexes
+  @test [Models._index_shape(ix) for ix in r] == [Models._index_shape(ix) for ix in m.cache.composite_indexes]
   @test [ix.name for ix in r] == ["rt_lower", "rt_partial", "rt_gin"]
 end
 
@@ -719,8 +719,8 @@ end
   @test occursin("Models.Index(fields = (\"raceid\", \"-points\",))", str)
   @test occursin("Models.Index(fields = (\"surname\",), name = \"rt_trgm\", method = \"gin\", opclasses = (\"gin_trgm_ops\",))", str)
   @test occursin("Models.Index(fields = (\"raceid\", \"surname\",), name = \"rt_mixed\", opclasses = (nothing, \"varchar_pattern_ops\",))", str)
-  r = _ix_reload(str).cache["composite_indexes"]["indexes"]
-  @test [Models._index_shape(ix) for ix in r] == [Models._index_shape(ix) for ix in m.cache["composite_indexes"]["indexes"]]
+  r = _ix_reload(str).cache.composite_indexes
+  @test [Models._index_shape(ix) for ix in r] == [Models._index_shape(ix) for ix in m.cache.composite_indexes]
   @test [ix.name for ix in r] == [nothing, "rt_trgm", "rt_mixed"]
 end
 
@@ -738,8 +738,8 @@ end
   # Evaluate the generated declaration and confirm it reconstructs the index — this is the
   # guard for the "sync Model_to_str when kwargs are added" rule.
   reconstructed = _ix_reload(str)
-  @test haskey(reconstructed.cache, "composite_indexes")
-  ri = reconstructed.cache["composite_indexes"]["indexes"][1]
+  @test !isempty(reconstructed.cache.composite_indexes)
+  ri = reconstructed.cache.composite_indexes[1]
   @test ri.fields == ["season", "round"]
   @test ri.name == "standings_lookup"
 
@@ -752,8 +752,8 @@ end
     indexes = [Models.Index(fields = ("b", "a"))],
   )
   rt = _ix_reload(Models.Model_to_str(mixed))
-  @test rt.cache["unique_constraints"]["constraints"][1].name == "mixed_uq"
-  @test rt.cache["composite_indexes"]["indexes"][1].fields == ["b", "a"]   # order survives
+  @test rt.cache.unique_constraints[1].name == "mixed_uq"
+  @test rt.cache.composite_indexes[1].fields == ["b", "a"]   # order survives
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -768,15 +768,15 @@ end
   renamed = Models.Model("mts_ixrename", Dict{String, PormG.PormGField}(
     "id" => Models.IDField(), "end" => Models.IntegerField(), "year" => Models.IntegerField(),
   ))
-  renamed.cache["composite_indexes"] = Dict{String, Any}("indexes" => [
+  renamed.cache.composite_indexes = [
     Models.Index(fields = ("end", "year"), name = "ix_end_year"),
-  ])
+  ]
   generated = Models.Model_to_str(renamed)
   @test !occursin("Models.Index(fields = (\"end\",", generated)   # the raw keyword never appears
   reloaded = _ix_reload(generated)
-  @test length(reloaded.cache["composite_indexes"]["indexes"]) == 1
+  @test length(reloaded.cache.composite_indexes) == 1
   # Whatever identifier the sanitizer chose, it must be one the reloaded model actually has.
-  @test all(f -> haskey(reloaded.fields, f), reloaded.cache["composite_indexes"]["indexes"][1].fields)
+  @test all(f -> haskey(reloaded.fields, f), reloaded.cache.composite_indexes[1].fields)
 
   # A ManyToManyField whose key is not a legal identity cannot be re-spelled (it carries no
   # db_column, and its name feeds the derived join-table name), so the render loop drops it with a
@@ -786,17 +786,17 @@ end
     "id" => Models.IDField(), "year" => Models.IntegerField(), "round" => Models.IntegerField(),
     "_teams" => Models.ManyToManyField("Team"),
   ))
-  dropped.cache["composite_indexes"] = Dict{String, Any}("indexes" => [
+  dropped.cache.composite_indexes = [
     Models.Index(fields = ("_teams", "year")),
     Models.Index(fields = ("year", "round"), name = "ix_year_round"),
-  ])
+  ]
   generated2 = @test_logs (:warn,) (:warn,) match_mode=:any Models.Model_to_str(dropped)
   @test occursin("# PormG: Index over (_teams, year) could not be rendered", generated2)
   @test !occursin("fields = (\"_teams\"", generated2)
   @test occursin("name = \"ix_year_round\"", generated2)          # the healthy one still ships
   reloaded2 = _ix_reload(generated2)
-  @test length(reloaded2.cache["composite_indexes"]["indexes"]) == 1
-  @test reloaded2.cache["composite_indexes"]["indexes"][1].fields == ["year", "round"]
+  @test length(reloaded2.cache.composite_indexes) == 1
+  @test reloaded2.cache.composite_indexes[1].fields == ["year", "round"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -815,13 +815,13 @@ end
 
   # Healthy: attached under the same cache key a declaration writes.
   ok = _attach_composite_indexes!(base(), [plain("ix_ab", ["a", "b"])])
-  @test ok.cache["composite_indexes"]["indexes"][1].fields == ["a", "b"]
-  @test ok.cache["composite_indexes"]["indexes"][1].name == "ix_ab"
-  @test !haskey(ok.cache, "unique_constraints")   # a plain index is not a constraint
+  @test ok.cache.composite_indexes[1].fields == ["a", "b"]
+  @test ok.cache.composite_indexes[1].name == "ix_ab"
+  @test isempty(ok.cache.unique_constraints)   # a plain index is not a constraint
 
   # A column the model does not carry → skipped, no cache entry, no exception.
   missing_col = _attach_composite_indexes!(base(), [plain("ix_ax", ["a", "gone"])])
-  @test !haskey(missing_col.cache, "composite_indexes")
+  @test isempty(missing_col.cache.composite_indexes)
 
   # An unrepresentable column NAME → skipped, and the healthy sibling still lands.
   odd = Models.Model("live_odd", Dict{String, PormG.PormGField}(
@@ -829,13 +829,13 @@ end
     "a__b" => Models.IntegerField(),
   ))
   mixed = _attach_composite_indexes!(odd, [plain("ix_bad", ["a__b", "a"]), plain("ix_good", ["a", "b"])])
-  @test length(mixed.cache["composite_indexes"]["indexes"]) == 1
-  @test mixed.cache["composite_indexes"]["indexes"][1].name == "ix_good"
+  @test length(mixed.cache.composite_indexes) == 1
+  @test mixed.cache.composite_indexes[1].name == "ix_good"
 
   # Nothing to attach leaves the cache untouched — a table with no composite index must be
   # byte-identical to how it introspected before this existed.
   none = _attach_composite_indexes!(base(), LiveComposite[])
-  @test !haskey(none.cache, "composite_indexes")
+  @test isempty(none.cache.composite_indexes)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -860,14 +860,14 @@ end
     adv("ix_gin", ["a"]; method = "gin", opc = Union{String, Nothing}["array_ops"], dflt = [false]),
     adv("ix_a_named", ["a"]; marker = "pormg:index"),
   ])
-  ixs = Dict(ix.name => ix for ix in m.cache["composite_indexes"]["indexes"])
+  ixs = Dict(ix.name => ix for ix in m.cache.composite_indexes)
   @test sort(collect(keys(ixs))) == ["ix_a_named", "ix_desc", "ix_gin"]
   @test (ixs["ix_desc"].fields, ixs["ix_desc"].descending) == (["a", "b"], [false, true])
   @test (ixs["ix_gin"].method, ixs["ix_gin"].opclasses) == ("gin", ["array_ops"])
   @test ixs["ix_a_named"].opclasses == ["int4_ops"]
   # Ownership rides along for the advanced ones; the marked plain one is PormG's either way.
-  @test m.cache["composite_index_owners"]["ix_desc"] == (nothing, nothing)
-  @test !haskey(m.cache["composite_index_owners"], "ix_a_named")
+  @test m.cache.composite_index_owners["ix_desc"] == (nothing, nothing)
+  @test !haskey(m.cache.composite_index_owners, "ix_a_named")
   # …and the declaration it writes matches the live index it came from, so the plan converges.
   d = only(x for x in PormG.Migrations.declared_composites(m) if x.name == "ix_a_named")
   @test PormG.Migrations.composite_shape_matches(adv("ix_a_named", ["a"]; marker = "pormg:index"), d)
@@ -892,13 +892,13 @@ end
     LiveComposite("pg_uq_c", ["c"], true, false),                     # a one-field UniqueConstraint
     LiveComposite("ix_ca", ["c", "a"], false, false),                 # and a plain index beside them
   ])
-  ucs = m.cache["unique_constraints"]["constraints"]
+  ucs = m.cache.unique_constraints
   @test [uc.fields for uc in ucs] == [["a", "b"], ["b", "c"], ["c"]]   # reader order kept
   @test ucs[1].name == "ux_ab"          # a real name is the live one, so re-migration reproduces it
   @test ucs[2].name === nothing         # the reserved autoindex name is NOT carried
   @test ucs[3].name == "pg_uq_c"
   # The plain index still lands in its own key — one kind never swallows the other.
-  @test [ix.name for ix in m.cache["composite_indexes"]["indexes"]] == ["ix_ca"]
+  @test [ix.name for ix in m.cache.composite_indexes] == ["ix_ca"]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1355,7 +1355,7 @@ end
                  "condition = \"position IS NOT NULL\")", src)
   @test occursin("Models.UniqueConstraint(expressions = (\"lower(code)\",), name = \"result_uc_code_ci\")", src)
   back = _ix_reload(src)
-  ucs = back.cache["unique_constraints"]["constraints"]
+  ucs = back.cache.unique_constraints
   @test [(u.fields, u.expressions, u.condition) for u in ucs] ==
         [(["raceid", "position"], String[], "position IS NOT NULL"), (String[], ["lower(code)"], nothing)]
 
@@ -1366,10 +1366,10 @@ end
                   Union{String, Nothing}[nothing, nothing], [true, true], nothing, nothing; condition = "position > 0"),
     LiveComposite("ux_fn", String[], true, false, "btree", Bool[], Union{String, Nothing}[], Bool[], nothing, nothing;
                   expressions = ["abs(raceid)"])])
-  read_back = live.cache["unique_constraints"]["constraints"]
+  read_back = live.cache.unique_constraints
   @test [(u.name, u.fields, u.expressions, u.condition) for u in read_back] ==
         [("ux_part", ["raceid", "position"], String[], "position > 0"), ("ux_fn", String[], ["abs(raceid)"], nothing)]
-  @test live.cache["composite_index_owners"]["ux_part"] == (nothing, nothing)   # hand-made stays hand-made
+  @test live.cache.composite_index_owners["ux_part"] == (nothing, nothing)   # hand-made stays hand-made
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

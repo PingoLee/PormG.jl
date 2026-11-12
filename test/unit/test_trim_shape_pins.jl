@@ -985,6 +985,57 @@ end
     isempty(infer_calls) || @info "dynamic calls in _infer_through_field" infer_calls
   end
 
+  # What: `ModelType.cache`, the metadata a model derives (#1687), and the functions that read it: the
+  #   constraint and auto-join readers the write path calls (`_unique_keys`), the many-to-many lookups
+  #   the query builder calls, and the planner's `declared_composites` / `live_table`.
+  # Expected: the slot is a `ModelCache` whose every field is concrete (or `nothing` or one concrete
+  #   type); each reader infers a concrete result and makes no dynamic call, three levels down;
+  #   `live_table` makes no dynamic call on what it reads from the cache.
+  # Why: the cache was a `Dict{String, Dict{String, Any}}`, so every read returned `Any` and each
+  #   consumer dispatched on it at run time — 87 dynamic calls under these readers on main, each a
+  #   `juliac --trim` verifier row once a trimmed app reaches the write, query or migration path (#1599).
+  #   A slot typed `Any`, or a reader that goes back to a string-keyed lookup, brings them back.
+  @testset "ModelType.cache is a typed ModelCache, read without a dynamic call (#1687)" begin
+    M = PormG.Models
+    MT = M.ModelType
+    @test fieldtype(MT, :cache) === M.ModelCache
+    # Concrete all the way down: a `Dict{String, Any}` or a `Vector{Any}` is a concrete type, and its
+    # reads still return `Any`, so a container's key, value and element types are checked too.
+    closed(T) = T isa Union ? all(closed, Base.uniontypes(T)) :
+                T <: Tuple ? all(closed, fieldtypes(T)) :
+                T <: AbstractDict ? isconcretetype(T) && closed(keytype(T)) && closed(valtype(T)) :
+                T <: AbstractVector ? isconcretetype(T) && closed(eltype(T)) :
+                isconcretetype(T)
+    @test !closed(Dict{String, Any}) && !closed(Vector{Any})    # the check itself discriminates
+    for name in fieldnames(M.ModelCache)
+      @test closed(fieldtype(M.ModelCache, name))
+    end
+    readers = ((M.declared_check_constraints, (MT,), Vector{M.CheckConstraint}),
+               (M._declared_unique_constraints, (MT,), Vector{M.UniqueConstraint}),
+               (M._auto_join_unique_columns, (MT,), Union{Nothing, Tuple{String, String}}),
+               (M.get_many_to_many_relation, (MT, String), M.ManyToManyRelation),
+               (M.has_many_to_many_accessor, (MT, String), Bool),
+               (PormG.Migrations.declared_composites, (MT,), Vector{PormG.Migrations.DeclaredComposite}),
+               (PormG.QueryBuilder._unique_keys, (MT,), Vector{@NamedTuple{fields::Vector{String}, kind::Symbol}}))
+    for (f, args, rt) in readers
+      @test only(Base.return_types(f, args)) == rt
+      calls = _dynamic_calls_deep(f, args; depth = 3)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic calls under a cache reader" f calls
+    end
+    # `live_table` three levels down, which holds its `cache.index` read. One dynamic call there reads no
+    # cache and is not this pin's: the keyword call to `_spec_or_degraded`, which compiles each column.
+    live = filter(c -> !occursin("_spec_or_degraded", c),
+                  _dynamic_calls_deep(PormG.Migrations.live_table, (MT, PormG.Kernel.PormGSQLite); depth = 3))
+    @test isempty(live)
+    isempty(live) || @info "dynamic calls under live_table" live
+    # Its `composite_index_owners` read reaches `LiveComposite` through a splat (`ownership(d)...`). The
+    # scans above skip builtins, and a splat the compiler cannot resolve stays a `Core._apply_iterate`
+    # builtin call, so that read is held by there being none left in `live_table`'s own code.
+    ci, _ = only(code_typed(PormG.Migrations.live_table, (MT, PormG.Kernel.PormGSQLite); optimize = true))
+    @test !any(s -> s isa Expr && s.head === :call && s.args[1] == GlobalRef(Core, :_apply_iterate), ci.code)
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

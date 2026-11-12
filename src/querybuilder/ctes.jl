@@ -89,7 +89,7 @@ function _cte_name_shadowed_model(name::String, q::SQLObject, query::SQLObjectHa
     Models.model_table_name(m) == name && return (m, nothing)
     # Forward m2m relations sit in the model's cache; reverse ones in `related_objects`. Both carry
     # the physical through table (#363).
-    m2m = get(m.cache, "many_to_many", nothing)
+    m2m = m.cache.many_to_many
     if m2m isa AbstractDict
       for (field_name, rel) in m2m
         rel isa Models.ManyToManyRelation && rel.through_table == name && return (m, String(field_name))

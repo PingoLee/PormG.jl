@@ -100,7 +100,7 @@ DbtPlain.connect_key = "db_table_mock"
       constraints = [UniqueConstraint(fields = ("a", "b"), name = "dbt_both_uniq")],
     )
     @test both.db_table == "X_Both"
-    @test haskey(both.cache, "unique_constraints")
+    @test !isempty(both.cache.unique_constraints)
 
     # A non-String is a definition-time error naming the option, not a field-type error.
     err = try

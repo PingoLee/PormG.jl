@@ -197,7 +197,7 @@ end)
   @test m2m_rev.reverse == true
 
   # The forward accessor is intact and distinct from the reverse one. Readers consult
-  # `model.cache["many_to_many"]` before `related_objects`, so an equal name would leave the reverse
+  # `model.cache.many_to_many` before `related_objects`, so an equal name would leave the reverse
   # end permanently shadowed rather than merely missing.
   fwd = Models.get_many_to_many_relation(SELF.Driver, "teammates")
   @test fwd.reverse == false

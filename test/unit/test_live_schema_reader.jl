@@ -257,7 +257,7 @@ end
   @test m.fields["d_naive"].type == "TIMESTAMP" && m.fields["d_tz"].type == "TIMESTAMPTZ"
   @test m.fields["n_int"].default == 7 && m.fields["d_date"].default == Date(2024, 1, 2)
   @test m.fields["b_bool"].default === true
-  @test m.cache["index"] == Dict{String, Any}("race_id" => ["probe_race_id_idx"])
+  @test m.cache.index == Dict{String, Vector{String}}("race_id" => ["probe_race_id_idx"])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -494,13 +494,13 @@ end
 # The adapter: a hand-built model is read as a live table, index names included
 # `get_migration_plan(::Vector{PormGModel}, …)` is how the planner's tests and the golden corpus
 # hand-build the live side; it must carry the same facts the readers would — the specs, `db_index`
-# as index presence, `cache["index"]` as the live index name — and agree with the LiveTable form.
+# as index presence, `cache.index` as the live index name — and agree with the LiveTable form.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "a hand-built live model reads as a LiveTable, and both plan entry points agree (#522)" begin
   races = _races522()
   m = Models.Model("car"; id = Models.IDField(), name = Models.CharField(max_length = 20, db_index = true),
                    race = Models.ForeignKey(races, pk_field = "id"), tag = Models.CharField(max_length = 5))
-  m.cache["index"] = Dict{String, Any}("name" => "car_name_idx")
+  m.cache.index["name"] = ["car_name_idx"]
   t = live_table(m, PG522)
   @test t.name == "car"
   @test collect(keys(t.columns)) == ["id", "name", "race", "tag"]
@@ -523,7 +523,7 @@ end
 # what a table created from `model` reads back as: physical columns (a `db_column` is the column,
 # not the field key), the derived name when the declaration gives none, every `UniqueConstraint`
 # beside every `Index`, and the synthesized join table's own unique index. Before #161 it read
-# `cache["composite_indexes"]` alone, by field key, and threw a MethodError on `name = nothing`.
+# `cache.composite_indexes` alone, by field key, and threw a MethodError on `name = nothing`.
 # Mutation gate: pass field keys instead of `Models.model_column` and `("race", "yr")` reads
 # `("race", "year")`; drop the `unique_constraints` loop and the first two entries vanish.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -551,9 +551,8 @@ end
   # chose that name, so a join table adopted from Django under Django's name must not be renamed.
   through = Models.Model("car_driver"; id = Models.IDField(),
                          car_id = Models.IntegerField(), driver_id = Models.IntegerField())
-  through.cache["many_to_many_auto"] = Dict{String, Any}(
-    "owner_column" => "car_id", "related_column" => "driver_id",
-    "unique_index" => "car_driver_car_id_driver_id_uniq")
+  through.cache.many_to_many_auto = Models.AutoJoinTable(
+    "driver", "car_id", "driver_id", "car_driver_car_id_driver_id_uniq")
   @test [(d.name, d.columns, d.unique, d.explicit) for d in Migrations.declared_composites(through)] ==
         [("car_driver_car_id_driver_id_uniq", ["car_id", "driver_id"], true, false)]
 end

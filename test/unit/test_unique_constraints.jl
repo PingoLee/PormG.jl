@@ -93,13 +93,13 @@ end
     b = Models.IntegerField(),
     constraints = [Models.UniqueConstraint(fields = ("a", "b"))],
   )
-  @test haskey(m.cache, "unique_constraints")
-  @test length(m.cache["unique_constraints"]["constraints"]) == 1
-  @test m.cache["unique_constraints"]["constraints"][1].fields == ["a", "b"]
+  @test !isempty(m.cache.unique_constraints)
+  @test length(m.cache.unique_constraints) == 1
+  @test m.cache.unique_constraints[1].fields == ["a", "b"]
 
   # A model with no constraints has no cache entry (no churn on the common path).
   plain = Models.Model("plain", id = Models.IDField(), a = Models.IntegerField())
-  @test !haskey(plain.cache, "unique_constraints")
+  @test isempty(plain.cache.unique_constraints)
 
   # The idiomatic NO-positional-name form (table inferred from the binding via set_models) must
   # also accept constraints= — it uses a distinct Model(; ...) method.
@@ -109,8 +109,8 @@ end
     b = Models.IntegerField(),
     constraints = [Models.UniqueConstraint(fields = ("a", "b"))],
   )
-  @test haskey(noname.cache, "unique_constraints")
-  @test noname.cache["unique_constraints"]["constraints"][1].fields == ["a", "b"]
+  @test !isempty(noname.cache.unique_constraints)
+  @test noname.cache.unique_constraints[1].fields == ["a", "b"]
 
   # Referencing an unknown field is rejected, naming the offender.
   @test_throws PormG.ModelDefinitionError Models.Model("bad_unknown",
@@ -206,8 +206,8 @@ end
   rt_mod = Module()
   Core.eval(rt_mod, :(import PormG.Models))
   reconstructed = Core.eval(rt_mod, Meta.parse(str))
-  @test haskey(reconstructed.cache, "unique_constraints")
-  rc = reconstructed.cache["unique_constraints"]["constraints"][1]
+  @test !isempty(reconstructed.cache.unique_constraints)
+  rc = reconstructed.cache.unique_constraints[1]
   @test rc.fields == ["season", "round"]
   @test rc.name == "standings_uniq"
 end

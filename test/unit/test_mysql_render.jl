@@ -1925,9 +1925,8 @@ end
                 "(ticket)")
   # An auto many-to-many join table: its index is not a declared constraint, and still a key.
   join = Models.Model("car_driver"; id = Models.IDField(), car_id = Models.IntegerField(), driver_id = Models.IntegerField())
-  join.cache["many_to_many_auto"] = Dict{String, Any}("field" => "drivers", "owner_column" => "car_id",
-                                                      "related_column" => "driver_id",
-                                                      "unique_index" => "car_driver_car_id_driver_id_uniq")
+  join.cache.many_to_many_auto = Models.AutoJoinTable("drivers", "car_id", "driver_id",
+                                                       "car_driver_car_id_driver_id_uniq")
   @test (fields = ["car_id", "driver_id"], kind = :constraint) in _MR_QB._unique_keys(join)
   row = Dict{String,Any}("id" => 1, "car_id" => 2, "driver_id" => 3)
   @test refused(caught(() -> _MR_QB._refuse_unnamed_upsert_target("update_or_create", join, ["id"], row,

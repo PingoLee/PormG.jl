@@ -122,12 +122,57 @@ function _refuse_nul(sql::AbstractString, params)
     "The statement text contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
   params === nothing && return nothing
   values = params isa AbstractPormGParam ? params.parameters : params
+  # Every collector delivers a `Vector{Any}`, and so do raw params by the time they get here; any other
+  # container takes the open arm.
+  values isa Vector{Any} ? _refuse_nul_values(values) : _refuse_nul_values_other(values)
+  return nothing
+end
+
+# #1599 layer 2: `_contains_nul` has seven methods and a collected value is typed `Any`, so the loop
+# dispatched on every value at run time, a call a `juliac --trim` image could not resolve (12 rows, one
+# set per collector type). The walk names the value types a statement binds and calls `_contains_nul`
+# at each, so dispatch still picks the method; any other type takes the one dynamic call it always
+# took (#1735's rule: a walk where the callee has many methods, an open arm for the rest).
+function _refuse_nul_values(values::Vector{Any})
   for (i, v) in enumerate(values)
-    _contains_nul(v) && throw(InvalidValueError(
-      "Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul))
+    _contains_nul_value(v) && throw(_nul_parameter_error(i))
   end
   return nothing
 end
+# The open arm: the values copied, in iteration order, into a 1-based `Vector{Any}` (so each keeps the
+# position `enumerate` gave it, whatever the container's axes) and checked by the typed loop above. Only
+# a collector whose `parameters` is not a `Vector{Any}` (a hand-built tuple or typed vector) gets here:
+# `fetch` turns raw params into a `Vector{Any}` first.
+@noinline _refuse_nul_values_other(@nospecialize(values)) =
+  _refuse_nul_values(copyto!(Vector{Any}(undef, length(values)::Int), values))
+_nul_parameter_error(i::Int) =
+  InvalidValueError("Parameter $i contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul)
+
+function _contains_nul_value(@nospecialize(v))::Bool
+  v isa String && return _contains_nul(v)
+  v isa SubString{String} && return _contains_nul(v)
+  v isa Char && return _contains_nul(v)
+  v isa Int64 && return _contains_nul(v)
+  v isa Float64 && return _contains_nul(v)
+  v isa Bool && return _contains_nul(v)
+  v === nothing && return _contains_nul(v)
+  v isa Missing && return _contains_nul(v)
+  v isa PormG.PormGArrayLiteral && return _contains_nul(v)
+  v isa PormG.PormGBytes && return _contains_nul(v)
+  v isa Vector{UInt8} && return _contains_nul(v)
+  v isa Vector{Int64} && return _contains_nul(v)
+  v isa Vector{String} && return _contains_nul(v)
+  if v isa Vector{Any}   # nested: `any(_contains_nul, v)`, each element through the walk
+    for x in v
+      _contains_nul_value(x) && return true
+    end
+    return false
+  end
+  return _contains_nul_other(v)
+end
+# A typeassert, not a `::Bool` return declaration: that would `convert` an untyped result, a second
+# dynamic call. Every `_contains_nul` method answers a `Bool`.
+@noinline _contains_nul_other(@nospecialize(v)) = _contains_nul(v)::Bool
 
 # A pool starts at `pool_size` connections and may grow lazily (on demand) up to
 # `pool_size * POOL_EXPANSION_FACTOR` before acquisition fails with a PoolTimeoutError (#37).

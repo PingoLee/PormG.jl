@@ -2568,6 +2568,37 @@ end
     @test checked >= 30
   end
 
+  # What: the NUL check at the execution funnel (`_refuse_nul`, #951) over each collector's values.
+  # Expected: no dynamic call in it, in the typed loop or in the walk it calls, for each collector type;
+  #   the walk answers what `_contains_nul` answers for every value shape a statement binds, and a NUL
+  #   in a raw-params tuple or a nested value is still refused with the parameter's position.
+  # Why: `_contains_nul` has seven methods and a collected value is typed `Any`, so the loop dispatched on
+  #   every value at run time: 12 rows of the trimmed fixture, one set per collector type (#1599 layer 2).
+  @testset "the NUL check walks the collected values without a dynamic call (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    QB = PormG.QueryBuilder
+    for T in (QB.PgParameterizedQuery, QB.SQLiteParameterizedQuery, QB.MySQLParameterizedQuery, Vector{Any})
+      @test (T, _dynamic_calls(CP._refuse_nul, (String, T))) == (T, String[])
+    end
+    @test _dynamic_calls(CP._refuse_nul_values, (Vector{Any},)) == String[]
+    @test _dynamic_calls(CP._contains_nul_value, (Any,)) == String[]
+    values = Any["Senna", SubString("Ayrton Senna", 8), 'x', '\0', 44, 1.5, true, nothing, missing, Int32(7), :monaco,
+                 PormG.PormGBytes(UInt8[0x00]), PormG.PormGArrayLiteral("{\"Monza\0\"}"), UInt8[0x00, 0x01], [1, 2],
+                 ["Monaco", "Monza\0"], Any["Spa", Any["Imola\0"]], ("Silverstone", "Suzuka\0"), "Interlagos\0"]
+    for v in values
+      @test (string(typeof(v)), CP._contains_nul_value(v)) == (string(typeof(v)), CP._contains_nul(v))
+    end
+    err = try CP._refuse_nul("SELECT ?, ?", ("Monaco", Any["Monza\0"])); nothing catch e; e end
+    @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
+    err = try CP._refuse_nul("SELECT ?, ?", Any[1, "Imola\0"]); nothing catch e; e end
+    @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
+    @test CP._refuse_nul("SELECT ?, ?", Any[1, "Imola"]) === nothing
+    # The open arm: a collector whose `parameters` is a tuple or a typed vector, checked in iteration order.
+    err = try CP._refuse_nul("SELECT ?, ?", QB.PgParameterizedQuery("", ("Monaco", "Monza\0"), 2)); nothing catch e; e end
+    @test err isa PormG.InvalidValueError && occursin("Parameter 2 contains a NUL", sprint(showerror, err))
+    @test CP._refuse_nul("SELECT ?, ?", QB.PgParameterizedQuery("", ["Monaco", "Monza"], 2)) === nothing
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

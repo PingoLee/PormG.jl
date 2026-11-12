@@ -841,7 +841,9 @@ an empty key list, and a `PROTECT` or `RESTRICT` relation raises `ProtectedError
 ### `Configuration.register_connection(key, url; adapter = "PostgreSQL", pool_size = 3, env = nothing, …)`
 
 Registers a connection pool at runtime from a connection string — see
-[Dynamic & Multi-Tenancy](configuration/dynamic.md). `adapter = "MySQL"` raises `InvalidConfigurationError`: a MySQL connection is configured by its keys in `connection.yml`, through `load`. The environment the entry records, which
+[Dynamic & Multi-Tenancy](configuration/dynamic.md). With `adapter = "MySQL"` it takes a
+`mysql://user:password@host:port/database` URL, whose query string takes `connect_timeout`,
+`sslmode`, `sslrootcert`, `sslcert` and `sslkey` (#1614). The environment the entry records, which
 `env(key)` and `status(key)` report, follows `load`'s rule (#1228, #1256): `env =` when passed, else a
 non-blank `PORMG_ENV`, else — in an interactive session only — `"dev"` with an `@info`. A service, a
 test or a script that states neither gets `InvalidConfigurationError`, before any pool is built or

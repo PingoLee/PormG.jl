@@ -65,7 +65,23 @@ rather than look for a folder. Registering the key again (after `unregister_conn
 process) is enough for the next query to rebind. This is also the configuration a `juliac --trim`
 binary uses: it reads no `connection.yml`.
 
-A MySQL connection cannot be registered this way: `adapter = "MySQL"` raises `InvalidConfigurationError`, since MySQL is configured by its keys in `connection.yml`, through `load`.
+A MySQL connection takes a `mysql://` URL (#1614):
+
+```julia
+PormG.register_connection("f1", "mysql://f1:s3cr%40t@db.internal:3306/f1?sslmode=verify_identity";
+                          adapter = "MySQL", env = "prod")
+```
+
+The URL is read into the keys of a `connection.yml` MySQL block, so the pool is the one `load` would
+build from that block, the 60-second idle ping included ([Advanced Configuration](advanced.md)). Write
+`mysql://user:password@host:port/database`, and percent-encode the user name and password when they
+hold a reserved character (`%40` for `@`, `%2F` for `/`, `%3A` for a `:` in the user name). A missing
+port, host or database means what the missing key means: MySQL's 3306, `localhost`, and no default
+database. The query string takes the block's other connection keys: `connect_timeout`, `sslmode`
+(`disabled`, `preferred`, `required`, `verify_ca`, `verify_identity`), `sslrootcert`, `sslcert` and
+`sslkey`. Any other option, or a URL that does not parse, raises `InvalidConfigurationError` before
+a pool is built. The message says what is wrong and never quotes the URL, since any part of it can
+hold the password.
 
 !!! note "The environment is stated, not guessed (#1256)"
     The entry records an environment — what `Configuration.env(key)` and `status(key)` report —

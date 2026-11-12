@@ -1025,6 +1025,150 @@ function _mysql_conninfo(db::AbstractDict)::String
   return join(parts, " ")
 end
 
+# ── A `mysql://` URL (#1614) ────────────────────────────────────────────────────────────────────────
+#
+# `register_connection(key, "mysql://user:password@host:port/database?sslmode=…"; adapter = "MySQL")`.
+# The URL is read into the keys a connection.yml MySQL block uses, and the pool is built from them by
+# `_mysql_conninfo`, as `load` builds it: one conninfo for both spellings, so the URL and the block
+# cannot drift. A part the URL leaves out is left out of the keys, so a missing port or database means
+# what a missing `port:` or `database:` means.
+#
+# Nothing a refusal says quotes the URL. Any part of it can hold the password: a password with an
+# unencoded `@`, `/` or `?` moves its tail into the host, the port, the path or the query (#658's
+# shapes on PostgreSQL), so each check names the part it found wrong and never its text.
+
+# The query options a `mysql://` URL may carry: the keys of a MySQL block other than the five the URL
+# spells itself (`_MYSQL_CONNINFO_KEYS` less `host` and `port`).
+const _MYSQL_URL_QUERY_KEYS = ("connect_timeout", "sslmode", "sslrootcert", "sslcert", "sslkey")
+
+@noinline _mysql_url_error(reason::String) = InvalidConfigurationError(
+  "register_connection: the MySQL connection URL could not be parsed: $(reason). In a URL, " *
+  "percent-encode reserved characters in the user name and password (`@` is %40, `/` is %2F, " *
+  "`?` is %3F, `#` is %23)")
+
+function _url_hex(b::UInt8)::Int
+  UInt8('0') <= b <= UInt8('9') && return Int(b - UInt8('0'))
+  UInt8('a') <= b <= UInt8('f') && return Int(b - UInt8('a')) + 10
+  UInt8('A') <= b <= UInt8('F') && return Int(b - UInt8('A')) + 10
+  return -1
+end
+
+# `s` percent-decoded. `+` stays a `+`, as libpq reads a URL: form encoding is not URL encoding. A
+# decoded NUL is refused here, in the URL's words, rather than by `_conninfo_value`, whose message
+# names connection.yml; so is a value that does not decode to valid UTF-8.
+function _url_unescape(s::SubString{String}, part::String)::String
+  cu = codeunits(s)
+  n = length(cu)
+  io = IOBuffer(sizehint = n)
+  i = 1
+  while i <= n
+    b = cu[i]
+    if b == UInt8('%')
+      hi = i + 2 <= n ? _url_hex(cu[i + 1]) : -1
+      lo = i + 2 <= n ? _url_hex(cu[i + 2]) : -1
+      (hi < 0 || lo < 0) && throw(_mysql_url_error("the $(part) holds a malformed percent-escape"))
+      write(io, UInt8(16 * hi + lo))
+      i += 3
+    else
+      write(io, b)
+      i += 1
+    end
+  end
+  out = String(take!(io))
+  '\0' in out && throw(_mysql_url_error("the $(part) holds a NUL character, which a connection cannot carry"))
+  isvalid(out) || throw(_mysql_url_error("the $(part) is not valid UTF-8 once decoded"))
+  return out
+end
+
+# The connection.yml keys a `mysql://` URL spells, or `InvalidConfigurationError`.
+function _mysql_url_block(url::String)::Dict{String, String}
+  out = Dict{String, String}()
+  scheme = "mysql://"
+  cu = codeunits(url)
+  ok = length(cu) >= 8
+  for i in 1:8
+    ok || break
+    ok = lowercase(Char(cu[i])) == scheme[i]
+  end
+  ok || throw(_mysql_url_error("a MySQL connection URL starts with `mysql://`"))
+  occursin('#', url) && throw(_mysql_url_error("a `#` is not allowed in a MySQL connection URL"))
+  rest = SubString(url, 9)
+
+  # The authority ends at the first `/` or `?`. An `@` after it means the user name or the password
+  # held an unencoded `/` or `?`, and the text read as the path or the query begins with its tail.
+  stop = findfirst(c -> c == '/' || c == '?', rest)
+  authority = stop === nothing ? rest : SubString(rest, 1, prevind(rest, stop))
+  tail = stop === nothing ? SubString(rest, ncodeunits(rest) + 1) : SubString(rest, stop)
+  occursin('@', tail) && throw(_mysql_url_error(
+    "an `@` follows the host, so the user name or password holds an unencoded `/` or `?`"))
+
+  at = findfirst('@', authority)
+  hostport = authority
+  if at !== nothing
+    userinfo = SubString(authority, 1, prevind(authority, at))
+    hostport = SubString(authority, nextind(authority, at))
+    occursin('@', hostport) && throw(_mysql_url_error(
+      "the URL holds more than one `@`, so the user name or password holds an unencoded `@`"))
+    colon = findfirst(':', userinfo)
+    if colon === nothing
+      isempty(userinfo) || (out["username"] = _url_unescape(userinfo, "user name"))
+    else
+      user = SubString(userinfo, 1, prevind(userinfo, colon))
+      isempty(user) || (out["username"] = _url_unescape(user, "user name"))
+      out["password"] = _url_unescape(SubString(userinfo, nextind(userinfo, colon)), "password")
+    end
+  end
+
+  # host[:port], or [IPv6][:port].
+  host = hostport
+  port = SubString(hostport, ncodeunits(hostport) + 1)
+  if startswith(hostport, '[')
+    close = findfirst(']', hostport)
+    close === nothing && throw(_mysql_url_error("an IPv6 host opened with `[` is not closed with `]`"))
+    host = SubString(hostport, 2, prevind(hostport, close))
+    after = SubString(hostport, nextind(hostport, close))
+    if startswith(after, ':')
+      port = SubString(after, 2)
+    elseif !isempty(after)
+      throw(_mysql_url_error("text follows the `]` of an IPv6 host"))
+    end
+  else
+    colon = findfirst(':', hostport)
+    if colon !== nothing
+      host = SubString(hostport, 1, prevind(hostport, colon))
+      port = SubString(hostport, nextind(hostport, colon))
+    end
+  end
+  isempty(host) || (out["host"] = _url_unescape(host, "host"))
+  if !isempty(port)
+    p = (ncodeunits(port) <= 5 && all(isdigit, port)) ? parse(Int, port) : 0
+    1 <= p <= 65535 || throw(_mysql_url_error("the port is not a whole number from 1 to 65535"))
+    out["port"] = string(p)
+  end
+
+  # /database?option=value&…
+  q = findfirst('?', tail)
+  path = q === nothing ? tail : SubString(tail, 1, prevind(tail, q))
+  if !isempty(path)
+    db = SubString(path, 2)                       # past the `/`
+    occursin('/', db) && throw(_mysql_url_error(
+      "the path holds more than one segment; only the database name follows the host"))
+    isempty(db) || (out["database"] = _url_unescape(db, "database name"))
+  end
+  q === nothing && return out
+  for item in eachsplit(SubString(tail, nextind(tail, q)), '&')
+    isempty(item) && continue
+    eq = findfirst('=', item)
+    eq === nothing && throw(_mysql_url_error("a query option has no `=`"))
+    k = _url_unescape(SubString(item, 1, prevind(item, eq)), "query option")
+    k in _MYSQL_URL_QUERY_KEYS || throw(_mysql_url_error(
+      "a query option is not one a MySQL connection takes; accepted: $(join(_MYSQL_URL_QUERY_KEYS, ", "))"))
+    haskey(out, k) && throw(_mysql_url_error("the query option `$(k)` is given twice"))
+    out[k] = _url_unescape(SubString(item, nextind(item, eq)), "value of `$(k)`")
+  end
+  return out
+end
+
 function _build_connection_pool!(settings::PormGSettings, path::String)
   # Extract pool size from config (defaults to 3)
   pool_size = _cfg_int(settings, "pool_size", 3)
@@ -2293,9 +2437,19 @@ neither gets `InvalidConfigurationError`, before any pool is built or replaced. 
 read-only unless it says otherwise. A connection resolver states them with `"change_data"` and
 `"change_db"` entries in the `Dict` it returns.
 
+`adapter = "MySQL"` takes a `mysql://user:password@host:port/database` URL (#1614), read into the
+keys a MySQL block of `connection.yml` uses, so the pool is the one `load` builds from that block. The
+user name and password are percent-decoded (`%40` for `@`, `%2F` for `/`). A missing port, host or
+database means what a missing `port:`, `host:` or `database:` means: MySQL's 3306, `localhost`, no
+default database. The query string takes `connect_timeout`, `sslmode`, `sslrootcert`, `sslcert` and
+`sslkey`, as the block does. Anything else, or a URL that does not parse, raises
+`InvalidConfigurationError` before any pool is built, without quoting the URL.
+
 ```julia
 PormG.Configuration.register_connection("f1", "postgresql://f1:…@db.internal/f1";
                                         env = "prod", change_data = true)
+PormG.Configuration.register_connection("f1_mysql", "mysql://f1:…@db.internal:3306/f1?sslmode=verify_identity";
+                                        adapter = "MySQL", env = "prod")
 ```
 """
 function register_connection(key::String, url::String; adapter::String = "PostgreSQL", pool_size::Int = 3, sqlite_split_read_write::Bool = false, idle_timeout::Real = 0, max_lifetime::Real = 0, pool_timeout::Real = DEFAULT_POOL_TIMEOUT, leak_detection_threshold::Real = 0, fail_fast_on_connect::Bool = true, postgres_driver::Union{Nothing, AbstractString, Symbol} = nothing, env::Union{Nothing, AbstractString} = nothing, change_db::Bool = false, change_data::Bool = false)
@@ -2312,15 +2466,20 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
     throw(InvalidConfigurationError("Cannot overwrite static connection '$(key)'. This key is bound to folder '$(config[key].db_def_folder)'."))
   end
   # Every refusal comes before the existing entry is closed below, so a refused re-registration
-  # leaves its pool serving (#1256): the adapter, then the environment.
-  # MySQL takes no connection URL (#1130): it is configured by keys, through `load`.
-  adapter == "MySQL" && throw(InvalidConfigurationError(
-    "register_connection does not take `adapter = \"MySQL\"`: a MySQL connection is configured by " *
-    "its keys (`host:`, `port:`, `username:`, `password:`, `database:`) in connection.yml, through `load`."))
+  # leaves its pool serving (#1256): the adapter, a MySQL URL, then the environment.
   # The value is not echoed (#1606 review): a resolver answer with its entries swapped would put the
   # connection URL, password included, into the message.
-  adapter in ("PostgreSQL", "SQLite") || throw(InvalidConfigurationError(
-    "register_connection: unsupported `adapter`; expected \"PostgreSQL\" or \"SQLite\"."))
+  adapter in ("PostgreSQL", "SQLite", "MySQL") || throw(InvalidConfigurationError(
+    "register_connection: unsupported `adapter`; expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))
+  # #1614: a MySQL URL is read into connection.yml's keys here, among the refusals. `postgres_driver`
+  # is refused as `postgres_driver:` is in a MySQL block (`_MYSQL_REFUSED_KEYS`).
+  mysql_keys = if adapter == "MySQL"
+    _is_unset(postgres_driver) || throw(InvalidConfigurationError(
+      "register_connection: `postgres_driver` is not supported with `adapter = \"MySQL\"`. It applies to PostgreSQL only."))
+    _mysql_url_block(url)
+  else
+    nothing
+  end
   app_env = _registered_env(env, key)
 
   if haskey(config, key)
@@ -2343,7 +2502,15 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
   # and the constructor's loop over them read each as an abstract `Pair`, a dynamic call (#1599, layer 1).
   block = Dict{String, Any}()
   block["adapter"] = adapter
-  block["url"] = url
+  # #1614: a MySQL entry holds the keys its URL spelled, not the URL, so it reads as a block `load`
+  # built (and `_mysql_conninfo` refuses a `url` key).
+  if mysql_keys === nothing
+    block["url"] = url
+  else
+    for (k, v) in mysql_keys
+      block[k] = v
+    end
+  end
   block["pool_size"] = pool_size
   block["sqlite_split_read_write"] = sqlite_split_read_write
   block["idle_timeout"] = idle_timeout
@@ -2356,26 +2523,46 @@ function register_connection(key::String, url::String; adapter::String = "Postgr
 
   CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
 
-  # A local, so the monitor calls below take the pool at its concrete type (#1622).
-  pool = if adapter == "PostgreSQL"
+  # Each branch hands the pool it built to `_install_registered_pool!`, so the monitor calls there take
+  # it at its concrete type (#1622). Not a local assigned from the `if`: with MySQL the branches' union
+  # (a pool per PostgreSQL driver, SQLite, MySQL) is wider than inference keeps, and every monitor call
+  # on it would be a dynamic one — the reason `_build_connection_pool!` is written the same way.
+  timers = (Float64(idle_timeout), Float64(max_lifetime), Float64(leak_detection_threshold))
+  if adapter == "PostgreSQL"
     driver = _resolve_postgres_driver(postgres_driver; source = "register_connection")
-    CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver)
+    return _install_registered_pool!(key, settings, timers,
+      CP.PostgresConnectionPool(url; pool_size=pool_size, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect, driver=driver))
   elseif adapter == "SQLite"
     _is_unset(postgres_driver) ||
       @warn "register_connection: `postgres_driver` is ignored on SQLite; it picks the driver of a PostgreSQL pool" key=key
-    CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect)
+    return _install_registered_pool!(key, settings, timers,
+      CP.SQLiteConnectionPool(url; pool_size=pool_size, split_read_write=sqlite_split_read_write, pool_timeout=pool_timeout, fail_fast_on_connect=fail_fast_on_connect))
+  elseif adapter == "MySQL"
+    pool = CP.MySQLConnectionPool(_mysql_conninfo(block); pool_size=pool_size, pool_timeout=pool_timeout,
+                                  fail_fast_on_connect=fail_fast_on_connect)
+    # The idle ping a MySQL pool from `load` gets by default (#1548, `_install_built_pool!`), so the
+    # URL and the block build the same pool.
+    CP.enable_idle_validation!(pool; after = CP._default_validate_after_idle(pool))
+    return _install_registered_pool!(key, settings, timers, pool)
   else
     throw(InvalidConfigurationError(
-      "register_connection: unsupported `adapter`; expected \"PostgreSQL\" or \"SQLite\"."))
+      "register_connection: unsupported `adapter`; expected \"PostgreSQL\", \"SQLite\" or \"MySQL\"."))
   end
-  settings.connections = pool
+end
 
-  # Opt into idle-reaping / max-lifetime (#125) and/or leak detection (#127) if configured. No-ops when 0.
+# The tail of `register_connection`, at the pool's concrete type (#1622): install the pool, opt it into
+# idle-reaping / max-lifetime (#125) and leak detection (#127) when configured (no-ops at 0), and
+# register the entry. `timers` is `(idle_timeout, max_lifetime, leak_detection_threshold)`. Out of line,
+# so each branch's call stays one `:invoke` at its pool type, which test_trim_shape_pins.jl reads.
+@noinline function _install_registered_pool!(key::String, settings::PormGSettings,
+                                   timers::Tuple{Float64, Float64, Float64}, pool::P)::String where {P<:_SQLEngine}
+  CP = getfield(parentmodule(@__MODULE__), :ConnectionPool)
+  idle_timeout, max_lifetime, leak_detection_threshold = timers
+  settings.connections = pool
   (idle_timeout > 0 || max_lifetime > 0) &&
     CP.enable_reaping!(pool; idle_timeout=idle_timeout, max_lifetime=max_lifetime)
   leak_detection_threshold > 0 &&
     CP.enable_leak_detection!(pool; threshold=leak_detection_threshold)
-
   config[key] = settings
   return key
 end

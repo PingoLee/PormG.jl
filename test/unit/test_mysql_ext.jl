@@ -126,8 +126,7 @@ end
   @test_throws PormG.InvalidConfigurationError _MyExt._parse_conninfo("host='unterminated")
 end
 
-# What: a folder with `adapter: MySQL` loads into a MySQL pool without connecting, displays as one,
-#   and `register_connection` refuses MySQL (it takes a URL, which MySQL does not yet).
+# What: a folder with `adapter: MySQL` loads into a MySQL pool without connecting, and displays as one.
 # Why: `load` checks the driver extension and the built-in ignore list before it builds the pool;
 #   before #1130 every `adapter: MySQL` stopped at "Unsupported adapter".
 @testset "adapter: MySQL loads into a MySQL pool (#1130)" begin
@@ -150,9 +149,188 @@ end
       PormG.Configuration.unregister_connection(dir)
     end
   end
-  e = try PormG.Configuration.register_connection("my_dyn_1130", "mysql://u:p@h/f1"; adapter = "MySQL", env = "dev"); nothing catch err; err end
-  @test e isa PormG.InvalidConfigurationError && occursin("connection.yml", sprint(showerror, e))
-  @test !haskey(PormG.config, "my_dyn_1130")
+end
+
+# The refusal text of `f()`, or `nothing` when it does not raise `InvalidConfigurationError`.
+_my_refusal(f) = try f(); nothing catch err; err isa PormG.InvalidConfigurationError ? sprint(showerror, err) : rethrow() end
+_my_url(url) = PormG.Configuration._mysql_url_block(url)
+
+# What: a `mysql://` URL is read into the keys a connection.yml MySQL block uses, so the URL and the
+#   block build the same conninfo byte for byte, which the extension reads back value for value.
+#   Expected conninfo: `host='db.example' port='3307' connect_timeout='5' sslmode='verify_ca'
+#   sslrootcert='/etc/ca.pem' user='f1 user' password='s3cr\'et\\ hunter' dbname='f1'`.
+# Why: #1614 — a trimmed MySQL app has no boot that avoids YAML (#1679) unless `register_connection`
+#   takes MySQL. One conninfo for both spellings is what keeps them from drifting: the URL is not a
+#   second path to the driver, only a second way to write the block.
+@testset "a mysql:// URL builds the conninfo its connection.yml block builds (#1614)" begin
+  yml = Dict{String, Any}("host" => "db.example", "port" => 3307, "username" => "f1 user",
+                          "password" => "s3cr'et\\ hunter", "database" => "f1", "connect_timeout" => 5,
+                          "sslmode" => "verify_ca", "sslrootcert" => "/etc/ca.pem")
+  url = "mysql://f1%20user:s3cr'et%5C%20hunter@db.example:3307/f1?connect_timeout=5&sslmode=verify_ca&sslrootcert=%2Fetc%2Fca.pem"
+  keys_ = _my_url(url)
+  @test keys_ == Dict("host" => "db.example", "port" => "3307", "username" => "f1 user",
+                      "password" => "s3cr'et\\ hunter", "database" => "f1", "connect_timeout" => "5",
+                      "sslmode" => "verify_ca", "sslrootcert" => "/etc/ca.pem")
+  info = PormG.Configuration._mysql_conninfo(keys_)
+  @test info == PormG.Configuration._mysql_conninfo(yml)
+  @test info == "host='db.example' port='3307' connect_timeout='5' sslmode='verify_ca' " *
+                "sslrootcert='/etc/ca.pem' user='f1 user' password='s3cr\\'et\\\\ hunter' dbname='f1'"
+  host, user, password, kw = _MyExt._connect_args(_MyExt._parse_conninfo(info))
+  @test (host, user, password) == ("db.example", "f1 user", "s3cr'et\\ hunter")
+  @test kw.port == 3307 && kw.db == "f1" && kw.connect_timeout == 5
+  @test kw.ssl_mode === :verify_ca && kw.ssl_ca == "/etc/ca.pem"
+  # Every query option the block takes, and the scheme in any case.
+  all5 = _my_url("MySQL://u@h/f1?connect_timeout=0&sslmode=required&sslrootcert=/ca&sslcert=/c&sslkey=/k")
+  @test all5 == Dict("username" => "u", "host" => "h", "database" => "f1", "connect_timeout" => "0",
+                     "sslmode" => "required", "sslrootcert" => "/ca", "sslcert" => "/c", "sslkey" => "/k")
+end
+
+# What: percent-escapes decode in the user name, the password, the host, the database and a query
+#   value; `+` stays a `+`; reserved characters survive into the conninfo quoted.
+# Why: a password holding `@`, `/` or `:` can only be written escaped, and it must reach the driver
+#   exactly; libpq reads a URL the same way (no form decoding of `+`).
+@testset "a mysql:// URL percent-decodes every part (#1614)" begin
+  k = _my_url("mysql://f1%3Aadmin:p%40ss%2Fw%3Ard%20x%27%5C+y@db%2Eexample/f1%2Dprod?sslkey=%2Fk%20ey")
+  @test k["username"] == "f1:admin"
+  @test k["password"] == "p@ss/w:rd x'\\+y"
+  @test k["host"] == "db.example" && k["database"] == "f1-prod" && k["sslkey"] == "/k ey"
+  # A `:` after the first one is the password's, unescaped or not.
+  @test _my_url("mysql://u:a:b@h")["password"] == "a:b"
+  # A password with no user name sends no `user=`; a value splits at its first `=` only; an option's
+  # name may be percent-encoded too.
+  @test _my_url("mysql://:pw@h") == Dict("password" => "pw", "host" => "h")
+  @test _my_url("mysql://h?sslkey=a=b")["sslkey"] == "a=b"
+  @test _my_url("mysql://h?ssl%6Dode=required")["sslmode"] == "required"
+  # Non-ASCII text, raw or escaped.
+  @test _my_url("mysql://u:s%C3%A9nna@h")["password"] == "sénna"
+  @test _my_url("mysql://u:sénna@h")["password"] == "sénna"
+  _, _, password, _ = _MyExt._connect_args(_MyExt._parse_conninfo(PormG.Configuration._mysql_conninfo(k)))
+  @test password == "p@ss/w:rd x'\\+y"
+end
+
+# What: a part the URL leaves out is left out of the keys, so it means what the missing YAML key means:
+#   no port is MySQL's 3306, no host is `localhost`, no database is none, `user@h` sends no password
+#   and `user:@h` sends an empty one (as `password: ""` does). An IPv6 host is written in brackets.
+# Why: "the URL and the YAML block build the same pool" has to hold for the defaults too; a URL parser
+#   that filled in its own defaults would be a second set to keep in step with the extension's.
+@testset "a mysql:// URL leaves a missing part to the block's default (#1614)" begin
+  conninfo(u) = PormG.Configuration._mysql_conninfo(_my_url(u))
+  @test conninfo("mysql://f1@db.example") == PormG.Configuration._mysql_conninfo(Dict{String, Any}("host" => "db.example", "username" => "f1"))
+  @test conninfo("mysql://f1@db.example") == "host='db.example' user='f1'"
+  @test conninfo("mysql://f1:@db.example/") == "host='db.example' user='f1' password=''"
+  @test conninfo("mysql://db.example:/f1") == "host='db.example' dbname='f1'"
+  @test conninfo("mysql://") == ""
+  host, user, password, kw = _MyExt._connect_args(_MyExt._parse_conninfo(conninfo("mysql://")))
+  @test (host, user, password) == ("localhost", "", nothing)
+  @test !haskey(kw, :port) && !haskey(kw, :db)
+  @test _my_url("mysql://u:p@[::1]:3307/f1") == Dict("username" => "u", "password" => "p", "host" => "::1",
+                                                     "port" => "3307", "database" => "f1")
+  @test _my_url("mysql://[2001:db8::7]")["host"] == "2001:db8::7"
+  @test _my_url("mysql://h:03306")["port"] == "3306"
+  @test _my_url("mysql://h/f1?") == Dict("host" => "h", "database" => "f1")
+end
+
+# What: every malformed URL raises `InvalidConfigurationError` naming what is wrong, and no message
+#   quotes the URL: each case below holds `SEC` where the password, or its tail, lands.
+# Why: a password with an unencoded `@`, `/`, `?` or `#` moves its tail into the host, port, path or
+#   query (PostgreSQL's #658 shapes), so any message quoting "the bad part" would print it. The parse
+#   runs before anything connects, so the refusal is the only text the URL can reach.
+@testset "a malformed mysql:// URL is refused without quoting it (#1614)" begin
+  cases = [
+    ("postgresql://u:SEC@h/f1", "starts with `mysql://`"),
+    ("mysql:/u:SEC@h/f1", "starts with `mysql://`"),
+    ("mysql://u:pa@SEC@h/f1", "more than one `@`"),
+    ("mysql://u:pa/SEC@h/f1", "an `@` follows the host"),
+    ("mysql://u:pa?SEC@h/f1", "an `@` follows the host"),
+    ("mysql://u:pa#SEC@h/f1", "a `#` is not allowed"),
+    ("mysql://u:SEC@h/f1#frag", "a `#` is not allowed"),
+    ("mysql://u:SEC@h:SEC/f1", "the port is not a whole number"),
+    ("mysql://u:SEC@h:0/f1", "the port is not a whole number"),
+    ("mysql://u:SEC@h:65536/f1", "the port is not a whole number"),
+    ("mysql://u:SEC@h:3306:1/f1", "the port is not a whole number"),
+    ("mysql://u:SEC@h/f1/extra", "more than one segment"),
+    ("mysql://u:SEC%zz@h/f1", "the password holds a malformed percent-escape"),
+    ("mysql://u:SEC%2@h/f1", "the password holds a malformed percent-escape"),
+    ("mysql://u:SEC%00@h/f1", "the password holds a NUL character"),
+    ("mysql://u:SEC%ff@h/f1", "the password is not valid UTF-8"),
+    ("mysql://u%zz:SEC@h/f1", "the user name holds a malformed percent-escape"),
+    ("mysql://u:SEC@h/f1%zz", "the database name holds a malformed percent-escape"),
+    ("mysql://u:SEC@h/f1?SECRETOPT=1", "accepted: connect_timeout, sslmode, sslrootcert, sslcert, sslkey"),
+    ("mysql://u:SEC@h/f1?user=SEC", "accepted: connect_timeout"),
+    ("mysql://u:SEC@h/f1?password=SEC", "accepted: connect_timeout"),
+    ("mysql://u:SEC@h/f1?sslmode=required&sslmode=disabled", "`sslmode` is given twice"),
+    ("mysql://u:SEC@h/f1?SECnoequals", "has no `=`"),
+    ("mysql://u:SEC@h/f1?sslkey=%zzSEC", "the value of `sslkey` holds a malformed percent-escape"),
+    ("mysql://u:SEC@[::1/f1", "is not closed with `]`"),
+    ("mysql://u:SEC@[::1]x/f1", "text follows the `]`"),
+  ]
+  for (url, reason) in cases
+    msg = _my_refusal(() -> _my_url(url))
+    @test msg !== nothing
+    msg === nothing && continue
+    @test occursin(reason, msg)
+    @test !occursin("SEC", msg)
+    @test occursin("percent-encode reserved characters", msg)
+  end
+end
+
+# What: `register_connection(key, "mysql://…"; adapter = "MySQL")` registers a MySQL pool, without
+#   connecting, whose conninfo is the one the same block builds (`_mysql_conninfo`) and whose idle
+#   validation is the engine default `load` applies (`_default_validate_after_idle`); the
+#   entry holds the block's keys, not the URL; and no display of it shows the password.
+# Why: #1614's maintainer decision: a trimmed MySQL app boots from code. "The same pool" includes the
+#   60-second idle ping (#1548) a MySQL pool from `load` gets, which `register_connection` did not wire
+#   for any adapter, since only MySQL has a default above zero.
+@testset "register_connection takes a mysql:// URL (#1614)" begin
+  key = "my_dyn_1614"
+  url = "mysql://f1:hunter%402@127.0.0.1:3307/f1?connect_timeout=5"
+  try
+    @test PormG.Configuration.register_connection(key, url; adapter = "MySQL", env = "test",
+                                                  change_data = true) == key
+    settings = PormG.config[key]
+    pool = settings.connections
+    @test pool isa _MyPool && settings.dynamic && settings.change_data
+    @test pool.connection_string == PormG.Configuration._mysql_conninfo(Dict{String, Any}(
+      "host" => "127.0.0.1", "port" => 3307, "username" => "f1", "password" => "hunter@2",
+      "database" => "f1", "connect_timeout" => 5))
+    @test all(isnothing, pool.connections)                    # nothing connected
+    block = settings.db_config_settings
+    @test !haskey(block, "url") && block["adapter"] == "MySQL" && block["password"] == "hunter@2"
+    @test _MyCP._monitor_state(pool).validate_after_idle == _MyCP._default_validate_after_idle(pool) > 0
+    for text in (sprint(show, pool), sprint(show, MIME"text/plain"(), pool),
+                 sprint(show, MIME"text/plain"(), settings),
+                 PormG.Configuration.redact_secret(pool.connection_string),
+                 PormG.Configuration.redact_secret(url))
+      @test !occursin("hunter", text)
+    end
+
+    # A refused re-registration leaves the entry's pool serving (#1256): the URL is read first.
+    @test _my_refusal(() -> PormG.Configuration.register_connection(key, "mysql://f1:pa@SEC@h/f1";
+                                                                    adapter = "MySQL", env = "test")) !== nothing
+    # The URL is read before the environment is chosen: with no `env` and no `PORMG_ENV` outside a
+    # REPL both refuse, and the URL's refusal is the one raised.
+    withenv("PORMG_ENV" => nothing) do
+      msg = _my_refusal(() -> PormG.Configuration.register_connection(key, "mysql://f1:pa@SEC@h/f1"; adapter = "MySQL"))
+      @test msg !== nothing && occursin("more than one `@`", msg)
+    end
+    @test PormG.config[key].connections === pool
+    msg = _my_refusal(() -> PormG.Configuration.register_connection(key, url; adapter = "MySQL", env = "test",
+                                                                    postgres_driver = "Postgres"))
+    @test msg !== nothing && occursin("`postgres_driver` is not supported", msg)
+    @test PormG.config[key].connections === pool
+  finally
+    haskey(PormG.config, key) && PormG.Configuration.unregister_connection(key)
+  end
+  # A resolver's answer registers a MySQL pool the same way.
+  rkey = "my_res_1614"
+  try
+    PormG.Configuration._register_resolved!(rkey, Dict{String, Any}("url" => "mysql://u:p@h/f1", "adapter" => "MySQL",
+                                                                    "env" => "test", "pool_size" => 1))
+    @test PormG.config[rkey].connections isa _MyPool
+    @test PormG.config[rkey].connections.pool_size == 1
+  finally
+    haskey(PormG.config, rkey) && PormG.Configuration.unregister_connection(rkey)
+  end
 end
 
 # What: MySQL's error numbers classify into the taxonomy; lost connections are recognised from the

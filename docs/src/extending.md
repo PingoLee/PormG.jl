@@ -82,7 +82,7 @@ compare `key == "db"` or the folder's `basename`, never `settings.db_def_folder 
 
 Register a callback that **lazily resolves unknown connection keys** — useful for multi-tenant
 apps where the connection list isn't known up front. `f(key::String)` returns `nothing` (can't
-resolve) or `(url, adapter, pool_size)` / a `Dict` with those keys, plus an optional `"env"`. The adapter is PostgreSQL or SQLite: a MySQL connection takes no URL, and the resolver registers through `register_connection`, which refuses it.
+resolve) or `(url, adapter, pool_size)` / a `Dict` with those keys, plus an optional `"env"`. The adapter is `"PostgreSQL"`, `"SQLite"` or `"MySQL"`, with a URL as [`register_connection`](configuration/dynamic.md) takes it (a `mysql://` URL for MySQL, #1614).
 
 ```julia
 PormG.set_connection_resolver() do key

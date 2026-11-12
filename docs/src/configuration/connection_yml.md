@@ -119,7 +119,7 @@ dev:
     time_zone: 'UTC'
 ```
 
-A MySQL connection is configured by these keys, not by a URL. `connect_timeout`, `sslrootcert`, `sslcert` and `sslkey` are read as on PostgreSQL, and `sslmode` takes MySQL's modes listed above. The PostgreSQL-only keys `url`, `hostaddr`, `passfile`, `client_encoding`, `postgres_driver` and `extensions` raise `InvalidConfigurationError` instead of being dropped. For the same reason, `register_connection` does not take `adapter = "MySQL"`.
+In `connection.yml`, a MySQL connection is configured by these keys, not by a `url:`. `connect_timeout`, `sslrootcert`, `sslcert` and `sslkey` are read as on PostgreSQL, and `sslmode` takes MySQL's modes listed above. The PostgreSQL-only keys `url`, `hostaddr`, `passfile`, `client_encoding`, `postgres_driver` and `extensions` raise `InvalidConfigurationError` instead of being dropped. A connection configured in code takes the same keys as a `mysql://` URL, through `register_connection` ([Dynamic & Multi-Tenancy](dynamic.md)).
 
 The server's default account plugin, `caching_sha2_password`, sends the password in full only over TLS, so with `sslmode: disabled` MySQL.jl refuses to authenticate unless the server already has the account's credentials cached. Keep TLS on.
 

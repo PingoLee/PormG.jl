@@ -36,8 +36,8 @@ const _EB_REVIEWED = Dict(
   # (`migrations/engine_facts.jl`, and the lease/execute/transaction helpers in ConnectionPool.jl).
   # What remains:
   #   - Configuration: `_builtin_ignores_for_adapter` names each adapter and refuses any other (three);
-  #     `register_connection` names PostgreSQL and SQLite and refuses MySQL (#1130: no connection URL
-  #     yet) and any other (three); the `url:` / `postgres_driver:` warnings are SQLite-only advice
+  #     `register_connection` builds each adapter's own pool and refuses any other (three), and reads a
+  #     MySQL URL into connection.yml's keys (one, #1614); the `url:` / `postgres_driver:` warnings are SQLite-only advice
   #     that fires only for `adapter: SQLite`; `_peek_driver` (#1232) names each adapter to pick the
   #     driver extension `load` checks, and leaves any other adapter to the reader that refuses it
   #     (three); `_build_connection_pool!` builds each adapter's own pool and refuses any other
@@ -51,7 +51,7 @@ const _EB_REVIEWED = Dict(
   #     other arm is the plain `ADD COLUMN` every engine has;
   #   - importers: the SQLite-only and MySQL-only importers' capability refusals (each reads its own
   #     catalog, so the other arm is a refusal, not another engine's path); tools: the setup wizard's choice.
-  "src/Configuration.jl" => 15,
+  "src/Configuration.jl" => 16,
   "src/ConnectionPool.jl" => 2,
   "src/migrations/importers.jl" => 2,
   "src/migrations/planner.jl" => 4,

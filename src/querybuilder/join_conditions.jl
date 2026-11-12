@@ -57,8 +57,22 @@ _relation_target(model::PormGModel, to) = to isa PormGModel ? to : _require_boun
 # from `model` — a plain column, a JSON/array value lookup, an unknown name. The canonical segment is the
 # spelling `row_path` records for a forward hop (the short form resolved); a reverse hop keeps its name.
 # `kind` is `:forward`, `:reverse` or `:many_to_many` (either direction: two rows through a link table).
-function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, first_segment::Bool)
-  seg = String(seg)
+#
+# #1599 layer 5: callers walk a path, so the model is the previous hop's answer, the abstract `PormGModel`,
+# and the segment a `SubString` of the split path; at those types the call dispatched at run time, and the
+# trimmed read stopped there. The entry takes both unspecialized and hands on the model at `ModelType`, the
+# model type PormG builds (#1772), and the segment as the `String` it was converted to first; a model type
+# defined elsewhere takes the one dynamic call, behind `@noinline`.
+function _relation_step(q::SQLObject, @nospecialize(model::PormGModel), @nospecialize(seg::AbstractString),
+                        first_segment::Bool)
+  s = seg isa String ? seg : seg isa SubString{String} ? String(seg) : _string_other(seg)
+  model isa Models.ModelType && return _relation_step_at(q, model, s, first_segment)
+  return _relation_step_other(q, model, s, first_segment)
+end
+@noinline _string_other(@nospecialize(seg))::String = String(seg)
+@noinline _relation_step_other(q::SQLObject, @nospecialize(model), seg::String, first_segment::Bool) =
+  _relation_step_at(q, model, seg, first_segment)
+function _relation_step_at(q::SQLObject, model::PormGModel, seg::String, first_segment::Bool)
   col = _resolve_fk_short_form(model, seg)
   own = get(model.fields, col, nothing)
   if own !== nothing

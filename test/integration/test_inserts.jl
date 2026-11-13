@@ -56,89 +56,89 @@ function _clear_schema_evolution_status_rows!()
 end
 
 @testset "Schema Evolution and Error Recovery" begin
-  _clear_schema_evolution_status_rows!()
-  try
-
-    # 1. Schema Evolution: Reordered columns and extra columns
-    #
-    # bulk_insert should match DataFrame columns to model fields by name, not by
-    # position. An extra DataFrame column that has no corresponding model field
-    # must be silently ignored rather than causing an error.
-    query = M.Status.objects
-
-    df_evolved = DataFrame(
-        extra_col = ["ignore me", "me too"],
-        status    = ["Evolved 1", "Evolved 2"],
-        statusid  = [325001, 325002]
-    )
-
-    # Both rows must land even though the DataFrame has an extra column and
-    # the columns are not in the model's declared field order.
-    bulk_insert(query, df_evolved)
-    query.filter("statusid" => 325001)
-    @test query.count() == 1
-    query = M.Status.objects
-    query.filter("statusid" => 325002)
-    @test query.count() == 1
-
-    # 2. Error Recovery: Single-batch atomicity on duplicate PK
-    #
-    # If any row in a batch violates a constraint, the entire batch must be
-    # rolled back — no partial commits. Row 325001 already exists from step 1,
-    # so the second row is a duplicate and the whole insert must fail.
-    query = M.Status.objects
-    initial_count = query.count()
-    df_bad = DataFrame(
-        statusid = [325003, 325001, 325004],    # 325001 duplicates the row seeded above
-        status   = ["Good", "Bad (Duplicate)", "Good"]
-    )
-
-    got_error = false
-    try
-        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-            bulk_insert(query, df_bad)
-        end
-    catch e
-        got_error = true        # bulk_insert rethrows the underlying DB error (duplicate key / unique violation)
-    end
-
-    @test got_error
-    # Rows 325003 and 325004 must NOT be present — the whole batch was rolled back.
-    query = M.Status.objects
-    @test query.count() == initial_count
-    query.filter("statusid" => 325003)
-    @test query.count() == 0
-
-    # 3. Multi-chunk Error Recovery: Atomicity across chunk boundaries
-    #
-    # With chunk_size=2: the first chunk (325005, 325006) would normally commit on its
-    # own, but the second chunk (325005 again, 325007) has a duplicate that fails.
-    # The expected behaviour is that the entire multi-chunk operation is rolled
-    # back, including the successfully-sent first chunk.
-    df_multi = DataFrame(
-        statusid = [325005, 325006, 325005, 325007],    # 325005 repeats in row 3 (second chunk)
-        status   = ["Chunk 1", "Chunk 1", "Chunk 2 (Fail)", "Chunk 2"]
-    )
-
-    query = M.Status.objects
-    got_error = false
-    try
-        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-            bulk_insert(query, df_multi, chunk_size=2)
-        end
-    catch e
-        got_error = true        # The async task failure is unwrapped; the real constraint error surfaces here.
-    end
-
-    @test got_error
-    # Even the first successfully-sent chunk must be gone — full rollback. Counted over the three ids
-    # the operation wrote, not the whole table, which holds the seeded F1 rows when this file runs alone.
-    query = M.Status.objects
-    query.filter("statusid__@in" => [325005, 325006, 325007])
-    @test query.count() == 0
-  finally
     _clear_schema_evolution_status_rows!()
-  end
+    try
+
+        # 1. Schema Evolution: Reordered columns and extra columns
+        #
+        # bulk_insert should match DataFrame columns to model fields by name, not by
+        # position. An extra DataFrame column that has no corresponding model field
+        # must be silently ignored rather than causing an error.
+        query = M.Status.objects
+
+        df_evolved = DataFrame(
+            extra_col = ["ignore me", "me too"],
+            status    = ["Evolved 1", "Evolved 2"],
+            statusid  = [325001, 325002]
+        )
+
+        # Both rows must land even though the DataFrame has an extra column and
+        # the columns are not in the model's declared field order.
+        bulk_insert(query, df_evolved)
+        query.filter("statusid" => 325001)
+        @test query.count() == 1
+        query = M.Status.objects
+        query.filter("statusid" => 325002)
+        @test query.count() == 1
+
+        # 2. Error Recovery: Single-batch atomicity on duplicate PK
+        #
+        # If any row in a batch violates a constraint, the entire batch must be
+        # rolled back — no partial commits. Row 325001 already exists from step 1,
+        # so the second row is a duplicate and the whole insert must fail.
+        query = M.Status.objects
+        initial_count = query.count()
+        df_bad = DataFrame(
+            statusid = [325003, 325001, 325004],    # 325001 duplicates the row seeded above
+            status   = ["Good", "Bad (Duplicate)", "Good"]
+        )
+
+        got_error = false
+        try
+            Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+                bulk_insert(query, df_bad)
+            end
+        catch e
+            got_error = true        # bulk_insert rethrows the underlying DB error (duplicate key / unique violation)
+        end
+
+        @test got_error
+        # Rows 325003 and 325004 must NOT be present — the whole batch was rolled back.
+        query = M.Status.objects
+        @test query.count() == initial_count
+        query.filter("statusid" => 325003)
+        @test query.count() == 0
+
+        # 3. Multi-chunk Error Recovery: Atomicity across chunk boundaries
+        #
+        # With chunk_size=2: the first chunk (325005, 325006) would normally commit on its
+        # own, but the second chunk (325005 again, 325007) has a duplicate that fails.
+        # The expected behaviour is that the entire multi-chunk operation is rolled
+        # back, including the successfully-sent first chunk.
+        df_multi = DataFrame(
+            statusid = [325005, 325006, 325005, 325007],    # 325005 repeats in row 3 (second chunk)
+            status   = ["Chunk 1", "Chunk 1", "Chunk 2 (Fail)", "Chunk 2"]
+        )
+
+        query = M.Status.objects
+        got_error = false
+        try
+            Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+                bulk_insert(query, df_multi, chunk_size=2)
+            end
+        catch e
+            got_error = true        # The async task failure is unwrapped; the real constraint error surfaces here.
+        end
+
+        @test got_error
+        # Even the first successfully-sent chunk must be gone — full rollback. Counted over the three ids
+        # the operation wrote, not the whole table, which holds the seeded F1 rows when this file runs alone.
+        query = M.Status.objects
+        query.filter("statusid__@in" => [325005, 325006, 325007])
+        @test query.count() == 0
+    finally
+        _clear_schema_evolution_status_rows!()
+    end
 end
 
 

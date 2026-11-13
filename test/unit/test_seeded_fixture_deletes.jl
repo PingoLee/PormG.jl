@@ -25,30 +25,35 @@ const _SFD_SEEDER = "test_database_setup.jl"
 const _SFD_DELETE_ALL = r"allow_delete_all\s*=\s*true"
 # A query that is only rendered, never executed, deletes nothing.
 const _SFD_INSPECT_ONLY = r"show_query\s*=\s*:(sql|dict)\b"
-const _SFD_LITERAL = r"\bM\.(\w+)\.objects\b"
-const _SFD_RECEIVER = r"\b(\w+)\s*\.\s*delete\s*\("
+# A `delete(…)` call and its receiver, matched over the whole file so a call split across lines is seen.
+const _SFD_CALL = r"([\w.]+)\s*\.\s*delete\s*\(([^()]*)\)"s
+const _SFD_LITERAL = r"^M\.(\w+)\.objects$"
 
-# The seeded model a delete-all line in `lines[i]` targets, or `nothing`. The receiver is either written on
-# the line (`M.Status.objects.delete(…)`) or a variable bound earlier in the file (`query = M.Status.objects`),
-# which is resolved to its nearest preceding assignment.
-function _sfd_target(lines::Vector{String}, i::Int)::Union{Nothing,String}
-  l = lines[i]
-  occursin(_SFD_DELETE_ALL, l) || return nothing
-  occursin(_SFD_INSPECT_ONLY, l) && return nothing
-  m = match(_SFD_LITERAL, l)
-  model = m === nothing ? nothing : String(m.captures[1])
-  if model === nothing
-    r = match(_SFD_RECEIVER, l)
-    r === nothing && return nothing
-    bind = Regex("\\b" * r.captures[1] * raw"\s*=\s*M\.(\w+)\.objects\b")
-    for j in i-1:-1:1
-      b = match(bind, lines[j])
-      b === nothing && continue
-      model = String(b.captures[1])
-      break
+# Every delete-all of a seeded model in `text`, as `(line, model)`. The receiver is written at the call
+# (`M.Status.objects.delete(…)`) or is a variable bound earlier in the file (`query = M.Status.objects`, or
+# a filtered `M.Status.objects.filter(…)`, which errs towards a hit), resolved to its nearest preceding
+# binding. A receiver the scan cannot resolve (a function's return, a loop variable) is not reported.
+function _sfd_hits(text::AbstractString)::Vector{Tuple{Int,String}}
+  hits = Tuple{Int,String}[]
+  for m in eachmatch(_SFD_CALL, text)
+    args = m.captures[2]
+    occursin(_SFD_DELETE_ALL, args) || continue
+    occursin(_SFD_INSPECT_ONLY, args) && continue
+    line = count(==('\n'), SubString(text, 1, m.offset)) + 1
+    linestart = something(findprev(==('\n'), text, m.offset), 0) + 1
+    startswith(lstrip(SubString(text, linestart, m.offset)), "#") && continue   # a comment
+    recv = m.captures[1]
+    lit = match(_SFD_LITERAL, recv)
+    model = lit === nothing ? nothing : String(lit.captures[1])
+    if model === nothing && occursin(r"^\w+$", recv)
+      bind = Regex("\\b" * recv * raw"\s*=\s*M\.(\w+)\.objects\b")
+      before = SubString(text, 1, m.offset - 1)
+      found = collect(eachmatch(bind, before))
+      isempty(found) || (model = String(last(found).captures[1]))
     end
+    model !== nothing && model in _SFD_SEEDED && push!(hits, (line, model))
   end
-  return model !== nothing && model in _SFD_SEEDED ? model : nothing
+  return hits
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,33 +69,31 @@ end
   hits = String[]
   for f in files
     f == _SFD_SEEDER && continue
-    lines = readlines(joinpath(dir, f))
-    for i in eachindex(lines)
-      startswith(lstrip(lines[i]), "#") && continue
-      model = _sfd_target(lines, i)
-      model === nothing || push!(hits, "test/integration/$(f):$(i) deletes every $(model) row")
+    for (line, model) in _sfd_hits(read(joinpath(dir, f), String))
+      push!(hits, "test/integration/$(f):$(line) deletes every $(model) row")
     end
   end
   @test hits == String[]
 
-  # The seeder still seeds each model the scan protects, so the list cannot drift from it silently.
+  # The seeder still writes each model the scan protects, so the list cannot drift from it silently.
+  # `\b…\.objects`, so `M.Driver` is not satisfied by `M.Driver_standings`.
   seeder = read(joinpath(dir, _SFD_SEEDER), String)
   for model in _SFD_SEEDED
-    @test occursin("M.$(model)", seeder)
+    @test occursin(Regex("\\bM\\.$(model)\\.objects\\b"), seeder)
   end
 
   # The scan sees each spelling it is for, and lets the safe ones through.
-  sample = ["query = M.Status.objects",
-            "query.delete(allow_delete_all=true)",
-            "M.Result.objects.delete(allow_delete_all = true)",
-            "M.Lap_times.objects.delete(allow_delete_all = true, show_query = :dict)",
-            "M.Just_a_test_deletion.objects.delete(allow_delete_all=true)",
-            "scratch().delete(allow_delete_all = true)",
-            "q = M.Status.objects; q.filter(\"statusid__@in\" => ids); q.delete()"]
-  @test _sfd_target(sample, 2) == "Status"
-  @test _sfd_target(sample, 3) == "Result"
-  @test _sfd_target(sample, 4) === nothing
-  @test _sfd_target(sample, 5) === nothing
-  @test _sfd_target(sample, 6) === nothing
-  @test _sfd_target(sample, 7) === nothing
+  sample = """
+    query = M.Status.objects
+    query.delete(allow_delete_all=true)
+    M.Result.objects.delete(allow_delete_all = true)
+    M.Lap_times.objects.delete(allow_delete_all = true, show_query = :dict)
+    M.Just_a_test_deletion.objects.delete(allow_delete_all=true)
+    scratch().delete(allow_delete_all = true)
+    q = M.Status.objects; q.filter("statusid__@in" => ids); q.delete()
+    # M.Driver.objects.delete(allow_delete_all = true)
+    M.Circuit.objects.delete(
+        allow_delete_all = true)
+    """
+  @test _sfd_hits(sample) == [(2, "Status"), (3, "Result"), (9, "Circuit")]
 end

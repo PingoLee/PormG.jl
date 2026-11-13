@@ -44,6 +44,15 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)
     e isa PormG.InvalidConfigurationError &&
         Core.println("  msg: ", (e::PormG.InvalidConfigurationError).msg)
+    # The pool wraps whatever the driver's connect raised: a refused port and a call the trimmed image has
+    # no code for both arrive as `PoolConnectError`, told apart by the cause's type. Its text is not
+    # printed: a server's refusal can name the user.
+    if e isa PormG.PoolConnectError
+        c = (e::PormG.PoolConnectError).cause
+        Core.println("  cause: ", string(nameof(typeof(c))))
+        c isa MethodError && Core.println("  cause missed: ", typeof(c.f))
+        c isa MethodError && Core.println("  cause args: ", typeof(c.args))
+    end
     try   # the frames, when the trimmed image can symbolize them
         for fr in stacktrace(catch_backtrace())
             f = string(fr.file)

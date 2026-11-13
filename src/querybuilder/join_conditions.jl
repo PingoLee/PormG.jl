@@ -51,14 +51,45 @@ function _require_bound_model(model::PormGModel, name::AbstractString)::PormGMod
 end
 
 # The model a target slot names: a model, or a binding name in the model's module.
-_relation_target(model::PormGModel, to) = to isa PormGModel ? to : _require_bound_model(model, String(to))
+# #1599 layer 5: `to` is a relation field's `to` slot (`Union{Nothing, String, PormGModel}`), so the one
+# compiled body takes it unspecialized and narrows it; a name of another string type converts through the
+# one dynamic call `String(to)` was.
+function _relation_target(model::PormGModel, @nospecialize(to))
+  to isa PormGModel && return to
+  to isa String && return _require_bound_model(model, to)
+  return _require_bound_model(model, _string_other(to))
+end
 
 # One relation hop: `(canonical segment, model reached, kind)`, or `nothing` when `seg` is not a relation
 # from `model` — a plain column, a JSON/array value lookup, an unknown name. The canonical segment is the
 # spelling `row_path` records for a forward hop (the short form resolved); a reverse hop keeps its name.
 # `kind` is `:forward`, `:reverse` or `:many_to_many` (either direction: two rows through a link table).
-function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, first_segment::Bool)
-  seg = String(seg)
+#
+# #1599 layer 5: callers walk a path, so the model is the previous hop's answer, the abstract `PormGModel`,
+# and the segment a `SubString` of the split path; at those types the call dispatched at run time, and the
+# trimmed read stopped there. The entry takes both unspecialized and hands on the model at `ModelType`, the
+# model type PormG builds (#1772), and the segment as the `String` it was converted to first; a model type
+# defined elsewhere takes the one dynamic call, behind `@noinline`.
+function _relation_step(q::SQLObject, @nospecialize(model::PormGModel), @nospecialize(seg::AbstractString),
+                        first_segment::Bool)
+  s = seg isa String ? seg : seg isa SubString{String} ? String(seg) : _string_other(seg)
+  model isa Models.ModelType && return _relation_step_at(q, model, s, first_segment)
+  return _relation_step_other(q, model, s, first_segment)
+end
+@noinline _string_other(@nospecialize(seg))::String = String(seg)
+# `hasproperty(field, :to) ? field.to : nothing` for the field a segment resolves to (#1599 layer 5). Of the
+# model fields PormG defines (`Models.AnyField`), the three relations have a `to` slot and the rest do not
+# (`test_trim_shape_pins.jl` checks it), so the answer is static; `hasproperty` on the 29-member union
+# dispatched at run time. A `cjoin` link of a field type defined elsewhere takes the one dynamic question.
+function _relation_to(@nospecialize(field))
+  field isa Union{Models.sForeignKey, Models.sOneToOneField, Models.sManyToManyField} && return field.to
+  field isa Models.AnyField && return nothing
+  return _relation_to_other(field)
+end
+@noinline _relation_to_other(@nospecialize(field)) = hasproperty(field, :to) ? field.to : nothing
+@noinline _relation_step_other(q::SQLObject, @nospecialize(model), seg::String, first_segment::Bool) =
+  _relation_step_at(q, model, seg, first_segment)
+function _relation_step_at(q::SQLObject, model::PormGModel, seg::String, first_segment::Bool)
   col = _resolve_fk_short_form(model, seg)
   own = get(model.fields, col, nothing)
   if own !== nothing
@@ -69,7 +100,7 @@ function _relation_step(q::SQLObject, model::PormGModel, seg::AbstractString, fi
   end
   field = _segment_field(q, model, seg, first_segment)
   if field !== nothing
-    to = hasproperty(field, :to) ? field.to : nothing
+    to = _relation_to(field)
     to === nothing && return nothing
     # The resolved name either way: a `cjoin` link is keyed by the base field it links, which is that
     # field's own name, so `status` and `status_id` canonicalize alike with or without a link (#977

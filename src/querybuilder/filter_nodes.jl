@@ -448,7 +448,7 @@ const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
 # everywhere (`Models.unranged_formatter`).
 const _RANGE_CHECKED_OPERATORS = ("=", "IN")
 
-function _format_filter_value(formatter, values, operator::AbstractString)
+function _format_filter_value(@nospecialize(formatter), @nospecialize(values), operator::AbstractString)
   operator in _RANGE_CHECKED_OPERATORS || (formatter = Models.unranged_formatter(formatter))
   return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
                                                                               formatter(values)
@@ -497,7 +497,11 @@ end
 # comparison — therefore raise `InvalidValueError` too, though no field formatter makes them.
 # A label that is not a name — an `F` expression on the left of a comparison — is not printed: its
 # `string` is a struct dump, operands included.
-function _locate_filter_refusal(e, label, type_label; subject::AbstractString = "field")
+# #1599 layer 5: the caught exception and the labels are taken unspecialized (one compiled body); an
+# exception is never of a type the compiler can name, so specialized on it the call had no compiled target,
+# and in a trimmed image the error it was handed was lost behind a `MethodError` on this function.
+function _locate_filter_refusal(@nospecialize(e), @nospecialize(label), @nospecialize(type_label);
+                                subject::AbstractString = "field")
   e isa InvalidValueError || rethrow(e)
   named = label isa AbstractString ? String(label) : label isa Symbol ? string(label) :
           # A CTE or `Joined` handle holds names only, so it is quoted as the caller wrote it.
@@ -534,8 +538,12 @@ _opt_label(x) = x === nothing ? nothing : string(x)   # refusal-value-ok: a fiel
 # carries `.type`, a projection alias carries only its own spelling and whichever formatter the
 # HAVING ladder resolved for it, and the transform ladder has an `FObject` with neither. `subject`
 # names what the message is talking about, so an alias is not told it is a field.
-_guarded_format(formatter, values, operator::AbstractString, label, type_label;
-                subject::AbstractString = "field") =
+#
+# #1599 layer 5: the formatter is a field's `formatter::Function`, an abstract type, so the one compiled
+# body takes it, the value and the labels unspecialized; specialized on them, the call had no compiled
+# target in a trimmed image. The call through the formatter stays a run-time dispatch (layer 3's).
+_guarded_format(@nospecialize(formatter), @nospecialize(values), operator::AbstractString, @nospecialize(label),
+                @nospecialize(type_label); subject::AbstractString = "field") =
   try
     _format_filter_value(formatter, values, operator)
   catch e
@@ -913,15 +921,27 @@ end
 # The field a filter's left-hand side names, and the path to report it by — a key of the model's own
 # fields, or the terminal field of a joined path from the #474 memo. `(nothing, "")` when the operand
 # is not a field. Read AFTER the column is rendered: rendering is what fills the memo.
-function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)
+# #1599 layer 5: the column's name is read once, so the `isa String` test narrows it, and the answer is
+# typed: read again off the slot, the name was `SQLField.field`'s union, the field `Any`, and every call on
+# the field (its `formatter`, first) dispatched at run time, which stopped the trimmed read.
+function _operand_field(v::SQLTypeOper, instruc::SQLInstruction)::Tuple{Union{Nothing,Models.AnyField},String}
   col = _oper_column(v)
   col isa SQLField || return nothing, ""
-  if col.field isa String && haskey(instruc.object.model.fields, col.field)
-    return instruc.object.model.fields[col.field], col.field
+  name = col.field
+  if name isa String
+    fields = instruc.object.model.fields
+    haskey(fields, name) && return fields[name], name
   end
-  f = memo_field(instruc, memo_key(col))
-  return f === nothing ? (nothing, "") : (f, memo_key(col)[2])
+  key = memo_key(col)
+  f = memo_field(instruc, key)
+  return f === nothing ? (nothing, "") : (f, key[2])
 end
+
+# A model field's `formatter`, for a field held at `Models.AnyField` (#1599 layer 5). Every member of that
+# union has the slot, typed `Function`, and none overloads `getproperty` (`test_trim_shape_pins.jl` checks
+# both), so the builtin `getfield` reads what `field.formatter` read; `getproperty` on the 29-member union
+# was a run-time dispatch, which stopped the trimmed read.
+_field_formatter(@nospecialize(field::Models.AnyField))::Function = getfield(field, :formatter)
 
 # #28/#903: the kind of column a pattern lookup must read as TEXT, or `nothing` for one it reads as it
 # is. Keyed on the formatter because that is the one piece of evidence a column and a projection alias
@@ -930,7 +950,12 @@ end
 # carry: an integer, a float and a decimal share `format_number_sql` (#1168), a `TimeField` shares
 # `format_text_sql` with a `CharField`, and a `Case`, a `Value` or arithmetic over a date part has no
 # formatter at all (#1183). The formatter decides first where it names a type; the kind decides the rest.
-function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
+#
+# #1599 layer 5: the formatter is a field's `formatter::Function` or an alias's, and the kind the walk's
+# abstract `CanonicalType`, so the one compiled body takes both unspecialized. It asks the formatter only
+# `isa` and `===`; the period formatters are matched by `===` too, which is what `in`'s `==` is for them
+# (none of the formatter types defines `==`), since `in` on an unspecialized value dispatched at run time.
+function _pattern_text_kind(@nospecialize(formatter); @nospecialize(kind = nothing))::Union{Symbol,Nothing}
   # #28: an array has no one text to match — refused in `_pattern_operand`, never read as text.
   formatter isa Models.ArrayFormatter && return :array
   (formatter === Models.format_inet_sql || formatter === Models.format_inet_unpacked_sql) && return :inet
@@ -947,7 +972,7 @@ function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
   formatter === Models.format_date_sql && return :date
   # #1086 (review): a date part (`@hour`, `@year`, an `Extract`) is an integer, whose text is the same
   # digits on both engines.
-  formatter in Models.PERIOD_FORMATTERS && return :integer
+  any(p -> p === formatter, Models.PERIOD_FORMATTERS) && return :integer
   # #1168: a number column. PostgreSQL has no `LIKE` for one, so it was a server error there while
   # SQLite matched the number's text. An integer prints the same digits on both engines, so it reads
   # as that text — Django's backend reads every column `::text` (`lookup_cast`). A float or a decimal
@@ -966,7 +991,7 @@ function _pattern_text_kind(formatter; kind = nothing)::Union{Symbol,Nothing}
   formatter === Models.format_duration_sql && return :interval
   formatter === Models.format_bool_sql && return :boolean
   formatter === Models.format_binary_sql && return :binary
-  return _pattern_kind_read(kind)
+  return _pattern_kind_read_any(kind)
 end
 
 # #1183: what a pattern lookup does with an operand its formatter does not type. A time reads as text:
@@ -982,6 +1007,19 @@ _pattern_kind_read(::CDateTime) = :timestamp
 _pattern_kind_read(::CInterval) = :interval
 _pattern_kind_read(::CBool) = :boolean
 _pattern_kind_read(::CBytes) = :binary
+# `_pattern_kind_read(kind)` for a kind held at the abstract `CanonicalType` (#1599 layer 5): one arm per
+# method above, each call static; anything else is the `::Any` method's `nothing`.
+@noinline function _pattern_kind_read_any(@nospecialize(kind))::Union{Symbol,Nothing}
+  kind isa Union{CInt16,CInt32,CInt64} && return _pattern_kind_read(kind)
+  kind isa Union{CFloat64,CDecimal} && return _pattern_kind_read(kind)
+  kind isa CDate && return _pattern_kind_read(kind)
+  kind isa CTime && return _pattern_kind_read(kind)
+  kind isa CDateTime && return _pattern_kind_read(kind)
+  kind isa CInterval && return _pattern_kind_read(kind)
+  kind isa CBool && return _pattern_kind_read(kind)
+  kind isa CBytes && return _pattern_kind_read(kind)
+  return nothing
+end
 
 # The kinds `_pattern_operand` refuses, so `_get_filter_query` knows when to derive the path label.
 const _PATTERN_REFUSED_KINDS = (:array, :tsvector, :inexact_number, :timestamp, :interval, :boolean, :binary)
@@ -1022,9 +1060,18 @@ _pattern_refusal_label(v::SQLTypeOper, column::AbstractString) =
 # natively. On SQLite a UUID column already holds that text, and a network column cannot exist (the
 # DDL that would create one is refused, `Dialect._refuse_unsupported_type`), so there the
 # predicate is left as written.
-function _pattern_operand(column::AbstractString, formatter, operator::AbstractString,
-                          instruc::SQLInstruction; label::AbstractString = column,
-                          operand_kind = nothing)::String
+# #1599 layer 5: positional, `label` and `operand_kind` included. The callers' keyword values were a union
+# (`operand_kind`) or `Any`, so the keyword set had no concrete type and the call could not be compiled; a
+# keyword call is now a `MethodError`, so none can come back. One compiled body takes the column, formatter,
+# label and kind unspecialized. The column and the label are read as the `String`s they are (any other
+# string type converts through one dynamic call); the formatter and the kind as `_pattern_text_kind`'s note
+# says; the one read off the formatter itself, an array's element kind, is at the `ArrayFormatter` the kind
+# proved. `label` is the column a caller with no path to name passes again.
+function _pattern_operand(@nospecialize(column0::AbstractString), @nospecialize(formatter),
+                          operator::AbstractString, instruc::SQLInstruction,
+                          @nospecialize(label0::AbstractString), @nospecialize(operand_kind))::String
+  column = column0 isa String ? column0 : _string_other(column0)
+  label = label0 isa String ? label0 : _string_other(label0)
   operator in PATTERN_LOOKUP_OPERATORS || return String(column)
   kind = _pattern_text_kind(formatter; kind = operand_kind)
   kind === nothing && return String(column)
@@ -1034,7 +1081,7 @@ function _pattern_operand(column::AbstractString, formatter, operator::AbstractS
   if kind === :array
     # The index hint only where it is a valid spelling that reads text: after a slice a second
     # subscript is refused (`_render_array_subscript`), and an element of a number array has no LIKE.
-    by_index = formatter.kind isa Union{CText, CVarChar} && !occursin(r"__[0-9]+_[0-9]+\z", label) ?
+    by_index = (formatter::Models.ArrayFormatter).kind isa Union{CText, CVarChar} && !occursin(r"__[0-9]+_[0-9]+\z", label) ?
       ", or match one element's text by index, \"$(label)__0__@contains\" => \"…\"" : ""
     throw(FilterError(
       "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
@@ -1240,7 +1287,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # #1086 (review): a transform has no field, but its node carries the formatter of what it yields —
   # `@date` a date, `@hour` an integer — so a pattern lookup over one reads the same text a column of
   # that kind does. Without it `"seen__@date__@startswith"` was a `LIKE` on a `date` on PostgreSQL.
-  operand_formatter = operand_field !== nothing ? operand_field.formatter :
+  operand_formatter = operand_field !== nothing ? _field_formatter(operand_field) :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
                       col isa SQLTypeField && col.field isa SQLTypeFunction ? col.field.formatter :
                       nothing
@@ -1253,9 +1300,8 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # boolean and a binary column (#1183). `_filter_path_label` has no method for every column kind (an
   # `F` transform), so it is not asked for the others.
   refuses = pattern && _pattern_text_kind(operand_formatter; kind = operand_kind) in _PATTERN_REFUSED_KINDS
-  column = _pattern_operand(column, operand_formatter, v.operator, instruc;
-                            label = refuses ? _pattern_refusal_label(v, column) : column,
-                            operand_kind = operand_kind)
+  column = _pattern_operand(column, operand_formatter, v.operator, instruc,
+                            refuses ? _pattern_refusal_label(v, column) : column, operand_kind)
   if isa(value_node, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     rhs_ref = value_node::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}   # narrowed before a closure captures it
     @pormg_debug false

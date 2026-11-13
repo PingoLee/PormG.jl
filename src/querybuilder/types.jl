@@ -396,6 +396,26 @@ _key_b(r::Union{ModelJoin,CteJoin})::String = r.key_b
 _key_b(::Union{CrossJoin,AnchorlessJoin})::String = ""
 _dedup_key(r::JoinRow) = (r.a, r.b, _key_a(r), _key_b(r), r.alias_a)
 
+# `r.alias_a` / `r.alias_b` for a row read off `row_join` at the abstract `JoinRow` (#1599 layer 5): one arm
+# per kind, each a `String` read at its concrete type. A `getproperty` on the abstract row dispatches at run
+# time, and in a `juliac --trim` image its answer is `Any`, so a collection built from it is a `Vector{Any}`
+# that no compiled call takes. A row type defined elsewhere takes the one dynamic read, behind `@noinline`.
+@noinline function _join_alias_a(@nospecialize(r::JoinRow))::String
+  r isa ModelJoin && return r.alias_a
+  r isa CteJoin && return r.alias_a
+  r isa CrossJoin && return r.alias_a
+  r isa AnchorlessJoin && return r.alias_a
+  return _join_alias_other(r, :alias_a)
+end
+@noinline function _join_alias_b(@nospecialize(r::JoinRow))::String
+  r isa ModelJoin && return r.alias_b
+  r isa CteJoin && return r.alias_b
+  r isa CrossJoin && return r.alias_b
+  r isa AnchorlessJoin && return r.alias_b
+  return _join_alias_other(r, :alias_b)
+end
+@noinline _join_alias_other(@nospecialize(r), name::Symbol)::String = getproperty(r, name)
+
 # The predicates a row appends to (or, for an `AnchorlessJoin`, substitutes for) its equi-anchor.
 # Empty for the two CTE kinds, which cannot carry any.
 _on_conditions(r::Union{ModelJoin,AnchorlessJoin})::Vector{FilterType} = r.on_conditions

@@ -51,7 +51,8 @@ end
 # A refusal or a check that names a feature the table does not have would throw `InvalidValueError`
 # only when reached. The scan catches a symbol written as the feature argument of `_supports`,
 # `_capability_error` or `_require_feature`, or of their Dialect barriers (`_supports_at`,
-# `_capability_error_at`, `_require_feature_at`, #1599), which forward it unchanged; the specialized field types name theirs through
+# `_capability_error_at`, `_require_feature_at`, #1599), which forward it unchanged; the specialized
+# field types name theirs through
 # `Dialect._field_feature`, asked directly below, as is the reason table keyed by them.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1129: every feature src/ names is a row of the table" begin

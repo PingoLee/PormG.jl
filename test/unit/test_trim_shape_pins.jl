@@ -907,7 +907,16 @@ end
   @testset "the SQLite extension binds, steps its cursor and checks a lock without a dynamic call (#1599 layer 2)" begin
     X = Base.get_extension(PormG, :PormGSQLiteExt)
     @test isempty(_dynamic_calls(X._sqlite_bind_one!, (SQLite.Stmt, Int, Any)))
-    @test isempty(_dynamic_calls(SQLite.bind!, (SQLite.Stmt, X._SQLiteBinds{Vector{Any}})))
+    # The count of placeholders is SQLite.jl's own call on its statement handle. Where SQLite.jl infers
+    # that handle concretely (current releases, which a trimmed build resolves) the method makes no
+    # dynamic call; at the 1.6.1 floor `_get_stmt_handle` reads an abstract `Ref`, and that count is the
+    # one call left, the same one SQLite.jl's own positional `bind!` makes there.
+    bind_calls = _dynamic_calls(SQLite.bind!, (SQLite.Stmt, X._SQLiteBinds{Vector{Any}}))
+    if isconcretetype(only(Base.return_types(SQLite._get_stmt_handle, (SQLite.Stmt,))))
+      @test isempty(bind_calls)
+    else
+      @test !isempty(bind_calls) && all(c -> occursin("sqlite3_bind_parameter_count", c), bind_calls)
+    end
     @test isempty(_dynamic_calls(X._is_sqlite_locked_error, (Any,)))
     # The cursor SQLite.jl returns is narrowed to `Query{false}`, so the rows are stepped by a static call
     # (the trimmed read stopped at `_sqlite_rows_into(::DataType, ::Query{false}, …)`).

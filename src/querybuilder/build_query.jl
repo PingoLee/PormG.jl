@@ -76,7 +76,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         push!(instruc.join, """ CROSS JOIN $b_quoted AS $alias_b_quoted """)
         continue
       end
-      instruc.defer_outer_join_check || _require_outer_join(instruc.connection, value.how)
+      instruc.defer_outer_join_check || _require_outer_join(instruc.connection, _join_how(value))
 
       # #985: under the row's join scope, so every column the conditions render is checked against the
       # rows this ON clause may name (`_record_join_column`).
@@ -129,17 +129,31 @@ end
 # outer join: refusing it refused a feature the statement does not use. An update whose SET reads a
 # joined column takes UPDATE … FROM, which joins through its FROM list and never prints a join type
 # either: it refuses a LEFT or FULL join on every engine and runs a RIGHT one as the INNER it means (#1430).
-function _require_outer_join(conn, how::AbstractString)::Nothing
-  how == "RIGHT" && return _require_feature(conn, :right_joins, "join_type = \"RIGHT\"")
-  how == "FULL" && return _require_feature(conn, :full_joins, "join_type = \"FULL\"")
+#
+# #1599 layer 5: `conn` is the instruction's connection, a union of the abstract engine types, so the one
+# compiled body takes it unspecialized; specialized on it, the call had no compiled target in a trimmed
+# image (the read stopped at `_require_outer_join(::SQLiteConnectionPool, ::String)`). The capability
+# check reaches the pool at its concrete type through `with_pool` (`_require_outer_join_feature`).
+function _require_outer_join(@nospecialize(conn), how::AbstractString)::Nothing
+  how == "RIGHT" && return _require_outer_join_feature(conn, :right_joins, "join_type = \"RIGHT\"")
+  how == "FULL" && return _require_outer_join_feature(conn, :full_joins, "join_type = \"FULL\"")
   return nothing
 end
+# A pool PormG builds is walked to its concrete type (`with_pool`'s closed set); anything else, a test's
+# bare value included, makes the call it made before, one dynamic call.
+@noinline function _require_outer_join_feature(@nospecialize(conn), feature::Symbol, what::String)::Nothing
+  conn isa _SQLEngine && return with_pool(_require_feature_on, conn, feature, what)
+  return _require_feature(conn, feature, what)
+end
+_require_feature_on(pool, feature::Symbol, what::String)::Nothing = _require_feature(pool, feature, what)
+# Imported, not reached as `PormG.ConnectionPool.with_pool`: `PormG` is a non-constant global here.
+import PormG.ConnectionPool: with_pool
 
 # Every join row of a build whose check was deferred, for a statement that prints them verbatim.
 function _require_outer_joins(instruc::SQLInstruction)::Nothing
   for row in instruc.row_join
     row isa CrossJoin && continue
-    _require_outer_join(instruc.connection, row.how)
+    _require_outer_join(instruc.connection, _join_how(row))
   end
   return nothing
 end

@@ -725,10 +725,8 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
         (null_flag = first(_render_projected_interval_ms(interval_name, instruc)))
       # #1313: a term's expression is rendered again for its flag, as an alias's projection is. Its
       # GROUP BY copy holds the first render's values (`order_params`), so this one is the flag's alone.
-      # #1599 layer 5: the closure captures a local bound once; `interval_node`, assigned above, was boxed.
-      flag_node = interval_node
-      flag_node === nothing ||
-        (null_flag = _with_render_scope(() -> first(_render_interval_ms(flag_node, instruc)), instruc;
+      interval_node === nothing ||
+        (null_flag = _with_render_scope(() -> first(_render_interval_ms(interval_node, instruc)), instruc;
                                 group_key = groups_term))
     end
     # #1130: the flag of a term printed as its alias, where a table the query reads has a column of

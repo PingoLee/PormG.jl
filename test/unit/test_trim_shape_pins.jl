@@ -1655,6 +1655,200 @@ end
     end
   end
 
+  # What: `FExpression`'s two sides as the build and render read them (#1599 layer 5): the accessors
+  #   `_fexpr_left`/`_fexpr_right`, the interval, duration, date-shift and kind readers that take a side, and
+  #   the closed walks they call (`_is_bare_column_any`, `_has_window_function_any`, `_infer_kind_any`,
+  #   `_arithmetic_side_kind_any`, `_side_kind_any`, `_whole_kind_any`, `_period_nanoseconds`).
+  # Expected:
+  #   - the accessors hand on the slot's own value, untyped;
+  #   - the converted readers read the sides only through them, and make no dynamic call to a callee that
+  #     takes a side;
+  #   - each walk's arms cover its function's methods and answer what the function answers;
+  #   - `_decompose_period` gives the components it gave, and refuses a component it does not know.
+  # Why: a side read at the slot's union (`Integer`, `Dates.Period`, `SQLTypeFunction`, … beside concrete
+  #   types) made every call on it a run-time dispatch, even to a callee with one method: 358 verifier rows on
+  #   main read a side, 16 of them attributed to layer-4 helpers (#1773's residue). Measured on main
+  #   67ac61865: the accessor and walk checks fail (not defined), and the named-call checks find the calls.
+  @testset "FExpression's sides are read untyped, and their callees take them statically (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    K = PormG.Kernel
+    I = QB.InstructionObject
+    has(n) = isdefined(QB, n)
+    for n in (:_fexpr_left, :_fexpr_right, :_is_bare_column_any, :_has_window_function_any, :_infer_kind_any,
+              :_arithmetic_side_kind_any, :_side_kind_any, :_whole_kind_any, :_period_nanoseconds,
+              :_may_hold_calendar_part_any, :_whole_days)
+      @test has(n)
+    end
+    e = QB.F("grid") * 2
+    if has(:_fexpr_left) && has(:_fexpr_right)
+      @test QB._fexpr_left(e) === e.field_name && QB._fexpr_right(e) === e.operand
+      @test only(Base.return_types(QB._fexpr_left, (QB.FExpression,))) === Any
+      @test only(Base.return_types(QB._fexpr_right, (QB.FExpression,))) === Any
+    end
+
+    # The readers: no dynamic call to a callee that takes a side. `_duration_units`, `_duration_value_units` and
+    # `_unordered_interval_error` are not listed: they take the instruction's connection too, an abstract
+    # engine type, which is a separate cause.
+    side_callees = ("_interval_ms_sql", "_calendar_scale_refused", "_refuse_window_in_interval",
+                    "_is_number_side", "_has_calendar_part", "_decompose_period", "_render_left_typed",
+                    "_render_side_kind", "_render_duration_value", "_integer_side_kind", "_arithmetic_side_kind",
+                    "_refuse_bitwise_interval", "_day_count_column_kind", "_is_bare_column", "_has_window_function",
+                    "_infer_kind", "_side_kind", "_operand_column_field", "_projection_column_kind", "getproperty",
+                    "Dates.Day", "_period_nanoseconds")
+    CK = Union{K.CanonicalType, Nothing}
+    readers = (Tuple{typeof(QB._render_interval_left), QB.FExpression, String, K.CInterval, I},
+               Tuple{typeof(QB._render_interval_left), QB.FExpression, String, QB._IntervalMs, I},
+               Tuple{typeof(QB._render_interval_right), QB.FExpression, String, CK, String, K.CInterval, I},
+               Tuple{typeof(QB._render_date_period_arithmetic), QB.FExpression, I},
+               Tuple{typeof(QB._render_duration_product), QB.FExpression, I},
+               Tuple{typeof(QB._temporal_result_kind), QB.FExpression, CK, CK, I},
+               Tuple{typeof(QB._interval_left_kind), QB.FExpression, K.CInterval, CK, I},
+               Tuple{typeof(QB._temporal_arith_kind), QB.FExpression, I},
+               Tuple{typeof(QB._operation_kind), QB.FExpression, I, QB._AllKinds},
+               Tuple{typeof(QB._calendar_scale_refused), Any, String, Any, I},
+               Tuple{typeof(QB._render_left_typed), Any, String, I},
+               Tuple{typeof(QB._render_side_kind), Any, I},
+               Tuple{typeof(QB._has_window_function), QB.FExpression},
+               Tuple{typeof(QB._is_bare_column), QB.FExpression},
+               Tuple{typeof(QB._infer_kind), QB.FExpression, I, QB._AllKinds})
+    for tt in readers
+      calls = _named_dynamic_calls(tt, side_callees; depth = 2)
+      @test isempty(calls)
+      isempty(calls) || @info "a dynamic call takes an FExpression side" tt calls
+    end
+    # `_render_expr_node_sql` keeps the calls whose callees are not converted (the operand renderers, the JSON-key
+    # and date-part walks); the ones listed above are gone from it too.
+    calls = _named_dynamic_calls(Tuple{typeof(QB._render_expr_node_sql), QB.FExpression, I},
+                                 ("_interval_ms_sql", "_render_left_typed", "_refuse_bitwise_interval",
+                                  "_day_count_column_kind", "_refuse_window_in_interval", "Dates.Day", "_side_kind(");
+                                 depth = 1)
+    @test isempty(calls)
+    isempty(calls) || @info "a dynamic call takes an FExpression side" calls
+
+    # The readers above read the sides through the accessors, never off the slot.
+    src(file) = read(joinpath(pkgdir(PormG), "src", "querybuilder", file), String)
+    body(text, header) = (s = findfirst(header, text); s === nothing ? "" : text[s[1]:findnext("\nend\n", text, s[1])[end]])
+    for (file, header) in (("expression_render.jl", "function _render_interval_left(v::FExpression"),
+                           ("expression_render.jl", "function _render_interval_right(v::FExpression"),
+                           ("expression_render.jl", "function _render_date_period_arithmetic(v::FExpression"),
+                           ("expression_render.jl", "function _render_duration_product(v::FExpression"),
+                           ("expression_render.jl", "function _render_expr_node_sql(v::FExpression"),
+                           ("expression_kind.jl", "function _temporal_result_kind(p::FExpression"),
+                           ("expression_kind.jl", "function _interval_left_kind(p::FExpression"),
+                           ("expression_kind.jl", "function _temporal_arith_kind(p::FExpression"),
+                           ("expression_kind.jl", "function _operation_kind(p::FExpression"))
+      # Code, not comments. A `#` inside a string cuts its line short too, which only ever drops text.
+      b = join((replace(l, r"#.*$" => "") for l in split(body(src(file), header), '\n')), '\n')
+      @test !isempty(strip(b))
+      @test !occursin(r"\b(v|p)\.(field_name|operand)\b", b)
+    end
+
+    # The walks: one arm per method of the function each stands for, and the same answers.
+    sigs(f) = Set(string(m.sig) for m in methods(f))
+    sig(f, Ts...) = string(Tuple{typeof(f), Ts...})
+    @test sigs(QB._is_bare_column) == Set(sig(QB._is_bare_column, T)
+                                          for T in (String, QB.JoinedReference, QB.FExpression, QB.CTEReference, Any))
+    @test sigs(QB._has_window_function) ==
+          Set(sig(QB._has_window_function, T) for T in (QB.WindowFunction, QB.FExpression, QB.FObject, QB.SQLField,
+                                                        AbstractVector, Any))
+    @test sigs(QB._arithmetic_side_kind) ==
+          Set([sig(QB._arithmetic_side_kind, Integer, K.SQLInstruction, QB._EveryKind),
+               sig(QB._arithmetic_side_kind, Union{AbstractFloat, PormG.Decimals.Decimal}, K.SQLInstruction, QB._EveryKind),
+               sig(QB._arithmetic_side_kind, Any, K.SQLInstruction, QB._EveryKind)])
+    @test length(methods(QB._infer_kind)) == 10
+    @test length(methods(QB._side_kind)) == 6
+    @test sigs(QB._whole_kind) == Set(sig(QB._whole_kind, T) for T in (Union{K.CInt16, K.CInt32, K.CInt64}, K.CDecimal, Any))
+
+    rank = QB.Rank()
+    cte = QB.CTE("g", "v")
+    joined = QB.Joined("d", "driverid")
+    if has(:_is_bare_column_any)
+      @test isempty(_dynamic_calls(QB._is_bare_column_any, (Any,)))
+      for x in ("grid", "date__@year", QB.F("grid"), QB.F("grid") + 1, QB.F("date__@year"), cte, joined, 1, nothing,
+                Dates.Hour(1), rank)
+        @test QB._is_bare_column_any(x) === QB._is_bare_column(x)
+      end
+    end
+    if has(:_has_window_function_any)
+      @test isempty(_dynamic_calls(QB._has_window_function_any, (Any,)))
+      for x in (rank, QB.Lag("grid"), QB.F("grid") + rank, QB.F("grid") + 1, QB.Sum("points"),
+                QB.Coalesce(rank, QB.Value(0)), QB.Case([QB.When("grid__@gte" => 1, then = rank)]),
+                QB.SQLField(rank), Any[rank], Any[1, "x"], [1], "grid", 1, nothing)
+        @test QB._has_window_function_any(x) === QB._has_window_function(x)
+      end
+    end
+    if has(:_whole_kind_any)
+      for k in (K.CInt16(), K.CInt32(), K.CInt64(), K.CDecimal(10, 0), K.CDecimal(10, 2), K.CDecimal(nothing, nothing),
+                K.CFloat64(), K.CText(), nothing)
+        @test QB._whole_kind_any(k) === QB._whole_kind(k)
+      end
+    end
+    if has(:_period_nanoseconds)
+      @test isempty(_dynamic_calls(QB._period_nanoseconds, (Any,)))
+      for p in (Dates.Hour(1), Dates.Day(2), Dates.Week(1), Dates.Nanosecond(5), Dates.Millisecond(7),
+                Dates.Microsecond(3), Dates.Second(9), Dates.Minute(4), Dates.Hour(1) + Dates.Minute(30))
+        @test QB._period_nanoseconds(p) === PormG.Models._duration_to_nanoseconds(p)
+      end
+      for p in (Dates.Month(1), Dates.Year(1), Dates.Quarter(1), Dates.Month(1) + Dates.Day(1))
+        @test_throws PormG.InvalidValueError QB._period_nanoseconds(p)
+        @test_throws PormG.InvalidValueError PormG.Models._duration_to_nanoseconds(p)
+      end
+      @test_throws MethodError QB._period_nanoseconds("01:00:00")   # what `_duration_to_nanoseconds` raises
+    end
+    # `_decompose_period`: the components, largest first, sub-second parts folded into seconds.
+    @test QB._decompose_period(Dates.Hour(1) + Dates.Minute(30)) == [(:hour, 1), (:minute, 30)]
+    @test QB._decompose_period(Dates.Day(1) + Dates.Millisecond(500)) == [(:day, 1), (:second, 0.5)]
+    @test QB._decompose_period(Dates.Quarter(1) + Dates.Month(1)) == [(:month, 4)]
+    @test QB._decompose_period(Dates.Year(2)) == [(:year, 2)]
+    @test QB._decompose_period(Dates.Second(0)) == Tuple{Symbol, Real}[]
+    # A `Period` Dates does not define: its value is read, then it is refused, as before. Defined here rather
+    # than with the file's test types at the top, which other slices edit too.
+    isdefined(Main, :_TspPeriod) || Core.eval(Main, :(struct _TspPeriod <: $(Dates.Period); value::Int64; end))
+    @test_throws PormG.InvalidValueError QB._decompose_period(Base.invokelatest(getglobal(Main, :_TspPeriod), 1))
+    @test isempty(_named_dynamic_calls(Tuple{typeof(QB._decompose_period), Dates.Hour}, ("Dates.value", "getproperty");
+                                       depth = 1))
+
+    # The kind walks, against the functions they stand for, on an instruction over a two-field model.
+    model = PormG.Models.Model("tsp_side_race", raceid = PormG.Models.IDField(), points = PormG.Models.IntegerField(),
+                               date = PormG.Models.DateField())
+    instruc = QB.InstructionObject(text = "", table_alias = QB.SQLTbAlias(), alias = "Tb",
+                                   object = QB.SQLObjectQuery(model = model))
+    corpus = ("points", "date", "nope", QB.F("points"), QB.F("points") + 1, QB.Q("points" => 1), QB.Qor("points" => 1),
+              QB.Sum("points"), QB.Max("date"), rank, QB.Lag("points"), QB.SQLField("points"), QB.Value(1), cte, joined,
+              1, Int8(1), UInt64(1), big(1), true, 1.5, Float32(1.5), big(1.5), PormG.Decimals.Decimal(1), nothing,
+              Dates.Hour(1), Dates.Date(2009, 5, 24), _TspUserAgg(0))
+    for policy in (QB._AllKinds(), QB._MeaningKinds()), x in corpus
+      if has(:_infer_kind_any)
+        @test isequal(QB._infer_kind_any(x, instruc, policy), QB._infer_kind(x, instruc, policy))
+      end
+      if has(:_arithmetic_side_kind_any)
+        @test isequal(QB._arithmetic_side_kind_any(x, instruc, policy), QB._arithmetic_side_kind(x, instruc, policy))
+      end
+    end
+    if has(:_may_hold_calendar_part_any)
+      for x in (Dates.Month(1), Dates.Hour(1), Dates.Month(1) + Dates.Day(1), QB.Interval(Dates.Day(1)), "points",
+                QB.F("points"), QB.Sum("points"), 1, nothing)
+        @test QB._may_hold_calendar_part_any(x, instruc) === QB._may_hold_calendar_part(x, instruc)
+      end
+    end
+    if has(:_whole_days)
+      for n in (1, -3, Int8(2), UInt16(4), big(5))
+        @test QB._whole_days(n) === Dates.Day(n)
+      end
+      @test_throws InexactError QB._whole_days(typemax(UInt64))   # what `Day(n)` raises
+    end
+    if has(:_side_kind_any)
+      for x in ("points", "date", "nope", QB.F("points"), Dates.Date(2009, 5, 24), Dates.DateTime(2009, 5, 24),
+                Dates.Hour(1), Dates.Month(1), QB.Interval(Dates.Day(1)), Dates.Hour(1) + Dates.Minute(2), 1,
+                QB.Sum("points"), QB.Max("date"), rank, cte, joined,
+                PormG.QueryBuilder.TimeZones.ZonedDateTime(2009, 5, 24, PormG.QueryBuilder.TimeZones.tz"UTC"),
+                _TspUserAgg(0))   # the open arm: a function type PormG does not define
+        outcome(f) = try f() catch e; typeof(e) end
+        @test isequal(outcome(() -> QB._side_kind_any(x, instruc)), outcome(() -> QB._side_kind(x, instruc)))
+      end
+    end
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete

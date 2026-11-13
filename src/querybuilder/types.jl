@@ -1199,6 +1199,26 @@ function F(field_name::AbstractString)
     column=normalized_name
   )
 end
+
+# `FExpression`'s two sides, as the build and render read them (#1599 layer 5). The slots stay as they are
+# declared: both are unions over open families (`Integer`, `Dates.Period`, `SQLTypeFunction`, …), so no
+# closed set of concrete types covers them, and narrowing one would refuse a value the operators accept.
+# A value read from the slot at that union made every call on it a run-time dispatch, even to a callee with
+# one method, and it stopped the call splitting over its other arguments too (the instruction's
+# connection, itself a union): in a `juliac --trim` image, a call with no compiled target. Read through
+# these accessors, a side is one untyped value (`Base.inferencebarrier`): a callee with one method takes it
+# `@nospecialize` and the call is static, a callee with several goes through a closed walk with one arm per
+# method (`_is_bare_column_any`, `_infer_kind_any`, …), and an `isa` test narrows it as before (#1735).
+# The writers (the constructors, `deepcopy`) and the walks #1773 closed read the slots directly.
+"""
+    _fexpr_left(v::FExpression)
+    _fexpr_right(v::FExpression)
+
+The left side (`field_name`) and the right side (`operand`) of `v`, untyped, so a call on either is
+static when its callee takes it `@nospecialize`. See the note above.
+"""
+_fexpr_left(v::FExpression) = Base.inferencebarrier(v.field_name)
+_fexpr_right(v::FExpression) = Base.inferencebarrier(v.operand)
 # Arithmetic operations for F expressions
 # Aggregate propagation helper: result is aggregate if any operand is aggregate
 _is_agg(f::FExpression) = f.aggregate

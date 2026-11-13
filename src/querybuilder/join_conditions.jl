@@ -674,8 +674,12 @@ end
 # this for `f::Function` and the scope receives a `Function` again.
 function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) where {F}
   hop = value.alias_b
+  # #1599 layer 5: the earlier rows are read at the abstract `JoinRow`, so their aliases go through the
+  # typed readers (`_join_alias_a`/`_b`), and the alias the search compares against is bound once per
+  # step (`p`): the closure captured `parent`, which the loop reassigns, so it was boxed (`Core.Box`) and
+  # every comparison dispatched at run time; in a trimmed image that was a `MethodError` on `==`.
   if value isa AnchorlessJoin
-    rows = (instruc.alias, (r.alias_b for r in instruc.row_join[1:idx-1])..., hop)
+    rows = (instruc.alias, (_join_alias_b(r) for r in instruc.row_join[1:idx-1])..., hop)
     return _with_render_scope(f, instruc; join_hop = hop, join_side = :none, join_left = rows, join_right = rows)
   end
   path = String[instruc.alias, hop]
@@ -683,9 +687,10 @@ function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) wh
   for _ in 1:length(instruc.row_join)
     parent == instruc.alias && break
     push!(path, parent)
-    i = findfirst(r -> r.alias_b == parent, instruc.row_join)
+    p = parent
+    i = findfirst(r -> _join_alias_b(r) == p, instruc.row_join)
     i === nothing && break
-    parent = instruc.row_join[i].alias_a
+    parent = _join_alias_a(instruc.row_join[i])
   end
   return _with_render_scope(f, instruc; join_hop = hop, join_side = :none, join_left = (hop,), join_right = Tuple(path))
 end

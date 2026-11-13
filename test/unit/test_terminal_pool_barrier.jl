@@ -162,7 +162,7 @@ const _TPB_REVIEWED_BOXES = Dict(
   "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
                                # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed)
   "expression_render.jl" => 1, # _refuse_unnamed_temporal
-  "join_conditions.jl" => 2,   # _bind_cjoin_on_conditions!; _join_scope
+  "join_conditions.jl" => 1,   # _bind_cjoin_on_conditions!; #1599 layer 5 removed _join_scope's (`parent` bound once)
   # #1599 layer 5 removed `filter_nodes.jl`'s (`_format_filter_value`, the formatter bound once) and
   # `projection_types.jl`'s (`_reads_alias`, a `RefValue{Bool}` now).
   "sql_format.jl" => 2,        # _format_sql

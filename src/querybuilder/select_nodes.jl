@@ -148,24 +148,37 @@ end
 # `cjoin_on` ON clause names, and the `cjoin`/`on()` paths. Each hop of such a path is walked without
 # joining it. A column path's last segment is its column, never a join, even when it is a ForeignKey
 # (`order_by("raceid__circuitid")` joins the race only); a `cjoin`/`on()` key is a join path, all hops.
+# The tables a relation path's hops reach, from the base model, added to `tables`.
+function _add_hop_tables!(tables::Set{String}, object::SQLObject, segs)
+  model = object.model
+  for (i, seg) in enumerate(segs)
+    step = _relation_step(object, model, seg, i == 1)
+    step === nothing && break
+    model = step[2]
+    push!(tables, Models.model_table_name(model))
+  end
+  return nothing
+end
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([Models.model_table_name(object.model)])
   for rj in instruc.row_join
     hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
   end
   column_hops(path) = (segs = split(String(first(split(lstrip(path, '-'), "__@"))), "__"); segs[1:end-1])
-  hops = Iterators.flatten((
-    (split(p, "__") for p in keys(object.custom_join)),
-    (column_hops(p) for p in with_order_terms(_projected_paths, object)::Vector{String}),   # #1599 slice C
-    (segs[1:end-1] for segs in something(instruc.cjoin_on_paths, ()))))
-  for segs in hops
-    model = object.model
-    for (i, seg) in enumerate(segs)
-      step = _relation_step(object, model, seg, i == 1)
-      step === nothing && break
-      model = step[2]
-      push!(tables, Models.model_table_name(model))
-    end
+  # #1599 layer 5: the three sources are walked one after the other, in the order `Iterators.flatten` gave
+  # them, each read before the first walk as the generators read them. A `flatten` over three generators of
+  # different types is iterated at run time, one dynamic call per step.
+  join_paths = keys(object.custom_join)
+  order_paths = with_order_terms(_projected_paths, object)::Vector{String}   # #1599 slice C
+  on_paths = something(instruc.cjoin_on_paths, ())
+  for p in join_paths
+    _add_hop_tables!(tables, object, split(p, "__"))
+  end
+  for p in order_paths
+    _add_hop_tables!(tables, object, column_hops(p))
+  end
+  for segs in on_paths
+    _add_hop_tables!(tables, object, segs[1:end-1])
   end
   # A CTE a later term orders by is joined when that term renders: `order_by("br__surname")`, which
   # `_resolve_cte_string_paths` has made a `CTEReference` before ORDER BY, `CTE("br", "surname")`, or

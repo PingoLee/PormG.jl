@@ -256,11 +256,19 @@ function _sqlite_decode_rows(conn::SQLite.DB, sql::String, params,
   stmt = SQLite.Stmt(conn, sql; register = false)
   try
     q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
-    return _sqlite_rows_into(T, q, decode)
+    # #1599 layer 2: SQLite.jl builds its cursor as `Query{strict}` from a keyword, so the call returns
+    # an abstract `Query` to inference, and the call below was dynamic: the trimmed read stopped at
+    # `_sqlite_rows_into(::DataType, ::Query{false}, …)`. PormG never passes `strict`, so the cursor is
+    # `Query{false}` (a parameter of `Query` on every SQLite.jl from the 1.6.1 floor up); any other
+    # takes the same call through one `@noinline` arm.
+    q isa SQLite.Query{false} && return _sqlite_rows_into(T, q, decode)
+    return _sqlite_rows_into_open(T, q, decode)
   finally
     SQLite.DBInterface.close!(stmt)
   end
 end
+@noinline _sqlite_rows_into_open(::Type{T}, @nospecialize(q), decode::PormG.QueryBuilder._RowDecoder{T}) where T =
+  _sqlite_rows_into(T, q, decode)::Vector{T}
 
 # The rows, stepped with `iterate` (the first row is already stepped by `execute`; each further one is
 # one step, under the lock each SQLite.jl version takes for it, and an error status raises there as it

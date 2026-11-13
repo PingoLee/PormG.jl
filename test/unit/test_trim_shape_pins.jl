@@ -893,19 +893,26 @@ end
     @test length(methods(CP._run_sqlite_statement)) == 1
   end
 
-  # What: the SQLite extension's statement parameters and its retry's lock check (#1599 layer 2).
+  # What: the SQLite extension's statement parameters, its typed read's cursor and its retry's lock check
+  #   (#1599 layer 2).
   # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`
   #   binds each value of the types `sqlite_bind_value` hands over with a static call (any other value
   #   through one `@noinline` open arm), with the rows, the count check and its message unchanged; the
-  #   lock check takes the caught exception unspecialized and reads SQLite.jl's error at its type.
+  #   typed read steps SQLite.jl's cursor at its concrete type; the lock check takes the caught exception
+  #   unspecialized and reads SQLite.jl's error at its type.
   # Why: SQLite.jl binds a vector with one `bind!(stmt, i, values[i])` per value, a call on an `Any`, and
-  #   the trimmed read stopped at `bind!(::Stmt, ::Int64, ::String)`; the retry's `_is_sqlite_locked_error(e)`
-  #   was then compiled per exception type, and the trimmed binary had none for the one it caught.
-  @testset "the SQLite extension binds parameters and checks a lock without a dynamic call (#1599 layer 2)" begin
+  #   the trimmed read stopped at `bind!(::Stmt, ::Int64, ::String)`; its cursor comes back as an abstract
+  #   `Query`, and the read then stopped at the row walk; the retry's `_is_sqlite_locked_error(e)` was
+  #   compiled per exception type, and the trimmed binary had none for the one it caught.
+  @testset "the SQLite extension binds, steps its cursor and checks a lock without a dynamic call (#1599 layer 2)" begin
     X = Base.get_extension(PormG, :PormGSQLiteExt)
     @test isempty(_dynamic_calls(X._sqlite_bind_one!, (SQLite.Stmt, Int, Any)))
     @test isempty(_dynamic_calls(SQLite.bind!, (SQLite.Stmt, X._SQLiteBinds{Vector{Any}})))
     @test isempty(_dynamic_calls(X._is_sqlite_locked_error, (Any,)))
+    # The cursor SQLite.jl returns is narrowed to `Query{false}`, so the rows are stepped by a static call
+    # (the trimmed read stopped at `_sqlite_rows_into(::DataType, ::Query{false}, …)`).
+    Dsl = PormG.QueryBuilder._RowDecoder{NamedTuple{(:surname,), Tuple{String}}, Tuple{PormG.ReadParser}}
+    @test isempty(_dynamic_calls(X._sqlite_decode_rows, (SQLite.DB, String, Vector{Any}, Dsl)))
     @test X._sqlite_binds(Any[1]) isa X._SQLiteBinds{Vector{Any}}
     @test X._sqlite_binds((1,)) === (1,)          # a tuple is handed over as it was
     @test X._sqlite_binds(nothing) === nothing
@@ -917,7 +924,9 @@ end
     stmt = SQLite.Stmt(db, "SELECT * FROM t WHERE a = ? AND b = ? AND f = ? AND g = ?"; register = false)
     probe = Any["Senna", Int64(3), Int32(7), UInt8[0x01, 0x02]]
     rows_plain = X.Tables.rowtable(SQLite.DBInterface.execute(stmt, probe))
-    rows_typed = X.Tables.rowtable(SQLite.DBInterface.execute(stmt, X._sqlite_binds(probe)))
+    cursor = SQLite.DBInterface.execute(stmt, X._sqlite_binds(probe))
+    @test cursor isa SQLite.Query{false}      # the type `_sqlite_decode_rows` narrows the cursor to
+    rows_typed = X.Tables.rowtable(cursor)
     @test isequal(rows_plain, rows_typed) && length(rows_typed) == 1
     # A value outside the arms takes SQLite.jl's own method (here `Float32`, an `AbstractFloat`).
     rows_open = X.Tables.rowtable(SQLite.DBInterface.execute(

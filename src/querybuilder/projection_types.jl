@@ -1937,8 +1937,7 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # `IN`/`NOT IN` membership case this branch used to special-case, adds the
   # `PATTERN_LOOKUP_OPERATORS` → `Dialect` dispatch it never had, and brings the
   # unknown-operator refusal that was missing here entirely.
-  return _render_predicate(string(field), v.operator, placeholder, instruc;
-                           expression = isnull_aggregate)
+  return _render_predicate_any(string(field), v.operator, placeholder, instruc, isnull_aggregate)
 end
 
 # The value of one predicate on a projection alias, formatted and checked as the alias's type and
@@ -2036,10 +2035,10 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
   end
   ms_values === nothing && return nothing
   sql, interval_ms = _render_interval_source_ms(source, instruc)
-  interval_ms && return _render_predicate(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc)
+  interval_ms && return _render_predicate_any(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc, false)
   placeholder = _bind_predicate_value(instruc, v.operator,
                   _resolve_having_filter_value(having_key, _oper_literal(v), instruc, v.operator))
-  return _render_predicate(sql, v.operator, placeholder, instruc)
+  return _render_predicate_any(sql, v.operator, placeholder, instruc, false)
 end
 
 # The plain filter key a predicate compares — a `String` path with no `__` — or `nothing`.

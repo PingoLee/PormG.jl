@@ -867,6 +867,23 @@ function _render_predicate(column::AbstractString, operator::AbstractString, pla
   end
 end
 
+# `_render_predicate` for placeholders that reach the caller untyped (#1599 layer 5): `add_parameter!`
+# answers a `String` or a `Vector{String}`, a range a pair, `@isnull` its `Bool`, and the binder that
+# chose among them returns any of them, so the keyword call dispatched at run time and a trimmed image had
+# no compiled target (the read stopped at the `_render_predicate` kwcall with a `String`). One arm per
+# shape, each the same call at that type; any other value takes the old call behind `@noinline`.
+@noinline function _render_predicate_any(column::AbstractString, operator::AbstractString, @nospecialize(placeholders),
+                                         instruc::SQLInstruction, expression::Bool)::String
+  placeholders isa String && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  placeholders isa Vector{String} && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  placeholders isa Tuple{String,String} && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  placeholders isa Bool && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  return _render_predicate_other(column, operator, placeholders, instruc, expression)
+end
+@noinline _render_predicate_other(column::AbstractString, operator::AbstractString, @nospecialize(placeholders),
+                                  instruc::SQLInstruction, expression::Bool)::String =
+  _render_predicate(column, operator, placeholders, instruc; expression = expression)
+
 # #635: a filter whose RHS is a column or expression (`F`, a CTE column, `Joined`, `Case`/`When`)
 # is not a bound value, so it used to skip `_render_predicate` and concatenate the operator as-is.
 # For a comparison that is right, but a pattern lookup's operator is a `Dialect` name, not SQL:
@@ -1647,7 +1664,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # #618: the ladder lives in `_render_predicate` so the HAVING/alias branch renders through the
   # same one. Behavior here is unchanged, which is why the existing WHERE coverage is the
   # regression test for the extraction itself.
-  return _render_predicate(column, v.operator, placeholders, instruc; expression = transform_lhs)
+  return _render_predicate_any(column, v.operator, placeholders, instruc, transform_lhs)
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
   resp = []

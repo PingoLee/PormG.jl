@@ -444,7 +444,7 @@ inspect_query(; kwargs...) = (objct) -> inspect_query(objct; kwargs...)
 # Django's meaning (#1049; it used to be the no-limit sentinel and returned every row). An offset of
 # `0` binds nothing because OFFSET 0 is a no-op anyway.
 function _limit_offset_sql(limit::Union{Nothing,Integer}, offset::Integer, parameters::AbstractPormGParam,
-                           connection::_SQLEngine)::String
+                           @nospecialize(connection::_SQLEngine))::String
   (limit === nothing && offset == 0) && return ""
   return with_bucket(parameters, :limit) do
     limit_sql = limit === nothing ? nothing : add_parameter!(parameters, limit)

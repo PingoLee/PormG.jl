@@ -748,7 +748,7 @@ const _NonNumberKind = Union{CDate,CDateTime,CTime,CUUID}
 _non_number_operand(x, instruc::SQLInstruction) = _expression_kind(x, instruc) isa _NonNumberKind
 _check_operand_domain(::Any, ::SQLInstruction) = nothing
 # The reason holds on every engine; the spelling it names is the engine's (`_duration_seconds_spelling`).
-function _duration_math_refusal(function_name::AbstractString, conn)
+function _duration_math_refusal(function_name::AbstractString, @nospecialize(conn))
   name = uppercasefirst(lowercase(function_name))
   remedy = if function_name == "ABS"
     "For the magnitude of a duration d, write Greatest(d, d * -1)."

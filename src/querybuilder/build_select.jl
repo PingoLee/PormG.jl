@@ -366,7 +366,7 @@ import PormG.ConnectionPool: _symbol_text
 # `expr`: the two texts are equal, and Julia's `===` compares strings by content. Not the projection
 # alias: inside an expression SQLite resolves a name to a FROM column first, so
 # `values("lap" => F("best") * 2)` would flag the raw `lap` column.
-function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn;
+function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, @nospecialize(conn);
                          null_flag::Union{Nothing,AbstractString} = nothing)
   if _emulates_nulls_order(conn)
     # SQLite < 3.30 has no NULLS syntax → emulate placement by sorting on the null-flag first.

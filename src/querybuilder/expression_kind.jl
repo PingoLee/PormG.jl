@@ -634,7 +634,7 @@ _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.colum
 # The suffix is the last `[]` (or `[n]`) only, so `integer[][]` reads its element as `integer[]`, a
 # `CArray`, which is no `_ArrayElementKind`.
 const _ONE_ARRAY_SUFFIX = r"^\s*(.*?)\s*\[\s*\d*\s*\]\s*$"
-function _declared_kind(type_name::AbstractString, conn)::Union{CanonicalType,Nothing}
+function _declared_kind(type_name::AbstractString, @nospecialize(conn))::Union{CanonicalType,Nothing}
   array = Base.endswith(rstrip(type_name), ']') ? match(_ONE_ARRAY_SUFFIX, type_name) : nothing
   if array !== nothing
     _single_precision_cast(strip(array.captures[1])) && return nothing
@@ -723,13 +723,13 @@ _numeric_rank(::Any) = nothing
 # `Sum` and `Avg` render bare on both engines and take each engine's aggregate type, so their methods
 # override these, beside their constructors (`functions.jl`). A width the operation may change is
 # dropped: a sum of `numeric(10,2)` values is not a `numeric(10,2)`.
-_computed_kind(::Val, ::Symbol, k, ::PormGPostgres) = CDecimal(nothing, nothing)
-_computed_kind(::Val, rule::Symbol, k, ::PormGSQLite) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
+_computed_kind(::Val, ::Symbol, k, @nospecialize(conn::PormGPostgres)) = CDecimal(nothing, nothing)
+_computed_kind(::Val, rule::Symbol, k, @nospecialize(conn::PormGSQLite)) = rule === :numeric ? CFloat64() : _sqlite_number_kind(k)
 # MySQL (#1130, measured on 8.4) renders them bare too. `SQRT`/`EXP`/`LN`/`POWER` are a DOUBLE over
 # any operand; `FLOOR`/`CEIL` a `BIGINT` over an integer, and over a decimal a `BIGINT` or a DECIMAL by
 # its precision, which the width-less decimal names. `Abs`, `Round` and `Mod` keep more of their
 # operand's type, beside their constructors (`functions.jl`).
-_computed_kind(::Val, rule::Symbol, k, ::PormGMySQL) = rule === :numeric ? CFloat64() : _mysql_number_kind(k)
+_computed_kind(::Val, rule::Symbol, k, @nospecialize(conn::PormGMySQL)) = rule === :numeric ? CFloat64() : _mysql_number_kind(k)
 # A backend with no method here (#1034 phase 3 step 2a, #1129 item 2) gets a `MethodError` naming
 # this fact rather than "unknown": what an engine computes is that engine's fact.
 # A number SQLite computes over `k` without a cast: an integer is a 64-bit integer, and anything else

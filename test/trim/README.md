@@ -53,7 +53,7 @@ time, which `main` prints with the function it missed.
 `mysql/` builds the same app with MySQL.jl in place of SQLite, to measure the MySQL extension
 (`ext/PormGMySQLExt.jl`), which no SQLite build compiles. Its entry, `mysql/main.jl`, boots through
 `register_connection("f1", "mysql://…"; adapter = "MySQL")` (#1769), so no YAML is read, and then
-runs the typed read only, with no write. The server comes from environment variables (`mysql/server.jl`),
+runs the typed read only, with no write. The server comes from environment variables (`tools/server.jl`),
 read at run time. With none of them set it is `127.0.0.1:1`, where nothing listens, so no database is
 needed: under the JIT the read raises `PoolConnectError`, and the binary stops wherever the trimmed
 read stops first. The write is left out for two reasons: it would fail at the same connect, and the

@@ -6,20 +6,20 @@
 # The boot is in this file, not in a package: `juliac` builds a package from a copy of its directory, so a
 # package here could not include `../db/models.jl`, the models the SQLite app uses. It registers a
 # `mysql://` URL (#1769), so no YAML is read. The server comes from the `PORMG_TRIM_*` environment
-# variables (`server.jl`); unset, it is 127.0.0.1:1, where nothing listens: nothing is contacted at boot,
-# and the read raises `PoolConnectError` under the JIT. Against a server seeded by `prep.jl`, the read
-# returns the Monaco race. Each step prints one line to `Core.stdout`, as in ../main.jl.
+# variables (`../tools/server.jl`); unset, it is 127.0.0.1:1, where nothing listens: nothing is contacted
+# at boot, and the read raises `PoolConnectError` under the JIT. Against a server seeded by `prep.jl`, the
+# read returns the Monaco race. Each step prints one line to `Core.stdout`, as in ../main.jl.
 using PormG, MySQL, Dates
 
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
 import .models as M
-include(joinpath(@__DIR__, "server.jl"))
+include(joinpath(@__DIR__, "..", "tools", "server.jl"))
 
 const KEY = "f1"
 
 "Register the MySQL connection under `KEY` and bind the models to it (#1606, #1769)."
 function boot!(server::TrimServer)
-    PormG.Configuration.register_connection(KEY, trim_url(server);
+    PormG.Configuration.register_connection(KEY, trim_url(server, "mysql");
         adapter = "MySQL", env = "prod", pool_size = 1, change_db = true, change_data = true)
     PormG.Models.set_models(models.MODEL_SET; key = KEY)
     return nothing

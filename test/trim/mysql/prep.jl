@@ -3,14 +3,14 @@
 # not `migrate` (#1603).
 #   PORMG_TRIM_DATABASE=pormg_trim … julia --project=test/trim/mysql test/trim/mysql/prep.jl
 #
-# The server comes from the same `PORMG_TRIM_*` variables as `main.jl` (`server.jl`). This script empties
-# both tables before seeding, so it refuses a database whose name does not contain "trim": the integration
-# suite's F1 database has `circuit` and `race` tables too, and must never be emptied from here.
+# The server comes from the same `PORMG_TRIM_*` variables as `main.jl` (`../tools/server.jl`). This script
+# empties both tables before seeding, so it refuses a database whose name does not contain "trim": the
+# integration suite's F1 database has `circuit` and `race` tables too, and must never be emptied from here.
 using PormG, MySQL, Dates
 
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
 import .models as M
-include(joinpath(@__DIR__, "server.jl"))
+include(joinpath(@__DIR__, "..", "tools", "server.jl"))
 
 const KEY = "f1"
 
@@ -18,7 +18,7 @@ server = trim_server()
 occursin("trim", get(ENV, "PORMG_TRIM_DATABASE", "")) || error(
     "prep.jl empties the circuit and race tables: set PORMG_TRIM_DATABASE to a database of the " *
     "fixture's own, whose name contains \"trim\" (e.g. pormg_trim), never the integration suite's")
-PormG.Configuration.register_connection(KEY, trim_url(server);
+PormG.Configuration.register_connection(KEY, trim_url(server, "mysql");
     adapter = "MySQL", env = "prod", pool_size = 1, change_db = true, change_data = true)
 PormG.Models.set_models(models.MODEL_SET; key = KEY)
 

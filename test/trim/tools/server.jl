@@ -1,5 +1,6 @@
-# The MySQL server the fixture talks to, read from the environment at run time (#1599, #1614). Included by
-# `main.jl` (the trimmed entry) and `prep.jl` (the JIT seeding script), so both point at the same database.
+# The database server a fixture variant talks to, read from the environment at run time (#1599, #1614).
+# Included by each server variant's `main.jl` (the trimmed entry) and `prep.jl` (the JIT seeding script),
+# so both point at the same database.
 #
 #   PORMG_TRIM_HOST      default 127.0.0.1
 #   PORMG_TRIM_PORT      default 1: nothing listens there, so the read stops at the connect
@@ -7,8 +8,8 @@
 #   PORMG_TRIM_DATABASE  default f1
 #   PORMG_TRIM_PASSWORD  default f1; read from the environment only, never printed
 #
-# With none of them set the URL is `mysql://f1:f1@127.0.0.1:1/f1`, the fixture's port-1 default, so a run
-# without a server behaves as it always has. The variables are read inside a function, at run time: a read
+# With none of them set the URL is `<scheme>://f1:f1@127.0.0.1:1/f1`, the fixture's port-1 default, so a
+# run without a server behaves as it always has. The variables are read inside a function, at run time: a read
 # at the top level of the entry would be frozen into the image when juliac writes it.
 
 "The environment variable `name`, or `default` when it is unset or empty."
@@ -45,9 +46,10 @@ function trim_urlencode(s::String)::String
     return String(take!(io))
 end
 
-"The connection URL `register_connection` takes (#1769). It holds the password: never print it."
-trim_url(s::TrimServer) = string("mysql://", trim_urlencode(s.user), ":", trim_urlencode(s.password), "@",
-    s.host, ":", s.port, "/", trim_urlencode(s.database))
+"The connection URL `register_connection` takes, `scheme` being `mysql` or `postgresql` (#1769). It holds
+the password: never print it."
+trim_url(s::TrimServer, scheme::String) = string(scheme, "://", trim_urlencode(s.user), ":",
+    trim_urlencode(s.password), "@", s.host, ":", s.port, "/", trim_urlencode(s.database))
 
 "What a step line may say about the server: where it is, never who connects or with what."
 trim_where(s::TrimServer) = string(s.host, ":", s.port, "/", s.database)

@@ -680,7 +680,7 @@ function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) wh
   # every comparison dispatched at run time; in a trimmed image that was a `MethodError` on `==`.
   if value isa AnchorlessJoin
     rows = (instruc.alias, (_join_alias_b(r) for r in instruc.row_join[1:idx-1])..., hop)
-    return _with_render_scope(f, instruc; join_hop = hop, join_side = :none, join_left = rows, join_right = rows)
+    return _with_render_scope(f, instruc, _join_render_scope(instruc.scope, hop, rows, rows))
   end
   path = String[instruc.alias, hop]
   parent = value.alias_a
@@ -692,8 +692,16 @@ function _join_scope(f::F, instruc::SQLInstruction, idx::Int, value::JoinRow) wh
     i === nothing && break
     parent = _join_alias_a(instruc.row_join[i])
   end
-  return _with_render_scope(f, instruc; join_hop = hop, join_side = :none, join_left = (hop,), join_right = Tuple(path))
+  return _with_render_scope(f, instruc, _join_render_scope(instruc.scope, hop, (hop,), Tuple(path)))
 end
+
+# `_with_scope(prev; join_hop = hop, join_side = :none, join_left = left, join_right = right)`, positionally
+# (#1599 layer 5): the two alias tuples have a length known only at run time, so they are taken
+# unspecialized, at the slots' own `Tuple{Vararg{String}}`, and the scope is one compiled call.
+_join_render_scope(prev::RenderScope, hop::String, @nospecialize(left::Tuple{Vararg{String}}),
+                   @nospecialize(right::Tuple{Vararg{String}}))::RenderScope =
+  RenderScope(prev.phase, prev.label, prev.group_key, hop, :none, left, right, prev.introducer, prev.outer,
+              prev.having, prev.set_reads)
 
 # ── Prefixing a condition key; the handles a condition may not hold (#444, #481) ──────────────────
 # Helper to recursively prefix and validate fields in cjoin filters.

@@ -2695,8 +2695,9 @@ end
     # The signatures: the two scope methods and the one wrapper that only passes `f` on (`_join_scope`)
     # take the closure at a type parameter, so each compiles per closure type. A wrapper that calls
     # `f()` in a branch (`_on_join_right`, `_or_arm`, `_in_clause_phase`) is specialized by Julia anyway.
-    for g in (QB.with_scope, QB._with_render_scope, QB._join_scope)
-      sig = Base.unwrap_unionall(only(methods(g)).sig)
+    # `_with_render_scope` has two methods since #1599 layer 5 (keywords, or a scope the caller built).
+    for g in (QB.with_scope, QB._with_render_scope, QB._join_scope), m in methods(g)
+      sig = Base.unwrap_unionall(m.sig)
       @test sig.parameters[2] isa TypeVar
     end
   end

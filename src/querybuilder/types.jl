@@ -674,6 +674,20 @@ function _with_render_scope(f::F, instruc::SQLInstruction; kw...) where {F}
     instruc.scope = prev
   end
 end
+# The same with the scope built by the caller (#1599 layer 5). A keyword call is compiled per keyword
+# `NamedTuple` type, and a join scope's alias tuples have a length known only at run time
+# (`_join_render_scope`), so its keyword call had no compiled target in a trimmed image (the runtime tried
+# to infer `kwcall(…join_right::Tuple{String,String}…, _with_render_scope, …)` and raised
+# `MissingCodeError`). Built positionally, the scope is one compiled call whatever the lengths.
+function _with_render_scope(f::F, instruc::SQLInstruction, scope::RenderScope) where {F}
+  prev = instruc.scope
+  instruc.scope = scope
+  try
+    return f()
+  finally
+    instruc.scope = prev
+  end
+end
 
 # Store information to decide the name from table alias in subquery
 mutable struct SQLTbAlias <: SQLTableAlias

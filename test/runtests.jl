@@ -210,6 +210,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "No joinpath Splat in src/ (#1649)" include("unit/test_joinpath_splat_1649.jl")
     @testset "Documented Test Commands (#624)" include("unit/test_documented_commands.jl")
     @testset "Every Unit File Loads Its Drivers (#1658)" include("unit/test_unit_files_load_drivers.jl")
+    @testset "Only the Seeder Empties a Seeded F1 Table (#1764)" include("unit/test_seeded_fixture_deletes.jl")
     @testset "DateTime UTC Canonicalization (#79)" include("unit/test_datetime_canonicalization.jl")
     @testset "Value Representation Table (#564)" include("unit/test_value_repr_table.jl")
     @testset "Read Value Coercion (#564)" include("unit/test_read_value_coercion.jl")

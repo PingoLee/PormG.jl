@@ -29,15 +29,35 @@ Run with:
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
+# The bulk scratch testsets seed through the shared helpers; runtests.jl includes them at top level, so
+# load them only when this file runs on its own (#1764).
+if !isdefined(Main, :_seed_bulk_update_scratch_parents!)
+    include("common_bulk_scratch_setup.jl")
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Schema Evolution and Error Recovery
 #
 # Migrated from test_database_setup.jl. Uses M.Status because it is a small,
 # structurally simple table (two columns, PK is explicit) that cleanly exposes
-# the error/rollback surface without FK complications.
+# the error/rollback surface.
+#
+# #1764: `status` is a seeded F1 table and the FK parent of `result` and `sprint_results`, and db_2 is
+# shared by every checkout. The testset writes only its own reserved ids, 325001–325007 (clear of
+# test_bulk_copy's 310001–320000 and below the 340001 the #30 sequence check below needs), and removes
+# them before it starts and in a `finally`. It used to empty the table, which cascaded into `result`
+# and left both empty when this file ran on its own.
 # ─────────────────────────────────────────────────────────────────────────────
+function _clear_schema_evolution_status_rows!()
+    leftover = M.Status.objects
+    leftover.filter("statusid__@in" => collect(325001:325007))
+    leftover.exists() && leftover.delete()
+    return nothing
+end
+
 @testset "Schema Evolution and Error Recovery" begin
+  _clear_schema_evolution_status_rows!()
+  try
 
     # 1. Schema Evolution: Reordered columns and extra columns
     #
@@ -45,32 +65,31 @@ end
     # position. An extra DataFrame column that has no corresponding model field
     # must be silently ignored rather than causing an error.
     query = M.Status.objects
-    query.delete(allow_delete_all=true)
 
     df_evolved = DataFrame(
         extra_col = ["ignore me", "me too"],
         status    = ["Evolved 1", "Evolved 2"],
-        statusid  = [999, 1000]
+        statusid  = [325001, 325002]
     )
 
     # Both rows must land even though the DataFrame has an extra column and
     # the columns are not in the model's declared field order.
     bulk_insert(query, df_evolved)
-    query.filter("statusid" => 999)
+    query.filter("statusid" => 325001)
     @test query.count() == 1
     query = M.Status.objects
-    query.filter("statusid" => 1000)
+    query.filter("statusid" => 325002)
     @test query.count() == 1
 
     # 2. Error Recovery: Single-batch atomicity on duplicate PK
     #
     # If any row in a batch violates a constraint, the entire batch must be
-    # rolled back — no partial commits. Row 999 already exists from step 1,
+    # rolled back — no partial commits. Row 325001 already exists from step 1,
     # so the second row is a duplicate and the whole insert must fail.
     query = M.Status.objects
     initial_count = query.count()
     df_bad = DataFrame(
-        statusid = [1001, 999, 1002],           # 999 duplicates the row seeded above
+        statusid = [325003, 325001, 325004],    # 325001 duplicates the row seeded above
         status   = ["Good", "Bad (Duplicate)", "Good"]
     )
 
@@ -84,21 +103,20 @@ end
     end
 
     @test got_error
-    # Rows 1001 and 1002 must NOT be present — the whole batch was rolled back.
+    # Rows 325003 and 325004 must NOT be present — the whole batch was rolled back.
     query = M.Status.objects
     @test query.count() == initial_count
-    query.filter("statusid" => 1001)
+    query.filter("statusid" => 325003)
     @test query.count() == 0
 
     # 3. Multi-chunk Error Recovery: Atomicity across chunk boundaries
     #
-    # With chunk_size=2: the first chunk (2001, 2002) would normally commit on its
-    # own, but the second chunk (2001 again, 2003) has a duplicate that fails.
+    # With chunk_size=2: the first chunk (325005, 325006) would normally commit on its
+    # own, but the second chunk (325005 again, 325007) has a duplicate that fails.
     # The expected behaviour is that the entire multi-chunk operation is rolled
     # back, including the successfully-sent first chunk.
-    M.Status.objects.delete(allow_delete_all=true)
     df_multi = DataFrame(
-        statusid = [2001, 2002, 2001, 2003],    # 2001 repeats in row 3 (second chunk)
+        statusid = [325005, 325006, 325005, 325007],    # 325005 repeats in row 3 (second chunk)
         status   = ["Chunk 1", "Chunk 1", "Chunk 2 (Fail)", "Chunk 2"]
     )
 
@@ -113,8 +131,14 @@ end
     end
 
     @test got_error
-    # Even the first successfully-sent chunk must be gone — full rollback.
+    # Even the first successfully-sent chunk must be gone — full rollback. Counted over the three ids
+    # the operation wrote, not the whole table, which holds the seeded F1 rows when this file runs alone.
+    query = M.Status.objects
+    query.filter("statusid__@in" => [325005, 325006, 325007])
     @test query.count() == 0
+  finally
+    _clear_schema_evolution_status_rows!()
+  end
 end
 
 
@@ -417,30 +441,34 @@ end
         q = M.Status.objects.filter("statusid__@in" => status_ids);
         q.exists() && q.delete()
 
-        df = DataFrame(
-            "input_id"     => status_ids,
-            "input_status" => ["Mapped Hamilton", "Mapped Verstappen", "Mapped Leclerc", "Mapped Norris"]
-        )
+        # #1764: the cleanup runs in a `finally`, so a failed assertion does not leave these rows in the
+        # shared `status` table.
+        try
+            df = DataFrame(
+                "input_id"     => status_ids,
+                "input_status" => ["Mapped Hamilton", "Mapped Verstappen", "Mapped Leclerc", "Mapped Norris"]
+            )
 
-        bulk_insert(
-            M.Status.objects,
-            df,
-            columns    = ["input_id" => "statusid", "input_status" => "status"],
-            chunk_size = 2
-        )
+            bulk_insert(
+                M.Status.objects,
+                df,
+                columns    = ["input_id" => "statusid", "input_status" => "status"],
+                chunk_size = 2
+            )
 
-        @test M.Status.objects.filter("statusid" => status_ids[1], "status" => "Mapped Hamilton").count() == 1
-        @test M.Status.objects.filter("statusid" => status_ids[2], "status" => "Mapped Verstappen").count() == 1
-        @test M.Status.objects.filter("statusid" => status_ids[3], "status" => "Mapped Leclerc").count() == 1
-        @test M.Status.objects.filter("statusid" => status_ids[4], "status" => "Mapped Norris").count() == 1
+            @test M.Status.objects.filter("statusid" => status_ids[1], "status" => "Mapped Hamilton").count() == 1
+            @test M.Status.objects.filter("statusid" => status_ids[2], "status" => "Mapped Verstappen").count() == 1
+            @test M.Status.objects.filter("statusid" => status_ids[3], "status" => "Mapped Leclerc").count() == 1
+            @test M.Status.objects.filter("statusid" => status_ids[4], "status" => "Mapped Norris").count() == 1
 
-        # The original DataFrame must not have been mutated (no in-place rename).
-        @test "input_status" in names(df)
-        @test !("status" in names(df))
-
-        q = M.Status.objects
-        q.filter("statusid__@in" => status_ids)
-        q.exists() && q.delete()
+            # The original DataFrame must not have been mutated (no in-place rename).
+            @test "input_status" in names(df)
+            @test !("status" in names(df))
+        finally
+            q = M.Status.objects
+            q.filter("statusid__@in" => status_ids)
+            q.exists() && q.delete()
+        end
     end
 end
 

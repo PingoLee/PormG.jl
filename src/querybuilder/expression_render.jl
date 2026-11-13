@@ -1928,7 +1928,12 @@ function _checking_unnamed_temporal(f, instruc::SQLInstruction)
   end
 end
 # A pair's `@range` bounds are each an ordering against the column.
-function _queue_unnamed_temporal!(pending, left, right, op)
+#
+# #1599 layer 5: one method, and every caller hands its two sides at a union (a filter's column node and
+# value node, an `FExpression`'s sides, a projection's `FieldPart`), so the one compiled body takes them
+# unspecialized; specialized on them, the call had no compiled target in a trimmed image (the read
+# stopped at `_queue_unnamed_temporal!(::Vector{Any}, ::SQLField, ::SQLText, ::String)`).
+function _queue_unnamed_temporal!(pending, @nospecialize(left), @nospecialize(right), op)
   pending === nothing && return nothing
   op in _UNNAMED_TEMPORAL_OPERATIONS || return nothing
   if op in ("BETWEEN", "NOT BETWEEN") && right isa Union{AbstractVector,Tuple}

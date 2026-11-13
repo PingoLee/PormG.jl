@@ -893,16 +893,19 @@ end
     @test length(methods(CP._run_sqlite_statement)) == 1
   end
 
-  # What: the SQLite extension's statement parameters (#1599 layer 2).
+  # What: the SQLite extension's statement parameters and its retry's lock check (#1599 layer 2).
   # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`
   #   binds each value of the types `sqlite_bind_value` hands over with a static call (any other value
-  #   through one `@noinline` open arm), with the rows, the count check and its message unchanged.
+  #   through one `@noinline` open arm), with the rows, the count check and its message unchanged; the
+  #   lock check takes the caught exception unspecialized and reads SQLite.jl's error at its type.
   # Why: SQLite.jl binds a vector with one `bind!(stmt, i, values[i])` per value, a call on an `Any`, and
-  #   the trimmed read stopped at `bind!(::Stmt, ::Int64, ::String)`.
-  @testset "the SQLite extension binds parameters without a dynamic call (#1599 layer 2)" begin
+  #   the trimmed read stopped at `bind!(::Stmt, ::Int64, ::String)`; the retry's `_is_sqlite_locked_error(e)`
+  #   was then compiled per exception type, and the trimmed binary had none for the one it caught.
+  @testset "the SQLite extension binds parameters and checks a lock without a dynamic call (#1599 layer 2)" begin
     X = Base.get_extension(PormG, :PormGSQLiteExt)
     @test isempty(_dynamic_calls(X._sqlite_bind_one!, (SQLite.Stmt, Int, Any)))
     @test isempty(_dynamic_calls(SQLite.bind!, (SQLite.Stmt, X._SQLiteBinds{Vector{Any}})))
+    @test isempty(_dynamic_calls(X._is_sqlite_locked_error, (Any,)))
     @test X._sqlite_binds(Any[1]) isa X._SQLiteBinds{Vector{Any}}
     @test X._sqlite_binds((1,)) === (1,)          # a tuple is handed over as it was
     @test X._sqlite_binds(nothing) === nothing
@@ -928,6 +931,12 @@ end
     @test short isa SQLite.SQLiteException && short.msg == "values should be provided for all query placeholders"
     SQLite.DBInterface.close!(stmt)
     close(db)
+
+    @test X._is_sqlite_locked_error(SQLite.SQLiteException("database is locked"))
+    @test X._is_sqlite_locked_error(SQLite.SQLiteException("DATABASE TABLE IS LOCKED: drivers"))
+    @test X._is_sqlite_locked_error(ErrorException("database is locked"))   # the open arm, as before
+    @test !X._is_sqlite_locked_error(SQLite.SQLiteException("no such table: drivers"))
+    @test !X._is_sqlite_locked_error(InterruptException())
   end
 
   # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /

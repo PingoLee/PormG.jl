@@ -20,6 +20,18 @@ import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, Invali
 import PormG: StatementError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
 import PormG: _require_feature  # #1163: a version row (window functions on SQLite)
+
+# #1599: the barriers through which a Dialect method that takes the engine `@nospecialize` calls the
+# capability helpers. Such a method holds the connection at its abstract engine type, and
+# `_capability_error` / `_supports` specialize on the connection (a caller with a concrete pool reads the
+# table statically, #1682), so a direct call from it would be one dynamic call site per method. Each
+# barrier holds that call at one site instead; it forwards its arguments unchanged, so the answer and the
+# refusal's type and text are the same.
+@noinline _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString) =
+  _capability_error(conn, feature, what)
+@noinline _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString,
+                               why::AbstractString) = _capability_error(conn, feature, what; why = why)
+@noinline _supports_at(@nospecialize(conn), feature::Symbol)::Bool = _supports(conn, feature)
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
@@ -1067,8 +1079,8 @@ _map_cast_name(map::AbstractDict, name::AbstractString, suffix::AbstractString) 
 # NUMERIC-affinity name that turns 'senna' into 0; MySQL refused naming no feature. Called after the
 # array check, so a `tsvector[]` names arrays.
 const _FTS_CAST_TYPES = ("tsvector", "tsquery")
-function _check_fts_cast(conn::PormGBackend, name::AbstractString, suffix::AbstractString, context::AbstractString)
-  (lowercase(name) in _FTS_CAST_TYPES && !_supports(conn, :full_text_search)) || return nothing
+function _check_fts_cast(@nospecialize(conn::PormGBackend), name::AbstractString, suffix::AbstractString, context::AbstractString)
+  (lowercase(name) in _FTS_CAST_TYPES && !_supports_at(conn, :full_text_search)) || return nothing
   throw(fts_capability_error(conn, "$(context): a cast to $(repr(name * suffix))"))
 end
 
@@ -1081,13 +1093,13 @@ kept — on PostgreSQL that is what turns `Cast(x, BinaryField())` into `::bytea
 instead of the nonexistent `::BLOB` — and any other validated name renders as validated. SQLite has
 no array types, so a `[]` suffix raises `BackendCapabilityError` there.
 """
-function cast_type_sql(type::AbstractString, conn::PormGPostgres; context::AbstractString = "Cast")
+function cast_type_sql(type::AbstractString, @nospecialize(conn::PormGPostgres); context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
   return _map_cast_name(postgres_type_map_reverse, name, suffix) * suffix
 end
-function cast_type_sql(type::AbstractString, conn::PormGSQLite; context::AbstractString = "Cast")
+function cast_type_sql(type::AbstractString, @nospecialize(conn::PormGSQLite); context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
-  occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
+  occursin('[', suffix) && throw(_capability_error_at(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
   _check_fts_cast(conn, name, suffix, context)
   return uppercase(_map_cast_name(sqlite_type_map_reverse, name, suffix) * suffix)
 end
@@ -1128,12 +1140,12 @@ const _MYSQL_CAST_TARGETS = Dict{String,String}(
 # `timestamp(3)`, `time(3)`); on any other the size is not MySQL's to keep (`integer(4)`). `float(p)`
 # stays `FLOAT(p)`, since MySQL's `DOUBLE` cast takes no size and `FLOAT(p)` picks the width by `p`.
 const _MYSQL_SIZED_CAST_TARGETS = ("CHAR", "DECIMAL", "FLOAT", "DATETIME", "TIME")
-function cast_type_sql(type::AbstractString, conn::PormGMySQL; context::AbstractString = "Cast")
+function cast_type_sql(type::AbstractString, @nospecialize(conn::PormGMySQL); context::AbstractString = "Cast")
   name, suffix = _parse_cast_type(type, context)
-  occursin('[', suffix) && throw(_capability_error(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
+  occursin('[', suffix) && throw(_capability_error_at(conn, :arrays, "$(context): a cast to $(repr(name * suffix))"))
   _check_fts_cast(conn, name, suffix, context)
   key = lowercase(name)
-  key in ("inet", "cidr") && throw(_capability_error(conn, :network_types, "$(context): a cast to $(repr(name * suffix))"))
+  key in ("inet", "cidr") && throw(_capability_error_at(conn, :network_types, "$(context): a cast to $(repr(name * suffix))"))
   # The parser keeps `with/without time zone` after a size (`timestamp(3) with time zone`) in the
   # suffix; MySQL takes only the size, and the zone words decide the name as they do unsized.
   m = match(r"^(\(\d+(?:,\d+)?\))?(?: (with|without) time zone)?$", suffix)
@@ -3006,21 +3018,21 @@ Render a row-level locking clause for a SELECT (#26), appended after ORDER BY / 
 names a range variable, never a table, and only the query builder knows which aliases it generated.
 Empty renders no `OF`, which locks every table the statement reads.
 """
-function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGPostgres)::String
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, @nospecialize(conn::PormGPostgres))::String
   lock_sql = no_key ? "FOR NO KEY UPDATE" : "FOR UPDATE"
   of_sql = isempty(of_aliases) ? "" : " OF " * join(of_aliases, ", ")
   wait_sql = nowait ? " NOWAIT" : (skip_locked ? " SKIP LOCKED" : "")
   return "$(lock_sql)$(of_sql)$(wait_sql) \n"
 end
-function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGSQLite)::String
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, @nospecialize(conn::PormGSQLite))::String
   return ""  # SQLite: no row-level locking — silent no-op (documented divergence, #26)
 end
 # MySQL (#1269): InnoDB row locks, `OF` naming the aliases as on PostgreSQL (measured on 8.4: `OF`
 # takes the alias of an aliased table). It has no lock weaker than `FOR UPDATE` that still lets a
 # foreign key be checked against the row, so `no_key = true` asks for a lock MySQL cannot take, and is
 # refused: a plain `FOR UPDATE` would silently take the stronger one.
-function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, conn::PormGMySQL)::String
-  no_key && throw(_capability_error(conn, :no_key_locks, "select_for_update(no_key = true)"))
+function for_update_clause(nowait::Bool, skip_locked::Bool, no_key::Bool, of_aliases::Vector{String}, @nospecialize(conn::PormGMySQL))::String
+  no_key && throw(_capability_error_at(conn, :no_key_locks, "select_for_update(no_key = true)"))
   of_sql = isempty(of_aliases) ? "" : " OF " * join(of_aliases, ", ")
   wait_sql = nowait ? " NOWAIT" : (skip_locked ? " SKIP LOCKED" : "")
   return "FOR UPDATE$(of_sql)$(wait_sql) \n"
@@ -4078,14 +4090,19 @@ end
 # prints only digits. A literal rather than a bound parameter, as a JSON path's index is: the
 # rendered text of a String path is memoized and re-used on the assumption that it binds nothing
 # (#586).
-_array_index_expr(::PormGPostgres, column::AbstractString, index::Int)::String =
+#
+# #1599: the engine argument is `@nospecialize`. The caller holds the instruction's connection, a union
+# of the abstract engine types, so a method specialized on it would be compiled for `PormGSQLite` — not
+# a compileable signature, so the call stayed dynamic in a trimmed build. Compiled at its declared type,
+# each arm is invoked statically; which method runs, and what it raises, is unchanged.
+_array_index_expr(@nospecialize(conn::PormGPostgres), column::AbstractString, index::Int)::String =
   string(column, "[", index, "]")
-_array_slice_expr(::PormGPostgres, column::AbstractString, lower::Int, upper::Int)::String =
+_array_slice_expr(@nospecialize(conn::PormGPostgres), column::AbstractString, lower::Int, upper::Int)::String =
   string(column, "[", lower, ":", upper, "]")
-_array_index_expr(conn::PormGBackend, column::AbstractString, index::Int) =
-  throw(_capability_error(conn, :arrays, "An ArrayField index (`__$(index - 1)`)"))
-_array_slice_expr(conn::PormGBackend, column::AbstractString, lower::Int, upper::Int) =
-  throw(_capability_error(conn, :arrays, "An ArrayField slice (`__$(lower - 1)_$(upper)`)"))
+_array_index_expr(@nospecialize(conn::PormGBackend), column::AbstractString, index::Int) =
+  throw(_capability_error_at(conn, :arrays, "An ArrayField index (`__$(index - 1)`)"))
+_array_slice_expr(@nospecialize(conn::PormGBackend), column::AbstractString, lower::Int, upper::Int) =
+  throw(_capability_error_at(conn, :arrays, "An ArrayField slice (`__$(lower - 1)_$(upper)`)"))
 
 # #904: PostgreSQL network operators over an `inet`/`cidr` column. The same three arms as the JSON
 # four: PostgreSQL emits the operator, SQLite and the abstract arm refuse. SQLite cannot declare
@@ -4302,8 +4319,8 @@ end
 # with, so the two cannot drift apart. `ts_config_name` is bound here too, as `Dialect.ts_config_name`.
 # The search text and the headline options are always bound.
 # ──────────────────────────────────────────────────────────────────────────────
-fts_capability_error(conn, what::AbstractString) =
-  _capability_error(conn, :full_text_search, what; why = "PormG does not emulate full-text search (#31).")
+fts_capability_error(@nospecialize(conn), what::AbstractString) =
+  _capability_error_at(conn, :full_text_search, what, "PormG does not emulate full-text search (#31).")
 
 const _TS_QUERY_FUNCTIONS = Dict("plain" => "plainto_tsquery", "phrase" => "phraseto_tsquery",
                                  "websearch" => "websearch_to_tsquery", "raw" => "to_tsquery")
@@ -4311,14 +4328,14 @@ const _TS_QUERY_FUNCTIONS = Dict("plain" => "plainto_tsquery", "phrase" => "phra
 # The left side of the `@search` lookup: the column's document, parsed with the query's config
 # (`ts_lookup_document_sql`, which says why it has no `COALESCE`). The connection is the LAST argument so this helper never takes the shape of a
 # lookup renderer, `(conn, column, value)`, which `test_operators.jl` reads back by reflection.
-ts_vector_sql(column::AbstractString, config, conn::PormGPostgres) = ts_lookup_document_sql(column, config)
-ts_vector_sql(column::AbstractString, config, conn::PormGAbstractType) =
+ts_vector_sql(column::AbstractString, config, @nospecialize(conn::PormGPostgres)) = ts_lookup_document_sql(column, config)
+ts_vector_sql(column::AbstractString, config, @nospecialize(conn::PormGAbstractType)) =
   throw(fts_capability_error(conn, "The @search lookup"))
 
-search(conn::PormGPostgres, vector::AbstractString, query::AbstractString)::String = "$(vector) @@ $(query)"
-search(conn::PormGBackend, vector::AbstractString, query::AbstractString) =
+search(@nospecialize(conn::PormGPostgres), vector::AbstractString, query::AbstractString)::String = "$(vector) @@ $(query)"
+search(@nospecialize(conn::PormGBackend), vector::AbstractString, query::AbstractString) =
   throw(fts_capability_error(conn, "The @search lookup"))
-search(conn::PormGAbstractType, vector::AbstractString, query) =
+search(@nospecialize(conn::PormGAbstractType), vector::AbstractString, query) =
   throw(fts_capability_error(conn, "The @search lookup"))
 
 # Django's document (`ts_vector_document_sql`), labelled by its weight (`setweight`, #1021).

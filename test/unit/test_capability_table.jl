@@ -50,7 +50,9 @@ end
 # Capability table: every feature a call site names is a row
 # A refusal or a check that names a feature the table does not have would throw `InvalidValueError`
 # only when reached. The scan catches a symbol written as the feature argument of `_supports`,
-# `_capability_error` or `_require_feature`; the specialized field types name theirs through
+# `_capability_error` or `_require_feature`, or of their Dialect barriers (`_supports_at`,
+# `_capability_error_at`, `_require_feature_at`, #1599), which forward it unchanged; the specialized
+# field types name theirs through
 # `Dialect._field_feature`, asked directly below, as is the reason table keyed by them.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1129: every feature src/ names is a row of the table" begin
@@ -58,12 +60,14 @@ end
   used = Set{Symbol}()
   for (dir, _, files) in walkdir(joinpath(_CT_ROOT, "src")), f in files
     endswith(f, ".jl") || continue
-    for m in eachmatch(r"(?:_supports|_capability_error|_require_feature)\([^,()]*(?:\([^()]*\))?[^,()]*,\s*:(\w+)", read(joinpath(dir, f), String))
+    for m in eachmatch(r"(?:_supports|_capability_error|_require_feature)(?:_at)?\([^,()]*(?:\([^()]*\))?[^,()]*,\s*:(\w+)", read(joinpath(dir, f), String))
       push!(used, Symbol(m.captures[1]))
     end
   end
   @test !isempty(used)
   @test setdiff(used, names) == Set{Symbol}()
+  # Named only at a barrier site (`for_update_clause`'s MySQL arm), so the scan must read the barriers.
+  @test :no_key_locks in used
   M = PormG.Models
   for field in (M.ArrayField(M.IntegerField()), M.SearchVectorField(), M.GenericIPAddressField(), M.CIDRField())
     @test PormG.Dialect._field_feature(field) in names

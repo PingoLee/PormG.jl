@@ -2790,6 +2790,108 @@ end
     end
   end
 
+  # What: the Dialect renderers a query reaches with the instruction's connection (`_array_slice_expr`,
+  #   `_array_index_expr`, `for_update_clause`, `cast_type_sql`, `search`, `ts_vector_sql`, and
+  #   `_check_fts_cast` / `fts_capability_error` below them), each called with the connection as the query
+  #   builder holds it: `QueryBuilder.ConnType`, a union of the three ABSTRACT engine types; and the two
+  #   barriers they reach the capability table through (`_capability_error_at`, `_supports_at`).
+  # Expected: every method takes the engine argument `@nospecialize`; a call over `ConnType` makes no
+  #   dynamic call; the real call sites in the query builder call these names statically; each engine
+  #   reaches the arm it reached before (PostgreSQL renders; SQLite and MySQL refuse, naming themselves);
+  #   the table's helpers keep specializing on a concrete pool (#1682's pin, above, still holds).
+  # Why: a method specialized on the engine argument is compiled for `PormGSQLite`, an abstract type, which
+  #   is not a compileable signature, so the call stayed a dynamic dispatch: 58 trimmed-build rows for the
+  #   array slice alone, through `_render_array_subscript` (#1780's survey, group 3). Compiled at the
+  #   declared type, each arm is invoked statically. A new engine arm added without `@nospecialize` would
+  #   make every call to its function dynamic again, which only the next fixture build would show; the
+  #   bit check catches it here.
+  @testset "the Dialect renderers take the abstract engine connection statically (#1599 layer 5, group 3)" begin
+    D = PormG.Dialect; QB = PormG.QueryBuilder
+    CT = QB.ConnType
+    # 1. Every method takes its engine argument `@nospecialize`. `fts_capability_error` and the barriers
+    #    take an untyped connection as their first argument.
+    @test isdefined(D, :_capability_error_at) && isdefined(D, :_supports_at)
+    untyped_first = Tuple(getglobal(D, n) for n in (:fts_capability_error, :_capability_error_at, :_supports_at)
+                          if isdefined(D, n))
+    for f in (D._array_slice_expr, D._array_index_expr, D.for_update_clause, D.cast_type_sql, D.search,
+              D.ts_vector_sql, D._check_fts_cast, untyped_first...), m in methods(f)
+      params = collect(Base.unwrap_unionall(m.sig).parameters[2:end])
+      i = f in untyped_first ? 1 : findfirst(T -> T !== Any && T isa Type && T <: PormG.PormGAbstractType, params)
+      @test i !== nothing
+      @test (m.nospecialize >> (i - 1)) & 1 == 1
+    end
+    # 2. A call over `ConnType` resolves: no dynamic call in the caller. The closures name the functions
+    #    through `PormG.Dialect` (a constant), not through the local `D`, which they would capture.
+    calls = (
+      (c, s) -> PormG.Dialect._array_slice_expr(c, s, 1, 2),
+      (c, s) -> PormG.Dialect._array_index_expr(c, s, 1),
+      (c, s) -> PormG.Dialect.for_update_clause(false, false, false, [s], c),
+      (c, s) -> PormG.Dialect.cast_type_sql(s, c),
+      (c, s) -> PormG.Dialect.cast_type_sql(s, c; context = s),
+      (c, s) -> PormG.Dialect.search(c, s, s),
+      (c, s) -> PormG.Dialect.ts_vector_sql(s, "english", c),
+      (c, s) -> PormG.Dialect.fts_capability_error(c, s),
+      (c, s) -> PormG.Dialect._check_fts_cast(c, s, s, s),
+    )
+    for g in calls
+      @test isempty(_dynamic_calls(g, (CT, String)))
+    end
+    # Inside each barrier, its own call is the only dynamic one. Read at `Any`, the instance the callers
+    #    invoke (the connection is `@nospecialize` and untyped there).
+    barriers = isdefined(D, :_capability_error_at) ?
+      ((Tuple{typeof(getglobal(D, :_capability_error_at)), Any, Symbol, String}, 1),
+       (Tuple{typeof(getglobal(D, :_capability_error_at)), Any, Symbol, String, String}, 1),
+       (Tuple{typeof(getglobal(D, :_supports_at)), Any, Symbol}, 1)) : ()
+    for (tt, n) in barriers
+      ci, _ = only(Base.code_typed_by_type(tt; optimize = true))
+      dyn = [s for s in ci.code if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]
+      @test length(dyn) == n
+    end
+    # 3. The real call sites, read from the query builder without changing it. (`cast_type_sql`'s and
+    #    `ts_vector_sql`'s sites pass a value read from a `Dict{String,Any}` as well, so they stay dynamic
+    #    until that value is typed: the PR's hand-off.)
+    for (tt, names) in (
+        (Tuple{typeof(QB._render_array_subscript), QB.InstructionObject, String, PormG.Models.sArrayField,
+               String, Vector{String}, Vector{String}}, ("_array_slice_expr", "_array_index_expr")),
+        (Tuple{typeof(QB._render_search_operator), QB.OperObject, String, QB.InstructionObject},
+         ("Dialect.search", "fts_capability_error")))
+      @test isempty(_named_dynamic_calls(tt, names))
+    end
+    # 4. Each engine reaches the arm it reached before: PostgreSQL renders, SQLite and MySQL refuse with
+    #    their own backend named, and SQLite's FOR UPDATE is empty. The full messages below were read from
+    #    the base commit (a3b3492b2), so the text is pinned, not sampled.
+    pg, sl, my = _TspStandInPGPool(), _TspStandInPool(), _TspStandInMyPool()
+    @test D._array_slice_expr(pg, "t.tags", 1, 2) == "t.tags[1:2]"
+    @test D._array_index_expr(pg, "t.tags", 3) == "t.tags[3]"
+    for (c, name) in ((sl, "SQLite"), (my, "MySQL"))
+      e = try D._array_slice_expr(c, "t.tags", 1, 2); nothing catch err; err end
+      @test e isa PormG.BackendCapabilityError
+      @test occursin("An ArrayField slice (`__0_2`)", e.msg) && occursin(name, e.msg)
+      e = try D.search(c, "v", "q"); nothing catch err; err end
+      @test e isa PormG.BackendCapabilityError && occursin("The @search lookup", e.msg) && occursin(name, e.msg)
+      @test occursin("PormG does not emulate full-text search (#31).", e.msg)
+      e = try D.cast_type_sql("tsvector", c); nothing catch err; err end
+      @test e isa PormG.BackendCapabilityError && occursin("Cast: a cast to \"tsvector\"", e.msg)
+    end
+    @test D.for_update_clause(true, false, false, String[], pg) == "FOR UPDATE NOWAIT \n"
+    @test D.for_update_clause(true, false, false, String[], sl) == ""
+    @test_throws PormG.BackendCapabilityError D.for_update_clause(false, false, true, String[], my)
+    @test D.cast_type_sql("tsvector", pg) == "tsvector"
+    msg(f) = try f(); "" catch err; err isa PormG.BackendCapabilityError ? err.msg : "not a refusal" end
+    @test msg(() -> D._array_slice_expr(sl, "t.tags", 1, 2)) == "An ArrayField slice (`__0_2`) needs array types " *
+      "(`ArrayField`, `integer[]`), which SQLite does not support (supported on PostgreSQL)."
+    @test msg(() -> D.search(sl, "v", "q")) == "The @search lookup needs full-text search (`tsvector`, `tsquery`), " *
+      "which SQLite does not support (supported on PostgreSQL). PormG does not emulate full-text search (#31)."
+    @test msg(() -> D.cast_type_sql("tsvector", sl)) == "Cast: a cast to \"tsvector\" needs full-text search " *
+      "(`tsvector`, `tsquery`), which SQLite does not support (supported on PostgreSQL). PormG does not emulate " *
+      "full-text search (#31)."
+    @test msg(() -> D.cast_type_sql("inet", my)) == "Cast: a cast to \"inet\" needs network address types " *
+      "(`inet`, `cidr`), which MySQL does not support (supported on PostgreSQL)."
+    @test msg(() -> D.for_update_clause(false, false, true, String[], my)) == "select_for_update(no_key = true) " *
+      "needs a row lock weaker than `FOR UPDATE` that leaves foreign-key checks free (`FOR NO KEY UPDATE`), which " *
+      "MySQL does not support (supported on PostgreSQL)."
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

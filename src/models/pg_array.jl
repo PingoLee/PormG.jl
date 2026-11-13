@@ -334,21 +334,35 @@ pg_array_element_text(::CDateTime, v::DateTime) = Dates.format(v, dateformat"yyy
 # exponent rather than `string(d)`, whose spelling differs between the two Decimals majors PormG
 # supports (`Decimals = "0.4, 0.5"`).
 function _pg_decimal_text(d::Decimals.Decimal)::String
-  c, q = BigInt(d.c), Int(d.q)
+  c, q = BigInt(d.c), _decimal_exponent(d)
   iszero(c) && return "0"
   digits = string(c)
   text = if q >= 0
-    digits * repeat("0", q)
+    digits * _zeros_text(q)
   elseif length(digits) > -q
     digits[1:end + q] * "." * digits[end + q + 1:end]
   else
-    "0." * repeat("0", -q - length(digits)) * digits
+    "0." * _zeros_text(-q - length(digits)) * digits
   end
   if occursin('.', text)
     text = rstrip(rstrip(text, '0'), '.')
   end
-  return (d.s == 1 ? "-" : "") * text
+  return (_decimal_negative(d) ? "-" : "") * text
 end
+
+# #1599 layer 3: the `Decimal` slots read at their types. Decimals 0.5 declares `q::Int64` and `s::Bool`;
+# 0.4 declares both `Integer`, so `Int(d.q)` and `d.s == 1` dispatched at run time there, and every
+# operation on the exponent after them with it. Each slot is read once (#1747) and tested at the type 0.5
+# gives; any other `Integer` takes one dynamic call behind `@noinline`, the expression it replaces (#1735).
+_decimal_exponent(d::Decimals.Decimal)::Int = (q = d.q; q isa Int ? q : _decimal_exponent_other(q))
+@noinline _decimal_exponent_other(@nospecialize(q))::Int = Int(q)
+_decimal_negative(d::Decimals.Decimal) = (s = d.s; s isa Bool ? s : s isa Int ? s == 1 : _decimal_negative_other(s))
+@noinline _decimal_negative_other(@nospecialize(s)) = s == 1
+
+# `repeat("0", n)` for `n >= 0`, the zeros `_pg_decimal_text` pads with. Base's `repeat(::String, ::Int)`
+# reaches `repeat(::AbstractString, ::Integer)` through an `@invoke`, a call a `juliac --trim` build cannot
+# compile (#1599 layer 3: 2 rows per call site on the MySQL fixture, through `_bind_value(::Decimal)`).
+_zeros_text(n::Int)::String = String(fill(UInt8('0'), n))
 
 
 # ── Whole arrays ─────────────────────────────────────────────────────────────────────────────────

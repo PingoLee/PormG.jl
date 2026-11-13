@@ -32,6 +32,16 @@ const _PG_ARRAY_BOUNDS = r"^\s*(?:\[\s*[+-]?\d+\s*:\s*[+-]?\d+\s*\])+\s*="
 # starts with one of those UNQUOTED, so stripping it here would change the text that was stored.
 _pg_array_space(c::Char)::Bool = c in (' ', '\t', '\n', '\r', '\v', '\f')
 
+# The index of the first non-space character at or after `i` (#1599 layer 3). A function rather than a
+# closure over `i`: a closure that reassigns a captured variable boxes it, which made every read of `i` in
+# `parse_pg_array_literal` an untyped one (about 190 verifier rows in a trimmed build).
+function _pg_array_skip_ws(chars::Vector{Char}, i::Int, n::Int)::Int
+  while i <= n && _pg_array_space(chars[i])
+    i += 1
+  end
+  return i
+end
+
 _pg_array_invalid(raw, why::AbstractString) =
   throw(InvalidValueError("Invalid PostgreSQL array literal: $why.", :format))
 
@@ -50,17 +60,16 @@ function parse_pg_array_literal(s::AbstractString)::Vector{Union{Nothing, String
   n = length(chars)
   out = Union{Nothing, String}[]
   i = 1
-  skip_ws() = (while i <= n && _pg_array_space(chars[i]); i += 1; end)
 
-  skip_ws()
+  i = _pg_array_skip_ws(chars, i, n)
   (i <= n && chars[i] == '{') || _pg_array_invalid(raw, "it must start with `{`")
   i += 1
-  skip_ws()
+  i = _pg_array_skip_ws(chars, i, n)
   if i <= n && chars[i] == '}'
     i += 1
   else
     while true
-      skip_ws()
+      i = _pg_array_skip_ws(chars, i, n)
       i > n && _pg_array_invalid(raw, "it ends before its closing `}`")
       c = chars[i]
       if c == '{'
@@ -111,7 +120,7 @@ function parse_pg_array_literal(s::AbstractString)::Vector{Union{Nothing, String
         isempty(text) && _pg_array_invalid(raw, "it has an empty unquoted element")
         push!(out, !escaped && lowercase(text) == "null" ? nothing : text)
       end
-      skip_ws()
+      i = _pg_array_skip_ws(chars, i, n)
       i > n && _pg_array_invalid(raw, "it ends before its closing `}`")
       if chars[i] == ','
         i += 1
@@ -123,7 +132,7 @@ function parse_pg_array_literal(s::AbstractString)::Vector{Union{Nothing, String
       end
     end
   end
-  skip_ws()
+  i = _pg_array_skip_ws(chars, i, n)
   i <= n && _pg_array_invalid(raw, "it has text after its closing `}`")
   return out
 end

@@ -304,7 +304,8 @@ include(joinpath(@__DIR__, "helper_core_box.jl"))
 const _TR_BOX_REVIEWED = Dict{String,Int}(
   # #1697: src/ConnectionPool.jl 5 → 0 (`_close_pool_slots!`'s `in_use`, both `release_connection`s'
   # `retired`, both `_acquire_connection!`s' waiter `w`) and src/models/fields.jl 1 → 0 (`_int_kwarg`'s
-  # `value`). The rest are older and counted, not fixed.
+  # `value`). #1599 layer 3: src/models/pg_array.jl 1 → 0 (`parse_pg_array_literal`'s index, captured and
+  # reassigned by its `skip_ws()` closure). The rest are older and counted, not fixed.
   "src/Dialect.jl" => 1,                       # alter_field's keyword body
   "src/Generator.jl" => 1,                     # create_db_folder_and_yml
   "src/migrations/column_spec.jl" => 1,        # field_from_spec
@@ -312,7 +313,6 @@ const _TR_BOX_REVIEWED = Dict{String,Int}(
   "src/migrations/introspection.jl" => 2,
   "src/migrations/planner.jl" => 2,
   "src/migrations/runner.jl" => 3,
-  "src/models/pg_array.jl" => 1,               # parse_pg_array_literal
 )
 
 # src/ and ext/, except src/querybuilder/ (test_terminal_pool_barrier.jl counts it per file).

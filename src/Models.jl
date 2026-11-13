@@ -5318,8 +5318,12 @@ before, through one dynamic call. Returns and raises exactly what the direct cal
   return _apply_formatter_other(f, value, ranged)
 end
 
-# The open arm (#1735): a callable no arm names, called as the filter path called it before.
-@noinline _apply_formatter_other(@nospecialize(f), value, ranged::Bool) =
+# The open arm (#1735): a callable no arm names, called as the filter path called it before. The value is
+# taken unspecialized too (#1599 layer 3): `apply_formatter` is compiled once per value type, and each
+# of those instances called its own copy of this arm, which a `juliac --trim` build then compiled per
+# literal type the query builder's walk names (about 330 verifier rows on #1784's fixture). The call
+# inside dispatches at run time either way, so one compiled copy serves every value.
+@noinline _apply_formatter_other(@nospecialize(f), @nospecialize(value), ranged::Bool) =
   ranged ? f(value) : unranged_formatter(f)(value)
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -6268,7 +6272,10 @@ function normalize_sqlite_datetime_string(value::AbstractString)
     s = String(value)
     m = match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})$", s)
     if m !== nothing
-        base_dt, ms, tz = m.captures
+        # Every group is required, so a match captures all three: `something` types each one, and the
+        # join below is a static call (#1599 layer 3: on a capture typed `Union{Nothing, SubString}` it
+        # was a dynamic one, on the SQLite read path).
+        base_dt, ms, tz = something(m[1]), something(m[2]), something(m[3])
         if length(ms) < 3
             ms = rpad(ms, 3, '0')
         elseif length(ms) > 3
@@ -6278,7 +6285,7 @@ function normalize_sqlite_datetime_string(value::AbstractString)
     end
     m_no_ms = match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(Z|[+-]\d{2}:\d{2})$", s)
     if m_no_ms !== nothing
-        base_dt, tz = m_no_ms.captures
+        base_dt, tz = something(m_no_ms[1]), something(m_no_ms[2])
         return "$(base_dt).000$(tz)"
     end
     return s

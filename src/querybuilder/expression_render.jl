@@ -223,8 +223,10 @@ function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones
   # A `Date` against a TIMESTAMP column is promoted to midnight first, because `format_timezone_sql`
   # has no `::Date` method — and midnight is what SQL itself means by a date literal compared to a
   # timestamp, so the promotion is exact rather than a guess.
-  kind isa CDateTime && operand isa Dates.Date && return formatter(Dates.DateTime(operand))
-  return formatter(operand)
+  # Through `Models.apply_formatter` (#1599 layer 5): `value_formatter` returns a formatter as a value, and
+  # a call through it dispatched at run time.
+  kind isa CDateTime && operand isa Dates.Date && return Models.apply_formatter(formatter, Dates.DateTime(operand))
+  return Models.apply_formatter(formatter, operand)
 end
 
 # Decompose a Period/CompoundPeriod into an ordered [(unit, magnitude)] list (largest → smallest),

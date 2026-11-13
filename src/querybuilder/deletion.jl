@@ -1420,7 +1420,7 @@ function update_field(connection::_SQLEngine, model::PormGModel, field::String, 
   any(k -> k[:key] == DIRECT_DELETE_KEY_SENTINEL, keys) &&
     throw(QueryBuildError("Cannot update field on keyless model $(model.name); define a primary key"))
 
-  value_sql = value === nothing ? "NULL" : model.fields[field].formatter(value)
+  value_sql = value === nothing ? "NULL" : Models.apply_formatter(model.fields[field].formatter, value)   # #1599
 
   # One predicate per cascade path, ORed together — the same renderer, and the same single-collector
   # discipline, as `delete_objects` (#452). Before #459 (a) this function took ONE entry because the

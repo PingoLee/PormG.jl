@@ -348,7 +348,7 @@ function _validate_network_value(model::PormGModel, field::String, f_meta, value
     example = cidr ? "\"10.0.0.0/24\"" : "\"10.0.0.1\""
     if value isa Union{AbstractString, Sockets.IPAddr}
         try
-            text = f_meta.formatter(value)
+            text = Models.apply_formatter(f_meta.formatter, value)   # #1599: at the formatter's type
             hasproperty(f_meta, :protocol) && Models.check_ip_protocol(f_meta.protocol, text)
             return true
         catch e

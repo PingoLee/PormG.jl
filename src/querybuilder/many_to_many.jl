@@ -35,12 +35,14 @@ end
 # The manager resolves its database in `_with_m2m_connection` (build_helpers.jl, #1693): the pool
 # reaches every operation below at its concrete type.
 
+# #1599 layer 5: through `Models.apply_formatter`, so the call is made at the formatter's type rather than
+# through the field's `formatter::Function` slot.
 function _m2m_format_owner(manager::ManyToManyManager)
-  return manager.owner_model.fields[manager.relation.owner_pk].formatter(manager.owner_id)
+  return Models.apply_formatter(manager.owner_model.fields[manager.relation.owner_pk].formatter, manager.owner_id)
 end
 
 function _m2m_format_related(manager::ManyToManyManager, related_id)
-  return manager.related_model.fields[manager.relation.related_pk].formatter(related_id)
+  return Models.apply_formatter(manager.related_model.fields[manager.relation.related_pk].formatter, related_id)
 end
 
 function _m2m_target_ids(manager::ManyToManyManager, targets)::Vector{Any}

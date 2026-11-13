@@ -2536,6 +2536,60 @@ end
     @test M.apply_formatter(user, 3) == "user:3"
   end
 
+  # What: `Models._pg_decimal_text`, the plain text of a `Decimal` that MySQL's binding sends
+  #   (`_bind_value(::Decimal)`) and a PostgreSQL array literal prints.
+  # Expected: no dynamic call under either Decimals major (0.4 declares the `s` and `q` slots `Integer`,
+  #   0.5 `Bool`/`Int64`), no `:invoke` that an `@invoke` redirects, two levels down, and the text the old
+  #   formula gave for every coefficient, exponent and sign, or the same error at the largest lengths.
+  # Why: `repeat("0", n)` hands on to another method through an `@invoke`, which a trimmed build cannot
+  #   compile: 4 verifier rows on the MySQL fixture, each a MethodError when a query binds a `Decimal`.
+  #   Under 0.4 (the unit suite's resolution), `d.s == 1` on the `Integer` slot was a dynamic call too,
+  #   and `Int(d.q)` once the drivers' `Int64` constructors are loaded, as they are here.
+  @testset "a Decimal's text is built without a dynamic or redirected call (#1599, layer 3)" begin
+    M = PormG.Models
+    D = M.Decimals.Decimal
+    @test isempty(_dynamic_calls(M._pg_decimal_text, (D,)))
+    for f in (M._decimal_exponent, M._decimal_negative)
+      @test isempty(_dynamic_calls(f, (D,)))
+    end
+    @test isempty(_dynamic_calls(M._zeros_text, (Int,)))
+    # The open arms are one dynamic call each, for an `Integer` slot of another type (Decimals 0.4 only).
+    @test length(_dynamic_calls(M._decimal_negative_other, (Any,))) == 1
+    redirected(tt, d) = [string(mi.specTypes) for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+                         for st in ci.code if st isa Expr && st.head === :invoke
+                         for mi in ((st.args[1] isa Core.CodeInstance ? st.args[1].def : st.args[1]),)
+                         if mi isa Core.MethodInstance && mi.def isa Method
+                         for T in (which(mi.specTypes) !== mi.def ? (string(mi.specTypes),) :
+                                   d > 1 ? redirected(mi.specTypes, d - 1) : ())]
+    @test isempty(redirected(Base.signature_type(M._pg_decimal_text, (D,)), 2))
+
+    # The text, against the formula it replaces (`repeat`, `Int(d.q)`, `d.s == 1`).
+    function old_text(d)
+      c, q = BigInt(d.c), Int(d.q)
+      iszero(c) && return "0"
+      digits = string(c)
+      text = q >= 0 ? digits * repeat("0", q) :
+             length(digits) > -q ? digits[1:end + q] * "." * digits[end + q + 1:end] :
+             "0." * repeat("0", -q - length(digits)) * digits
+      occursin('.', text) && (text = rstrip(rstrip(text, '0'), '.'))
+      return (d.s == 1 ? "-" : "") * text
+    end
+    for s in (0, 1), c in (0, 1, 5, 150, 123456789, big(10)^30 + 7), q in (-40, -12, -3, -2, -1, 0, 1, 2, 9)
+      d = D(s, c, q)
+      @test M._pg_decimal_text(d) == old_text(d)
+    end
+    @test M._pg_decimal_text(D(0, 150, -2)) == "1.5"
+    @test M._pg_decimal_text(D(1, 1, -3)) == "-0.001"
+    @test M._pg_decimal_text(D(0, 12, 3)) == "12000"
+    @test M._zeros_text(0) == "" && M._zeros_text(3) == "000"
+    # The largest exponents: the same error as `repeat` (an `OutOfMemoryError`, not `fill`'s `ArgumentError`).
+    errtype(g) = try g(); nothing catch e; typeof(e) end
+    for q in (typemax(Int), typemax(Int) - 1)
+      d = D(0, 1, q)
+      @test errtype(() -> M._pg_decimal_text(d)) === errtype(() -> old_text(d)) === OutOfMemoryError
+    end
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

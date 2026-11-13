@@ -334,20 +334,43 @@ pg_array_element_text(::CDateTime, v::DateTime) = Dates.format(v, dateformat"yyy
 # exponent rather than `string(d)`, whose spelling differs between the two Decimals majors PormG
 # supports (`Decimals = "0.4, 0.5"`).
 function _pg_decimal_text(d::Decimals.Decimal)::String
-  c, q = BigInt(d.c), Int(d.q)
+  c, q = BigInt(d.c), _decimal_exponent(d)
   iszero(c) && return "0"
   digits = string(c)
   text = if q >= 0
-    digits * repeat("0", q)
+    digits * _zeros_text(q)
   elseif length(digits) > -q
     digits[1:end + q] * "." * digits[end + q + 1:end]
   else
-    "0." * repeat("0", -q - length(digits)) * digits
+    "0." * _zeros_text(-q - length(digits)) * digits
   end
   if occursin('.', text)
     text = rstrip(rstrip(text, '0'), '.')
   end
-  return (d.s == 1 ? "-" : "") * text
+  return (_decimal_negative(d) ? "-" : "") * text
+end
+
+# #1599 layer 3: the exponent and the sign read at their types. Decimals 0.5 declares `q::Int64` and
+# `s::Bool`; 0.4 declares both `Integer` (the unit suite resolves 0.4: LibPQ pins it). There `d.s == 1` is a
+# dynamic call, and so is `Int(d.q)` once enough `Int64` constructor methods are loaded for inference to
+# stop splitting it (with every driver loaded it is dynamic, and every use of the exponent after it with
+# it). Each slot is read once (#1747) and tested at the type 0.5 gives; any other `Integer` takes one
+# dynamic call behind `@noinline`, the expression it replaces (#1735), at the same point as before. The
+# sign is not asserted `Bool`: the ternary that reads it raises the same `TypeError` as before for a `==`
+# that answers something else.
+_decimal_exponent(d::Decimals.Decimal)::Int = (q = d.q; q isa Int ? q : _decimal_exponent_other(q))
+@noinline _decimal_exponent_other(@nospecialize(q))::Int = Int(q)
+_decimal_negative(d::Decimals.Decimal) = (s = d.s; s isa Bool ? s : s isa Int ? s == 1 : _decimal_negative_other(s))
+@noinline _decimal_negative_other(@nospecialize(s)) = s == 1
+
+# `repeat("0", n)` for `n >= 0`, the zeros `_pg_decimal_text` pads with (both call sites pass `n >= 0`).
+# Base's `repeat(::String, ::Int)` hands on to its `Union{String, SubString{String}}` method through an
+# `@invoke`, a call a `juliac --trim` build cannot compile (#1599 layer 3: 2 rows per call site on the
+# MySQL fixture, through `_bind_value(::Decimal)`). `fill` refuses `typemax(Int)` with an `ArgumentError`
+# before it allocates, where `repeat` raised `OutOfMemoryError`; that one length keeps `repeat`'s error.
+function _zeros_text(n::Int)::String
+  n == typemax(Int) && throw(OutOfMemoryError())
+  return String(fill(UInt8('0'), n))
 end
 
 

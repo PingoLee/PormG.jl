@@ -757,9 +757,31 @@ function _bind_predicate_value(instruc::SQLInstruction, operator::AbstractString
   elseif operator == "ISNULL"
     return formatted
   end
-  return add_parameter!(instruc, formatted,
-                        contains = operator in LIKE_WILDCARD_OPERATORS, operator = operator)
+  return _bind_formatted_value(instruc, formatted, operator in LIKE_WILDCARD_OPERATORS, operator)
 end
+
+# `add_parameter!(instruc, value; contains, operator)` for a formatted filter value at its concrete type
+# (#1599 layer 5). A formatter's answer reaches here untyped, so the keyword call dispatched at run time,
+# and a trimmed image had no compiled target for it: the read stopped at the `add_parameter!` kwcall
+# with a `String`. One arm per type a formatter returns, each the same call at that type; any other value
+# takes the old call behind `@noinline` (`_bind_formatted_other`).
+@noinline function _bind_formatted_value(instruc::SQLInstruction, @nospecialize(value), contains::Bool,
+                                         operator::AbstractString)
+  value isa String && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Int64 && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Float64 && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Bool && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Decimals.Decimal && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Nothing && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Missing && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa PormGBytes && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa PormGArrayLiteral && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Vector{String} && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Vector{Int64} && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  return _bind_formatted_other(instruc, value, contains, operator)
+end
+@noinline _bind_formatted_other(instruc::SQLInstruction, @nospecialize(value), contains::Bool, operator::AbstractString) =
+  add_parameter!(instruc, value; contains = contains, operator = operator)
 
 # #972: the binding half of the three transform arms of `_get_filter_query(::SQLTypeOper, …)`.
 #
@@ -1561,9 +1583,9 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
       # above already does — only the operand formatting is being converted, never the binding.
-      placeholders = add_parameter!(instruc,
+      placeholders = _bind_formatted_value(instruc,
         _guarded_format(_lookup_formatter(_f_meta, v.operator), _oper_literal(v), v.operator, col.field, _f_meta.type),
-        contains=is_like_op, operator=v.operator)
+        is_like_op, v.operator)
       # A whole JSON document is compared as JSON, on every engine (`_json_document_marker`); a pattern
       # lookup's value is text (`@contains`, `@iexact`), and stays a bare marker.
       !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_f_meta) &&
@@ -1598,10 +1620,10 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # `filter("x" => …)`), which the field walk rejects earlier as `UnknownFieldError`. The
       # probe was wrong, not the arm. `_vc_field` is a real field, so no label is synthesised —
       # the memo key's second half is the path the user wrote.
-      placeholders = add_parameter!(instruc,
+      placeholders = _bind_formatted_value(instruc,
         _guarded_format(_lookup_formatter(_vc_field, v.operator), _oper_literal(v), v.operator,
                         memo_key(col)[2], _vc_field.type),
-        contains=is_like_op, operator=v.operator)
+        is_like_op, v.operator)
       !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_vc_field) &&
         (placeholders = _json_document_marker(instruc.connection, placeholders))
     elseif isa(col, SQLTypeField)
@@ -1615,7 +1637,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # had. It bound the value raw: no check of the alias's type, and on MySQL no JSON marker for a
       # whole document. It binds as the alias's own filter binds it now; anything else stays raw.
       placeholders = alias_key !== nothing ? _bind_alias_value(v, alias_key, instruc) :
-        add_parameter!(instruc, _oper_literal(v), contains=is_like_op, operator=v.operator)
+        _bind_formatted_value(instruc, _oper_literal(v), is_like_op, v.operator)
     else
       @pormg_debug false
       throw(UnknownFieldError("Field \"$(col.field)\" not found in model $(instruc.object.model.name)"))

@@ -14,10 +14,10 @@ query (the walls left are in #1599's tables).
 
 ## Drivers
 
-The fixture runs on SQLite; a MySQL variant is in `mysql/` (see "The MySQL variant" below). For
-PostgreSQL in a `juliac --trim` build, use Postgres.jl
-(`register_connection(…; adapter = "PostgreSQL", postgres_driver = "Postgres")`). A copy of this
-fixture switched to it (not committed) builds, and has not been run. A binary built with LibPQ 1.18
+The fixture runs on SQLite; a MySQL variant is in `mysql/` and a PostgreSQL one in `postgres/` (see
+their sections below). For PostgreSQL in a `juliac --trim` build, use Postgres.jl
+(`register_connection(…; adapter = "PostgreSQL", postgres_driver = "Postgres")`), as `postgres/`
+does. A binary built with LibPQ 1.18
 aborts before `main` with `InitError(:Infinity, MethodError(!, (false,)))`: the `__init__` of
 Infinity.jl, a LibPQ dependency, calls Requires' `@require`, which makes a dynamic call the trimmed
 image has no compiled code for. The cause is upstream, not in PormG. Memento, LibPQ's logging
@@ -101,6 +101,33 @@ Against a server the trimmed binary connects, binds the parameters and runs the 
 the pool hands the result to the typed read: `ConnectionPool._decoded` is called on the untyped value
 `await_result` returns, and the image has no code for that call, so it raises `MethodError`. With no
 variables set it stops at the connect, as the JIT does.
+
+## The Postgres.jl variant
+
+`postgres/` is the MySQL variant's app on PostgreSQL through Postgres.jl, to measure the Postgres.jl
+extension (`ext/PormGPostgresExt.jl`). Its entry, `postgres/main.jl`, boots through
+`register_connection("f1", "postgresql://…"; adapter = "PostgreSQL", postgres_driver = "Postgres")`
+and runs the typed read only. It reads the same `PORMG_TRIM_*` variables as the MySQL variant (the
+table above), with the same port-1 default, where the read raises `PoolConnectError`. Its
+`postgres/prep.jl` seeds the same way and refuses the same databases. From the repository root:
+
+```
+julia --project=test/trim/postgres -e 'using Pkg; Pkg.instantiate()'
+julia --project=test/trim/postgres test/trim/postgres/main.jl  # the JIT control
+
+mkdir -p build-postgres && cd build-postgres
+JULIA_CPU_TARGET=native juliac --project ../test/trim/postgres --output-exe main \
+  --trim=unsafe-warn --experimental ../test/trim/postgres/main.jl 2>&1 | tee build.log
+./main
+```
+
+Against a server, with the variables exported, from the repository root:
+
+```
+julia --project=test/trim/postgres test/trim/postgres/prep.jl
+julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, 1 row
+build-postgres/main
+```
 
 ## Reading the build log
 

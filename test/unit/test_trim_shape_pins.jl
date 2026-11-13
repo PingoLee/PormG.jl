@@ -2771,7 +2771,7 @@ end
     on_any = [replace(c, r"^\d+: " => "") for c in _dynamic_calls(M.apply_formatter, (Function, Any, Bool))]
     @test count(c -> startswith(c, "PormG.Models._apply_formatter_other("), on_any) == 0
     @test count(c -> occursin(r"^\(%\d+\)\(_3\)$", c), on_any) == 1
-    @test all(c -> occursin(r"^(PormG\.Models\.(format_\w+|identity|_apply_formatter_other)\(|Core\.kwcall\(%\d+, PormG\.Models\.format_\w+, _3\)$|\(%\d+\)\(_3\)$)", c), on_any)
+    @test all(c -> occursin(r"^(PormG\.Models\.(format_\w+|identity)\(|Core\.kwcall\(%\d+, PormG\.Models\.format_\w+, _3\)$|\(%\d+\)\(_3\)$)", c), on_any)
     # 2. The open arm is exactly the call a user's formatter made before: one dynamic call per branch.
     @test length(_dynamic_calls(M._apply_formatter_other, (Function, Any, Bool))) == 2
 

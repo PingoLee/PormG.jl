@@ -5321,7 +5321,7 @@ end
 # The open arm (#1735): a callable no arm names, called as the filter path called it before. The value is
 # taken unspecialized too (#1599 layer 3): `apply_formatter` is compiled once per value type, and each
 # of those instances called its own copy of this arm, which a `juliac --trim` build then compiled per
-# literal type the query builder's walk names (about 330 verifier rows on #1784's fixture). The call
+# literal type the query builder's walk names (84 verifier rows on the read-only fixture). The call
 # inside dispatches at run time either way, so one compiled copy serves every value.
 @noinline _apply_formatter_other(@nospecialize(f), @nospecialize(value), ranged::Bool) =
   ranged ? f(value) : unranged_formatter(f)(value)

@@ -80,7 +80,7 @@ function build_row_join_sql_text(instruc::SQLInstruction)
 
       # #985: under the row's join scope, so every column the conditions render is checked against the
       # rows this ON clause may name (`_record_join_column`).
-      conditions = _join_scope(() -> _render_on_conditions(instruc, value), instruc, idx, value)
+      conditions = _join_row_conditions(instruc, idx, value)
       if value isa AnchorlessJoin
         # #45: anchor-less join — the ON clause is entirely the caller's conditions (no equi-anchor).
         # Never empty: binding refuses an ON clause that never names this alias (#448), which an empty
@@ -148,6 +148,23 @@ end
 _require_feature_on(pool, feature::Symbol, what::String)::Nothing = _require_feature(pool, feature, what)
 # Imported, not reached as `PormG.ConnectionPool.with_pool`: `PormG` is a non-constant global here.
 import PormG.ConnectionPool: with_pool
+
+# One row's ON conditions, rendered under its join scope (#985), with the row at its concrete type
+# (#1599 layer 5). The row is read off `row_join` at the abstract `JoinRow`, so a closure capturing it had a
+# type only known at run time, and the call into `_join_scope` had no compiled target in a trimmed image
+# (the read stopped at `_join_scope(…, ::ModelJoin)`). One arm per row kind; a row type defined elsewhere
+# takes the one dynamic call, behind `@noinline`.
+@noinline function _join_row_conditions(instruc::SQLInstruction, idx::Int, @nospecialize(row::JoinRow))::Vector{String}
+  row isa ModelJoin && return _join_row_conditions_at(instruc, idx, row)
+  row isa CteJoin && return _join_row_conditions_at(instruc, idx, row)
+  row isa AnchorlessJoin && return _join_row_conditions_at(instruc, idx, row)
+  row isa CrossJoin && return _join_row_conditions_at(instruc, idx, row)
+  return _join_row_conditions_other(instruc, idx, row)
+end
+_join_row_conditions_at(instruc::SQLInstruction, idx::Int, row::JoinRow) =
+  _join_scope(() -> _render_on_conditions(instruc, row), instruc, idx, row)
+@noinline _join_row_conditions_other(instruc::SQLInstruction, idx::Int, @nospecialize(row::JoinRow)) =
+  _join_row_conditions_at(instruc, idx, row)
 
 # Every join row of a build whose check was deferred, for a statement that prints them verbatim.
 function _require_outer_joins(instruc::SQLInstruction)::Nothing

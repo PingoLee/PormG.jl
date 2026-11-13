@@ -90,9 +90,13 @@ _infer_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_
 # #1034 step 5a). The memo lives for the outermost question only, so a kind asked after the render
 # has moved on (resolving a path fills the memo the walk reads) is never one from before it. It is
 # keyed by the instruction too: an inner query's walk is another instruction's question.
-function _memo_kind(f, node, instruc::SQLInstruction, tag)
+# #1599 layer 5: specialized on the closure (`F`): `f` is only passed on, to `get!`, so Julia compiled it as
+# `Function` and the `get!` call was dynamic (#1773's widened-argument class). The memo is read back at the
+# type this function stores, the one writer of the key: out of `task_local_storage()` it was `Any`, and
+# `get!` on it dispatched at run time too. 32 verifier rows between the two.
+function _memo_kind(f::F, node, instruc::SQLInstruction, tag) where {F}
   tls = task_local_storage()
-  memo = get(tls, :_pormg_kind_memo, nothing)
+  memo = get(tls, :_pormg_kind_memo, nothing)::Union{Nothing,IdDict{Any,Any}}
   memo === nothing || return get!(f, memo, (node, instruc, tag))
   memo = IdDict{Any,Any}()
   tls[:_pormg_kind_memo] = memo

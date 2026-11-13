@@ -120,21 +120,25 @@ end
 # every alias, because `values()` refuses one spelled with `__` (#757). `seen` stops a
 # cycle — `"a"` reads `"b"` and `"b"` reads `"a"` — which only a statement that fails at render can
 # spell, but the walk must return before that render gets to say so.
+#
+# #1599 layer 5: the answer is a `Base.RefValue{Bool}` the closure sets, not a local it reassigns. A captured
+# local that is assigned is boxed (`Core.Box`), and every read of a box is a run-time call: 46 verifier rows,
+# one per caller of this walk.
 function _reads_alias(pred::Function, node, instruc::SQLInstruction,
                       seen::Set{String} = Set{String}())::Bool
-  hit = false
+  hit = Ref(false)
   _each_condition_leaf(node) do leaf
-    hit && return nothing
+    hit[] && return nothing
     key = _alias_filter_key(_oper_column(leaf), instruc)
     (key === nothing || key in seen) && return nothing
     push!(seen, key)
     source = _projected_source(memo_key(_oper_column(leaf)), instruc)
     # A `Value(...)` literal is neither kind, and no source means the name is not a projection.
     source isa SQLTypeField || return nothing
-    hit = pred(source.field) || _reads_alias(pred, source.field, instruc, seen)
+    hit[] = pred(source.field) || _reads_alias(pred, source.field, instruc, seen)
     return nothing
   end
-  return hit
+  return hit[]
 end
 _resolved_agg(node, instruc::SQLInstruction)::Bool =
   _is_agg(node) || _reads_alias(_is_agg, node, instruc)

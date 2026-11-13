@@ -154,7 +154,7 @@ end
 #   none (30 before and after); those boxes are older than #1693 and are counted here, not fixed.
 # ─────────────────────────────────────────────────────────────────────────────
 const _TPB_REVIEWED_BOXES = Dict(
-  "build_query.jl" => 2,       # a closure in build_row_join_sql_text; _check_mixed_grouping
+  "build_query.jl" => 1,       # _check_mixed_grouping; #1599 layer 5 removed build_row_join_sql_text's (`keyed`)
   "build_select.jl" => 1,      # get_order_query; #1711 removed get_select_query's (`local kind` in its render closure)
   "deletion.jl" => 4,          # delete's body (2); topological_sort; _collector_predicate
   "execution_bulk.jl" => 7,    # bulk_insert (4: keyword body, body, its insert loop); _bulk_update (3)
@@ -162,9 +162,9 @@ const _TPB_REVIEWED_BOXES = Dict(
   "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
                                # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed)
   "expression_render.jl" => 1, # _refuse_unnamed_temporal
-  "filter_nodes.jl" => 1,      # _format_filter_value
   "join_conditions.jl" => 2,   # _bind_cjoin_on_conditions!; _join_scope
-  "projection_types.jl" => 1,  # _reads_alias
+  # #1599 layer 5 removed `filter_nodes.jl`'s (`_format_filter_value`, the formatter bound once) and
+  # `projection_types.jl`'s (`_reads_alias`, a `RefValue{Bool}` now).
   "sql_format.jl" => 2,        # _format_sql
 )
 

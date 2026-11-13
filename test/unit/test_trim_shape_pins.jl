@@ -2608,8 +2608,8 @@ end
   @testset "the Dialect renderers take the abstract engine connection statically (#1599 layer 5, group 3)" begin
     D = PormG.Dialect; QB = PormG.QueryBuilder
     CT = QB.ConnType
-    # 1. Every method takes its engine argument `@nospecialize`. The two FTS helpers and the barriers take
-    #    an untyped connection as their first argument.
+    # 1. Every method takes its engine argument `@nospecialize`. `fts_capability_error` and the barriers
+    #    take an untyped connection as their first argument.
     @test isdefined(D, :_capability_error_at) && isdefined(D, :_supports_at)
     untyped_first = Tuple(getglobal(D, n) for n in (:fts_capability_error, :_capability_error_at, :_supports_at)
                           if isdefined(D, n))
@@ -2636,11 +2636,12 @@ end
     for g in calls
       @test isempty(_dynamic_calls(g, (CT, String)))
     end
-    # Below the barriers, nothing but the barrier's own call is left dynamic.
+    # Inside each barrier, its own call is the only dynamic one. Read at `Any`, the instance the callers
+    #    invoke (the connection is `@nospecialize` and untyped there).
     barriers = isdefined(D, :_capability_error_at) ?
-      ((Tuple{typeof(getglobal(D, :_capability_error_at)), PormG.PormGBackend, Symbol, String}, 1),
-       (Tuple{typeof(getglobal(D, :_capability_error_at)), PormG.PormGBackend, Symbol, String, String}, 1),
-       (Tuple{typeof(getglobal(D, :_supports_at)), PormG.PormGBackend, Symbol}, 1)) : ()
+      ((Tuple{typeof(getglobal(D, :_capability_error_at)), Any, Symbol, String}, 1),
+       (Tuple{typeof(getglobal(D, :_capability_error_at)), Any, Symbol, String, String}, 1),
+       (Tuple{typeof(getglobal(D, :_supports_at)), Any, Symbol}, 1)) : ()
     for (tt, n) in barriers
       ci, _ = only(Base.code_typed_by_type(tt; optimize = true))
       dyn = [s for s in ci.code if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]
@@ -2657,7 +2658,8 @@ end
       @test isempty(_named_dynamic_calls(tt, names))
     end
     # 4. Each engine reaches the arm it reached before: PostgreSQL renders, SQLite and MySQL refuse with
-    #    their own backend named, and SQLite's FOR UPDATE is empty.
+    #    their own backend named, and SQLite's FOR UPDATE is empty. The full messages below were read from
+    #    the base commit (a3b3492b2), so the text is pinned, not sampled.
     pg, sl, my = _TspStandInPGPool(), _TspStandInPool(), _TspStandInMyPool()
     @test D._array_slice_expr(pg, "t.tags", 1, 2) == "t.tags[1:2]"
     @test D._array_index_expr(pg, "t.tags", 3) == "t.tags[3]"
@@ -2675,6 +2677,19 @@ end
     @test D.for_update_clause(true, false, false, String[], sl) == ""
     @test_throws PormG.BackendCapabilityError D.for_update_clause(false, false, true, String[], my)
     @test D.cast_type_sql("tsvector", pg) == "tsvector"
+    msg(f) = try f(); "" catch err; err isa PormG.BackendCapabilityError ? err.msg : "not a refusal" end
+    @test msg(() -> D._array_slice_expr(sl, "t.tags", 1, 2)) == "An ArrayField slice (`__0_2`) needs array types " *
+      "(`ArrayField`, `integer[]`), which SQLite does not support (supported on PostgreSQL)."
+    @test msg(() -> D.search(sl, "v", "q")) == "The @search lookup needs full-text search (`tsvector`, `tsquery`), " *
+      "which SQLite does not support (supported on PostgreSQL). PormG does not emulate full-text search (#31)."
+    @test msg(() -> D.cast_type_sql("tsvector", sl)) == "Cast: a cast to \"tsvector\" needs full-text search " *
+      "(`tsvector`, `tsquery`), which SQLite does not support (supported on PostgreSQL). PormG does not emulate " *
+      "full-text search (#31)."
+    @test msg(() -> D.cast_type_sql("inet", my)) == "Cast: a cast to \"inet\" needs network address types " *
+      "(`inet`, `cidr`), which MySQL does not support (supported on PostgreSQL)."
+    @test msg(() -> D.for_update_clause(false, false, true, String[], my)) == "select_for_update(no_key = true) " *
+      "needs a row lock weaker than `FOR UPDATE` that leaves foreign-key checks free (`FOR NO KEY UPDATE`), which " *
+      "MySQL does not support (supported on PostgreSQL)."
   end
 
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)

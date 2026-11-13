@@ -21,11 +21,12 @@ import PormG: StatementError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
 import PormG: _require_feature  # #1163: a version row (window functions on SQLite)
 
-# #1599: the capability helpers as a Dialect method that takes the engine `@nospecialize` calls them.
-# Such a method holds the connection at its abstract engine type, and `_capability_error` / `_supports`
-# specialize on the connection (a caller with a concrete pool reads the table statically, #1682), so a
-# direct call from it would be one dynamic call per method. Each barrier is that call once, compiled
-# once; it forwards its arguments unchanged, so the answer and the refusal's type and text are the same.
+# #1599: the barriers through which a Dialect method that takes the engine `@nospecialize` calls the
+# capability helpers. Such a method holds the connection at its abstract engine type, and
+# `_capability_error` / `_supports` specialize on the connection (a caller with a concrete pool reads the
+# table statically, #1682), so a direct call from it would be one dynamic call site per method. Each
+# barrier holds that call at one site instead; it forwards its arguments unchanged, so the answer and the
+# refusal's type and text are the same.
 @noinline _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString) =
   _capability_error(conn, feature, what)
 @noinline _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString,

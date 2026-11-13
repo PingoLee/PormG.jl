@@ -838,8 +838,8 @@ end
     end
   end
 
-  # What: the pool's calls into code that may be defined later than the task making them (the SQLite
-  #   worker's `backend_execute`, a deferred or reaped `close`).
+  # What: the pool's calls into code that may be defined later than the task making them (a deferred or
+  #   reaped `close`; the SQLite worker reaches the latest world through a `@cfunction`, pinned below).
   # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its
   #   arguments and result and holds no dynamic call (the builtin is not one).
   # Why: six call sites each carried their own copy of the world-age reason (#1609, I11). One owner
@@ -853,6 +853,44 @@ end
     @test occursin("@noinline", only(sites))   # the build reaches it only out of line (#1609)
     @test PormG.ConnectionPool._call_latest(+, 1, 2) === 3
     @test isempty(_dynamic_calls(PormG.ConnectionPool._call_latest, (typeof(+), Int, Int)))
+  end
+
+  # What: the SQLite worker, the one task every SQLite statement runs on (#1599 layer 2).
+  # Expected: `_ensure_sqlite_async_worker!` spawns the named loop `_sqlite_worker_loop` with the queue as a
+  #   captured argument, never a `begin … end` body; the loop makes no dynamic call (the statement runs
+  #   through a `ccall` of the pointer the caller took); the statement's runner, the method that pointer
+  #   names, makes no dynamic call over a concrete pool with a plain statement or a typed read's decoder;
+  #   and the caller takes that pointer with no dynamic call.
+  # Why: a `juliac --trim` image compiles a spawned body only when the closure `@spawn` builds captures a
+  #   value. The worker's body read only globals, so it was never compiled: its task died with a
+  #   `MethodError` at its first call, and the trimmed SQLite read waited on the queue until it was killed
+  #   (#1599, round on 089f8fe). And a statement the worker called through its `Any` slot had no compiled
+  #   target for the typed read's row type; a `@cfunction` taken by the caller at the statement's type is
+  #   reached statically. Both measured in a minimal trimmed program first.
+  @testset "the SQLite worker starts and runs its statements in a trimmed image (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    i = findfirst("function _ensure_sqlite_async_worker!()", src)
+    j = findfirst("function _sqlite_worker_loop(", src)
+    @test i !== nothing && j !== nothing && first(j) > last(i)
+    starter = src[last(i):first(j)]
+    spawns = [l for l in split(starter, '\n') if occursin("@spawn", l) && !startswith(lstrip(l), "#")]
+    @test length(spawns) == 1
+    @test occursin("@spawn _sqlite_worker_loop(queue)", only(spawns))
+    @test occursin("queue = _sqlite_async_work_queue", starter)
+
+    @test isempty(_dynamic_calls(CP._sqlite_worker_loop, (Channel{CP.SQLiteAsyncWorkItem},)))
+
+    QB = PormG.QueryBuilder
+    D = QB._RowDecoder{NamedTuple{(:surname,), Tuple{String}}, Tuple{PormG.ReadParser}}
+    for S in (CP._SQLiteStatement{CP.SQLiteConnectionPool, Nothing, Nothing},
+              CP._SQLiteStatement{CP.SQLiteConnectionPool, Vector{Any}, Nothing},
+              CP._SQLiteStatement{CP.SQLiteConnectionPool, Nothing, D})
+      @test isempty(_dynamic_calls(CP._run_sqlite_statement, (S, Any)))
+      @test isempty(_dynamic_calls(CP._sqlite_statement_runner, (S,)))
+    end
+    # One method, so the pointer names one target.
+    @test length(methods(CP._run_sqlite_statement)) == 1
   end
 
   # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /
@@ -3180,23 +3218,21 @@ end
 
     # The sites the reflection above cannot reach (inside a `lock` closure, an `invoke`d callee, a
     # spawned task): by source, every driver call on a handle in `src/` goes through `_with_handle`, and
-    # `close` on a handle only through its named helpers. The SQLite
-    # worker's two statement calls are the reviewed exception: they run through `_call_latest`, the
-    # world-age helper #1609 owns, and are not a #1683 site.
+    # `close` on a handle only through its named helpers. The SQLite worker's two statement calls go
+    # through `_with_handle` too, in `_sqlite_statement_call` (#1599 layer 2; they ran through
+    # `_call_latest` before and were reviewed here as an exception).
     # Driver generics that take a handle, called directly or handed on as a value (`_call_latest(f, …)`,
     # `invokelatest(f, …)`), and `close` on a handle, called or broadcast.
     generic = raw"backend_(?:is_alive|renew_connection|execute_async|execute_rows|execute|cancel_query!|drain_connection!|copy_in!|ping)"
     driver_call = Regex(raw"\b(" * generic * raw")\(|(?:_call_latest|invokelatest)\((" * generic * raw"|close),")
     close_call = r"(?<!\w)close\.?\((?:conn|retired|dead|new_conn|handle|handles|h|old|pool\.connections)\b"
-    # The named helpers the barrier calls, by their exact definitions, and the SQLite worker's two
-    # statement calls (#1609's `_call_latest`), each expected exactly once.
+    # The named helpers the barrier calls, by their exact definitions, each expected exactly once.
     helpers = ("_handle_close(pool, conn) = close(conn)", "_handle_close_latest(pool, conn) = _call_latest(close, conn)",
                "_handle_renew(pool, conn) = backend_renew_connection(pool, conn)",
                "_handle_renew(pool, conn, read_only::Bool) = backend_renew_connection(pool, conn; read_only = read_only)")
-    # Backend.jl's default `backend_execute_rows` (a driver without a typed read) is reached only from that
-    # worker, so it is the same exception.
-    reviewed = ("_call_latest(backend_execute_rows, item.pool, item.conn", "_call_latest(backend_execute, item.pool, item.conn",
-                "backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
+    # Backend.jl's default `backend_execute_rows` (a driver without a typed read) is reached only from the
+    # SQLite worker, through `_with_handle`, with the handle it was given: the reviewed exception.
+    reviewed = ("backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
                 "decode_on_worker(decode, backend_execute(pool, conn, sql, params))")
     # Every file in src/, AdvisoryLock.jl included since #1708.
     files = sort!([joinpath(root, f) for (root, _, fs) in walkdir(joinpath(pkgdir(PormG), "src")) for f in fs

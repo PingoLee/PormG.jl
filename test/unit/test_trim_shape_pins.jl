@@ -2892,6 +2892,79 @@ end
       "MySQL does not support (supported on PostgreSQL)."
   end
 
+  # What: the Dialect renderers the query builder reaches through a dispatcher of its own: every renderer
+  #   `_dialect_function_sql` names (`QueryBuilder._FN_OPTIONS_RENDERERS`, read from Dialect's method table),
+  #   the window renderers `_window_no_column_sql` / `_window_column_sql` and the offset sites call
+  #   (`RANK`, `DENSE_RANK`, `ROW_NUMBER`, `FIRST_VALUE`, `LAST_VALUE`, `LAG`, `LEAD`, `NTH_VALUE`), and
+  #   the helpers their arms pass the connection to (`sqlite_cast_sql`, `_assert_sqlite_window_support`,
+  #   through the `_require_feature_at` barrier).
+  # Expected: every method takes the engine argument `@nospecialize`; the three dispatchers, called over
+  #   `_SQLEngine` (with a `String` and with a list column), make no dynamic call; the window renderers
+  #   and `_assert_sqlite_window_support` called over `ConnType` make none, nor does `sqlite_cast_sql`
+  #   read at `PormGSQLite` with its keyword body; each engine renders, or refuses with, what it did
+  #   before (the literals were read from the commit before this change).
+  # Why: the dispatchers' callers (`_function_sql`, the window render) are themselves dynamic calls
+  #   today, so a trimmed build never compiles into them and their Dialect calls are not yet fixture
+  #   rows. Read by reflection, 16 of the 48 renderer calls in `_dialect_function_sql` and all 5 in the
+  #   window dispatchers were dynamic, for #1780's group-3 reason; they would surface as rows the moment
+  #   the query-builder hand-off makes their callers static. A renderer added to Dialect later joins
+  #   `_FN_OPTIONS_RENDERERS` by itself, so the bit check covers it.
+  @testset "the renderers behind the query builder's dispatchers take the engine connection statically (#1599 layer 5, group 3)" begin
+    D = PormG.Dialect; QB = PormG.QueryBuilder
+    windows = ("RANK", "DENSE_RANK", "ROW_NUMBER", "FIRST_VALUE", "LAST_VALUE", "LAG", "LEAD", "NTH_VALUE")
+    fs = Any[getglobal(D, Symbol(n)) for n in unique(vcat(collect(QB._FN_OPTIONS_RENDERERS), collect(windows)))]
+    push!(fs, D.sqlite_cast_sql, D._assert_sqlite_window_support)
+    @test length(fs) >= 50   # the pin cannot pass by finding no renderer
+    # 1. Every method takes its engine argument `@nospecialize`.
+    for f in fs, m in methods(f)
+      m.module === D || continue
+      params = collect(Base.unwrap_unionall(m.sig).parameters[2:end])
+      i = findfirst(T -> T !== Any && T isa Type && T <: PormG.PormGAbstractType, params)
+      @test i !== nothing
+      i === nothing || @test (m.nospecialize >> (i - 1)) & 1 == 1
+    end
+    @test isdefined(D, :_require_feature_at)
+    if isdefined(D, :_require_feature_at)
+      @test getglobal(D, :_require_feature_at) |> methods |> only |> (m -> m.nospecialize & 1) == 1
+    end
+    # 2. The dispatchers resolve every renderer call.
+    @test isempty(_dynamic_calls(QB._dialect_function_sql, (String, String, D.FnOptions, QB._SQLEngine)))
+    # A list column reaches the renderers that take one (`COALESCE`, `CONCAT`, `GREATEST`, `LEAST`, the list
+    #   `CASE` and `SEARCH_*` arms), which a `String` column skips as `MethodError` arms.
+    @test isempty(_dynamic_calls(QB._dialect_function_sql, (String, Vector{Any}, D.FnOptions, QB._SQLEngine)))
+    @test isempty(_dynamic_calls(QB._window_no_column_sql, (String, String, QB._SQLEngine)))
+    @test isempty(_dynamic_calls(QB._window_column_sql, (String, String, String, QB._SQLEngine)))
+    # 3. The renderers the dispatchers do not reach and the window check, called over `ConnType`.
+    calls = (
+      (c, s) -> PormG.Dialect.LAG(s, s, Dict{String,Any}(), c),
+      (c, s) -> PormG.Dialect.LEAD(s, s, Dict{String,Any}(), c),
+      (c, s) -> PormG.Dialect.NTH_VALUE(s, 2, s, c),
+      (c, s) -> PormG.Dialect._assert_sqlite_window_support(c),
+    )
+    for g in calls
+      @test isempty(_dynamic_calls(g, (QB.ConnType, String)))
+    end
+    # `sqlite_cast_sql` keeps its code in its keyword body, which the `_kw` reader follows.
+    @test isempty(_dynamic_calls_kw(D.sqlite_cast_sql, (String, String, PormG.PormGSQLite)))
+    # 4. What each engine renders or refuses, unchanged.
+    pg, sl, my = _TspStandInPGPool(), _TspStandInPool(), _TspStandInMyPool()
+    fo = D.FnOptions()
+    msg(f) = try f(); "" catch err; err isa PormG.BackendCapabilityError ? err.msg : "not a refusal" end
+    @test D.ARRAY_LEN("t.tags", fo, pg) == "cardinality(t.tags)"
+    @test msg(() -> D.ARRAY_LEN("t.tags", fo, sl)) == "The @len transform (array cardinality) needs array types " *
+      "(`ArrayField`, `integer[]`), which SQLite does not support (supported on PostgreSQL)."
+    @test msg(() -> D.ARRAY_LEN("t.tags", fo, my)) == "The @len transform (array cardinality) needs array types " *
+      "(`ArrayField`, `integer[]`), which MySQL does not support (supported on PostgreSQL)."
+    @test D.RANK("ORDER BY x", pg) == "RANK() OVER (ORDER BY x)"
+    @test D.RANK("ORDER BY x", my) == "CAST(RANK() OVER (ORDER BY x) AS SIGNED)"
+    @test D.FIRST_VALUE("t.a", "ORDER BY x", pg) == "FIRST_VALUE(t.a) OVER (ORDER BY x)"
+    @test D.FIRST_VALUE("t.a", "ORDER BY x", my) == "FIRST_VALUE(t.a) OVER (ORDER BY x)"
+    @test D.sqlite_cast_sql("x", "date", sl) == "date(x)"
+    @test D.sqlite_cast_sql("x", "integer", sl) == "CAST(x AS INTEGER)"
+    @test msg(() -> D.sqlite_cast_sql("x", "date[]", sl)) == "Cast: a cast to \"date[]\" needs array types " *
+      "(`ArrayField`, `integer[]`), which SQLite does not support (supported on PostgreSQL)."
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

@@ -448,11 +448,65 @@ const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
 # everywhere (`Models.unranged_formatter`).
 const _RANGE_CHECKED_OPERATORS = ("=", "IN")
 
-# #1599 layer 5: the formatter the comprehension's closure captures is bound once (`f`); reassigning the
-# argument it captured boxed it (`Core.Box`).
+# #1599 layer 5: each value goes through `_apply_lookup_formatter`, so the call through the formatter is
+# made at the formatter's own type (`Models.apply_formatter`, #1781) instead of through the field's
+# `formatter::Function` slot, which a trimmed image cannot dispatch. `ranged` is what
+# `Models.unranged_formatter` decided before: only a date part or `@yyyy_mm` drops its range.
+#
+# An EMPTY list keeps the old comprehension (`_format_empty_list`). A comprehension over no values takes
+# its element type from inference of the closure it maps, so `Int[]` against `format_number_sql` bound a
+# `Vector{String}`, and a list of values takes it from the values. Through `apply_formatter` the empty
+# list would infer `Any` and bind a `Vector{Any}`, a different parameter on PostgreSQL, where an empty
+# list binds as one array. With values, the element type comes from the values either way.
 function _format_filter_value(@nospecialize(formatter), @nospecialize(values), operator::AbstractString)
-  f = operator in _RANGE_CHECKED_OPERATORS ? formatter : Models.unranged_formatter(formatter)
-  return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [f(v) for v in values] : f(values)
+  ranged = operator in _RANGE_CHECKED_OPERATORS
+  (operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray) ||
+    return _format_literal_value(formatter, values, ranged)
+  isempty(values) && return _format_empty_list(formatter, values, ranged)
+  return [_format_literal_value(formatter, v, ranged) for v in values]
+end
+
+# A filter's literal (`OperObject.values`, read untyped by `_oper_literal`, #1754) at its concrete type
+# (#1599 layer 5). A call with the untyped value dispatches at run time, and a trimmed image has nothing
+# compiled for the type it meets: the read stopped at `_apply_lookup_formatter(::typeof(format_text_sql),
+# ::String, ::Bool)`. One arm per type a filter value commonly is, each the same call at that type; any
+# other value takes one dynamic call behind `@noinline` (`_format_literal_other`), so nothing is refused.
+@noinline function _format_literal_value(@nospecialize(formatter), @nospecialize(value), ranged::Bool)
+  value isa String && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Int64 && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Float64 && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Bool && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa SubString{String} && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Dates.Date && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Dates.DateTime && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Dates.Time && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa TimeZones.ZonedDateTime && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Decimals.Decimal && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa UUIDs.UUID && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Int32 && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Nothing && return _apply_lookup_formatter(formatter, value, ranged)
+  value isa Missing && return _apply_lookup_formatter(formatter, value, ranged)
+  return _format_literal_other(formatter, value, ranged)
+end
+@noinline _format_literal_other(@nospecialize(formatter), @nospecialize(value), ranged::Bool) =
+  _apply_lookup_formatter(formatter, value, ranged)
+
+# The old shape, for an empty membership list only: see `_format_filter_value`. The formatter is bound
+# once (`f`), because reassigning the argument the closure captures boxed it (`Core.Box`).
+@noinline function _format_empty_list(@nospecialize(formatter), @nospecialize(values), ranged::Bool)
+  f = ranged ? formatter : Models.unranged_formatter(formatter)
+  return [f(v) for v in values]
+end
+
+# `formatter(value)` at the formatter's type (#1599 layer 5). `Models.apply_formatter` walks the
+# formatters `Models` defines; the two pattern formatters below are the query builder's, which `Models`
+# cannot name, so they are tested here first. Neither has a range, so `ranged` does not reach them
+# (`Models.unranged_formatter` returned each unchanged). Any other formatter takes `apply_formatter`'s
+# open arm, as before.
+@noinline function _apply_lookup_formatter(@nospecialize(formatter), value, ranged::Bool)
+  formatter isa typeof(format_pattern_text_sql) && return format_pattern_text_sql(value)
+  formatter isa typeof(format_pattern_number_sql) && return format_pattern_number_sql(value)
+  return Models.apply_formatter(formatter, value, ranged)
 end
 
 # The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as
@@ -703,9 +757,31 @@ function _bind_predicate_value(instruc::SQLInstruction, operator::AbstractString
   elseif operator == "ISNULL"
     return formatted
   end
-  return add_parameter!(instruc, formatted,
-                        contains = operator in LIKE_WILDCARD_OPERATORS, operator = operator)
+  return _bind_formatted_value(instruc, formatted, operator in LIKE_WILDCARD_OPERATORS, operator)
 end
+
+# `add_parameter!(instruc, value; contains, operator)` for a formatted filter value at its concrete type
+# (#1599 layer 5). A formatter's answer reaches here untyped, so the keyword call dispatched at run time,
+# and a trimmed image had no compiled target for it: the read stopped at the `add_parameter!` kwcall
+# with a `String`. One arm per type a formatter returns, each the same call at that type; any other value
+# takes the old call behind `@noinline` (`_bind_formatted_other`).
+@noinline function _bind_formatted_value(instruc::SQLInstruction, @nospecialize(value), contains::Bool,
+                                         operator::AbstractString)
+  value isa String && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Int64 && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Float64 && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Bool && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Decimals.Decimal && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Nothing && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Missing && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa PormGBytes && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa PormGArrayLiteral && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Vector{String} && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  value isa Vector{Int64} && return add_parameter!(instruc, value; contains = contains, operator = operator)
+  return _bind_formatted_other(instruc, value, contains, operator)
+end
+@noinline _bind_formatted_other(instruc::SQLInstruction, @nospecialize(value), contains::Bool, operator::AbstractString) =
+  add_parameter!(instruc, value; contains = contains, operator = operator)
 
 # #972: the binding half of the three transform arms of `_get_filter_query(::SQLTypeOper, …)`.
 #
@@ -790,6 +866,23 @@ function _render_predicate(column::AbstractString, operator::AbstractString, pla
     throw(FilterError("Invalid filter operator: $(operator) is not a supported operator."))
   end
 end
+
+# `_render_predicate` for placeholders that reach the caller untyped (#1599 layer 5): `add_parameter!`
+# answers a `String` or a `Vector{String}`, a range a pair, `@isnull` its `Bool`, and the binder that
+# chose among them returns any of them, so the keyword call dispatched at run time and a trimmed image had
+# no compiled target (the read stopped at the `_render_predicate` kwcall with a `String`). One arm per
+# shape, each the same call at that type; any other value takes the old call behind `@noinline`.
+@noinline function _render_predicate_any(column::AbstractString, operator::AbstractString, @nospecialize(placeholders),
+                                         instruc::SQLInstruction, expression::Bool)::String
+  placeholders isa String && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  placeholders isa Vector{String} && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  placeholders isa Tuple{String,String} && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  placeholders isa Bool && return _render_predicate(column, operator, placeholders, instruc; expression = expression)
+  return _render_predicate_other(column, operator, placeholders, instruc, expression)
+end
+@noinline _render_predicate_other(column::AbstractString, operator::AbstractString, @nospecialize(placeholders),
+                                  instruc::SQLInstruction, expression::Bool)::String =
+  _render_predicate(column, operator, placeholders, instruc; expression = expression)
 
 # #635: a filter whose RHS is a column or expression (`F`, a CTE column, `Joined`, `Case`/`When`)
 # is not a bound value, so it used to skip `_render_predicate` and concatenate the operator as-is.
@@ -1507,9 +1600,9 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # `_guarded_format`, which also moves `add_parameter!` OUT of the guard. That is what #467
       # said it wanted ("`add_parameter!` stays outside the new `try`") and what the `BETWEEN` arm
       # above already does — only the operand formatting is being converted, never the binding.
-      placeholders = add_parameter!(instruc,
+      placeholders = _bind_formatted_value(instruc,
         _guarded_format(_lookup_formatter(_f_meta, v.operator), _oper_literal(v), v.operator, col.field, _f_meta.type),
-        contains=is_like_op, operator=v.operator)
+        is_like_op, v.operator)
       # A whole JSON document is compared as JSON, on every engine (`_json_document_marker`); a pattern
       # lookup's value is text (`@contains`, `@iexact`), and stays a bare marker.
       !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_f_meta) &&
@@ -1544,10 +1637,10 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # `filter("x" => …)`), which the field walk rejects earlier as `UnknownFieldError`. The
       # probe was wrong, not the arm. `_vc_field` is a real field, so no label is synthesised —
       # the memo key's second half is the path the user wrote.
-      placeholders = add_parameter!(instruc,
+      placeholders = _bind_formatted_value(instruc,
         _guarded_format(_lookup_formatter(_vc_field, v.operator), _oper_literal(v), v.operator,
                         memo_key(col)[2], _vc_field.type),
-        contains=is_like_op, operator=v.operator)
+        is_like_op, v.operator)
       !(v.operator in PATTERN_LOOKUP_OPERATORS) && _is_json_field(_vc_field) &&
         (placeholders = _json_document_marker(instruc.connection, placeholders))
     elseif isa(col, SQLTypeField)
@@ -1561,7 +1654,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       # had. It bound the value raw: no check of the alias's type, and on MySQL no JSON marker for a
       # whole document. It binds as the alias's own filter binds it now; anything else stays raw.
       placeholders = alias_key !== nothing ? _bind_alias_value(v, alias_key, instruc) :
-        add_parameter!(instruc, _oper_literal(v), contains=is_like_op, operator=v.operator)
+        _bind_formatted_value(instruc, _oper_literal(v), is_like_op, v.operator)
     else
       @pormg_debug false
       throw(UnknownFieldError("Field \"$(col.field)\" not found in model $(instruc.object.model.name)"))
@@ -1571,7 +1664,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # #618: the ladder lives in `_render_predicate` so the HAVING/alias branch renders through the
   # same one. Behavior here is unchanged, which is why the existing WHERE coverage is the
   # regression test for the extraction itself.
-  return _render_predicate(column, v.operator, placeholders, instruc; expression = transform_lhs)
+  return _render_predicate_any(column, v.operator, placeholders, instruc, transform_lhs)
 end
 function _get_filter_query(q::SQLTypeQ, instruc::SQLInstruction)
   resp = []

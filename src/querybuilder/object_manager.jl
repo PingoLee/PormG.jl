@@ -635,11 +635,22 @@ function _query_select(io::IO, array::Vector{<:SQLTypeField}, connection)::Nothi
   return nothing
 end
 
+# `_query_select(io, array, connection)` with the connection at its concrete type (#1599 layer 5). The
+# instruction's connection is a union of the abstract engine types, so a call passing it dispatched at run
+# time, and a trimmed image had no compiled target for it (the read stopped inferring
+# `_query_select(::IOBuffer, ::Vector{SQLField}, ::SQLiteConnectionPool)`). A pool PormG builds is reached
+# through `with_pool`'s closed set; anything else makes the call it made before, one dynamic call.
+function _query_select_at(io::IO, array::Vector{<:SQLTypeField}, @nospecialize(connection))::Nothing
+  connection isa _SQLEngine && return with_pool(_query_select_on, connection, io, array)
+  return _query_select(io, array, connection)
+end
+_query_select_on(pool, io::IO, array::Vector{<:SQLTypeField})::Nothing = _query_select(io, array, pool)
+
 # The projection list as a `String`, for the two callers that splice it into a statement of their own
 # (`_exists_projection`, the `count()` projection).
-function _query_select(array::Vector{<:SQLTypeField}, connection)::String
+function _query_select(array::Vector{<:SQLTypeField}, @nospecialize(connection))::String
   io = IOBuffer()
-  _query_select(io, array, connection)
+  _query_select_at(io, array, connection)
   return String(take!(io))
 end
 

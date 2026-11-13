@@ -75,7 +75,9 @@ const RSCOPE_WRITE = r"\.scope\s*=(?!=)|set(field|property)!\s*\([^,]+,\s*:scope
 # The writes `with_scope` and `_with_render_scope` make, two each — pinned by EXPRESSION, not by file, so
 # another write added to `types.jl` is still caught. Two methods, not one shared body (#1728): a shared
 # helper would be re-entered across the clause/render boundary again, which #1728 removes there.
-const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc.scope = prev"])
+# `_with_render_scope` has a second method, taking a scope its caller built (#1599 layer 5): two more.
+const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc.scope = prev",
+                            "instruc.scope = scope"])
 
 @testset "RenderScope: only with_scope and _with_render_scope write the scope (#932, #1728)" begin
     offenders = Tuple{String,Int,String}[]
@@ -97,8 +99,8 @@ const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc
                "the previous scope is restored." offenders
     @test isempty(offenders)
     # The allow-list must still match the real code: if either method is rewritten, the pinned
-    # expressions stop matching and this scan would pass vacuously. Two writes in each of the two.
-    @test allowed_hits == 4
+    # expressions stop matching and this scan would pass vacuously. Two writes in each of the three methods.
+    @test allowed_hits == 6
 end
 
 @testset "RenderScope: the retired flags stay retired (#932)" begin

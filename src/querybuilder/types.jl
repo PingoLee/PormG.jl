@@ -415,6 +415,14 @@ end
   return _join_alias_other(r, :alias_b)
 end
 @noinline _join_alias_other(@nospecialize(r), name::Symbol)::String = getproperty(r, name)
+# `r.how` the same way (#1599 layer 5): the join type the outer-join check reads. A `CrossJoin` has none, and
+# both callers skip it before asking.
+@noinline function _join_how(@nospecialize(r::JoinRow))::String
+  r isa ModelJoin && return r.how
+  r isa CteJoin && return r.how
+  r isa AnchorlessJoin && return r.how
+  return _join_alias_other(r, :how)
+end
 
 # The predicates a row appends to (or, for an `AnchorlessJoin`, substitutes for) its equi-anchor.
 # Empty for the two CTE kinds, which cannot carry any.
@@ -660,6 +668,20 @@ end
 function _with_render_scope(f::F, instruc::SQLInstruction; kw...) where {F}
   prev = instruc.scope
   instruc.scope = _with_scope(prev; kw...)
+  try
+    return f()
+  finally
+    instruc.scope = prev
+  end
+end
+# The same with the scope built by the caller (#1599 layer 5). A keyword call is compiled per keyword
+# `NamedTuple` type, and a join scope's alias tuples have a length known only at run time
+# (`_join_render_scope`), so its keyword call had no compiled target in a trimmed image (the runtime tried
+# to infer `kwcall(…join_right::Tuple{String,String}…, _with_render_scope, …)` and raised
+# `MissingCodeError`). Built positionally, the scope is one compiled call whatever the lengths.
+function _with_render_scope(f::F, instruc::SQLInstruction, scope::RenderScope) where {F}
+  prev = instruc.scope
+  instruc.scope = scope
   try
     return f()
   finally

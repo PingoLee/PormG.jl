@@ -223,8 +223,10 @@ function _format_date_operand(operand::Union{Dates.Date,Dates.DateTime,TimeZones
   # A `Date` against a TIMESTAMP column is promoted to midnight first, because `format_timezone_sql`
   # has no `::Date` method — and midnight is what SQL itself means by a date literal compared to a
   # timestamp, so the promotion is exact rather than a guess.
-  kind isa CDateTime && operand isa Dates.Date && return formatter(Dates.DateTime(operand))
-  return formatter(operand)
+  # Through `Models.apply_formatter` (#1599 layer 5): `value_formatter` returns a formatter as a value, and
+  # a call through it dispatched at run time.
+  kind isa CDateTime && operand isa Dates.Date && return Models.apply_formatter(formatter, Dates.DateTime(operand))
+  return Models.apply_formatter(formatter, operand)
 end
 
 # Decompose a Period/CompoundPeriod into an ordered [(unit, magnitude)] list (largest → smallest),
@@ -1926,7 +1928,12 @@ function _checking_unnamed_temporal(f, instruc::SQLInstruction)
   end
 end
 # A pair's `@range` bounds are each an ordering against the column.
-function _queue_unnamed_temporal!(pending, left, right, op)
+#
+# #1599 layer 5: one method, and every caller hands its two sides at a union (a filter's column node and
+# value node, an `FExpression`'s sides, a projection's `FieldPart`), so the one compiled body takes them
+# unspecialized; specialized on them, the call had no compiled target in a trimmed image (the read
+# stopped at `_queue_unnamed_temporal!(::Vector{Any}, ::SQLField, ::SQLText, ::String)`).
+function _queue_unnamed_temporal!(pending, @nospecialize(left), @nospecialize(right), op)
   pending === nothing && return nothing
   op in _UNNAMED_TEMPORAL_OPERATIONS || return nothing
   if op in ("BETWEEN", "NOT BETWEEN") && right isa Union{AbstractVector,Tuple}

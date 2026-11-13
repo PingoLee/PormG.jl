@@ -719,8 +719,12 @@ function _render_select(q::SQLObjectHandler;
       end
 
       # Quote table name and alias to prevent SQL injection
-      safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
-      safe_alias = quote_identifier(instruction.alias, instruction.connection)  
+      # #1599 layer 5: below, the connection is the closure's own, the pool `build` stored in
+      # `instruction.connection` (the same object), read at its concrete type: the instruction's slot is a
+      # union of the abstract engine types, and a call passing it dispatched at run time, which a trimmed
+      # image could not do (the read stopped at `_query_select` and then `_limit_offset_sql`).
+      safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), connection)
+      safe_alias = quote_identifier(instruction.alias, connection)  
   
       io = IOBuffer()
       print(io, with_clause)
@@ -728,7 +732,7 @@ function _render_select(q::SQLObjectHandler;
       if q.object.distinct
         print(io, "DISTINCT ")
       end
-      _query_select(io, instruction.select, instruction.connection)
+      _query_select(io, instruction.select, connection)
       print(io, "\nFROM ", safe_table_name, " as ", safe_alias, "\n")
   
       for j in instruction.join
@@ -771,7 +775,7 @@ function _render_select(q::SQLObjectHandler;
         print(io, "\n")
       end
   
-      print(io, _limit_offset_sql(q.object.limit, q.object.offset, parameters, instruction.connection))
+      print(io, _limit_offset_sql(q.object.limit, q.object.offset, parameters, connection))
 
       # #26: row-level locking clause (FOR UPDATE …) must follow ORDER BY / LIMIT / OFFSET. No-op on
       # SQLite (Dialect.for_update_clause renders "" there). PostgreSQL rejects FOR UPDATE with
@@ -782,12 +786,12 @@ function _render_select(q::SQLObjectHandler;
           # exempt — there the lock renders "" (pure no-op), so DISTINCT does not raise (#26). An `of`
           # target that does not resolve raises on both engines (#169): that is a bug in the call, not
           # a lock the engine lacks — and so does a lock without `of` beside an outer join (#1106).
-          if q.object.distinct && _locks_rows(instruction.connection)
+          if q.object.distinct && _locks_rows(connection)
             throw(QueryBuildError("select_for_update() cannot be combined with distinct() — a locking read must return concrete rows."))
           end
           isempty(fu.of) && _refuse_plain_lock_beside_outer_joins(instruction)
           of_aliases = isempty(fu.of) ? String[] : _lock_target_aliases(instruction, fu.of)
-          print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, of_aliases, instruction.connection))
+          print(io, Dialect.for_update_clause(fu.nowait, fu.skip_locked, fu.no_key, of_aliases, connection))
         end
       end
 
@@ -1018,7 +1022,7 @@ function _exists_projection(object::SQLObject, instruction::SQLInstruction, keep
   if keep
     io = IOBuffer()
     object.distinct && print(io, "DISTINCT ")
-    _query_select(io, instruction.select, instruction.connection)
+    _query_select_at(io, instruction.select, instruction.connection)
     return String(take!(io))
   end
   object.distinct && object.offset > 0 && return "DISTINCT $(quote_identifier(instruction.alias, instruction.connection)).*"

@@ -2025,6 +2025,136 @@ end
     end
   end
 
+  # What: the trimmed read's filter value, from the field formatter to the join scope (#1599 layer 5, read):
+  #   the formatter call (`_format_filter_value` → `_format_literal_value` → `_apply_lookup_formatter` →
+  #   `Models.apply_formatter`, #1781's hand-off), the bind (`_bind_formatted_value`), the predicate
+  #   (`_render_predicate_any`), the unnamed-temporal queue, the outer-join check (`_join_how`,
+  #   `_require_outer_join`), a join row's ON conditions (`_join_row_conditions`) and its scope
+  #   (`_join_scope`, `_join_render_scope`, `_with_render_scope`'s positional method).
+  # Expected: no dynamic call in each walk (one open arm each, an `:invoke`), the open arms' one dynamic call
+  #   each, `_queue_unnamed_temporal!` and `_require_outer_join` unspecialized on their union arguments, no
+  #   `==` or `_with_render_scope` kwcall left dynamic in `_join_scope`; the same value and type, or the same
+  #   error and text, as the old `_format_filter_value` over formatters x values x operators, empty lists
+  #   included; the join scope built positionally equal to the keyword one; and every direct formatter call
+  #   #1781 lists outside the write path made through `Models.apply_formatter`.
+  # Why: each was the read's run-time wall, one after the other: a call on an untyped value, or a keyword call
+  #   whose keyword set has no concrete type, has no compiled target in a trimmed image, and raises
+  #   `MethodError` (or `MissingCodeError`) when the read reaches it. Measured on main a3b3492b2: the walls'
+  #   functions are missing, `_queue_unnamed_temporal!` and `_require_outer_join` are specialized, and the
+  #   formatter call sites call the slot directly.
+  @testset "the trimmed read formats, binds and joins its filter at concrete types (#1599 layer 5, read walls)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    I = QB.InstructionObject
+    has(n) = isdefined(QB, n)
+    for n in (:_format_literal_value, :_format_literal_other, :_apply_lookup_formatter, :_format_empty_list,
+              :_bind_formatted_value, :_bind_formatted_other, :_render_predicate_any, :_render_predicate_other,
+              :_join_how, :_require_outer_join_feature, :_join_row_conditions, :_join_render_scope)
+      @test has(n)
+    end
+    # Wall 1, the formatter: the literal is walked to its type, then the formatter to its own.
+    literal_types = (String, Int64, Float64, Bool, SubString{String}, Dates.Date, Dates.DateTime, Dates.Time,
+                     M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID, Int32, Nothing, Missing)
+    if has(:_format_literal_value)
+      @test isempty(_dynamic_calls(QB._format_literal_value, (Function, Any, Bool)))
+      for T in literal_types
+        @test isempty(_dynamic_calls(QB._apply_lookup_formatter, (Function, T, Bool)))
+        @test isempty(_dynamic_calls(QB._format_filter_value, (Function, T, String)))
+      end
+      # The open arm is the one dynamic call: on the value, at the formatter it was handed.
+      @test length(_dynamic_calls(QB._format_literal_other, (Function, Any, Bool))) == 1
+    end
+    # The same answer as the old `_format_filter_value`, which called the formatter value directly.
+    old_ffv(@nospecialize(formatter), @nospecialize(values), operator::AbstractString) = begin
+      f = operator in QB._RANGE_CHECKED_OPERATORS ? formatter : M.unranged_formatter(formatter)
+      operator in QB._ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [f(v) for v in values] : f(values)
+    end
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), sprint(showerror, e))
+    end
+    samevalue(x, y) = isequal(x, y) || (typeof(x) === typeof(y) && isstructtype(typeof(x)) && nfields(x) > 0 &&
+                                        all(i -> samevalue(getfield(x, i), getfield(y, i)), 1:nfields(x)))
+    same(a, b) = a[1] === b[1] && a[2] === b[2] && samevalue(a[3], b[3])
+    formatters = Any[M.format_number_sql, M.format_text_sql, M.format_date_sql, M.format_timezone_sql, M.format_bool_sql,
+                     M.format_uuid_sql, M.format_json_sql, M.format_inet_sql, M.format_year_sql, M.format_month_sql,
+                     M.format_yyyy_mm, QB.format_pattern_text_sql, QB.format_pattern_number_sql,
+                     M.ArrayField(M.IntegerField()).formatter, v -> string("user:", v), identity, nothing]
+    values = Any[7, Int32(7), 13, 2.5, true, "abc", "2009-05", SubString("2009-05-24", 1, 10), Dates.Date(2009, 5, 24),
+                 Dates.DateTime(2009, 5, 24, 14), Dates.Time(10, 30), M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")),
+                 M.Decimals.Decimal(0, 150, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), nothing, missing,
+                 Int16(3), :sym, Dict("a" => 1),
+                 Int[], Any[], String[], Dates.Date[], Float64[], [1, 2], ["a", "b"], Any[1, "a"], [Dates.Date(2009, 5, 24)]]
+    if has(:_format_literal_value)
+      for f in formatters, v in values, op in ("=", "IN", "NOT IN", "BETWEEN", ">", "LIKE")
+        @test same(outcome(() -> QB._format_filter_value(f, v, op)), outcome(() -> old_ffv(f, v, op)))
+      end
+    end
+
+    # Walls 2 and 3, the bind and the predicate: the formatted value and the placeholders, each at its type.
+    if has(:_bind_formatted_value)
+      @test isempty(_dynamic_calls(QB._bind_formatted_value, (I, Any, Bool, String)))
+      @test length(_dynamic_calls(QB._bind_formatted_other, (I, Any, Bool, String))) == 1
+      @test isempty(_dynamic_calls(QB._render_predicate_any, (String, String, Any, I, Bool)))
+      @test length(_dynamic_calls(QB._render_predicate_other, (String, String, Any, I, Bool))) == 1
+    end
+
+    # Wall 4: one body for the queue, whatever its two sides are.
+    @test only(methods(QB._queue_unnamed_temporal!)).nospecialize != 0
+
+    # Wall 5, the outer-join check: the join type read at the row's kind, the connection unspecialized, and the
+    # capability asked of the pool at its concrete type.
+    @test only(methods(QB._require_outer_join)).nospecialize != 0
+    rows = QB.JoinRow[QB.ModelJoin(a = "t", alias_a = "Tb", key_a = "k", b = "u", alias_b = "Tb_1", key_b = "id", how = "INNER"),
+                      QB.CteJoin(a = "t", alias_a = "Tb", key_a = "k", b = "c", alias_b = "c_1", key_b = "v", how = "LEFT"),
+                      QB.AnchorlessJoin(a = "t", alias_a = "Tb", b = "d", alias_b = "dd", how = "RIGHT",
+                                        on_conditions = QB.FilterType[], to_many = false)]
+    if has(:_join_how)
+      for r in rows
+        @test QB._join_how(r) === r.how
+      end
+      @test isempty(_dynamic_calls(QB._join_how, (QB.JoinRow,)))
+      @test isempty(_dynamic_calls(QB._require_outer_join, (Any, String)))
+      # The pool arm is static; anything that is not a pool makes the one call it made before.
+      @test length(_dynamic_calls(QB._require_outer_join_feature, (Any, Symbol, String))) == 1
+      sl = PormG.ConnectionPool.SQLiteConnectionPool(":memory:"; pool_size = 1)
+      @test QB._require_outer_join(sl, "INNER") === nothing
+      @test QB._require_outer_join(sl, "LEFT") === nothing
+      @test outcome(() -> QB._require_outer_join(sl, "FULL")) == outcome(() -> PormG._require_feature(sl, :full_joins, "join_type = \"FULL\""))
+    end
+
+    # Walls 6 to 8, a join row's ON conditions: the row walked to its kind before the closure is built, the
+    # earlier rows' aliases read typed and compared without a box, and the scope built positionally.
+    if has(:_join_row_conditions)
+      @test isempty(_dynamic_calls(QB._join_row_conditions, (I, Int, QB.JoinRow)))
+      probe = () -> String[]
+      for R in (QB.ModelJoin, QB.CteJoin, QB.AnchorlessJoin)
+        dyn = _dynamic_calls(QB._join_scope, (typeof(probe), I, Int, R))
+        @test !any(c -> occursin("_with_render_scope", c) || occursin(r"(^|\W)==\(", replace(c, r"^\d+: " => "")), dyn)
+      end
+    end
+    if has(:_join_render_scope)
+      base = QB.RenderScope(label = "x", group_key = true)
+      for (left, right) in ((("Tb",), ("Tb", "Tb_1")), (("Tb", "R1", "dd"), ("Tb", "R1", "dd")), ((), ()))
+        @test QB._join_render_scope(base, "Tb_1", left, right) ===
+              QB._with_scope(base; join_hop = "Tb_1", join_side = :none, join_left = left, join_right = right)
+      end
+      @test length(_dynamic_calls(QB._join_render_scope, (QB.RenderScope, String, Tuple{Vararg{String}}, Tuple{Vararg{String}}))) == 0
+    end
+
+    # #1781's hand-off: every direct formatter call outside the write path goes through `apply_formatter`.
+    qb_src(f) = read(joinpath(pkgdir(PormG), "src", "querybuilder", f), String)
+    code(f) = join((replace(l, r"#.*$" => "") for l in split(qb_src(f), '\n')), '\n')
+    @test count("Models.apply_formatter(", code("many_to_many.jl")) == 2
+    @test count("Models.apply_formatter(", code("deletion.jl")) == 1
+    @test count("Models.apply_formatter(", code("value_validation.jl")) == 1
+    @test count("Models.apply_formatter(", code("expression_render.jl")) == 2
+    @test !occursin(".formatter(", code("many_to_many.jl")) && !occursin(".formatter(", code("deletion.jl"))
+    # And the WHERE path's three direct binds go through the walk, beside `_bind_predicate_value`'s.
+    @test count("_bind_formatted_value(instruc,", code("filter_nodes.jl")) == 4
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete
@@ -2695,8 +2825,9 @@ end
     # The signatures: the two scope methods and the one wrapper that only passes `f` on (`_join_scope`)
     # take the closure at a type parameter, so each compiles per closure type. A wrapper that calls
     # `f()` in a branch (`_on_join_right`, `_or_arm`, `_in_clause_phase`) is specialized by Julia anyway.
-    for g in (QB.with_scope, QB._with_render_scope, QB._join_scope)
-      sig = Base.unwrap_unionall(only(methods(g)).sig)
+    # `_with_render_scope` has two methods since #1599 layer 5 (keywords, or a scope the caller built).
+    for g in (QB.with_scope, QB._with_render_scope, QB._join_scope), m in methods(g)
+      sig = Base.unwrap_unionall(m.sig)
       @test sig.parameters[2] isa TypeVar
     end
   end

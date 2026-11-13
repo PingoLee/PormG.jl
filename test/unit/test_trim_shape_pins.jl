@@ -1984,6 +1984,44 @@ end
     end
   end
 
+  # What: three layer-5 groups by cause (#1599 layer 5, PR 3): closures over a local that is reassigned
+  #   (`_reads_alias`, `build_row_join_sql_text`, `_format_filter_value`), the kind memo's
+  #   `get!` (`_memo_kind`), and the FROM-column walk's `Iterators.flatten` (`_from_column_names`).
+  # Expected: no `Core.Box` in the three functions' lowered code; `_memo_kind` specialized on its closure, with
+  #   no dynamic call; `_from_column_names` walks its three sources through `_add_hop_tables!`, with no
+  #   `flatten`.
+  # Why: every read of a box, a `get!` through a closure compiled as `Function` on a memo read as `Any`, and
+  #   each step of a `flatten` over generators of different types is a run-time call, an unresolved row in a
+  #   trimmed build: 88 + 32 + 6 verifier rows on the read-only entry. Measured on PR 2's head feb29214b: the
+  #   box checks, the `_memo_kind` checks and the `_add_hop_tables!` check fail. (`_render_order_terms`' null-flag
+  #   closure keeps its box: rebound, it captures the term's node at its union and the scope call is left
+  #   unresolved instead, the #1711 residue below.)
+  @testset "layer-5 groups: no boxed capture, the kind memo static, the FROM walk unflattened (#1599 layer 5, PR 3)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    boxed(f, types) = any(ci -> any(st -> occursin("Core.Box", string(st)), ci.code), code_lowered(f, types))
+    @test !boxed(QB._reads_alias, (typeof(QB._is_agg), Any, I, Set{String}))
+    @test !boxed(QB.build_row_join_sql_text, (I,))
+    @test !boxed(QB._format_filter_value, (Function, Any, String))
+    # `_memo_kind` is specialized on its closure, so `get!` takes it at its concrete type, and the memo is read
+    # back at the type it is stored.
+    m = only(methods(QB._memo_kind))
+    @test Base.unwrap_unionall(m.sig).parameters[2] isa TypeVar
+    probe = () -> nothing
+    @test isempty(_dynamic_calls(QB._memo_kind, (typeof(probe), Any, I, Symbol)))
+    @test isempty(_widened_function_args(QB._temporal_inside, (QB.FExpression, I)))
+    # The FROM-column walk: three loops over its sources, in the order `flatten` gave them.
+    @test isdefined(QB, :_add_hop_tables!)
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "select_nodes.jl"), String)
+    s = findfirst("function _from_column_names(", src)
+    @test s !== nothing
+    if s !== nothing
+      fbody = join((replace(l, r"#.*$" => "") for l in split(src[s[1]:findnext("\nend\n", src, s[1])[end]], '\n')), '\n')
+      @test !occursin("Iterators.flatten", fbody)
+      @test count("_add_hop_tables!(tables, object, ", fbody) == 3
+    end
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete

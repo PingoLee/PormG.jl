@@ -2170,11 +2170,11 @@ end
   #   (`_bind_value(::Decimal)`) and a PostgreSQL array literal prints.
   # Expected: no dynamic call under either Decimals major (0.4 declares the `s` and `q` slots `Integer`,
   #   0.5 `Bool`/`Int64`), no `:invoke` that an `@invoke` redirects, two levels down, and the text the old
-  #   formula gave for every coefficient, exponent and sign.
-  # Why: `repeat("0", n)` reaches `repeat(::AbstractString, ::Integer)` through an `@invoke`, which a
-  #   trimmed build cannot compile: 4 verifier rows on the MySQL fixture, each a MethodError when a
-  #   query binds a `Decimal`. Under 0.4, `Int(d.q)` on the abstract slot also left everything after it
-  #   untyped.
+  #   formula gave for every coefficient, exponent and sign, or the same error at the largest lengths.
+  # Why: `repeat("0", n)` hands on to another method through an `@invoke`, which a trimmed build cannot
+  #   compile: 4 verifier rows on the MySQL fixture, each a MethodError when a query binds a `Decimal`.
+  #   Under 0.4 (the unit suite's resolution), `d.s == 1` on the `Integer` slot was a dynamic call too,
+  #   and `Int(d.q)` once the drivers' `Int64` constructors are loaded, as they are here.
   @testset "a Decimal's text is built without a dynamic or redirected call (#1599, layer 3)" begin
     M = PormG.Models
     D = M.Decimals.Decimal
@@ -2212,6 +2212,12 @@ end
     @test M._pg_decimal_text(D(1, 1, -3)) == "-0.001"
     @test M._pg_decimal_text(D(0, 12, 3)) == "12000"
     @test M._zeros_text(0) == "" && M._zeros_text(3) == "000"
+    # The largest exponents: the same error as `repeat` (an `OutOfMemoryError`, not `fill`'s `ArgumentError`).
+    errtype(g) = try g(); nothing catch e; typeof(e) end
+    for q in (typemax(Int), typemax(Int) - 1)
+      d = D(0, 1, q)
+      @test errtype(() -> M._pg_decimal_text(d)) === errtype(() -> old_text(d)) === OutOfMemoryError
+    end
   end
 
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)

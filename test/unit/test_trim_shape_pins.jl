@@ -893,6 +893,43 @@ end
     @test length(methods(CP._run_sqlite_statement)) == 1
   end
 
+  # What: the SQLite extension's statement parameters (#1599 layer 2).
+  # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`
+  #   binds each value of the types `sqlite_bind_value` hands over with a static call (any other value
+  #   through one `@noinline` open arm), with the rows, the count check and its message unchanged.
+  # Why: SQLite.jl binds a vector with one `bind!(stmt, i, values[i])` per value, a call on an `Any`, and
+  #   the trimmed read stopped at `bind!(::Stmt, ::Int64, ::String)`.
+  @testset "the SQLite extension binds parameters without a dynamic call (#1599 layer 2)" begin
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    @test isempty(_dynamic_calls(X._sqlite_bind_one!, (SQLite.Stmt, Int, Any)))
+    @test isempty(_dynamic_calls(SQLite.bind!, (SQLite.Stmt, X._SQLiteBinds{Vector{Any}})))
+    @test X._sqlite_binds(Any[1]) isa X._SQLiteBinds{Vector{Any}}
+    @test X._sqlite_binds((1,)) === (1,)          # a tuple is handed over as it was
+    @test X._sqlite_binds(nothing) === nothing
+
+    db = SQLite.DB()
+    SQLite.execute(db, "CREATE TABLE t (a, b, c, d, e, f, g)")
+    vals = Any["Senna", Int64(3), 1.5, true, missing, Int32(7), UInt8[0x01, 0x02]]
+    SQLite.execute(db, "INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?)", vals)
+    stmt = SQLite.Stmt(db, "SELECT * FROM t WHERE a = ? AND b = ? AND f = ? AND g = ?"; register = false)
+    probe = Any["Senna", Int64(3), Int32(7), UInt8[0x01, 0x02]]
+    rows_plain = X.Tables.rowtable(SQLite.DBInterface.execute(stmt, probe))
+    rows_typed = X.Tables.rowtable(SQLite.DBInterface.execute(stmt, X._sqlite_binds(probe)))
+    @test isequal(rows_plain, rows_typed) && length(rows_typed) == 1
+    # A value outside the arms takes SQLite.jl's own method (here `Float32`, an `AbstractFloat`).
+    rows_open = X.Tables.rowtable(SQLite.DBInterface.execute(
+      SQLite.Stmt(db, "SELECT ? AS x"; register = false), X._sqlite_binds(Any[Float32(2.5)])))
+    @test rows_open[1].x == 2.5
+    short = try
+      SQLite.DBInterface.execute(stmt, X._sqlite_binds(Any["Senna"])); nothing
+    catch e
+      e
+    end
+    @test short isa SQLite.SQLiteException && short.msg == "values should be provided for all query placeholders"
+    SQLite.DBInterface.close!(stmt)
+    close(db)
+  end
+
   # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /
   #   `_feature_since(T, ::Symbol)`, and its callers `_supports` and `_supporting_backends`.
   # Expected: the same answer as the table's `Val` method for every feature on every backend; an

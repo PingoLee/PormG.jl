@@ -126,7 +126,11 @@ const PINNED_NAMES = _NamePin[
   (name = "SQLite.C.sqlite3_column_int64",      status = :internal,   reader = "_sqlite_cell"),
   (name = "SQLite.C.sqlite3_column_double",     status = :internal,   reader = "_sqlite_cell"),
   (name = "SQLite.sqlitevalue",                 status = :internal,   reader = "_sqlite_cell (TEXT and BLOB)"),
-  (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into"),
+  (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into, SQLite.bind!(::Stmt, ::_SQLiteBinds)"),
+  # #1599 layer 2: the positional parameters are bound by this extension's `bind!` method on its own vector
+  # type, the body of SQLite.jl's positional one (1.6.1 through 1.11 have the same).
+  (name = "SQLite.bind!",                       status = :documented, reader = "SQLite.bind!(::Stmt, ::_SQLiteBinds), _sqlite_bind_one!"),
+  (name = "SQLite.C.sqlite3_bind_parameter_count", status = :internal, reader = "SQLite.bind!(::Stmt, ::_SQLiteBinds)"),
   # MySQL.jl
   (name = "MySQL.Connection",                   status = :documented, reader = "PormG.backend_execute, _open_connection, _run, …"),
   (name = "MySQL.connection_id",                status = :documented, reader = "PormG.backend_cancel_query!"),

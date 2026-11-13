@@ -105,6 +105,51 @@ function _create_sqlite_connection(connection_string::String; read_only::Bool = 
   return new_conn
 end
 
+# The statement's positional parameters, bound by value type (#1599 layer 2). SQLite.jl binds a vector
+# of parameters with one `bind!(stmt, i, values[i])` per value, and PormG's collector holds them as
+# `Vector{Any}`, so each was a call on an `Any`: one dispatch per value under the JIT, and in a
+# `juliac --trim` image a call with no compiled target (the trimmed read stopped at
+# `bind!(::Stmt, ::Int64, ::String)`). Wrapped in `_SQLiteBinds`, the vector reaches this extension's
+# `SQLite.bind!` method instead of SQLite.jl's positional one. It has the same body, one positional
+# `bind!` per placeholder after the same count check and message, with each value's call made at the
+# types the SQLite collector binds (`sqlite_bind_value`). Any other value (a `ManualParams` entry) takes
+# the call it took before, one dynamic `bind!`. A tuple, a named collection or `nothing` is handed over
+# as it was.
+struct _SQLiteBinds{V<:AbstractVector} <: AbstractVector{Any}
+  values::V
+end
+Base.size(b::_SQLiteBinds) = size(b.values)
+Base.getindex(b::_SQLiteBinds, i::Int) = b.values[i]
+Base.IndexStyle(::Type{<:_SQLiteBinds}) = IndexLinear()
+
+_sqlite_binds(params::AbstractVector) = _SQLiteBinds(params)
+_sqlite_binds(params) = params
+
+function SQLite.bind!(stmt::SQLite.Stmt, b::_SQLiteBinds)
+  values = b.values
+  nparams = SQLite.C.sqlite3_bind_parameter_count(SQLite._get_stmt_handle(stmt))
+  (nparams == length(values)) || throw(
+    SQLite.SQLiteException("values should be provided for all query placeholders"),
+  )
+  for i in 1:nparams
+    @inbounds _sqlite_bind_one!(stmt, i, values[i])
+  end
+end
+
+# One arm per type `sqlite_bind_value` hands over, each a static call into SQLite.jl's own method.
+@noinline function _sqlite_bind_one!(stmt::SQLite.Stmt, i::Int, @nospecialize(v))
+  v isa String && return SQLite.bind!(stmt, i, v)
+  v isa Int64 && return SQLite.bind!(stmt, i, v)
+  v isa Float64 && return SQLite.bind!(stmt, i, v)
+  v isa Bool && return SQLite.bind!(stmt, i, v)
+  v isa Missing && return SQLite.bind!(stmt, i, v)
+  v isa Nothing && return SQLite.bind!(stmt, i, v)
+  v isa Int32 && return SQLite.bind!(stmt, i, v)
+  v isa Vector{UInt8} && return SQLite.bind!(stmt, i, v)
+  return _sqlite_bind_open!(stmt, i, v)
+end
+@noinline _sqlite_bind_open!(stmt::SQLite.Stmt, i::Int, @nospecialize(v)) = SQLite.bind!(stmt, i, v)
+
 # Prepare an UNREGISTERED statement, execute it, fully materialize the result rows into a
 # connection-independent rowtable, and finalize the statement deterministically.
 #
@@ -135,7 +180,7 @@ function _sqlite_execute_materialized(conn::SQLite.DB, sql::String, params)
   try
     cursor = params === nothing ?
       SQLite.DBInterface.execute(stmt) :
-      SQLite.DBInterface.execute(stmt, params)
+      SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
     return Tables.rowtable(cursor)
   finally
     SQLite.DBInterface.close!(stmt)
@@ -197,7 +242,7 @@ function _sqlite_decode_rows(conn::SQLite.DB, sql::String, params,
                              decode::PormG.QueryBuilder._RowDecoder{T})::Vector{T} where T
   stmt = SQLite.Stmt(conn, sql; register = false)
   try
-    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, params)
+    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
     return _sqlite_rows_into(T, q, decode)
   finally
     SQLite.DBInterface.close!(stmt)

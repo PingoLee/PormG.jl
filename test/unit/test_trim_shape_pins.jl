@@ -2699,9 +2699,10 @@ end
   #   the helpers their arms pass the connection to (`sqlite_cast_sql`, `_assert_sqlite_window_support`,
   #   through the `_require_feature_at` barrier).
   # Expected: every method takes the engine argument `@nospecialize`; the three dispatchers, called over
-  #   `_SQLEngine`, make no dynamic call; the window renderers and helpers called over `ConnType` make
-  #   none; each engine renders, or refuses with, what it did before (the literals were read from the
-  #   commit before this change).
+  #   `_SQLEngine` (with a `String` and with a list column), make no dynamic call; the window renderers
+  #   and `_assert_sqlite_window_support` called over `ConnType` make none, nor does `sqlite_cast_sql`
+  #   read at `PormGSQLite` with its keyword body; each engine renders, or refuses with, what it did
+  #   before (the literals were read from the commit before this change).
   # Why: the dispatchers' callers (`_function_sql`, the window render) are themselves dynamic calls
   #   today, so a trimmed build never compiles into them and their Dialect calls are not yet fixture
   #   rows. Read by reflection, 16 of the 48 renderer calls in `_dialect_function_sql` and all 5 in the
@@ -2728,19 +2729,23 @@ end
     end
     # 2. The dispatchers resolve every renderer call.
     @test isempty(_dynamic_calls(QB._dialect_function_sql, (String, String, D.FnOptions, QB._SQLEngine)))
+    # A list column reaches the renderers that take one (`COALESCE`, `CONCAT`, `GREATEST`, `LEAST`, the list
+    #   `CASE` and `SEARCH_*` arms), which a `String` column skips as `MethodError` arms.
+    @test isempty(_dynamic_calls(QB._dialect_function_sql, (String, Vector{Any}, D.FnOptions, QB._SQLEngine)))
     @test isempty(_dynamic_calls(QB._window_no_column_sql, (String, String, QB._SQLEngine)))
     @test isempty(_dynamic_calls(QB._window_column_sql, (String, String, String, QB._SQLEngine)))
-    # 3. The renderers the dispatchers do not reach, and the helpers, called over `ConnType`.
+    # 3. The renderers the dispatchers do not reach and the window check, called over `ConnType`.
     calls = (
       (c, s) -> PormG.Dialect.LAG(s, s, Dict{String,Any}(), c),
       (c, s) -> PormG.Dialect.LEAD(s, s, Dict{String,Any}(), c),
       (c, s) -> PormG.Dialect.NTH_VALUE(s, 2, s, c),
-      (c, s) -> PormG.Dialect.sqlite_cast_sql(s, s, c),
       (c, s) -> PormG.Dialect._assert_sqlite_window_support(c),
     )
     for g in calls
       @test isempty(_dynamic_calls(g, (QB.ConnType, String)))
     end
+    # `sqlite_cast_sql` keeps its code in its keyword body, which the `_kw` reader follows.
+    @test isempty(_dynamic_calls_kw(D.sqlite_cast_sql, (String, String, PormG.PormGSQLite)))
     # 4. What each engine renders or refuses, unchanged.
     pg, sl, my = _TspStandInPGPool(), _TspStandInPool(), _TspStandInMyPool()
     fo = D.FnOptions()

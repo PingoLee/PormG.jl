@@ -66,8 +66,10 @@ end
   end
   @test !isempty(used)
   @test setdiff(used, names) == Set{Symbol}()
-  # Named only at a barrier site (`for_update_clause`'s MySQL arm), so the scan must read the barriers.
+  # Named only at barrier sites (`for_update_clause`'s MySQL arm, the SQLite window check), so the scan
+  # must read the barriers.
   @test :no_key_locks in used
+  @test :window_functions in used
   M = PormG.Models
   for field in (M.ArrayField(M.IntegerField()), M.SearchVectorField(), M.GenericIPAddressField(), M.CIDRField())
     @test PormG.Dialect._field_feature(field) in names

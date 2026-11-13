@@ -2440,6 +2440,102 @@ end
     @test M.fk_target_column(unresolved) == "circuitref"
   end
 
+  # What: `Models.apply_formatter(f, value, ranged)`, the call through a field's `formatter::Function` slot
+  #   (and the date-part formatters a filter transform takes), walked over PormG's own formatters.
+  # Expected: for a value of a concrete type, no dynamic call in either method; every formatter a field
+  #   constructor stores, and every member of `FIELD_FORMATTERS`, `PERIOD_FORMATTERS` and `format_yyyy_mm`,
+  #   has an arm; the open arm is the old call; every answer — value, type, or exception type and message —
+  #   is the direct call's (`f(v)`, or `unranged_formatter(f)(v)` when `ranged` is false).
+  # Why: `field.formatter(value)` dispatches at run time whatever the value, because the slot is typed
+  #   `Function`; in a trimmed binary that is a `MethodError` wherever nothing was compiled for the target.
+  #   The filter path's `_format_filter_value` is such a call (the layer-5 session's finding). With the
+  #   function known, what stays dynamic is the value, `OperObject.values`' untyped literal (#1754, round
+  #   11's decision), which a typed literal closes. A formatter a field stores that has no arm here would
+  #   send every value of that field through the open arm.
+  @testset "a field formatter is called at its concrete type through apply_formatter (#1599, layer 3)" begin
+    M = PormG.Models
+    # 1. Static for a concrete value, through both methods (the 2-argument one defaults `ranged`).
+    for T in (Int64, Float64, Bool, String, SubString{String}, Dates.Date, Dates.DateTime,
+              M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID, Nothing, Missing, Vector{Int64})
+      @test isempty(_dynamic_calls(M.apply_formatter, (Function, T, Bool)))
+    end
+    # With an untyped value, each arm is a call on the value at a known function: no call on `f` itself
+    # but the open arm's and the `ArrayFormatter` arm's (a call on the struct, whose one method takes the
+    # value untyped). That residue is the literal's, not the formatter's.
+    on_any = [replace(c, r"^\d+: " => "") for c in _dynamic_calls(M.apply_formatter, (Function, Any, Bool))]
+    @test count(c -> startswith(c, "PormG.Models._apply_formatter_other("), on_any) == 1
+    @test count(c -> occursin(r"^\(%\d+\)\(_3\)$", c), on_any) == 1
+    @test all(c -> occursin(r"^(PormG\.Models\.(format_\w+|identity|_apply_formatter_other)\(|Core\.kwcall\(%\d+, PormG\.Models\.format_\w+, _3\)$|\(%\d+\)\(_3\)$)", c), on_any)
+    # 2. The open arm is exactly the call a user's formatter made before: one dynamic call per branch.
+    @test length(_dynamic_calls(M._apply_formatter_other, (Function, Any, Bool))) == 2
+
+    # 3. Every formatter a field type stores is a member, and every member has an arm.
+    target = M.Model("tsp_fmt_circuit", circuitid = M.IDField(), name = M.CharField())
+    stored = Any[]
+    for T in Base.uniontypes(M.AnyField)
+      ctor = getfield(M, Symbol(string(nameof(T))[2:end]))
+      fld = T in (M.sForeignKey, M.sOneToOneField, M.sManyToManyField) ? ctor(target) :
+            T === M.sArrayField ? ctor(M.IntegerField()) : ctor()
+      push!(stored, fld.formatter)
+    end
+    push!(stored, M.GenericIPAddressField(unpack_ipv4 = true).formatter)
+    for E in (M.CharField, M.TextField, M.IntegerField, M.BigIntegerField, M.FloatField, M.BooleanField,
+              M.DateField, M.DateTimeField, M.UUIDField)
+      push!(stored, M.ArrayField(E()).formatter.base.formatter)
+    end
+    for f in stored
+      @test f isa M.ArrayFormatter || f in M.FIELD_FORMATTERS
+    end
+    # An arm per member: the walk names each one (`isa typeof(member)`), read from its lowered code.
+    named = Set{Symbol}()
+    # Lowered code holds a global as a statement of its own (or, in older lowerings, as a call's argument).
+    for stmt in only(code_lowered(M.apply_formatter, (Function, Any, Bool))).code,
+        a in (stmt isa Expr ? stmt.args : (stmt,))
+      a isa GlobalRef && a.mod === M && push!(named, a.name)
+    end
+    for f in (M.FIELD_FORMATTERS..., M.PERIOD_FORMATTERS..., M.format_yyyy_mm)
+      @test nameof(f) in named
+    end
+    # And each arm calls the function it tests for: in the lowered code, after `typeof(X)` the next global
+    # of `Models` that is not `isa`/`typeof` is `X` itself (the call), so two swapped arms fail here.
+    refs = Symbol[]
+    for stmt in only(code_lowered(M.apply_formatter, (Function, Any, Bool))).code,
+        a in (stmt isa Expr ? stmt.args : (stmt,))
+      a isa GlobalRef && a.mod === M && push!(refs, a.name)
+    end
+    for (k, r) in enumerate(refs)
+      (r === :typeof && k < length(refs)) || continue
+      tested = refs[k + 1]
+      called = something(findfirst(x -> !(x in (:isa, :typeof)), refs[k + 2:end]), 0)
+      @test called > 0 && refs[k + 1 + called] === tested
+    end
+
+    # 4. The same answer as the direct call, value by value, ranged and unranged.
+    direct(f, v, ranged) = ranged ? f(v) : M.unranged_formatter(f)(v)
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), sprint(showerror, e))
+    end
+    # A wrapper the formatters return (`PormGBytes`, `PormGArrayLiteral`) has no `isequal` of its own, so
+    # it is compared slot by slot.
+    samevalue(x, y) = isequal(x, y) || (typeof(x) === typeof(y) && isstructtype(typeof(x)) && nfields(x) > 0 &&
+                                        all(i -> samevalue(getfield(x, i), getfield(y, i)), 1:nfields(x)))
+    same(a, b) = a[1] === b[1] && a[2] === b[2] && samevalue(a[3], b[3])
+    values = Any[7, -1, 13, 0, 2.5, true, "abc", "2009-05", "12", SubString("2009-05-24", 1, 10), Dates.Date(2009, 5, 24),
+                 Dates.DateTime(2009, 5, 24, 14), M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")),
+                 M.Decimals.Decimal(0, 150, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), nothing, missing,
+                 [1, 2], ["a", "b"], Dates.Time(10, 30), Dates.Second(90), "10.0.0.1", "10.0.0.0/8",
+                 Dict("a" => 1), :sym, 2009_05, UInt8[1, 2],
+                 "::ffff:10.0.0.1"]   # the one value the inet and the unpacked-inet formatters answer differently
+    user = v -> string("user:", v)
+    for f in (M.FIELD_FORMATTERS..., M.PERIOD_FORMATTERS..., M.format_yyyy_mm, unique(filter(x -> x isa M.ArrayFormatter, stored))...,
+              user, M.unranged_formatter(M.format_month_sql)), v in values, ranged in (true, false)
+      @test same(outcome(() -> M.apply_formatter(f, v, ranged)), outcome(() -> direct(f, v, ranged)))
+    end
+    @test M.apply_formatter(user, 3) == "user:3"
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

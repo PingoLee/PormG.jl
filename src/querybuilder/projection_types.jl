@@ -309,7 +309,7 @@ function _having_alias_formatter(alias::MemoKey, instruc::SQLInstruction)
   # the JSON formatter refused every plain string compared with it. The comparisons bind as the key
   # lookup's own filter binds them (`_render_json_lookup_comparison`); any other operator, as given.
   _json_key_lookup_operand(source.field, instruc) && return nothing
-  formatter = _expression_formatter(source.field, instruc)
+  formatter = _with_field_part_open(_expression_formatter, source.field, instruc)   # #1599: at the member's type
   # #900: a `Sum`/`Avg` over an interval is an interval, not the number `_expression_formatter` names
   # for every sum, and `"total__@gt" => Hour(1)` raised a `MethodError` from the number formatter. The
   # SELECT renders first, so the projection's kind is known here: the value is checked as a duration,
@@ -402,7 +402,7 @@ function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   return _unranged(_expression_formatter(p.field_name, instruc)) === Models.format_number_sql ?
     Models.format_number_sql : nothing
 end
-_expression_formatter(p::SQLField, instruc::SQLInstruction) = _expression_formatter(p.field, instruc)
+_expression_formatter(p::SQLField, instruc::SQLInstruction) = _with_field_part_open(_expression_formatter, p.field, instruc)
 function _expression_formatter(p::Union{String,CTEReference,JoinedReference}, instruc::SQLInstruction)
   column_field = _alias_column_field(p, instruc)
   return column_field === nothing ? nothing : column_field.formatter

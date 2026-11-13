@@ -2343,6 +2343,29 @@ function with_field_part(f::F, @nospecialize(part), args::Vararg{Any,N}) where {
   part isa JoinedReference && return f(part, args...)
   return _unlisted_node(f, part, args...)
 end
+
+# `with_field_part` for a call that used to dispatch on the `FieldPart` at run time (#1599 layer 5, group 6):
+# the same ten arms, and any other value, such as a caller's own `SQLTypeFunction`, makes the call it made
+# before, one dynamic call behind `@noinline`, where `with_field_part` raises. A render site reading
+# `SQLField.field` at its union goes through here, so the call is made at the member's type without
+# refusing what the slot's abstract families admit.
+function _with_field_part_open(f::F, @nospecialize(part), args::Vararg{Any,N}) where {F,N}
+  part isa String && return f(part, args...)
+  part isa SQLText && return f(part, args...)
+  part isa FObject && return f(part, args...)
+  part isa WindowFunction && return f(part, args...)
+  part isa FExpression && return f(part, args...)
+  part isa OuterRefObject && return f(part, args...)
+  part isa SubqueryObject && return f(part, args...)
+  part isa ExistsObject && return f(part, args...)
+  part isa CTEReference && return f(part, args...)
+  part isa JoinedReference && return f(part, args...)
+  return _with_field_part_other(f, part, args...)
+end
+@noinline _with_field_part_other(f::F, @nospecialize(part), args::Vararg{Any,N}) where {F,N} = f(part, args...)
+# `string(part)` for an `SQLField.field` value, at the member's type: the text a message or a projection
+# list printed for it, through `string` on the slot's union, a run-time dispatch.
+_field_part_text(@nospecialize(part))::String = _with_field_part_open(string, part)
 _is_agg(::WindowFunction) = false
 # `_is_agg(x)` for a value of any type, without a dynamic call (#1599 layer 4): one arm per method of
 # `_is_agg` (`test/unit/test_trim_shape_pins.jl` fails when a method is added), each calling that method.

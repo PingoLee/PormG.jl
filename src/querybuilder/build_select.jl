@@ -23,7 +23,7 @@ _order_term_select(part, instruc::SQLInstruction, group_key::Bool) =
   _with_render_scope(() -> _select_field_part(part, instruc, nothing), instruc; group_key = group_key)
 # A barrier, so the walk's ten arms are not inlined into `get_order_query`: inlined, they grew its body
 # and the build allocated more on every query, ordered or not (`alloc_baseline.jl`).
-@noinline _render_order_term(order_node, instruc::SQLInstruction, group_key::Bool) =
+@noinline _render_order_term(@nospecialize(order_node), instruc::SQLInstruction, group_key::Bool) =
   with_field_part(_order_term_select, order_node, instruc, group_key)
 
 # #564 — the SELECT-`*` half of the projection-kind map.
@@ -99,8 +99,8 @@ function _group_role(v::ProjectionNode, instruc::SQLInstruction)::Symbol
   node = v.field
   node isa Union{SubqueryObject,ExistsObject} && return :none
   node isa Union{SQLTypeFunction,SQLTypeF} || return :group
-  _resolved_agg(node, instruc) && return :aggregate
-  _resolved_window(node, instruc) && return :window
+  _with_field_part_open(_resolved_agg, node, instruc) && return :aggregate   # #1599: at the member's type
+  _with_field_part_open(_resolved_window, node, instruc) && return :window
   return :group
 end
 
@@ -314,7 +314,8 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
                                  _with_render_scope(render, instruc; label, group_key)
       instruc.select[i] = v_copy
       if v_copy._as === nothing
-        throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(v_copy.field)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(v_copy.field)\e[0m or use \e[4m\e[32mSQLField($(v_copy.field), \"alias_name\")\e[0m"))
+        part_text = _field_part_text(v_copy.field)   # #1599: the text the message printed, at the member's type
+        throw(QueryBuildError("Field requires an alias: \e[4m\e[31m$(part_text)\e[0m must have a name using the format \e[4m\e[32m\"field_name\" => $(part_text)\e[0m or use \e[4m\e[32mSQLField($(part_text), \"alias_name\")\e[0m"))
       end
       # `cache_key` is non-`nothing` here: it is `nothing` exactly when `_as` is, which the throw
       # above has already ruled out. Otherwise the first entry stays (#441), with one exception:
@@ -415,9 +416,10 @@ _is_transform_term(v::SQLField) = memo_name(v) != v._as
 # holds. A path written as itself (`SQLField(f, f)`, every String `order_by`), a `CTE`/`Joined` handle
 # and an outer reference are named by what they resolve to, and a transform's memo name is its path, so
 # those still match a projection by key.
-_is_labelled_term(v::SQLField) =
-  !(v.field isa Union{SQLTypeCTE,SQLTypeJoined,OuterRefObject}) && !_is_transform_term(v) &&
-  !(v.field isa String && v.field == v._as)
+_is_labelled_term(v::SQLField) = _is_labelled_term(v, v.field)   # #1599: the field read once, so `==` sees a `String`
+_is_labelled_term(v::SQLField, @nospecialize(f)) =
+  !(f isa Union{SQLTypeCTE,SQLTypeJoined,OuterRefObject}) && !_is_transform_term(v) &&
+  !(f isa String && f == v._as)
 
 # #1004 — does `path` walk relations from the query's model to a real column? `"raceid__year"` does
 # (the race's `year`); `"date__day"`, a transform's output name, does not. A pure walk: `_build_row_join`
@@ -448,9 +450,11 @@ end
 # #894 — an ORDER BY term that is a bare `DurationField` column path, on SQLite. Typed after the term
 # has been rendered, so the memo the kind lookup reads is populated. #1285: or a CTE column holding a
 # duration, which the body left as its text.
+# #1599 layer 5: the field read once, so `_is_bare_column` is called at `String` or `CTEReference`.
+_bare_string_or_cte(@nospecialize(part)) = part isa Union{String,CTEReference} && _is_bare_column(part)
 _orders_as_sqlite_interval(term::SQLField, instruc::SQLInstruction) =
-  _interval_as_ms(instruc.connection) && term.field isa Union{String,CTEReference} && _is_bare_column(term.field) &&
-  _expression_kind(term.field, instruc) isa CInterval
+  _interval_as_ms(instruc.connection) && _bare_string_or_cte(term.field) &&
+  _with_field_part_open(_expression_kind, term.field, instruc) isa CInterval
 _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 
 # #1599 slice C: the terms through `with_order_terms`, so each is an `SQLOrder` read statically, or, for a caller's
@@ -678,14 +682,16 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # checks the terms recorded in `ungrouped_order_terms` below. The window half is resolved too,
       # so a window reached through an alias (`When("r" => 1, …)` over `"r" => Rank(…)`) counts.
       order_node = v_field_copy.field
-      groups_term = !_resolved_contains_agg(order_node, instruc) && !_resolved_window(order_node, instruc)
+      # #1599 layer 5: the term's node is a `FieldPart`, so each question is asked at the member's type.
+      groups_term = !_with_field_part_open(_resolved_contains_agg, order_node, instruc) &&
+                    !_with_field_part_open(_resolved_window, order_node, instruc)
       # #1313: on SQLite an interval with a millisecond form orders by it, as its alias and an
       # unprojected `DurationField` path do (#894); a labelled term (`SQLOrder(SQLField(F("time"), "x"))`)
       # sorted its `HH:MM:SS` text. One render gives both forms with the same parameters in the same
       # order: the text stays the term's SQL, which GROUP BY, the #76 guard and the memo read, and
       # ORDER BY prints the milliseconds. Not a `Value` literal: one constant orders nothing, and its
       # millisecond form would change the text the #76 guard matches against its projection.
-      if _interval_as_ms(instruc.connection) && !(order_node isa SQLText) && _interval_ms_candidate(order_node)
+      if _interval_as_ms(instruc.connection) && !(order_node isa SQLText) && _with_field_part_open(_interval_ms_candidate, order_node)
         text, ms, _ = _with_render_scope(() -> _render_interval_operand(order_node, instruc), instruc;
                                  group_key = groups_term)
         v_field_copy.field = text
@@ -699,8 +705,8 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # SQLite, as its alias did. Refused the same way, naming the term's label and the CTE spelling;
       # render first, then type.
       if _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) &&
-         !_interval_ms_candidate(order_node) &&
-         _expression_kind(order_node, instruc) isa CInterval
+         !_with_field_part_open(_interval_ms_candidate, order_node) &&
+         _with_field_part_open(_expression_kind, order_node, instruc) isa CInterval
         label = v_field_copy._as
         throw(label isa AbstractString ? _unordered_interval_alias_error("`order_by`", label) :
                                          _unordered_interval_error("order_by", instruc.connection))
@@ -797,11 +803,11 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # BY x`) — expression membership captures both. Skip when there is no explicit projection
       # (`SELECT DISTINCT *`) or the projection carries a `*` wildcard that already covers the column.
       if object.distinct && !isempty(object.values) && !any(_is_wildcard_projection, object.values)
-        distinct_expr = string(v_field_copy.field)
+        distinct_expr = _field_part_text(v_field_copy.field)
         in_projection = false
         for i in eachindex(instruc.select)
           isassigned(instruc.select, i) || continue
-          if string(instruc.select[i].field) == distinct_expr
+          if _field_part_text(instruc.select[i].field) == distinct_expr
             in_projection = true
             break
           end

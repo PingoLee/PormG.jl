@@ -2155,6 +2155,76 @@ end
     @test count("_bind_formatted_value(instruc,", code("filter_nodes.jl")) == 4
   end
 
+  # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
+  #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
+  #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type
+  #   or read the field once.
+  # Expected: the open walk has `with_field_part`'s ten arms and an open arm that makes the call (where
+  #   `with_field_part` raises), with no dynamic call itself; `_field_part_text` is `string`; `_part_formatter`
+  #   is the slot read; the converted readers make no dynamic call (16 of them), and the ORDER BY render, the
+  #   interval-side check and the WHERE render no longer dispatch the calls they walked.
+  # Why: each was a call on the slot's union, a run-time dispatch that a trimmed image cannot make: 153
+  #   verifier rows on the read-only entry at PR 1's head. Measured on PR 1's head 3b6cd6062: all 16 readers
+  #   below make the dynamic calls this pin forbids, and the four helpers are missing (24 failures).
+  @testset "SQLField.field is read at its member type at the render sites (#1599 layer 5, group 6)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    has(n) = isdefined(QB, n)
+    for n in (:_with_field_part_open, :_with_field_part_other, :_field_part_text, :_part_formatter)
+      @test has(n)
+    end
+    if has(:_with_field_part_open)
+      members = Set{Any}(Base.uniontypes(QB.FieldPartNode))
+      src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "types.jl"), String)
+      start = findfirst("function _with_field_part_open(", src)[1]
+      body = join(filter(l -> !startswith(lstrip(l), "#"),
+                         split(src[start:findnext("\nend", src, start)[end]], '\n')), '\n')
+      for T in members
+        @test occursin("part isa $(nameof(T)) && return f(part, args...)", body)
+      end
+      @test count("part isa ", body) == length(members)
+      @test occursin("return _with_field_part_other(f, part, args...)", body)
+      @test QB._with_field_part_open(typeof, "raceid") === String
+      @test QB._with_field_part_open((p, x) -> (typeof(p), x), QB.SQLText(1), 7) === (QB.SQLText, 7)
+      # Where `with_field_part` refuses, the open arm makes the call.
+      @test_throws MethodError QB.with_field_part(typeof, QB.SQLField("raceid"))
+      @test QB._with_field_part_open(typeof, QB.SQLField("raceid")) === QB.SQLField
+      @test isempty(_dynamic_calls(QB._with_field_part_open, (typeof(_tsp_visit), Any)))
+      @test length(_dynamic_calls(QB._with_field_part_other, (typeof(string), Any))) == 1
+      for x in ("raceid", QB.SQLText(1), QB.SQLText("a"), PormG.F("points") + 1, QB.SQLField("raceid"))
+        @test QB._field_part_text(x) == string(x)
+      end
+      @test QB._part_formatter("raceid") === nothing
+      fo = QB.FObject(function_name = "EXTRACT", column = "date", formatter = PormG.Models.format_year_sql)
+      @test QB._part_formatter(fo) === PormG.Models.format_year_sql
+    end
+    S = QB.SQLField
+    P = PormG.ConnectionPool.SQLiteConnectionPool
+    for tt in (Tuple{typeof(QB._group_role), S, I}, Tuple{typeof(QB._grouped_expressions), I},
+               Tuple{typeof(QB._query_select), IOBuffer, Vector{S}, P}, Tuple{typeof(QB._describe_projection), S},
+               Tuple{typeof(QB._projects_column), S, String}, Tuple{typeof(QB._is_wildcard_projection), S},
+               Tuple{typeof(QB._is_labelled_term), S}, Tuple{typeof(QB._is_null_propagating_label), S},
+               Tuple{typeof(QB._orders_as_sqlite_interval), S, I}, Tuple{typeof(QB._projected_interval_source), String, I},
+               Tuple{typeof(QB._projected_unordered_interval), String, I},
+               Tuple{typeof(QB._infer_kind), S, I, QB._AllKinds}, Tuple{typeof(QB._expression_formatter), S, I},
+               Tuple{typeof(QB._having_alias_formatter), QB.MemoKey, I},
+               Tuple{typeof(QB._guard_window_alias_predicate), S, String, I},
+               Tuple{typeof(QB._collect_projected_paths!), Vector{String}, S, Int})
+      calls = _named_dynamic_calls(tt, ("",); depth = 0)
+      @test isempty(calls)
+      isempty(calls) || @info "dynamic calls at a group-6 site" tt calls
+    end
+    @test isempty(_named_dynamic_calls(Tuple{typeof(QB._render_order_terms), QB.OrderTermView, QB.SQLObjectQuery, I},
+                                       ("_resolved_contains_agg", "_resolved_window", "_interval_ms_candidate",
+                                        "_expression_kind", "_render_order_term(", "QueryBuilder.string(")))
+    @test isempty(_named_dynamic_calls(Tuple{typeof(QB._is_interval_operand_side), QB.OperObject, I}, ("_expression_kind",)))
+    @test count(c -> occursin(":formatter", c),
+                _named_dynamic_calls(Tuple{typeof(QB._render_filter_oper), QB.OperObject, I}, (":formatter",); depth = 0)) <= 1
+    # `_filter_path_label` reads the field once (its dynamic call was inlined into its callers).
+    fsrc = read(joinpath(pkgdir(PormG), "src", "querybuilder", "filter_nodes.jl"), String)
+    @test !occursin("isa(col.field, String) && return col.field", fsrc)
+  end
+
   # What: how `get_select_query` records each projection's kind (#1599 round 8, row 31): `_read_kind`'s
   #   declared answer and the store into `projection_kinds` (`_store_projection_kind!`).
   # Expected: `_read_kind` infers `Union{Nothing, CanonicalType}`; the store has one `isa` arm per concrete

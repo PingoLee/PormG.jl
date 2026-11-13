@@ -77,7 +77,7 @@ end
 _infer_kind(p::FExpression, instruc::SQLInstruction, policy::_EveryKind) =
   p.operation === nothing ? _infer_kind_any(_fexpr_left(p), instruc, policy) :
   _memo_kind(() -> _operation_kind(p, instruc, policy), p, instruc, policy)
-_infer_kind(p::SQLField, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind(p.field, instruc, policy)
+_infer_kind(p::SQLField, instruc::SQLInstruction, policy::_EveryKind) = _with_field_part_open(_infer_kind, p.field, instruc, policy)
 _infer_kind(p::SQLText, ::SQLInstruction, policy::_EveryKind) =
   _is_null_literal(p.field) ? nothing : _literal_kind(p.field, policy)
 _infer_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind) =

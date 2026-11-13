@@ -199,7 +199,7 @@ const PINNED_FIELDS = _FieldPin[
   (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
   (type = SQLite.Query, fields = [:stmt, :names], status = :internal, reader = "_sqlite_rows_into (#1605)"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
-   reader = "PormG.backend_classify_error, backend_error_fields"),
+   reader = "PormG.backend_classify_error, backend_error_fields, _is_sqlite_locked_error"),
   # MySQL.jl. `_ok_info` returns "" when the cursor has no `ok` field; the pin is what keeps that
   # branch from hiding a rename.
   (type = MySQL.Cursor, fields = [:rows_affected], status = :documented, reader = "_materialize"),

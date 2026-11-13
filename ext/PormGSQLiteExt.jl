@@ -22,15 +22,17 @@ const _SQLITE_LOCK_RETRY_MAX_DELAY = 0.25
 # `e` is whatever the statement threw, caught as `Any`: taken unspecialized, so the retry's call is one
 # compiled method and not one per exception type, which a `juliac --trim` image has no code for (#1599
 # layer 2: the trimmed read's first statement error stopped here with a `MethodError`). SQLite.jl's own
-# error, the one a lock raises, is read at its type. Its text is `string(e)`, the type name around the
-# escaped message, and lowercased that holds one of the two phrases (letters and spaces only, so no
-# escape can split or make one) exactly when the lowercased message does. The message field is typed
-# `AbstractString`; SQLite.jl builds it as a `String`. Any other value takes the call it took before,
-# behind `@noinline`.
+# error, the one a lock raises, is read at its type, through the classifiers' `_phrase_text` (#1714):
+# the message lowercased, a malformed character (invalid bytes in an identifier, echoed back) first
+# replaced, so it never throws. The old text was `string(e)`, the type name around the escaped message;
+# lowercased, that holds one of the two phrases exactly when `_phrase_text` of the message does, since the
+# phrases are letters and spaces and neither an escape (`\xff`) nor U+FFFD can split or make one. The
+# message field is typed `AbstractString`; SQLite.jl builds it as a `String`. Any other value takes the
+# call it took before, behind `@noinline`.
 function _is_sqlite_locked_error(@nospecialize(e))::Bool
   if e isa SQLite.SQLiteException
     msg = e.msg
-    msg isa String && return _is_locked_text(lowercase(msg))
+    msg isa String && return _is_locked_text(PormG._phrase_text(msg))
   end
   return _is_locked_text(lowercase(_error_text(e)))
 end

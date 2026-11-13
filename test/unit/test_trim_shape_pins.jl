@@ -946,6 +946,9 @@ end
     @test X._is_sqlite_locked_error(ErrorException("database is locked"))   # the open arm, as before
     @test !X._is_sqlite_locked_error(SQLite.SQLiteException("no such table: drivers"))
     @test !X._is_sqlite_locked_error(InterruptException())
+    # A message with invalid UTF-8 answers as `string(e)` does, where `lowercase` on the message would throw.
+    @test !X._is_sqlite_locked_error(SQLite.SQLiteException("no such table: t\xff"))
+    @test X._is_sqlite_locked_error(SQLite.SQLiteException("database is locked \xff"))
   end
 
   # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /

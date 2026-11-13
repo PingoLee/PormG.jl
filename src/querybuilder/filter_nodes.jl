@@ -1060,18 +1060,16 @@ _pattern_refusal_label(v::SQLTypeOper, column::AbstractString) =
 # natively. On SQLite a UUID column already holds that text, and a network column cannot exist (the
 # DDL that would create one is refused, `Dialect._refuse_unsupported_type`), so there the
 # predicate is left as written.
-# #1599 layer 5: the callers' keyword values were a union (`operand_kind`) or `Any`, so the keyword set had
-# no concrete type and the call could not be compiled: the two callers call `_pattern_operand_at`, the
-# positional form, which takes the column, formatter, label and kind unspecialized in one compiled body.
-# The column and the label are read as the `String`s they are (any other string type converts through one
-# dynamic call); the formatter and the kind as `_pattern_text_kind`'s note says; the one read off the
-# formatter itself, an array's element kind, is at the `ArrayFormatter` the kind proved.
-_pattern_operand(column::AbstractString, formatter, operator::AbstractString, instruc::SQLInstruction;
-                 label::AbstractString = column, operand_kind = nothing)::String =
-  _pattern_operand_at(column, formatter, operator, instruc, label, operand_kind)
-function _pattern_operand_at(@nospecialize(column0::AbstractString), @nospecialize(formatter),
-                             operator::AbstractString, instruc::SQLInstruction,
-                             @nospecialize(label0::AbstractString), @nospecialize(operand_kind))::String
+# #1599 layer 5: positional, `label` and `operand_kind` included. The callers' keyword values were a union
+# (`operand_kind`) or `Any`, so the keyword set had no concrete type and the call could not be compiled; a
+# keyword call is now a `MethodError`, so none can come back. One compiled body takes the column, formatter,
+# label and kind unspecialized. The column and the label are read as the `String`s they are (any other
+# string type converts through one dynamic call); the formatter and the kind as `_pattern_text_kind`'s note
+# says; the one read off the formatter itself, an array's element kind, is at the `ArrayFormatter` the kind
+# proved. `label` is the column a caller with no path to name passes again.
+function _pattern_operand(@nospecialize(column0::AbstractString), @nospecialize(formatter),
+                          operator::AbstractString, instruc::SQLInstruction,
+                          @nospecialize(label0::AbstractString), @nospecialize(operand_kind))::String
   column = column0 isa String ? column0 : _string_other(column0)
   label = label0 isa String ? label0 : _string_other(label0)
   operator in PATTERN_LOOKUP_OPERATORS || return String(column)
@@ -1302,8 +1300,8 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # boolean and a binary column (#1183). `_filter_path_label` has no method for every column kind (an
   # `F` transform), so it is not asked for the others.
   refuses = pattern && _pattern_text_kind(operand_formatter; kind = operand_kind) in _PATTERN_REFUSED_KINDS
-  column = _pattern_operand_at(column, operand_formatter, v.operator, instruc,
-                               refuses ? _pattern_refusal_label(v, column) : column, operand_kind)
+  column = _pattern_operand(column, operand_formatter, v.operator, instruc,
+                            refuses ? _pattern_refusal_label(v, column) : column, operand_kind)
   if isa(value_node, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     rhs_ref = value_node::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}   # narrowed before a closure captures it
     @pormg_debug false

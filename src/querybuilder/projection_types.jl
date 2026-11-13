@@ -1915,11 +1915,11 @@ function _render_alias_predicate_node(v::SQLTypeOper, having_key::MemoKey, havin
   # #903: the alias's own column type decides what a pattern lookup reads — `HOST(MAX(…))` for an alias
   # over an `inet`, exactly as `_get_filter_query(::SQLTypeOper)` wraps the column itself.
   alias_formatter = _having_alias_formatter(having_key, instruc)
-  field = _pattern_operand_at(string(_alias_lhs(having_key, having_cached, instruc)),
-                              alias_formatter, v.operator, instruc, having_key[2],
-                              # #1168/#1183: the alias's kind — a number's width, a time, a type
-                              # with no formatter — only where it decides the read.
-                              v.operator in PATTERN_LOOKUP_OPERATORS ? _having_alias_kind(having_key, instruc) : nothing)
+  field = _pattern_operand(string(_alias_lhs(having_key, having_cached, instruc)),
+                           alias_formatter, v.operator, instruc, having_key[2],
+                           # #1168/#1183: the alias's kind — a number's width, a time, a type
+                           # with no formatter — only where it decides the read.
+                           v.operator in PATTERN_LOOKUP_OPERATORS ? _having_alias_kind(having_key, instruc) : nothing)
   # #618: `contains=` / `operator=` are what run `_apply_like_wildcards` (and with it
   # `escape_like_pattern`) inside `add_parameter!`. Without them a pattern lookup on an alias
   # bound its value undecorated AND unescaped — no `%`, and a user-supplied `%` or `_` in the

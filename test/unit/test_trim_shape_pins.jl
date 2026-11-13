@@ -1853,7 +1853,7 @@ end
   # What: the trimmed read's run-time walls on the WHERE path past `_get_alias_name` (#1599 layer 5, PR 2):
   #   the join alias allocator, the relation walk (`_relation_step`, `_relation_to`, `_relation_target`), the
   #   filter operand's field and formatter (`_operand_field`, `_field_formatter`), the pattern operand
-  #   (`_pattern_operand_at`, `_pattern_text_kind`, `_pattern_kind_read_any`) and the format guard
+  #   (`_pattern_operand`, now positional, `_pattern_text_kind`, `_pattern_kind_read_any`) and the format guard
   #   (`_guarded_format`, `_format_filter_value`, `_locate_filter_refusal`).
   # Expected: each call the trimmed binary missed is static under the JIT, and each closed walk answers what
   #   the call it stands for answered.
@@ -1862,7 +1862,7 @@ end
   #   the image could not infer (`vcat` on two `Vector{Any}`), a model held at the abstract `PormGModel`,
   #   `hasproperty`/`getproperty` on the 29-member `AnyField`, a keyword set with no concrete type, and a
   #   formatter held at the abstract `Function`. It now stops at the call through a field's
-  #   `formatter::Function` (layer 3). Measured on PR 1's head 5b512271f: every check below that names a new
+  #   `formatter::Function` (layer 3). Measured on PR 1's head 8966ecc90: every check below that names a new
   #   helper fails (not defined), and the dynamic-call checks find the calls.
   @testset "the trimmed read's WHERE path past the join alias makes its calls statically (#1599 layer 5, walls 1-7)" begin
     QB = PormG.QueryBuilder
@@ -1871,9 +1871,13 @@ end
     I = QB.InstructionObject
     has(n) = isdefined(QB, n)
     for n in (:_join_alias_a, :_join_alias_b, :_relation_step_at, :_relation_to, :_field_formatter,
-              :_pattern_operand_at, :_pattern_kind_read_any)
+              :_pattern_kind_read_any)
       @test has(n)
     end
+    # The pattern operand takes no keyword: its keyword set had no concrete type, and a keyword call could not
+    # be compiled.
+    @test length(methods(QB._pattern_operand)) == 1
+    @test isempty(Base.kwarg_decl(only(methods(QB._pattern_operand))))
     # Wall 1: the aliases a join row takes, read at the row's kind, in element-typed vectors.
     @test isempty(_dynamic_calls(QB._get_alias_name, (Vector{QB.JoinRow}, String, Vector{String})))
     if has(:_join_alias_a)
@@ -1907,11 +1911,40 @@ end
       @test hasfield(T, :formatter) && fieldtype(T, :formatter) === Function
     end
     if has(:_relation_to)
-      for f in (M.ForeignKey("Circuit"), M.CharField(max_length = 5), M.IntegerField(), nothing)
+      isdefined(Main, :_TspLinkField) ||
+        Core.eval(Main, :(struct _TspLinkField <: $(PormG.PormGField); to::String; end))   # a caller's own link type
+      for f in (M.ForeignKey("Circuit"), M.OneToOneField("Circuit"), M.ManyToManyField("Circuit"),
+                M.CharField(max_length = 5), M.IntegerField(), nothing,
+                Base.invokelatest(getglobal(Main, :_TspLinkField), "Circuit"))
         @test QB._relation_to(f) === (hasproperty(f, :to) ? f.to : nothing)
       end
     end
     @test isempty(_dynamic_calls(QB._relation_target, (M.ModelType, Any)))
+    # A relation hop answers the same for a `SubString` segment and its `String`, and a `String` target
+    # resolves to the bound model, on a model with a ForeignKey to one bound beside it.
+    # A module must be a top-level expression, so it is parsed whole and evaluated in `Main`, after the mock
+    # connection and the configuration `set_models` binds it to (as `test_array_lookups.jl` does).
+    isdefined(Main, :TspHopModels) || Core.eval(Main, Meta.parseall("""
+      struct _TspHopSQLite <: PormG.PormGSQLite end
+      PormG.config["tsp_hop_models"] = PormG.Configuration.Settings(connections = _TspHopSQLite(),
+                                                                    change_data = true, db_def_folder = "tsp_hop_models")
+      module TspHopModels
+        import PormG
+        import PormG: Models
+        Circuit = Models.Model("tsp_hop_circuit", circuitid = Models.IDField(), country = Models.CharField(max_length = 20))
+        Race = Models.Model("tsp_hop_race", raceid = Models.IDField(), circuitid = Models.ForeignKey("Circuit"))
+        Models.@models Circuit Race
+        PormG.Models.set_models(@__MODULE__, "tsp_hop_models")
+      end"""))
+    hop_models = Base.invokelatest(getglobal, Main, :TspHopModels)
+    race = Base.invokelatest(getglobal, hop_models, :Race)
+    q = QB.SQLObjectQuery(model = race)
+    step_s = QB._relation_step(q, race, "circuitid", true)
+    step_sub = QB._relation_step(q, race, SubString("circuitid__country", 1, 9), true)
+    @test step_s !== nothing && step_s == step_sub
+    circuit = Base.invokelatest(getglobal, hop_models, :Circuit)
+    @test step_s !== nothing && step_s[2] === circuit && step_s[3] === :forward
+    @test QB._relation_target(race, "Circuit") === circuit
     # Wall 5: the operand's field typed, its formatter read without dispatch.
     # (Inference widens a tuple holding the 29-member union to `Tuple{Any, String}` whatever is declared, so
     # the check is that the body makes no dynamic call: on the base, the name read again off the slot did.)
@@ -1926,7 +1959,7 @@ end
     # (Its other `.formatter` reads, on a range bound, a transform node or a joined column, are off the walls'
     # path and stay; the operand's own goes through `_field_formatter`, which inlines to the builtin `getfield`.)
     calls = _named_dynamic_calls(Tuple{typeof(QB._render_filter_oper), QB.OperObject, I},
-                                 ("_pattern_operand_at", "_pattern_operand(", "_guarded_format", "_operand_field",
+                                 ("_pattern_operand(", "_guarded_format", "_operand_field",
                                   "_field_formatter"); depth = 1)
     @test isempty(calls)
     isempty(calls) || @info "dynamic calls in the filter render" calls

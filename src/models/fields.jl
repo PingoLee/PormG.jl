@@ -4219,7 +4219,9 @@ function (f::ArrayFormatter)(value)
     (el isa Union{AbstractArray, Tuple} && !(el isa AbstractString)) &&
       throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection.", :type))
     texts[i] = try
-      formatted = f.base.formatter(el)
+      # Through `apply_formatter`: the slot is typed `Function`, so a direct call dispatches at run
+      # time (#1599 layer 3).
+      formatted = apply_formatter(f.base.formatter, el)
       # A float into a numeric element converts through its shortest text (`string`, `1.1`), not the
       # formatter's 17 significant digits (`1.1000000000000001`), which is the noise a declared
       # `default = [1.1]` would otherwise carry into the DDL and every literal. The formatter still

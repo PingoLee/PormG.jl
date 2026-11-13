@@ -5255,6 +5255,68 @@ const PERIOD_FORMATTERS = (format_quarter_sql, format_quadrimester_sql, format_h
 # taken from the formatter the column carries, before this is asked for.
 unranged_formatter(f) = f in PERIOD_FORMATTERS || f === format_yyyy_mm ? (v -> f(v; ranged = false)) : f
 
+# #1599 layer 3: the formatter functions PormG itself hands a value to. Every one a field constructor
+# stores in a `formatter::Function` slot (an `ArrayField`'s `ArrayFormatter` is a struct, matched by
+# type), the network filter's `format_inet_network_sql`, and the date-part formatters a filter
+# transform takes. `apply_formatter` has one arm per member; `test_trim_shape_pins.jl` fails when a
+# field type stores a formatter that is not here, or when a member has no arm.
+const FIELD_FORMATTERS = (identity, format_number_sql, format_text_sql, format_bool_sql, format_date_sql,
+                          format_timezone_sql, format_binary_sql, format_duration_sql, format_uuid_sql,
+                          format_json_sql, format_tsvector_sql, format_inet_sql, format_inet_unpacked_sql,
+                          format_cidr_sql, format_inet_network_sql)
+
+"""
+    apply_formatter(f, value, ranged::Bool = true)
+
+`f(value)` for a formatter `f`, with the call made at `f`'s concrete type (#1599 layer 3).
+
+A field's `formatter` slot is typed `Function`, so `field.formatter(value)` dispatches at run time,
+and in a `juliac --trim` build it finds nothing compiled for a target the verifier could not see.
+This walks `f` over PormG's own formatters, so each call is resolved, and for a value of a concrete
+type the whole call is static. With `ranged = false` a date-part formatter (`PERIOD_FORMATTERS`) and
+`format_yyyy_mm` drop their range, as [`unranged_formatter`](@ref) does; every other formatter ignores
+it. Any other callable, such as a formatter a user passes to `Extract` or `ToChar`, is called as
+before, through one dynamic call. Returns and raises exactly what the direct call does.
+"""
+@noinline function apply_formatter(@nospecialize(f), value, ranged::Bool = true)
+  # The slot formatters, most common first. `isa typeof(g)` narrows `f` to `g`'s singleton type.
+  f isa typeof(format_number_sql) && return format_number_sql(value)
+  f isa typeof(format_text_sql) && return format_text_sql(value)
+  f isa typeof(format_date_sql) && return format_date_sql(value)
+  f isa typeof(format_timezone_sql) && return format_timezone_sql(value)
+  f isa typeof(format_bool_sql) && return format_bool_sql(value)
+  f isa typeof(format_uuid_sql) && return format_uuid_sql(value)
+  f isa typeof(format_json_sql) && return format_json_sql(value)
+  f isa typeof(format_duration_sql) && return format_duration_sql(value)
+  f isa typeof(format_binary_sql) && return format_binary_sql(value)
+  f isa typeof(format_tsvector_sql) && return format_tsvector_sql(value)
+  f isa typeof(format_inet_sql) && return format_inet_sql(value)
+  f isa typeof(format_inet_unpacked_sql) && return format_inet_unpacked_sql(value)
+  f isa typeof(format_cidr_sql) && return format_cidr_sql(value)
+  f isa typeof(format_inet_network_sql) && return format_inet_network_sql(value)
+  f isa typeof(identity) && return identity(value)
+  f isa ArrayFormatter && return f(value)
+  # The date parts and `@yyyy_mm`: the only formatters with a range to drop (#1088).
+  f isa typeof(format_year_sql) && return format_year_sql(value; ranged = ranged)
+  f isa typeof(format_month_sql) && return format_month_sql(value; ranged = ranged)
+  f isa typeof(format_day_sql) && return format_day_sql(value; ranged = ranged)
+  f isa typeof(format_hour_sql) && return format_hour_sql(value; ranged = ranged)
+  f isa typeof(format_minute_sql) && return format_minute_sql(value; ranged = ranged)
+  f isa typeof(format_second_sql) && return format_second_sql(value; ranged = ranged)
+  f isa typeof(format_quarter_sql) && return format_quarter_sql(value; ranged = ranged)
+  f isa typeof(format_quadrimester_sql) && return format_quadrimester_sql(value; ranged = ranged)
+  f isa typeof(format_week_sql) && return format_week_sql(value; ranged = ranged)
+  f isa typeof(format_week_day_sql) && return format_week_day_sql(value; ranged = ranged)
+  f isa typeof(format_dow_sql) && return format_dow_sql(value; ranged = ranged)
+  f isa typeof(format_doy_sql) && return format_doy_sql(value; ranged = ranged)
+  f isa typeof(format_yyyy_mm) && return format_yyyy_mm(value; ranged = ranged)
+  return _apply_formatter_other(f, value, ranged)
+end
+
+# The open arm (#1735): a callable no arm names, called as the filter path called it before.
+@noinline _apply_formatter_other(@nospecialize(f), value, ranged::Bool) =
+  ranged ? f(value) : unranged_formatter(f)(value)
+
 #═══════════════════════════════════════════════════════════════════════════════
 # SECTION: Comparison Tools
 #

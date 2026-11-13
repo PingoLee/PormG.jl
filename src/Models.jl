@@ -5255,11 +5255,15 @@ const PERIOD_FORMATTERS = (format_quarter_sql, format_quadrimester_sql, format_h
 # taken from the formatter the column carries, before this is asked for.
 unranged_formatter(f) = f in PERIOD_FORMATTERS || f === format_yyyy_mm ? (v -> f(v; ranged = false)) : f
 
-# #1599 layer 3: the formatter functions PormG itself hands a value to. Every one a field constructor
-# stores in a `formatter::Function` slot (an `ArrayField`'s `ArrayFormatter` is a struct, matched by
-# type), the network filter's `format_inet_network_sql`, and the date-part formatters a filter
-# transform takes. `apply_formatter` has one arm per member; `test_trim_shape_pins.jl` fails when a
-# field type stores a formatter that is not here, or when a member has no arm.
+# #1599 layer 3: the formatter functions `Models` defines and a value is handed to. Every one a field
+# constructor stores in a `formatter::Function` slot (an `ArrayField`'s `ArrayFormatter` is a struct,
+# matched by type), the network filter's `format_inet_network_sql`, and the date-part formatters a
+# filter transform takes. `apply_formatter` has one arm per member; `test_trim_shape_pins.jl` fails
+# when a field type stores a formatter that is not here, or when a member has no arm.
+# Not here, because they are defined after `Models` and it cannot name them: the query builder's
+# `format_pattern_text_sql`/`format_pattern_number_sql`, `Dialect._format_mysql_duration`, and the
+# `CArray` closure `value_formatter` builds. They take `apply_formatter`'s open arm, so a caller that
+# hands one over walks it first.
 const FIELD_FORMATTERS = (identity, format_number_sql, format_text_sql, format_bool_sql, format_date_sql,
                           format_timezone_sql, format_binary_sql, format_duration_sql, format_uuid_sql,
                           format_json_sql, format_tsvector_sql, format_inet_sql, format_inet_unpacked_sql,
@@ -5273,7 +5277,8 @@ const FIELD_FORMATTERS = (identity, format_number_sql, format_text_sql, format_b
 A field's `formatter` slot is typed `Function`, so `field.formatter(value)` dispatches at run time,
 and in a `juliac --trim` build it finds nothing compiled for a target the verifier could not see.
 This walks `f` over PormG's own formatters, so each call is resolved, and for a value of a concrete
-type the whole call is static. With `ranged = false` a date-part formatter (`PERIOD_FORMATTERS`) and
+type the whole call is static; a call INTO it with an untyped value is still one dynamic dispatch, on
+the value. With `ranged = false` a date-part formatter (`PERIOD_FORMATTERS`) and
 `format_yyyy_mm` drop their range, as [`unranged_formatter`](@ref) does; every other formatter ignores
 it. Any other callable, such as a formatter a user passes to `Extract` or `ToChar`, is called as
 before, through one dynamic call. Returns and raises exactly what the direct call does.

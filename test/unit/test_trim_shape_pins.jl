@@ -2088,13 +2088,14 @@ end
     for T in (Int64, Float64, Bool, String, SubString{String}, Dates.Date, Dates.DateTime,
               M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID, Nothing, Missing, Vector{Int64})
       @test isempty(_dynamic_calls(M.apply_formatter, (Function, T, Bool)))
-      @test isempty(_dynamic_calls(M.apply_formatter, (Function, T)))
     end
     # With an untyped value, each arm is a call on the value at a known function: no call on `f` itself
-    # but the open arm's. That residue is the literal's, not the formatter's.
-    on_any = _dynamic_calls(M.apply_formatter, (Function, Any, Bool))
-    @test count(c -> occursin("_apply_formatter_other", c), on_any) == 1
-    @test all(c -> occursin(r"PormG\.Models\.format_\w+|identity|_apply_formatter_other|\(%\d+\)\(_3\)", c), on_any)
+    # but the open arm's and the `ArrayFormatter` arm's (a call on the struct, whose one method takes the
+    # value untyped). That residue is the literal's, not the formatter's.
+    on_any = [replace(c, r"^\d+: " => "") for c in _dynamic_calls(M.apply_formatter, (Function, Any, Bool))]
+    @test count(c -> startswith(c, "PormG.Models._apply_formatter_other("), on_any) == 1
+    @test count(c -> occursin(r"^\(%\d+\)\(_3\)$", c), on_any) == 1
+    @test all(c -> occursin(r"^(PormG\.Models\.(format_\w+|identity|_apply_formatter_other)\(|Core\.kwcall\(%\d+, PormG\.Models\.format_\w+, _3\)$|\(%\d+\)\(_3\)$)", c), on_any)
     # 2. The open arm is exactly the call a user's formatter made before: one dynamic call per branch.
     @test length(_dynamic_calls(M._apply_formatter_other, (Function, Any, Bool))) == 2
 
@@ -2125,6 +2126,19 @@ end
     for f in (M.FIELD_FORMATTERS..., M.PERIOD_FORMATTERS..., M.format_yyyy_mm)
       @test nameof(f) in named
     end
+    # And each arm calls the function it tests for: in the lowered code, after `typeof(X)` the next global
+    # of `Models` that is not `isa`/`typeof` is `X` itself (the call), so two swapped arms fail here.
+    refs = Symbol[]
+    for stmt in only(code_lowered(M.apply_formatter, (Function, Any, Bool))).code,
+        a in (stmt isa Expr ? stmt.args : (stmt,))
+      a isa GlobalRef && a.mod === M && push!(refs, a.name)
+    end
+    for (k, r) in enumerate(refs)
+      (r === :typeof && k < length(refs)) || continue
+      tested = refs[k + 1]
+      called = something(findfirst(x -> !(x in (:isa, :typeof)), refs[k + 2:end]), 0)
+      @test called > 0 && refs[k + 1 + called] === tested
+    end
 
     # 4. The same answer as the direct call, value by value, ranged and unranged.
     direct(f, v, ranged) = ranged ? f(v) : M.unranged_formatter(f)(v)
@@ -2142,7 +2156,8 @@ end
                  Dates.DateTime(2009, 5, 24, 14), M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")),
                  M.Decimals.Decimal(0, 150, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), nothing, missing,
                  [1, 2], ["a", "b"], Dates.Time(10, 30), Dates.Second(90), "10.0.0.1", "10.0.0.0/8",
-                 Dict("a" => 1), :sym, 2009_05, UInt8[1, 2]]
+                 Dict("a" => 1), :sym, 2009_05, UInt8[1, 2],
+                 "::ffff:10.0.0.1"]   # the one value the inet and the unpacked-inet formatters answer differently
     user = v -> string("user:", v)
     for f in (M.FIELD_FORMATTERS..., M.PERIOD_FORMATTERS..., M.format_yyyy_mm, unique(filter(x -> x isa M.ArrayFormatter, stored))...,
               user, M.unranged_formatter(M.format_month_sql)), v in values, ranged in (true, false)

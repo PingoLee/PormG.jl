@@ -138,16 +138,6 @@ function _projection_null_key(name::AbstractString, instruc::SQLInstruction)::St
                         "rendered. This is a PormG bug; please report it."))
 end
 
-# The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
-# and each joined CTE's projections. A joined model is found by its table among the models the base
-# model reaches through its relations (forward and reverse, any depth, whatever module defines them),
-# the `cjoin_on` targets, and the models of the base model's module.
-#
-# Read while ORDER BY renders (`get_order_query`), so it also counts the joins the statement adds after
-# that point (#404 fixes that order): an `order_by` path a later term resolves, the relation paths a
-# `cjoin_on` ON clause names, and the `cjoin`/`on()` paths. Each hop of such a path is walked without
-# joining it. A column path's last segment is its column, never a join, even when it is a ForeignKey
-# (`order_by("raceid__circuitid")` joins the race only); a `cjoin`/`on()` key is a join path, all hops.
 # The tables a relation path's hops reach, from the base model, added to `tables`.
 function _add_hop_tables!(tables::Set{String}, object::SQLObject, segs)
   model = object.model
@@ -159,6 +149,17 @@ function _add_hop_tables!(tables::Set{String}, object::SQLObject, segs)
   end
   return nothing
 end
+
+# The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
+# and each joined CTE's projections. A joined model is found by its table among the models the base
+# model reaches through its relations (forward and reverse, any depth, whatever module defines them),
+# the `cjoin_on` targets, and the models of the base model's module.
+#
+# Read while ORDER BY renders (`get_order_query`), so it also counts the joins the statement adds after
+# that point (#404 fixes that order): an `order_by` path a later term resolves, the relation paths a
+# `cjoin_on` ON clause names, and the `cjoin`/`on()` paths. Each hop of such a path is walked without
+# joining it. A column path's last segment is its column, never a join, even when it is a ForeignKey
+# (`order_by("raceid__circuitid")` joins the race only); a `cjoin`/`on()` key is a join path, all hops.
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([Models.model_table_name(object.model)])
   for rj in instruc.row_join

@@ -4327,6 +4327,24 @@ end
     @test PormG.backend_num_rows(pool, [(1, "Senna"), (2, "Prost")]) == 2   # the open arm, as before
   end
 
+  # What: the MySQL connect, `_dial`: the keywords `_connect_args` builds and the `DBInterface.connect`
+  #   call that takes them.
+  # Expected: the keywords are `_ConnectKeywords` (one concrete type) for every conninfo, and `_dial` makes
+  #   no dynamic call. That the fixed shape builds the options the present keys built is pinned in
+  #   `test_mysql_ext.jl`.
+  # Why: the keywords were a `NamedTuple` built from the keys the conninfo holds, so the keyword call was
+  #   dynamic, and the trimmed MySQL fixture raised `MethodError` on `kwcall` at every connect (wrapped in
+  #   `PoolConnectError`, which read like a refused port): the read had never reached the server (#1599
+  #   layer 2, #1775's decision 2).
+  @testset "the MySQL connect hands DBInterface.connect one keyword shape (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    P = PormG.ConnectionPool.MySQLConnectionPool
+    @test isdefined(myx, :_ConnectKeywords) && isconcretetype(myx._ConnectKeywords)
+    kwtypes = unique(map(T -> fieldtype(T, 4), Base.return_types(myx._connect_args, (Dict{String, String},))))
+    @test isdefined(myx, :_ConnectKeywords) && kwtypes == [myx._ConnectKeywords]
+    @test _dynamic_calls(myx._dial, (P,)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

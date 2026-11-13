@@ -103,28 +103,42 @@ end
 # a `START TRANSACTION` it issued as a plain statement (the Postgres.jl extension refuses it for the
 # same reason). `found_rows` makes an UPDATE report the rows it MATCHED, as PostgreSQL and SQLite do,
 # rather than the rows whose value changed — `backend_num_affected_rows` is a matched-row count.
+#
+# #1599: the keywords have one shape, `_ConnectKeywords`, whatever the conninfo holds; a key the conninfo
+# leaves out is `nothing`. A shape built from the keys present was a `NamedTuple` type known only at run
+# time, so `DBInterface.connect`'s keyword call was dynamic, and a trimmed binary had no code for it: every
+# connect raised `MethodError` (wrapped in `PoolConnectError`) before reaching the server. `nothing` is what
+# MySQL.jl reads as a keyword left out: `db`/`port` default to it in `DBInterface.connect`'s signature, and
+# `ConnectOptions` reads every other keyword as `haskey(kw, k) && kw[k] !== nothing` or
+# `get(kw, k, nothing)`. `test/unit/test_mysql_ext.jl` builds `MySQL.ConnectOptions` both ways and fails if
+# a MySQL.jl ever reads them differently.
+const _ConnectKeywords = NamedTuple{
+  (:reconnect, :found_rows, :db, :port, :connect_timeout, :ssl_mode, :ssl_ca, :ssl_cert, :ssl_key),
+  Tuple{Bool, Bool, Union{Nothing, String}, Union{Nothing, Int}, Union{Nothing, Int}, Union{Nothing, Symbol},
+        Union{Nothing, String}, Union{Nothing, String}, Union{Nothing, String}}}
+
 function _connect_args(info::Dict{String, String})
   host = get(info, "host", "localhost")
   user = get(info, "user", "")
   password = get(info, "password", nothing)
-  kw = Pair{Symbol, Any}[:reconnect => false, :found_rows => true]
-  haskey(info, "dbname") && push!(kw, :db => info["dbname"])
-  haskey(info, "port") && push!(kw, :port => _conninfo_int("port", info["port"]))
+  db = get(info, "dbname", nothing)
+  port = haskey(info, "port") ? _conninfo_int("port", info["port"]) : nothing
   # `connect_timeout: 0` is libpq's "no timeout"; MySQL.jl takes no timeout as the keyword left out.
+  connect_timeout = nothing
   if haskey(info, "connect_timeout")
     t = _conninfo_int("connect_timeout", info["connect_timeout"])
-    t > 0 && push!(kw, :connect_timeout => t)
+    t > 0 && (connect_timeout = t)
   end
+  ssl_mode = nothing
   if haskey(info, "sslmode")
     mode = lowercase(strip(info["sslmode"]))
     mode in _SSL_MODES || throw(InvalidConfigurationError(
       "connection.yml: `sslmode:` for `adapter: MySQL` must be one of $(join(_SSL_MODES, ", "))"))
-    push!(kw, :ssl_mode => Symbol(mode))
+    ssl_mode = Symbol(mode)
   end
-  haskey(info, "sslrootcert") && push!(kw, :ssl_ca => info["sslrootcert"])
-  haskey(info, "sslcert") && push!(kw, :ssl_cert => info["sslcert"])
-  haskey(info, "sslkey") && push!(kw, :ssl_key => info["sslkey"])
-  return host, user, password, (; kw...)
+  kw = _ConnectKeywords((false, true, db, port, connect_timeout, ssl_mode, get(info, "sslrootcert", nothing),
+                         get(info, "sslcert", nothing), get(info, "sslkey", nothing)))
+  return host, user, password, kw
 end
 
 # ── Session ──────────────────────────────────────────────────────────────────

@@ -2161,11 +2161,11 @@ end
   #   or read the field once.
   # Expected: the open walk has `with_field_part`'s ten arms and an open arm that makes the call (where
   #   `with_field_part` raises), with no dynamic call itself; `_field_part_text` is `string`; `_part_formatter`
-  #   is the slot read; the converted readers make no dynamic call (17 of them), and the ORDER BY render, the
+  #   is the slot read; the converted readers make no dynamic call (16 of them), and the ORDER BY render, the
   #   interval-side check and the WHERE render no longer dispatch the calls they walked.
   # Why: each was a call on the slot's union, a run-time dispatch that a trimmed image cannot make: 153
-  #   verifier rows on the read-only entry at PR 1's head. Measured on PR 1's head 3b6cd6062: every reader
-  #   below but one makes the dynamic calls this pin forbids, and the four helpers are missing.
+  #   verifier rows on the read-only entry at PR 1's head. Measured on PR 1's head 3b6cd6062: all 16 readers
+  #   below make the dynamic calls this pin forbids, and the four helpers are missing (24 failures).
   @testset "SQLField.field is read at its member type at the render sites (#1599 layer 5, group 6)" begin
     QB = PormG.QueryBuilder
     I = QB.InstructionObject

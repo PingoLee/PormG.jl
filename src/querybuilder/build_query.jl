@@ -98,9 +98,11 @@ function build_row_join_sql_text(instruc::SQLInstruction)
         # through the fail-closed `quote_identifier`. So the strict check happens where the caller
         # wrote the name, exactly as it does for the CTE name itself since #394.
         # Only the two keyed kinds reach this branch (#487): `CrossJoin` and `AnchorlessJoin` left above.
-        value = value::Union{ModelJoin,CteJoin}
-        key_a_quoted = safe_column_identifier(value.key_a, instruc.connection)
-        key_b_quoted = safe_column_identifier(value.key_b, instruc.connection)
+        # #1599 layer 5: a new name for the narrowed row; reassigning `value`, which the ON-clause closure
+        # above captures, boxed it (`Core.Box`), and every read of it was a run-time call.
+        keyed = value::Union{ModelJoin,CteJoin}
+        key_a_quoted = safe_column_identifier(keyed.key_a, instruc.connection)
+        key_b_quoted = safe_column_identifier(keyed.key_b, instruc.connection)
         on_clause = "$alias_a_quoted.$key_a_quoted = $alias_b_quoted.$key_b_quoted"
         for sql in conditions
           on_clause *= " AND $(sql)"

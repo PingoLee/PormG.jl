@@ -448,10 +448,11 @@ const _ITERABLE_LOOKUP_OPERATORS = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
 # everywhere (`Models.unranged_formatter`).
 const _RANGE_CHECKED_OPERATORS = ("=", "IN")
 
+# #1599 layer 5: the formatter the comprehension's closure captures is bound once (`f`); reassigning the
+# argument it captured boxed it (`Core.Box`).
 function _format_filter_value(@nospecialize(formatter), @nospecialize(values), operator::AbstractString)
-  operator in _RANGE_CHECKED_OPERATORS || (formatter = Models.unranged_formatter(formatter))
-  return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [formatter(v) for v in values] :
-                                                                              formatter(values)
+  f = operator in _RANGE_CHECKED_OPERATORS ? formatter : Models.unranged_formatter(formatter)
+  return operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray ? [f(v) for v in values] : f(values)
 end
 
 # The filter path's shared re-raise (#411, #467). A formatter reports a value it cannot coerce as

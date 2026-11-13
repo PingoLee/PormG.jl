@@ -460,6 +460,7 @@ function _projected_paths(values)::Vector{String}
   return out
 end
 
+_collect_part_paths!(part, out::Vector{String}, depth::Int) = _collect_projected_paths!(out, part, depth)
 function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
   depth > 32 && return nothing
   if x isa AbstractString
@@ -467,7 +468,7 @@ function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
   elseif x isa Pair
     _collect_projected_paths!(out, x.second, depth + 1)
   elseif x isa Union{SQLField,SQLOrder}
-    _collect_projected_paths!(out, x.field, depth + 1)
+    _with_field_part_open(_collect_part_paths!, x.field, out, depth + 1)   # #1599: at the member's type
   elseif x isa WindowFunction
     _collect_projected_paths!(out, x.column, depth + 1)
     _collect_projected_paths!(out, x.over.partition_by, depth + 1)
@@ -686,7 +687,7 @@ function _grouped_expressions(instruct::SQLInstruction)::Vector{String}
     if !isempty(g) && all(isdigit, g)
       i = parse(Int, g)
       (1 <= i <= length(instruct.select) && isassigned(instruct.select, i)) || continue
-      push!(out, string(instruct.select[i].field))
+      push!(out, _field_part_text(instruct.select[i].field))
     else
       push!(out, g)
     end

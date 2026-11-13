@@ -734,11 +734,26 @@ end
 # lookup).
 _guard_vector_equality(v::SQLTypeOper, f_meta) = _guard_vector_equality(v, f_meta, _filter_path_label(v))
 
+# A transform column's formatter (#1599 layer 5): `field.formatter` when the `SQLField.field` is a function
+# node, else `nothing`, read at `FObject` / `WindowFunction`. Read at the slot's union, or at the abstract
+# `SQLTypeFunction` an `isa` narrows it to, the read dispatched at run time. A caller's own function node
+# makes the read it made before, behind `@noinline`.
+function _part_formatter(@nospecialize(part))
+  part isa FObject && return part.formatter
+  part isa WindowFunction && return part.formatter
+  part isa SQLTypeFunction && return _part_formatter_other(part)
+  return nothing
+end
+@noinline _part_formatter_other(@nospecialize(part)) = part.formatter
+
 # The path the user wrote, for an error message on an arm that has no field name of its own (the
 # JSON-path lookup). Best effort: falls back to the rendered column.
 function _filter_path_label(v::SQLTypeOper)
   col = _oper_column(v)
-  isa(col, SQLField) && isa(col.field, String) && return col.field
+  if col isa SQLField   # #1599: the field read once, so the label is a `String`
+    part = col.field
+    part isa String && return part
+  end
   k = memo_key(col)
   return k === nothing ? string(col) : k[2]
 end
@@ -976,7 +991,7 @@ function _is_interval_operand_side(v::SQLTypeOper, instruc::SQLInstruction)::Boo
   col = _oper_column(v)
   alias = _alias_filter_key(col, instruc)
   alias === nothing || return get(instruc.projection_kinds, Symbol(alias), nothing) isa CInterval
-  return col isa SQLField && _expression_kind(col.field, instruc) isa CInterval
+  return col isa SQLField && _with_field_part_open(_expression_kind, col.field, instruc) isa CInterval
 end
 function _sqlite_duration_column_ms(v::SQLTypeOper, instruc::SQLInstruction)
   _is_sqlite_duration_column(v, instruc) || return nothing
@@ -1383,7 +1398,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   # that kind does. Without it `"seen__@date__@startswith"` was a `LIKE` on a `date` on PostgreSQL.
   operand_formatter = operand_field !== nothing ? _field_formatter(operand_field) :
                       alias !== nothing ? _having_alias_formatter(memo_key(:base, alias), instruc) :
-                      col isa SQLTypeField && col.field isa SQLTypeFunction ? col.field.formatter :
+                      col isa SQLTypeField ? _part_formatter(col.field) :
                       nothing
   # #1168/#1183: the operand's kind, which its formatter may not carry (a number's width, a time, an
   # alias with no formatter) — read only for a pattern lookup, the one place it decides something.
@@ -1437,12 +1452,12 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     placeholders = _on_join_right(() -> _get_filter_query(rhs_sub, instruc), instruc)
     _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v, placeholders, instruc)
-  elseif isa(col, SQLTypeField) && isa(col.field, SQLTypeFunction) && col.field.formatter !== nothing
+  elseif isa(col, SQLTypeField) && _part_formatter(col.field) !== nothing
     @pormg_debug false
     # #576: this is the arm `filter("happened__@month" => "abc")` lands in once the sargable rewrite
     # above has declined it, and it formatted outside any guard, so it reported the write path's
     # `InvalidValueError` on a read. Guarded now, like every sibling.
-    _label, _type, _subject = _transform_filter_labels(col, col.field.formatter)
+    _label, _type, _subject = _transform_filter_labels(col, _part_formatter(col.field))
     # #596: a transform column is a bare path, so `date__@year => UInt8[1, 2]` reaches here as an
     # equality. No transform yields bytes, so this is always the refusal.
     #
@@ -1456,7 +1471,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # pattern lookup over a transform column got no `%` and no `escape_like_pattern`. That is the same
     # bind half as the HAVING/alias branch, so all three arms here take the two kwargs too — now
     # through `_bind_transform_value`, which also gives them `@isnull` and `@range` (#972).
-    placeholders = _bind_transform_value(instruc, v, col.field, col.field.formatter, _label, _type, _subject)
+    placeholders = _bind_transform_value(instruc, v, col.field, _part_formatter(col.field), _label, _type, _subject)
     transform_lhs = true
   elseif isa(col, SQLTypeField) && isa(col.field, SQLTypeFunction) && haskey(PormGTypeField, col.field.function_name)
     # Through the same helper as the other sites (#411). These work today only because
@@ -1512,7 +1527,8 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # Subqueries - these are safe since they're built through PormG.jl
     if !(v.operator in ["IN", "NOT IN"])
       @pormg_debug
-      throw(FilterError("Invalid subquery filter on \"$(col.field)\": a queryset value requires a membership operator — use \"$(col.field)__@in\" => subquery or __@nin."))
+      part_text = _field_part_text(col.field)   # #1599: the text the message printed, at the member's type
+      throw(FilterError("Invalid subquery filter on \"$(part_text)\": a queryset value requires a membership operator — use \"$(part_text)__@in\" => subquery or __@nin."))
     end
     _validate_membership_subquery(v)
     # #432: same nested-run reordering — the subquery renders inside this predicate's clause.
@@ -1648,7 +1664,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS
       # #596: this arm resolves no field, so it cannot prove the column holds bytes. Fail closed by
       # passing no field: a byte payload is refused rather than expanded into one marker per byte.
-      _guard_vector_equality(v, nothing, string(col.field))
+      _guard_vector_equality(v, nothing, _field_part_text(col.field))
       # #1381: a `When` condition on a projection alias is the spelling that reaches this arm — the
       # comment here once said no test did, and `When("total__@gte" => 100)` over a `Sum` alias always
       # had. It bound the value raw: no check of the alias's type, and on MySQL no JSON marker for a

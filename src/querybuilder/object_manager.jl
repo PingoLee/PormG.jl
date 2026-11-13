@@ -333,7 +333,7 @@ function _describe_projection(v)
   # PormG generated. A joined copy's transform takes the handle spelling, its only one.
   if v isa SQLField && _is_transform_term(v)
     name = memo_name(v)
-    _reads_joined(f) || return "\"$(name)\""
+    _with_field_part_open(_reads_joined, f) || return "\"$(name)\""
     alias, path = split(name, "__"; limit = 2)
     return "Joined(\"$(alias)\", \"$(path)\")"
   end
@@ -348,9 +348,10 @@ function _describe_projection(v)
   # a bare `CTEReference`, which is exactly the useless bare-type-name this function exists to avoid.
   f isa CTEReference && return "CTE(\"$(f.name)\", \"$(f.path)\")"
   f isa JoinedReference && return "Joined(\"$(f.alias)\", \"$(f.path)\")"
-  hasproperty(f, :function_name) && f.function_name isa String && return "$(f.function_name)(...)"
-  return string(nameof(typeof(f)))
+  return _with_field_part_open(_describe_part_tail, f)   # #1599: at the member's type
 end
+_describe_part_tail(f) =
+  hasproperty(f, :function_name) && f.function_name isa String ? "$(f.function_name)(...)" : string(nameof(typeof(f)))
 
 # #1004 — the `values(...)` argument a projection was declared with: `"yr" => "raceid__@year"` for a
 # chosen name, the path or handle alone for a name PormG generated (`"raceid__@year"`,
@@ -620,7 +621,7 @@ function _query_select(io::IO, array::Vector{<:SQLTypeField}, connection)::Nothi
     i > 1 && print(io, ", \n  ")
     field = array[i]
     part = field.field
-    field_str = part isa String ? part : string(part)
+    field_str = part isa String ? part : _field_part_text(part)   # #1599: at the member's type
     # Exclude wildcard projections from receiving an `AS alias` suffix (e.g., `Tb.* AS *` is invalid SQL)
     if field._as == "*" || endswith(field_str, ".*") || field_str == "*"
       print(io, field_str)

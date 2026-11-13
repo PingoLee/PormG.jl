@@ -35,7 +35,7 @@ function _push_having_part!(having_part::Union{OperObject,QObject,QorObject}, in
   with_bucket(instruc, :having) do
     push!(instruc.having, _with_render_scope(() -> _get_having_query(having_part, instruc), instruc;
                                      phase = :group, having = true,   # #1367: promotes nothing
-                                     label = _having_subquery_label(string(_having_leaf_label(having_part)))))
+                                     label = _having_subquery_label(_field_part_text(_having_leaf_label(having_part)))))
   end
   return nothing
 end
@@ -327,10 +327,15 @@ end
 # Is this projection the column `key` itself, under its own name? `isa String` before each `==`:
 # `F` overloads `==` to BUILD a comparison node (#457), so comparing an `FExpression` to a string
 # answers an expression, not a `Bool`.
-_projects_column(p::SQLTypeField, key::String) =
-  (p.field isa String && p.field == key) ||
-  (p.field isa FExpression && p.field.operation === nothing &&
-   p.field.field_name isa String && p.field.field_name == key)
+_projects_column(p::SQLTypeField, key::String) = _projects_column_part(p.field, key)
+# #1599 layer 5: the field and the expression's side read once each, so `==` compares two `String`s.
+function _projects_column_part(@nospecialize(part), key::String)::Bool
+  part isa String && return part == key
+  part isa FExpression || return false
+  part.operation === nothing || return false
+  side = _fexpr_left(part)
+  return side isa String && side == key
+end
 _projects_column(::Any, ::String) = false
 
 function _refuse_field_alias_collision(key::String, projection, instruc::SQLInstruction;
@@ -547,7 +552,7 @@ const _WINDOW_PREDICATE_ADVICE =
 # `nothing` when the memo was written by a non-projection path; that is not a window, and the
 # existing ladder handles it.
 function _guard_window_alias_predicate(source, label::AbstractString, instruc::SQLInstruction)
-  (source !== nothing && _resolved_window(source.field, instruc)) || return nothing
+  (source !== nothing && _with_field_part_open(_resolved_window, source.field, instruc)) || return nothing
   throw(QueryBuildError(
     "\e[4m\e[31mfilter(\"$(label)\" => …)\e[0m — \e[31m$(label)\e[0m projects a window function, " *
     "and a window cannot be filtered in the query that computes it: SQL evaluates windows after " *
@@ -644,7 +649,7 @@ function _split_having(filter::FilterNode, instruc::SQLInstruction, depth::Int =
     all(p -> p.having_part === nothing, parts) && return HavingSplit(filter, nothing)
     all(p -> p.where_part === nothing, parts) && return HavingSplit(nothing, filter)
     if filter isa QorObject
-      label = _having_leaf_label(first(p.having_part for p in parts if p.having_part !== nothing))
+      label = _field_part_text(_having_leaf_label(first(p.having_part for p in parts if p.having_part !== nothing)))
       throw(QueryBuildError(
         "\e[4m\e[31mQor(…)\e[0m mixes the aggregate alias \e[31m\"$(label)\"\e[0m with a condition on " *
         "rows. An aggregate alias filters groups (HAVING) and a column filters rows (WHERE), and an " *

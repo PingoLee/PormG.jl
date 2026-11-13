@@ -108,8 +108,9 @@ end
 # That is what makes `<label> IS NULL` mean "the date is NULL", and so what licenses it in `ISNULL`.
 # The narrowness is a fail-safe no test can pin: no other public spelling reaching that arm renders
 # a call today, so a licence granted to every column would render the same SQL.
-_is_null_propagating_label(c) =
-  c isa SQLTypeField && c.field isa FObject && get(c.field.kwargs, "propagate_null", false) === true
+_is_null_propagating_label(c) = c isa SQLTypeField && _propagates_null(c.field)
+# #1599 layer 5: the field read once, so its `kwargs` are read at `FObject`.
+_propagates_null(@nospecialize(part)) = part isa FObject && get(part.kwargs, "propagate_null", false) === true
 
 # #811: the lookups whose right-hand side is never a single column, refused on the column-reference
 # arms only (`F`, a function, `Joined`, `CTE`) — the scalar arm's `@in` binds a one-element list, which
@@ -549,7 +550,8 @@ function _is_wildcard_projection(value::ProjectionNode)
   if value.custom_as == "*" || value._as == "*"
     return true
   end
-  return value.field isa String && (value.field == "*" || endswith(value.field, ".*"))
+  f = value.field   # #1599: read once, so the comparisons see a `String`
+  return f isa String && (f == "*" || endswith(f, ".*"))
 end
 
 function _subquery_projection_labels(subquery::SQLObjectHandler)
@@ -596,7 +598,8 @@ function _validate_membership_subquery(v::SQLTypeOper)
   projection_count == 1 && return nothing
 
   col = _oper_column(v)
-  filter_field = col isa SQLField && col.field isa String ? col.field : "field"
+  part = col isa SQLField ? col.field : nothing   # #1599: read once, so the label is a `String`
+  filter_field = part isa String ? part : "field"
   operator_suffix = v.operator == "IN" ? "in" : "nin"
   lookup = string(filter_field, "__@", operator_suffix)
   detail = if isempty(subquery.object.values)

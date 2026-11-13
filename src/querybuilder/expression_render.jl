@@ -1075,7 +1075,7 @@ function _projected_interval_source(name::AbstractString, instruc::SQLInstructio
   # #1130: where the engine stores the integer (MySQL), every interval projection is its own integer.
   every = _stores_interval_as_units(instruc.connection)
   source isa SQLText && return every || _interval_ms_candidate(source) ? source : nothing
-  source isa SQLField && (every || _interval_ms_candidate(source.field)) || return nothing
+  source isa SQLField && (every || _with_field_part_open(_interval_ms_candidate, source.field)) || return nothing
   return source
 end
 
@@ -1096,8 +1096,8 @@ function _projected_unordered_interval(name::AbstractString, instruc::SQLInstruc
   source = _projected_source(memo_key(:base, name), instruc)
   source isa SQLText && return _unordered_interval_literal(source)
   source isa SQLField || return false
-  _interval_ms_candidate(source.field) && return false
-  return _expression_kind(source.field, instruc) isa CInterval
+  _with_field_part_open(_interval_ms_candidate, source.field) && return false   # #1599: at the member's type
+  return _with_field_part_open(_expression_kind, source.field, instruc) isa CInterval
 end
 _unordered_interval_literal(source::SQLText) =
   literal_canonical_kind(source.field) isa CInterval && !_interval_ms_candidate(source)

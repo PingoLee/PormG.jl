@@ -53,6 +53,16 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
         c isa MethodError && Core.println("  cause missed: ", typeof(c.f))
         c isa MethodError && Core.println("  cause args: ", typeof(c.args))
     end
+    # A statement's failure, likewise by the cause's type and the SQLSTATE; the server's message is not
+    # printed, since it can quote a bound value.
+    if e isa PormG.StatementError
+        se = e::PormG.StatementError
+        c = se.cause
+        Core.println("  cause: ", string(nameof(typeof(c))))
+        c isa MethodError && Core.println("  cause missed: ", typeof(c.f))
+        c isa MethodError && Core.println("  cause args: ", typeof(c.args))
+        se.sqlstate isa String && Core.println("  sqlstate: ", se.sqlstate)
+    end
     try   # the frames, when the trimmed image can symbolize them
         for fr in stacktrace(catch_backtrace())
             f = string(fr.file)

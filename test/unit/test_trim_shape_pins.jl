@@ -2355,6 +2355,14 @@ end
     literal_types = (String, Int64, Float64, Bool, SubString{String}, Dates.Date, Dates.DateTime, Dates.Time,
                      M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID, Int32, Nothing, Missing)
 
+    # The callee names a function's optimized code `:invoke`s. A walk that lost an arm still makes no dynamic
+    # call (its value goes to the `@noinline` open arm, an `:invoke` too), so each arm is pinned by what it
+    # does NOT invoke: at a type with an arm the open arm is dead code, and without the arm it is called.
+    # (The leaf is no pin: it is inlined at some types.)
+    invoked(f, tt) = [string((s.args[1] isa Core.CodeInstance ? s.args[1].def : s.args[1]).def.name)
+                      for s in only(code_typed(f, tt; optimize = true))[1].code if s isa Expr && s.head === :invoke]
+    not_open(f, tt, open) = !(open in invoked(f, tt))
+
     # Wall 1, the value checks.
     @test only(methods(QB.validate_field_data)).nospecialize != 0
     @test isempty(_dynamic_calls_kw(QB.validate_field_data, (M.ModelType, String, Any, String)))
@@ -2363,6 +2371,7 @@ end
       @test length(_dynamic_calls(QB._validate_field_value_other, (M.ModelType, String, M.AnyField, Any, String))) == 1
       for T in literal_types
         @test isempty(_dynamic_calls(QB._validate_field_value_at, (M.ModelType, String, M.sIntegerField, T, String)))
+        @test not_open(QB._validate_field_value_at, (M.ModelType, String, M.sIntegerField, T, String), "_validate_field_value_other")
       end
     end
 
@@ -2403,6 +2412,9 @@ end
       @test isempty(_dynamic_calls(QB._format_single_at, (Function, Bool, String, Any, String)))
       @test length(_dynamic_calls(QB._format_single_other, (Function, Bool, String, Any, String))) == 1
       @test only(methods(QB._format_single_value)).nospecialize != 0
+      for T in literal_types
+        @test not_open(QB._format_single_at, (Function, Bool, String, T, String), "_format_single_other")
+      end
       # Wall 3, the formatter: called through `Models.apply_formatter`, never through the slot's `Function`.
       for T in literal_types
         @test isempty(_dynamic_calls(QB._format_single_value, (Function, Bool, String, T, String)))
@@ -2418,6 +2430,7 @@ end
       @test length(_dynamic_calls(QB._checked_formatted_other, (Any, String, String))) == 1
       for T in (literal_types..., PormG.PormGBytes, PormG.PormGArrayLiteral)
         @test isempty(_dynamic_calls(QB._checked_formatted_value, (T, String, String)))
+        @test not_open(QB._checked_formatted, (T, String, String), "_checked_formatted_other")
       end
     end
     # The same answer as the old body, which read the field inside it.
@@ -2455,6 +2468,9 @@ end
         C = typeof(mk())
         @test isempty(_dynamic_calls(QB._bind_written_value!, (C, Any)))
         @test length(_dynamic_calls(QB._bind_written_other!, (C, Any))) == 1
+        for T in (literal_types..., PormG.PormGBytes, PormG.PormGArrayLiteral)
+          @test not_open(QB._bind_written_value!, (C, T), "_bind_written_other!")
+        end
       end
       bound = Any["abc", 7, Int32(7), 2.5, true, nothing, missing, Dates.Date(2009, 5, 24), M.Decimals.Decimal(0, 150, -2),
                   M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), SubString("abc", 1, 2),
@@ -2476,8 +2492,10 @@ end
                                  CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))) ==
           Tuple{Vector{String}, Vector{String}, Bool, Vector{String}}
     # and a placeholder goes into its `String` vector asserted, not converted (a dynamic `convert` in the verifier).
-    @test occursin("push!(param_values, _bind_written_value!(parameters, formatted)::String)",
-                   read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String))
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test occursin("push!(param_values, _bind_written_value!(parameters, formatted)::String)", ew_src)
+    # and the primary-key list is built typed: `pk_field::Vector{String} = []` converted a `Vector{Any}` (4 rows).
+    @test occursin("pk_field = String[]", ew_src) && !occursin("pk_field::Vector{String} = []", ew_src)
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 

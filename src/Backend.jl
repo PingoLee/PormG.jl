@@ -443,7 +443,33 @@ const _NO_ERROR_FIELDS = _error_record(nothing, nothing, nothing, nothing, nothi
 # Those two readings are dynamic by nature (`string` on an untyped value, a field looked up by name), so
 # they live here, in one place, behind `@noinline`: a classifier calls them only for an exception it does
 # not own, and a trimmed image meets a dynamic call there and nowhere else in the classifiers.
-@noinline _unowned_string(@nospecialize(x))::String = string(x)
+#
+# `string` on an untyped value had no code in a trimmed image either, so a statement-path `MethodError`
+# reaching a classifier was replaced by the classifier's own (#1599). The values a classifier meets most
+# are tested by `isa` first and their text built at their type, as `string` builds it: a `String` is
+# itself, a `SubString`/`Symbol` its characters, `InterruptException()`, and an `ErrorException` or
+# `ArgumentError` with a `String` message `T(` + `show` of the message + `)`. A `MethodError` is the one
+# arm that is not `string`'s text: `string` prints its function and arguments through untyped `show`
+# calls, so it answers with its type name alone, and no phrase a classifier tests (a lost connection, a
+# lock, an inactive transaction) matches it (decided on #1799: a `MethodError` on the statement path is a
+# bug to report, never a connection to renew or a statement to retry). Anything else takes `string`, as
+# before, behind `@noinline`.
+@noinline function _unowned_string(@nospecialize(x))::String
+  x isa String && return x
+  x isa SubString{String} && return String(x)
+  x isa Symbol && return String(x)
+  x isa MethodError && return "MethodError"
+  x isa InterruptException && return "InterruptException()"
+  if x isa ErrorException
+    m = x.msg
+    m isa String && return string("ErrorException(", sprint(show, m), ")")
+  elseif x isa ArgumentError
+    m = x.msg
+    m isa String && return string("ArgumentError(", sprint(show, m), ")")
+  end
+  return _unowned_string_open(x)
+end
+@noinline _unowned_string_open(@nospecialize(x))::String = string(x)
 @noinline _unowned_error_text(@nospecialize(e))::String = _phrase_text(_unowned_string(e))
 
 # The lower-cased text an ASCII phrase test reads (#1714), which never throws: `lowercase` raises

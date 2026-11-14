@@ -4643,17 +4643,18 @@ end
 
   # What: each driver extension's interrupt walk (`_interrupt_in_causes`), on an exception typed `Any`,
   #   followed four calls deep, core's open arm `_unowned_field_open` not followed; and the SQLite lock
-  #   check (`_is_sqlite_locked_error`) on an `InterruptException` and an `ErrorException`.
+  #   check (`_is_sqlite_locked_error`) on an exception typed `Any`.
   # Expected: no dynamic call in either walk: the driver's own errors (`MySQL.Protocol.Error`,
   #   `StmtError`, `ProtocolError`, `TimeoutError`; `Postgres.Error`, `PostgresInterfaceError`) are read at
-  #   their types (`_driver_cause`). The lock check answers both exceptions in arms of its own, without
-  #   `_error_text`'s `string`, and answers as `string(e)` did, over messages that test the escape rule
-  #   (a newline, a quote, a `$`, an invalid byte, a tab, an escape whose hex digits start the phrase).
+  #   their types (`_driver_cause`), and the lock check reads any exception SQLite does not own through
+  #   core's `_unowned_string` (pinned below), answering as `string(e)` did over messages that test the
+  #   escape rule (a newline, a quote, a `$`, an invalid byte, a tab, an escape whose hex digits start the
+  #   phrase), and `false` for a `MethodError` (decided on #1799).
   # Why: core's walk does not know the driver's errors, so a statement the server refused reached its open
   #   arm's `hasproperty`, which had no code in a trimmed image: the trimmed MySQL and Postgres.jl reads
   #   surfaced a missing table as `StatementError(cause = MethodError: hasproperty(::StmtError, …))`. The
-  #   lock check's `string(e)` had none either, so a Ctrl-C on SQLite's worker became a `MethodError`
-  #   (#1599, #1794's residue).
+  #   lock check's `string(e)` had none either, so a non-SQLite error on SQLite's worker became a
+  #   `MethodError` (#1599, #1794's residue).
   @testset "the drivers' error paths read their own exceptions at their types (#1599 layer 2)" begin
     myx = Base.get_extension(PormG, :PormGMySQLExt)
     pgx = Base.get_extension(PormG, :PormGPostgresExt)
@@ -4662,21 +4663,45 @@ end
     for X in (myx, pgx)
       @test (X, _dynamic_calls_deep(X._interrupt_in_causes, (Any, Int); depth = 4, skip = skip)) == (X, String[])
     end
-    # An `InterruptException` never reaches `_error_text`; an `ErrorException` takes the arm that `show`s
-    # its message at its type (only a message that is not a `String` falls through).
-    ir_int = sprint(show, first(only(code_typed(slx._is_sqlite_locked_error, (InterruptException,); optimize = true))))
-    @test !occursin("_error_text", ir_int)
-    ir_err = sprint(show, first(only(code_typed(slx._is_sqlite_locked_error, (ErrorException,); optimize = false))))
-    @test occursin("sprint", ir_err)
+    @test !isdefined(slx, :_error_text)          # the lock check's own `string` arm is gone
     @test !slx._is_sqlite_locked_error(InterruptException())
+    @test !slx._is_sqlite_locked_error(MethodError(identity, ("database is locked",)))   # decided on #1799
     for m in ("database is locked", "DATABASE TABLE IS LOCKED: drivers", "no such table: drivers",
               "database is\nlocked", "database is \"locked\"", "\$database is locked", "database is locked \xff",
               "database\tis locked", "database is lock\x65d", "",
               # an escape's hex digits supply the phrase's first letters in `string(e)`'s text
               "\xdatabase is locked", "\u009database is locked", "\x1database is locked")
-      e = ErrorException(m)
-      @test (m, slx._is_sqlite_locked_error(e)) == (m, slx._is_locked_text(lowercase(string(e))))
+      for e in (ErrorException(m), ArgumentError(m))
+        @test (e, slx._is_sqlite_locked_error(e)) == (e, slx._is_locked_text(lowercase(string(e))))
+      end
     end
+  end
+
+  # What: the classifiers' text for a value they do not own, `_unowned_string(x)` (and
+  #   `_unowned_error_text` over it), on a value typed `Any`.
+  # Expected: no dynamic call (the open arm `_unowned_string_open` is an `invoke`, and it still calls
+  #   `string`). Every typed arm returns `string(x)` exactly (a `String`, a `SubString`, a `Symbol`, an
+  #   `InterruptException`, an `ErrorException`/`ArgumentError` with a `String` message, escapes included),
+  #   and so does the open arm; a `MethodError` returns `"MethodError"`, so no classifier phrase matches it
+  #   (decided on #1799: its `string` prints the function and arguments through untyped `show` calls).
+  # Why: `string` on an untyped value had no code in a trimmed image, so a statement-path `MethodError`
+  #   reaching a classifier (SQLite's `backend_is_connection_error`, the lock check, LibPQ's, the pool's
+  #   inactive-transaction check) was replaced by the classifier's own `MethodError` (#1599, #1797's
+  #   hand-off).
+  @testset "the classifiers read an unowned value's text at its type (#1599 layer 2)" begin
+    @test _dynamic_calls(PormG._unowned_string, (Any,)) == String[]
+    @test _dynamic_calls(PormG._unowned_error_text, (Any,)) == String[]
+    @test isdefined(PormG, :_unowned_string_open) && !isempty(_dynamic_calls(PormG._unowned_string_open, (Any,)))
+    samples = Any["Senna", SubString("Monaco GP", 1, 6), :drivers, InterruptException(),
+                  ErrorException("database is closed"), ErrorException("\xdatabase is closed\n\$x"),
+                  ArgumentError("disk I/O error"), ArgumentError(""),
+                  PormG.QueryBuildError("no field"), 42, nothing]                     # the last three: the open arm
+    for x in samples
+      @test (x, PormG._unowned_string(x)) == (x, string(x))
+    end
+    me = MethodError(identity, ("database is closed", "disk i/o error"))
+    @test PormG._unowned_string(me) == "MethodError"
+    @test PormG._unowned_error_text(me) == "methoderror"
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

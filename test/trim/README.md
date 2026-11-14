@@ -165,10 +165,21 @@ julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot
 build-mysql/main
 ```
 
-Against a server the trimmed binary connects, binds the parameters and runs the statement. It stops when
-the pool hands the result to the typed read: `ConnectionPool._decoded` is called on the untyped value
-`await_result` returns, and the image has no code for that call, so it raises `MethodError`. With no
-variables set it stops at the connect, as the JIT does.
+Against a server the trimmed binary connects, binds the parameters, runs the statement and returns the
+row its JIT control prints (#1599):
+
+```
+step	main	entered
+step	ext	true
+step	server	127.0.0.1:3306/pormg_trim
+step	boot	ok
+step	query	1 rows
+step	row	1 2008 Monaco Grand Prix 2008-05-25
+```
+
+The pool hands the result to the typed read at the type the extension registers
+(`backend_result_type`), and the read decodes it cell by cell over the cell types MySQL.jl delivers. With
+no variables set it stops at the connect, as the JIT does.
 
 ## The Postgres.jl variant
 
@@ -198,10 +209,8 @@ build-postgres/main
 ```
 
 Against a server the trimmed binary connects, authenticates, registers its result types, binds the
-parameters and runs the statement. It stops when the pool hands the result to the typed read:
-`ConnectionPool._decoded` is called on the untyped value `await_result` returns, and the image has no
-code for that call, so it raises `MethodError`. With no variables set it stops at the connect, as the JIT
-does. The trimmed connect covers a connection string with a host, port, user, database, a password or
+parameters, runs the statement and returns the row its JIT control prints, as the MySQL variant does (with
+`server	127.0.0.1:5432/pormg_trim`). With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
 none and an `sslmode` or none (PormG adds `options` itself). Any other connection parameter
 (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`, `statement_timeout`, …) takes
 Postgres.jl's own connect, which a trimmed binary has no code for: it fails at the connect with

@@ -1561,8 +1561,8 @@ function _monitor_on_acquire!(pool)
   return nothing
 end
 
-# Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool.
-_reap_all_pools!() = _reap_all_pools!(_POOL_MONITOR)
+# Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool. The
+# registry is `_POOL_MONITOR`, the one the sweeper captures; its lock is `_POOL_MONITOR_LOCK`.
 function _reap_all_pools!(registry::_PoolRegistry{PoolMonitorState})
   pools = Base.lock(() -> _registry_pools(registry), _POOL_MONITOR_LOCK)
   for pool in pools                       # a collected pool has no entry left (its WeakRef reads nothing)

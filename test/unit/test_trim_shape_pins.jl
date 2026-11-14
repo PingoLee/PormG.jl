@@ -896,8 +896,7 @@ end
   # What: the pool reaper's sweeper task (#125, #1599 layer 2).
   # Expected: `_ensure_reaper!` spawns the named loop `_reaper_loop` with the monitor registry as a
   #   captured argument (`registry = _POOL_MONITOR`), never a `begin … end` body; the loop, the sweep over
-  #   the registry and `_reap_pool!` over each concrete pool make no dynamic call; the zero-argument
-  #   `_reap_all_pools!()` the tests drive still sweeps `_POOL_MONITOR`.
+  #   the registry and `_reap_pool!` over each concrete pool make no dynamic call.
   # Why: a `juliac --trim` image compiles a spawned body only when it sees the closure `@spawn` builds
   #   constructed. The sweeper's `begin … end` body read only globals, so it was never compiled: in a
   #   trimmed long-running application its task died at its first call and no idle or over-lifetime
@@ -916,12 +915,13 @@ end
     @test length(spawns) == 1
     @test occursin("@spawn _reaper_loop(registry)", only(spawns))
     @test occursin("registry = _POOL_MONITOR", starter)
-    @test !isbitstype(typeof(CP._POOL_MONITOR))   # a bits capture would be folded into a constant
+    # A bits capture would be folded into a constant. A proxy: whether the body is compiled is measured
+    # by the read-only fixture's `tasks` run (test/trim/README.md), not by this file.
+    @test !isbitstype(typeof(CP._POOL_MONITOR))
 
     R = CP._PoolRegistry{CP.PoolMonitorState}
     @test isempty(_dynamic_calls(CP._reaper_loop, (R,)))
     @test isempty(_dynamic_calls(CP._reap_all_pools!, (R,)))
-    @test isempty(_dynamic_calls(CP._reap_all_pools!, ()))
     for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
               CP.MySQLConnectionPool)
       @test (P, _dynamic_calls(CP._reap_pool!, (P,))) == (P, String[])
@@ -957,6 +957,8 @@ end
       CP._sqlite_pending_dec!(db)
     end
     @test p() === true
+    # Not what tells the old shape from the new (given a concrete probe type, the wait was static before
+    # too); the type assertions above are.
     @test isempty(_dynamic_calls(CP._wait_settled, (typeof(p), Float64)))
     @test CP._wait_settled(p, 1.0) === true
     close(db)

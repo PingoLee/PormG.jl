@@ -59,6 +59,8 @@ jobs:
         run: |
           julia --project=test/trim test/trim/prep.jl run-jit
           julia --project=test/trim test/trim/read.jl run-jit
+          julia --project=test/trim test/trim/prep.jl run-jit-tasks
+          julia --project=test/trim test/trim/read.jl run-jit-tasks tasks
       - name: Build the trimmed binary
         id: build
         run: |
@@ -86,7 +88,7 @@ jobs:
       - name: Run the pool's long-lived tasks in the trimmed binary
         # The reaper and the deferred close (#1599 layer 2): the `tasks` run adds two steps, about 20 s,
         # that fail with exit 4 or 5 when the task never ran. Runs even when the read above failed.
-        if: always() && steps.build.outcome == 'success'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           julia --project=test/trim test/trim/prep.jl run-tasks
           set +e

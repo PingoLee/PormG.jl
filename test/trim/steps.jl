@@ -88,9 +88,9 @@ function reap_step()::Bool
         pool = PormG.Configuration.get_settings(TrimF1.KEY).connections::CP.SQLiteConnectionPool
         c1 = CP.acquire_connection(pool)
         c2 = CP.acquire_connection(pool)
+        opened = open_connections(pool)    # while both are leased, so no sweep can take one first
         CP.release_connection(pool, c1)
         CP.release_connection(pool, c2)
-        opened = open_connections(pool)
         t0 = time_ns()
         while open_connections(pool) >= opened && time_ns() - t0 < 40_000_000_000
             sleep(0.25)

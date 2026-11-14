@@ -893,6 +893,41 @@ end
     @test length(methods(CP._run_sqlite_statement)) == 1
   end
 
+  # What: the pool reaper's sweeper task (#125, #1599 layer 2).
+  # Expected: `_ensure_reaper!` spawns the named loop `_reaper_loop` with the monitor registry as a
+  #   captured argument (`registry = _POOL_MONITOR`), never a `begin … end` body; the loop, the sweep over
+  #   the registry and `_reap_pool!` over each concrete pool make no dynamic call; the zero-argument
+  #   `_reap_all_pools!()` the tests drive still sweeps `_POOL_MONITOR`.
+  # Why: a `juliac --trim` image compiles a spawned body only when it sees the closure `@spawn` builds
+  #   constructed. The sweeper's `begin … end` body read only globals, so it was never compiled: in a
+  #   trimmed long-running application its task died at its first call and no idle or over-lifetime
+  #   connection was ever reaped (the read-only fixture's `reap` step: no connection closed in 40 s). The
+  #   verifier reports no row for such a body, so only the shape can be pinned. A capture of a constant
+  #   bits value (`interval = _REAP_INTERVAL`) is folded the same way, which is why the capture is the
+  #   registry; both measured in a minimal trimmed program.
+  @testset "the pool reaper's sweeper starts in a trimmed image (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    i = findfirst("function _ensure_reaper!(", src)
+    j = findfirst("function _reaper_loop(", src)
+    @test i !== nothing && j !== nothing && first(j) > last(i)
+    starter = src[last(i):first(j)]
+    spawns = [l for l in split(starter, '\n') if occursin("@spawn", l) && !startswith(lstrip(l), "#")]
+    @test length(spawns) == 1
+    @test occursin("@spawn _reaper_loop(registry)", only(spawns))
+    @test occursin("registry = _POOL_MONITOR", starter)
+    @test !isbitstype(typeof(CP._POOL_MONITOR))   # a bits capture would be folded into a constant
+
+    R = CP._PoolRegistry{CP.PoolMonitorState}
+    @test isempty(_dynamic_calls(CP._reaper_loop, (R,)))
+    @test isempty(_dynamic_calls(CP._reap_all_pools!, (R,)))
+    @test isempty(_dynamic_calls(CP._reap_all_pools!, ()))
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(CP._reap_pool!, (P,))) == (P, String[])
+    end
+  end
+
   # What: the SQLite extension's statement parameters, its typed read's cursor and its retry's lock check
   #   (#1599 layer 2).
   # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`

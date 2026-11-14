@@ -1515,19 +1515,32 @@ function _ensure_reaper!(; generating::Bool = ccall(:jl_generating_output, Cint,
   _reaper_started[] && return
   Base.lock(_reaper_lock) do
     _reaper_started[] && return
-    Threads.@spawn begin
-      while true
-        sleep(_REAP_INTERVAL)
-        try
-          _reap_all_pools!()
-        catch e
-          @debug "Connection-pool reaper sweep failed" exception=e
-        end
-      end
-    end
+    # The sweep is a named function, spawned with the registry it sweeps as a captured argument
+    # (#1599 layer 2), the SQLite worker's shape. A `juliac --trim` image compiles a spawned body only
+    # when it sees the closure `@spawn` builds constructed. A `begin … end` body that reads only
+    # globals is a closure with no fields, and one that captures only a constant bits value (the
+    # interval) is folded into a constant: neither is constructed, so neither body is compiled, and the
+    # task died at its first call with a `MethodError` nobody awaited. Nothing was ever reaped, and the
+    # verifier reports no row for it. Measured in a minimal trimmed program: the globals-only body and
+    # a constant `Float64` capture failed; a captured `Channel`, `Ref` or this registry ran.
+    registry = _POOL_MONITOR
+    Threads.@spawn _reaper_loop(registry)
     _reaper_started[] = true
   end
   return nothing
+end
+
+# The sweeper task's loop: every `_REAP_INTERVAL` seconds, reap every monitored pool. Never returns, and
+# never throws: a failed sweep is logged at debug level and the next one runs on schedule.
+function _reaper_loop(registry::_PoolRegistry{PoolMonitorState})
+  while true
+    sleep(_REAP_INTERVAL)
+    try
+      _reap_all_pools!(registry)
+    catch e
+      @debug "Connection-pool reaper sweep failed" exception=e
+    end
+  end
 end
 
 # The lazy start (#1562): this pool reaps but the sweeper is not running, because reaping was enabled
@@ -1549,8 +1562,9 @@ function _monitor_on_acquire!(pool)
 end
 
 # Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool.
-function _reap_all_pools!()
-  pools = Base.lock(() -> _registry_pools(_POOL_MONITOR), _POOL_MONITOR_LOCK)
+_reap_all_pools!() = _reap_all_pools!(_POOL_MONITOR)
+function _reap_all_pools!(registry::_PoolRegistry{PoolMonitorState})
+  pools = Base.lock(() -> _registry_pools(registry), _POOL_MONITOR_LOCK)
   for pool in pools                       # a collected pool has no entry left (its WeakRef reads nothing)
     try
       with_pool(_reap_pool!, pool)        # at the pool's concrete type (#1622); a stand-in takes the open arm

@@ -76,7 +76,7 @@ end
 # refused `` `R1_1` ``), and mis-split a `db_column` holding a `"` or a `.` on every engine. A selector
 # that is not one quoted alias and one quoted column (a JSON extraction, an expression) names no column
 # to join on, so it is refused.
-function _split_qualified_column(selector::AbstractString, path::AbstractString, conn)::Tuple{String,String}
+function _split_qualified_column(selector::AbstractString, path::AbstractString, @nospecialize(conn))::Tuple{String,String}
   q = first(quote_identifier("x", conn))
   part = "$(q)((?:[^$(q)]|$(q)$(q))+)$(q)"
   m = match(Regex("\\A$(part)\\.$(part)\\z"), selector)

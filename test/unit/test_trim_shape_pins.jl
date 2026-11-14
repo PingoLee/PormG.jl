@@ -3115,6 +3115,77 @@ end
       "(`ArrayField`, `integer[]`), which SQLite does not support (supported on PostgreSQL)."
   end
 
+  # What: the query builder's own share of group 3 (#1785's hand-off): the four dispatchers, the callees
+  #   that take the engine connection, the callees those forward it to, and every engine fact.
+  # Expected: the engine argument of every method of each is named and `@nospecialize` (read live from the
+  #   method tables, so a method added later is covered); a call over the engine union makes no dynamic
+  #   call, for the dispatchers, the read path's callees and every one-argument engine fact; the
+  #   write-path facts that forward the connection to a statement keep their specialization.
+  # Why: the query builder holds the connection as a union of the three abstract engine types. Inference
+  #   splits the union, but each arm's method specialized on an abstract type is not a compileable
+  #   signature, so the call stayed a dynamic dispatch: about 60 verifier rows on each fixture, and a
+  #   `MethodError` in a trimmed image for any arm no static call compiled. `@nospecialize` compiles each
+  #   method once at its declared type, which every arm invokes. Julia ignores it on an unnamed argument.
+  @testset "the query builder's callees take the engine connection statically (#1599 layer 5, group 3)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    is_engine(T) = T isa Type && T !== Any && T !== Union{} &&
+      (T <: K.PormGBackend || (T isa Union && T <: Union{K._SQLEngine, Nothing}))
+    facts = Set{Symbol}(m.name for name in names(QB; all = true) if isdefined(QB, name)
+                        for m in (let f = getglobal(QB, name); f isa Function ? methods(f) : () end)
+                        if m.module === QB && endswith(string(m.file), "engine_facts.jl"))
+    # The write path's facts that hand the connection on to a statement (layer 7, #1694): unchanged.
+    write_facts = (:_allocate_ids, :_inserted_row_query, :_update_row_count)
+    callees = (:_function_sql, :_dialect_function_sql, :_window_no_column_sql, :_window_column_sql,
+               :_limit_offset_sql, :_declared_kind, :_unordered_interval_error, :_duration_math_refusal,
+               :_duration_value_units, :_temporal_shift_sql, :_computed_kind, :_departure,
+               :_guarded_integer_type, :_interval_round_sql, :_division_sql, :_as_interval_text,
+               :_duration_units, :_predicate_duration_units, :_split_qualified_column, :_order_term_sql,
+               :_duration_part_refusal, :_time_arithmetic_refusal, :_unnamed_temporal_refusal,
+               :_bitwise_not_sql, :_xor_sql, :_untyped_date_refusal, :_day_count_shift_sql,
+               :_duration_operand_units, :_duration_value_sql, :_json_document_marker, :_meaning_refusal,
+               # the callees the ones above hand the connection to
+               :_computes, :_interval_ms_as_text, :_duration_values_units, :_unnamed_temporal_remedy,
+               :_interval_error)
+    checked = 0
+    for name in union(Set(callees), setdiff(facts, write_facts))
+      f = getglobal(QB, name)
+      for m in methods(f)
+        m.module === QB || continue
+        params = collect(Base.unwrap_unionall(m.sig).parameters[2:end])
+        argn = Base.method_argnames(m)[2:end]
+        for (i, T) in enumerate(params)
+          (is_engine(T) || (T === Any && i <= length(argn) && argn[i] in (:conn, :connection))) || continue
+          checked += 1
+          @test (name, m.line, i, (m.nospecialize >> (i - 1)) & 1) == (name, m.line, i, 1)
+        end
+      end
+    end
+    # The exact count records the set: a method added, removed or renamed in it changes it.
+    @test checked == 192
+    for name in write_facts, m in methods(getglobal(QB, name))
+      @test m.nospecialize == 0
+    end
+
+    # A call over the engine union resolves. The closures name the functions through the module (a
+    # constant), so they capture nothing but what they are given.
+    E = K._SQLEngine
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._function_sql("UPPER", "t.a", Dict{String,Any}(), c), (E,)))
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._dialect_function_sql("ROUND", "t.a",
+                                        PormG.Dialect.FnOptions(Dict{String,Any}()), c), (E,)))
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._window_no_column_sql("RANK", "ORDER BY x", c), (E,)))
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._window_column_sql("FIRST_VALUE", "t.a", "ORDER BY x", c), (E,)))
+    @test isempty(_dynamic_calls((p, c) -> PormG.QueryBuilder._limit_offset_sql(10, 0, p, c),
+                                 (PormG.QueryBuilder.SQLiteParameterizedQuery, E)))
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._split_qualified_column("t.a", "a", c), (E,)))
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._declared_kind("integer", c), (QB.ConnType,)))
+    @test isempty(_dynamic_calls(c -> PormG.QueryBuilder._departure(c, :text, :integer), (QB.ConnType,)))
+    for name in setdiff(facts, write_facts)
+      f = getglobal(QB, name)
+      all(m -> m.nargs == 2, methods(f)) || continue   # the facts that take only the engine
+      @test (name, _dynamic_calls(c -> f(c), (E,))) == (name, String[])
+    end
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

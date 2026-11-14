@@ -507,7 +507,7 @@ _count_minus_date_error() =
 
 _refuse_untyped_date_operand(operation::AbstractString, instruc::SQLInstruction) =
   _untyped_date_refusal(instruc.connection, operation)
-function _untyped_date_refusal(conn, operation::AbstractString)
+function _untyped_date_refusal(@nospecialize(conn), operation::AbstractString)
   _stores_date_as_text(conn) || return nothing
   throw(QueryBuildError("`$(operation)` between a date and a value PormG cannot type is not supported on " *
                         "SQLite, where a date is text and `$(operation)` would use only its year. Add a " *
@@ -517,7 +517,7 @@ end
 # MySQL (#1130 phase 2b): its `+`/`-` read a date as the number its digits spell (measured:
 # `DATE '2009-03-29' + 1` is `20090330`, and `+ 2.5` is `20090331`), silently. Refused there too; a
 # typed day count or a duration renders `± INTERVAL … DAY`.
-_untyped_date_refusal(::PormGMySQL, operation::AbstractString) =
+_untyped_date_refusal(@nospecialize(conn::PormGMySQL), operation::AbstractString) =
   throw(QueryBuildError("`$(operation)` between a date and a value PormG cannot type is not supported on " *
                         "MySQL, where `$(operation)` reads a date as the number its digits spell " *
                         "(2009-03-29 is 20090329). Add a whole number of days (an IntegerField, " *
@@ -558,7 +558,7 @@ function _pg_interval_args(comps, instruc::SQLInstruction)::Union{String,Nothing
     return isempty(parts) ? nothing : join(parts, ", ")
 end
 
-function _temporal_shift_sql(::PormGPostgres, left_side::AbstractString, kind::TemporalKind, operation::String,
+function _temporal_shift_sql(@nospecialize(conn::PormGPostgres), left_side::AbstractString, kind::TemporalKind, operation::String,
                              comps, instruc::SQLInstruction)::String
     args = _pg_interval_args(comps, instruc)
     args === nothing && return left_side  # zero-length interval → identity
@@ -572,7 +572,7 @@ function _temporal_shift_sql(::PormGPostgres, left_side::AbstractString, kind::T
     return sql_canonicalize(kind, instruc.connection, shifted)
 end
 
-function _temporal_shift_sql(::PormGSQLite, left_side::AbstractString, kind::TemporalKind, operation::String,
+function _temporal_shift_sql(@nospecialize(conn::PormGSQLite), left_side::AbstractString, kind::TemporalKind, operation::String,
                              comps, instruc::SQLInstruction)::String
     op_factor = operation == "-" ? -1 : 1
     mods = String[]
@@ -629,7 +629,7 @@ end
 # (`+ INTERVAL 1.5 SECOND`). MySQL types the result as the meaning does — a DATE shifted by whole days
 # stays a DATE, by an hour becomes a DATETIME — so no canonicalizing wrapper is needed. A zero-length
 # duration is the identity, as on the other engines.
-function _temporal_shift_sql(::PormGMySQL, left_side::AbstractString, kind::TemporalKind, operation::String,
+function _temporal_shift_sql(@nospecialize(conn::PormGMySQL), left_side::AbstractString, kind::TemporalKind, operation::String,
                              comps, instruc::SQLInstruction)::String
   sql = String(left_side)
   # Checked: a year count past `typemax(Int) ÷ 12` must raise, not wrap into a small shift.
@@ -656,13 +656,13 @@ end
 # #1599 layer 5: the duration is untyped in one compiled body, so the call splits over the engines only.
 _render_duration_value(@nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   _duration_value_sql(instruc.connection, Base.inferencebarrier(d), instruc)
-function _duration_value_sql(::PormGPostgres, @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind}
+function _duration_value_sql(@nospecialize(conn::PormGPostgres), @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind}
   args = _pg_interval_args(_decompose_period(d isa Interval ? d.period : d), instruc)
   return "make_interval($(something(args, "")))", CInterval(_has_calendar_part(d))   # #1583
 end
-_duration_value_sql(conn::PormGSQLite, @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+_duration_value_sql(@nospecialize(conn::PormGSQLite), @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
-_duration_value_sql(conn::PormGMySQL, @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
+_duration_value_sql(@nospecialize(conn::PormGMySQL), @nospecialize(d::_DurationOperand), instruc::SQLInstruction)::Tuple{String,_RenderKind} =
   (add_parameter!(instruc, _duration_operand_units(d, conn)), _IntervalMs())
 # #1576 — A MONTH OR A YEAR AS A VALUE IS SCALED BY A WHOLE NUMBER ONLY, AND NEVER DIVIDED, on every
 # engine. A month has 28 to 31 days, so 1.5 months, or a year over 7, has no single answer: PostgreSQL
@@ -714,7 +714,7 @@ _calendar_scale_error() =
 
 # A zero-length duration is zero whatever its unit (`Month(0)` too), as the shift's identity treats it,
 # so only a duration with a calendar component reaches the `calendar_intervals` refusal.
-_duration_operand_units(@nospecialize(d::_DurationOperand), conn)::Int64 =
+_duration_operand_units(@nospecialize(d::_DurationOperand), @nospecialize(conn))::Int64 =
   isempty(_decompose_period(d isa Interval ? d.period : d)) ? Int64(0) : _duration_units(d, conn)
 
 # #801 — THE DIFFERENCE OF TWO TEMPORAL SIDES, `kind` being the rule's answer (`_arith_result_kind`).
@@ -769,7 +769,7 @@ _finalize_render(sql::AbstractString, ::_IntervalMs, instruc::SQLInstruction) =
   (_interval_ms_as_text(sql, instruc.connection), CInterval())
 
 # The text of a side, for the places that compare or combine it as text rather than as a number.
-_as_interval_text(sql::AbstractString, kind::_RenderKind, conn) =
+_as_interval_text(sql::AbstractString, kind::_RenderKind, @nospecialize(conn)) =
   kind isa _IntervalMs ? _interval_ms_as_text(sql, conn) : String(sql)
 
 _is_interval_kind(kind::_RenderKind) = kind isa Union{CInterval,_IntervalMs}
@@ -807,16 +807,16 @@ _interval_text_as_ms(sql::AbstractString, ::PormGSQLite) = Dialect._sqlite_inter
 _interval_text_as_ms(sql::AbstractString, ::PormGMySQL) = String(sql)
 _interval_subquery_as_ms(sql::AbstractString, ::PormGSQLite) = Dialect._sqlite_interval_text_ms(sql)
 _interval_subquery_as_ms(sql::AbstractString, ::PormGMySQL) = String(sql)
-_interval_ms_as_text(ms::AbstractString, ::PormGSQLite) = Dialect._sqlite_interval_text(ms)
-_interval_ms_as_text(ms::AbstractString, ::PormGMySQL) = String(ms)
+_interval_ms_as_text(ms::AbstractString, @nospecialize(conn::PormGSQLite)) = Dialect._sqlite_interval_text(ms)
+_interval_ms_as_text(ms::AbstractString, @nospecialize(conn::PormGMySQL)) = String(ms)
 # A product or a quotient of the integer form, or a mean of it, rounded back to a whole unit, half away
 # from zero, as `_ns_to_units` rounds a literal (#881, #900). MySQL's `ROUND` of an exact value rounds
 # half away from zero too (measured on 8.4: `ROUND(-5/2)` is `-3`), and its `/` and `AVG` are exact
 # DECIMALs, so the cast is the only rounding. A product with a DOUBLE (`d * F("points")`) is a DOUBLE,
 # which MySQL's `ROUND` rounds as its C library does: a representation difference at a tie of half a
 # microsecond, documented rather than guarded.
-_interval_round_sql(x::AbstractString, ::PormGSQLite) = "CAST(round($(x)) AS INTEGER)"
-_interval_round_sql(x::AbstractString, ::PormGMySQL) = "CAST(ROUND($(x)) AS SIGNED)"
+_interval_round_sql(x::AbstractString, @nospecialize(conn::PormGSQLite)) = "CAST(round($(x)) AS INTEGER)"
+_interval_round_sql(x::AbstractString, @nospecialize(conn::PormGMySQL)) = "CAST(ROUND($(x)) AS SIGNED)"
 # `date ± interval` with the interval in its integer form (#881). SQLite shifts the julian day by the
 # milliseconds as a fraction of a day, through the day-count shift, so the date keeps its text order.
 # MySQL adds the microseconds as an `INTERVAL … MICROSECOND`, exactly; a DATE shifted so becomes a
@@ -836,7 +836,7 @@ _interval_shift_sql(::PormGMySQL, date_side::AbstractString, ::Union{CDate,CDate
 # `interval` keeps months apart for the same reason): the `calendar_intervals` capability (#1553), the
 # one refusal for a month beside an interval, a timestamp difference's and a duration value's alike. It
 # was a `QueryBuildError` that printed the period until #1553; it names no value now (#971).
-function _duration_units(@nospecialize(p), conn)::Int64
+function _duration_units(@nospecialize(p), @nospecialize(conn))::Int64
   period = p isa Interval ? p.period : p
   ns = try
     _period_nanoseconds(period)
@@ -883,7 +883,7 @@ end
 # engine's unit, as `_duration_units`), or `nothing` when it is not a duration: a `Period`, an
 # `Interval`, or a duration string in a `DurationField`'s accepted forms. `nothing` sends the caller
 # back to the text comparison, so a value that is not a duration still raises what it always raised there.
-function _duration_value_units(@nospecialize(x), conn)::Union{Int64,Nothing}
+function _duration_value_units(@nospecialize(x), @nospecialize(conn))::Union{Int64,Nothing}
   x isa Interval && (x = x.period)
   ns = try
     if x isa Union{Dates.Period,Dates.CompoundPeriod}
@@ -907,14 +907,14 @@ end
 # that is not a duration keeps the text comparison.
 const _INTERVAL_MS_PREDICATES = ("=", "!=", "<>", ">", ">=", "<", "<=")
 const _INTERVAL_MS_LIST_PREDICATES = ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN")
-function _predicate_duration_units(operator::AbstractString, values, conn)
+function _predicate_duration_units(operator::AbstractString, values, @nospecialize(conn))
   operator in _INTERVAL_MS_PREDICATES && return _duration_value_units(values, conn)
   operator in _INTERVAL_MS_LIST_PREDICATES && return _duration_values_units(values, conn)
   return nothing
 end
 
 # Every value of a membership list or a range, or `nothing` when any one is not a duration.
-function _duration_values_units(values, conn)::Union{Vector{Int64},Nothing}
+function _duration_values_units(values, @nospecialize(conn))::Union{Vector{Int64},Nothing}
   values isa Union{AbstractVector,Tuple} || return nothing
   out = Int64[]
   for x in values
@@ -1189,7 +1189,7 @@ const _ORDERING_OPERATIONS = (">", "<", ">=", "<=")
 # (`interval + integer`, `interval * interval`, `integer / interval` fail when the statement runs) or
 # because the side has no integer form (`_interval_ms_sql`). Refused at build time there, where it would
 # otherwise compute on text or on a number, silently. Named for the engine at hand.
-_interval_error(what::AbstractString, conn) =
+_interval_error(what::AbstractString, @nospecialize(conn)) =
   QueryBuildError("$(what) is not supported on $(_backend_name(conn)). An interval there is a timestamp " *
                   "difference, a DurationField column or a duration (Hour(1)); it combines with another " *
                   "interval (+, -, comparisons), with a number (* and /), or with a date (date + interval).")
@@ -1206,7 +1206,7 @@ end
 # values, so the rows a filter keeps would differ from PostgreSQL's. Equality still compares the text.
 # Never reached on an engine that stores the integer (`_stores_interval_as_units`), where every interval
 # has that form.
-_unordered_interval_error(op::String, conn) = _interval_error(
+_unordered_interval_error(op::String, @nospecialize(conn)) = _interval_error(
   "Ordering (`$(op)`) an interval with no millisecond form (a `Case` whose value is a duration, a " *
   "function over one, or a window function such as `Lag`)", conn)
 
@@ -1293,18 +1293,18 @@ _is_field_path(s::String, instruc::SQLInstruction) =
 _render_day_count_shift(date_side::AbstractString, date_kind::Union{CDate,CDateTime}, count_side::AbstractString,
                         operation::String, date_first::Bool, instruc::SQLInstruction)::String =
   _day_count_shift_sql(instruc.connection, date_side, date_kind, count_side, operation, date_first, instruc)
-function _day_count_shift_sql(::PormGPostgres, date_side::AbstractString, date_kind::Union{CDate,CDateTime},
+function _day_count_shift_sql(@nospecialize(conn::PormGPostgres), date_side::AbstractString, date_kind::Union{CDate,CDateTime},
                               count_side::AbstractString, operation::String, date_first::Bool, ::SQLInstruction)
   days = date_kind isa CDate ? count_side : "make_interval(days => $(count_side))"
   return date_first ? "($(date_side) $(operation) $(days))" : "($(days) + $(date_side))"
 end
-function _day_count_shift_sql(::PormGSQLite, date_side::AbstractString, date_kind::Union{CDate,CDateTime},
+function _day_count_shift_sql(@nospecialize(conn::PormGSQLite), date_side::AbstractString, date_kind::Union{CDate,CDateTime},
                               count_side::AbstractString, operation::String, date_first::Bool, instruc::SQLInstruction)
   jd = date_first ? "julianday($(date_side)) $(operation) ($(count_side))" :
                     "($(count_side)) + julianday($(date_side))"
   return date_kind isa CDate ? "date($(jd))" : sql_canonicalize(date_kind, instruc.connection, jd)
 end
-_day_count_shift_sql(::PormGMySQL, date_side::AbstractString, ::Union{CDate,CDateTime}, count_side::AbstractString,
+_day_count_shift_sql(@nospecialize(conn::PormGMySQL), date_side::AbstractString, ::Union{CDate,CDateTime}, count_side::AbstractString,
                      operation::String, date_first::Bool, ::SQLInstruction) =
   date_first ? "($(date_side) $(operation) INTERVAL ($(count_side)) DAY)" : "(INTERVAL ($(count_side)) DAY + $(date_side))"
 
@@ -1987,7 +1987,7 @@ _unnamed_side_label(path::String) = "`$(path)`"
 _unnamed_side_label(::Any) = "a value"
 # The spellings that state the type, from what is at stake and what the engine can cast to: an interval
 # has no cast on either engine, a timestamp none on SQLite (#822).
-function _unnamed_temporal_remedy(conn, kind)
+function _unnamed_temporal_remedy(@nospecialize(conn), kind)
   kind isa CTime && return "give every value of a `Case` or `Coalesce` the one type (then = F(\"time\"), " *
                            "default = Time(0)), and compare a time with a time (a Time literal)"
   values = "give every value of a `Case` or `Coalesce` the one type, and do the arithmetic inside each " *
@@ -2000,24 +2000,24 @@ _timestamp_remedy(::PormGSQLite) = " (then = F(\"start_at\") + Hour(1))"
 _timestamp_remedy(::PormGMySQL) = ", or cast the value to a timestamp (Cast(…, \"timestamp\"))"
 # #1323: beside a time of day, the message names that, not the three kinds #1310 covered.
 _temporal_beside(kind) = kind isa CTime ? "a time of day" : "a date, a timestamp or an interval"
-_unnamed_temporal_refusal(conn::PormGSQLite, op, label, kind) =
+_unnamed_temporal_refusal(@nospecialize(conn::PormGSQLite), op, label, kind) =
   QueryBuildError("`$(op)` beside $(_temporal_beside(kind)), with $(label) on one side, is not " *
                   "supported on SQLite: PormG cannot type $(label), and the SQL depends on the type, since a " *
                   (kind isa CTime ? "time is its `HH:MM:SS` text there" :
                                     "date is text there and an interval is its `HH:MM:SS` text") *
                   ". State the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
-_unnamed_temporal_refusal(conn::PormGMySQL, op, label, kind) =
+_unnamed_temporal_refusal(@nospecialize(conn::PormGMySQL), op, label, kind) =
   QueryBuildError("`$(op)` beside $(_temporal_beside(kind)), with $(label) on one side, is not " *
                   "supported on MySQL: PormG cannot type $(label), and the SQL depends on the type, since " *
                   (kind isa CTime ? "MySQL reads a time there as the number its digits spell (06:00:00 is 60000)" :
                                     "MySQL reads a date there as the number its digits spell (2009-03-29 is 20090329)") *
                   ". State the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
-_time_arithmetic_refusal(::PormGSQLite, op, label) =
+_time_arithmetic_refusal(@nospecialize(conn::PormGSQLite), op, label) =
   QueryBuildError("`$(op)` on a time of day ($(label)) is not supported on SQLite: a time is its `HH:MM:SS` " *
                   "text there, and `$(op)` computes on the number its leading digits spell (06:00:00 + 1 is 7). " *
                   "SQLite has no spelling for arithmetic on a time of day: compare a time with a time (a Time " *
                   "literal), or compute it in Julia.")
-_time_arithmetic_refusal(::PormGMySQL, op, label) =
+_time_arithmetic_refusal(@nospecialize(conn::PormGMySQL), op, label) =
   QueryBuildError("`$(op)` on a time of day ($(label)) is not supported on MySQL: MySQL reads a time there as " *
                   "the number its digits spell (06:00:00 is 60000), and `$(op)` computes on that number. PormG " *
                   "has no spelling for arithmetic on a time of day on MySQL: compare a time with a time (a Time " *
@@ -2288,9 +2288,9 @@ end
 # An engine fact (#1129): one method per engine and no fallback, because `/` is the very operator
 # engines disagree on (MySQL's over two integers is a decimal, `5 / 2` = `2.5000`), so a third
 # backend gets a `MethodError` here rather than PostgreSQL's text.
-_division_sql(::PormGPostgres, ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
+_division_sql(@nospecialize(conn::PormGPostgres), ::FExpression, left::AbstractString, right::AbstractString, ::SQLInstruction) =
   "($(left) / $(right))"
-function _division_sql(::PormGSQLite, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
+function _division_sql(@nospecialize(conn::PormGSQLite), v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
   fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}
   (fractional(v.field_name) || fractional(v.operand)) || return "($(left) / $(right))"
   (_real_on_every_row(v.field_name, instruc) || _real_on_every_row(v.operand, instruc)) && return "($(left) / $(right))"
@@ -2303,7 +2303,7 @@ end
 # a `DECIMAL` (under the session's `div_precision_increment = 30`) or a `DOUBLE` quotient. A side the
 # walk cannot type leaves the meaning to run time, which MySQL has no operator for: refused on MySQL
 # only, naming the spelling that states it (#1130 phase 2b).
-function _division_sql(::PormGMySQL, v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
+function _division_sql(@nospecialize(conn::PormGMySQL), v::FExpression, left::AbstractString, right::AbstractString, instruc::SQLInstruction)
   whole(x) = _integer_side_kind(x, instruc, _AllKinds()) !== nothing
   whole(v.field_name) && whole(v.operand) && return "($(left) DIV $(right))"
   fractional(x) = _arithmetic_side_kind(x, instruc, _AllKinds()) isa Union{CDecimal,CFloat64}

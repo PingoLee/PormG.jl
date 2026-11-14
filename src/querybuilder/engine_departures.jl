@@ -182,7 +182,7 @@ The `_MEANING_DEPARTURES` row by which `conn`'s engine departs from what `target
 `kind` means, or `nothing` when it keeps the meaning (and the expression builds). An integer quotient
 (`_DIVISION_KINDS`) departs where the engine fact `_untyped_sum_departs` says it does.
 """
-function _departure(conn, target::Symbol, kind::Symbol)
+function _departure(@nospecialize(conn), target::Symbol, kind::Symbol)
   if kind in _DIVISION_KINDS
     row = _INTEGER_QUOTIENT_DEPARTURE
     return target in row.targets && _untyped_sum_departs(conn) ? row : nothing
@@ -202,7 +202,7 @@ _meaning_kind(target::Symbol, kind::Symbol) =
 # The one message for a meaning departure: the expression, what it means, what the engine at hand
 # computes, and the explicit spelling. It names that engine only — never a pair (#1129 item 3).
 # RETURNS the exception; the call site throws it.
-function _meaning_refusal(fname::AbstractString, what::AbstractString, row, conn;
+function _meaning_refusal(fname::AbstractString, what::AbstractString, row, @nospecialize(conn);
                           flag::AbstractString = "x", declared = nothing)
   engine = _backend_name(conn)
   return QueryBuildError(
@@ -212,4 +212,4 @@ end
 
 # What `conn`'s engine computes instead, from the row's per-engine `computes` pairs. Asked only of an
 # engine the row departs on, so a missing pair is a row written wrong, which the departure test catches.
-_computes(row, conn) = last(row.computes[findfirst(p -> conn isa first(p), row.computes)])
+_computes(row, @nospecialize(conn)) = last(row.computes[findfirst(p -> conn isa first(p), row.computes)])

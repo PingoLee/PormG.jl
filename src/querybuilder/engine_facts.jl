@@ -21,17 +21,17 @@
 # compares by its integer form, an interval in arithmetic is rewritten over it, and the shapes that form
 # cannot express are refused here rather than failing on the server. MySQL has no interval type either
 # (#1130): a `DurationField` is a BIGINT of microseconds there.
-_interval_as_ms(::PormGPostgres) = false
-_interval_as_ms(::PormGSQLite) = true
-_interval_as_ms(::PormGMySQL) = true
+_interval_as_ms(@nospecialize(conn::PormGPostgres)) = false
+_interval_as_ms(@nospecialize(conn::PormGSQLite)) = true
+_interval_as_ms(@nospecialize(conn::PormGMySQL)) = true
 
 # The unit of that integer, in nanoseconds: what a duration literal binds as, and what a timestamp
 # difference counts. SQLite computes in milliseconds, the precision its stored timestamps carry (#79).
 # PostgreSQL never computes an interval as an integer (`_interval_as_ms`); its answer is the
 # resolution of its own `interval`, for completeness.
-_interval_unit_ns(::PormGPostgres) = 1_000
-_interval_unit_ns(::PormGSQLite) = 1_000_000
-_interval_unit_ns(::PormGMySQL) = 1_000
+_interval_unit_ns(@nospecialize(conn::PormGPostgres)) = 1_000
+_interval_unit_ns(@nospecialize(conn::PormGSQLite)) = 1_000_000
+_interval_unit_ns(@nospecialize(conn::PormGMySQL)) = 1_000
 
 # The engine STORES an interval as that integer (#1130: MySQL's `DurationField` is a BIGINT of
 # microseconds), so an interval's value is already its integer form: a column needs no conversion, a
@@ -39,48 +39,48 @@ _interval_unit_ns(::PormGMySQL) = 1_000
 # value — orders and compares as the number it is. SQLite stores the `HH:MM:SS` text, which orders as
 # the duration only below 100 hours (#894), so it converts at each edge and refuses an interval with no
 # integer form. PostgreSQL never computes an interval as an integer (`_interval_as_ms`).
-_stores_interval_as_units(::PormGPostgres) = false
-_stores_interval_as_units(::PormGSQLite) = false
-_stores_interval_as_units(::PormGMySQL) = true
+_stores_interval_as_units(@nospecialize(conn::PormGPostgres)) = false
+_stores_interval_as_units(@nospecialize(conn::PormGSQLite)) = false
+_stores_interval_as_units(@nospecialize(conn::PormGMySQL)) = true
 
 # #1406 — a time of day minus a time of day is an interval: PostgreSQL's `time - time`. SQLite and
 # MySQL refuse arithmetic on a time of day (#1323), so the type walk has no answer to give there.
-_subtracts_times(::PormGPostgres) = true
-_subtracts_times(::PormGSQLite) = false
-_subtracts_times(::PormGMySQL) = false
+_subtracts_times(@nospecialize(conn::PormGPostgres)) = true
+_subtracts_times(@nospecialize(conn::PormGSQLite)) = false
+_subtracts_times(@nospecialize(conn::PormGMySQL)) = false
 
 # The engine stores a date as text, so `date ± x` with an operand PormG cannot type would do
 # arithmetic on the text — on SQLite, on its year (#882).
-_stores_date_as_text(::PormGPostgres) = false
-_stores_date_as_text(::PormGSQLite) = true
+_stores_date_as_text(@nospecialize(conn::PormGPostgres)) = false
+_stores_date_as_text(@nospecialize(conn::PormGSQLite)) = true
 
 # A `BIGINT` day count must be cast to `integer` before it shifts a date: PostgreSQL has
 # `date ± integer` but no `date ± bigint`.
-_casts_bigint_day_count(::PormGPostgres) = true
-_casts_bigint_day_count(::PormGSQLite) = false
+_casts_bigint_day_count(@nospecialize(conn::PormGPostgres)) = true
+_casts_bigint_day_count(@nospecialize(conn::PormGSQLite)) = false
 # MySQL's `INTERVAL (n) DAY` takes a BIGINT count as it is (measured on 8.4, #1130 phase 2b).
-_casts_bigint_day_count(::PormGMySQL) = false
+_casts_bigint_day_count(@nospecialize(conn::PormGMySQL)) = false
 
 # Whether a declared cast type renders as a cast to TEXT on this engine, so a value compared with it
 # is that text, not the type's value: on SQLite `Cast(x, "uuid")` and the network types render
 # `CAST(x AS TEXT)` (#929).
-_cast_renders_text(::PormGField, ::PormGPostgres) = false
-_cast_renders_text(field::PormGField, ::PormGSQLite) = _text_cast_on_sqlite(field)
+_cast_renders_text(::PormGField, @nospecialize(conn::PormGPostgres)) = false
+_cast_renders_text(field::PormGField, @nospecialize(conn::PormGSQLite)) = _text_cast_on_sqlite(field)
 # MySQL casts a `uuid` to `CHAR(36)`, the text it stores one as (#1270), and refuses a network type
 # (`:network_types`), so a value compared with either cast is text, as on SQLite (#1130 phase 2b).
-_cast_renders_text(field::PormGField, ::PormGMySQL) = _text_cast_on_sqlite(field)
+_cast_renders_text(field::PormGField, @nospecialize(conn::PormGMySQL)) = _text_cast_on_sqlite(field)
 
 # A bound parameter carries an explicit SQL type cast (`$1::bigint`), so the server types an untyped
 # literal as PormG means it. SQLite's collector ignores a cast (`add_parameter!(::PormGSQLiteParam)`).
-_casts_bind_parameters(::PormGPostgres) = true
-_casts_bind_parameters(::PormGSQLite) = false
-_casts_bind_parameters(::PormGMySQL) = false   # MySQL.jl binds typed values; `?` takes no cast
+_casts_bind_parameters(@nospecialize(conn::PormGPostgres)) = true
+_casts_bind_parameters(@nospecialize(conn::PormGSQLite)) = false
+_casts_bind_parameters(@nospecialize(conn::PormGMySQL)) = false   # MySQL.jl binds typed values; `?` takes no cast
 
 # An `INSERT` reports the row it wrote (`RETURNING`). SQLite deliberately does not use it: PormG reads
 # the row back out-of-band, because `RETURNING` can hang there for some table shapes (#48).
-_insert_returns_rows(::PormGPostgres) = true
-_insert_returns_rows(::PormGSQLite) = false
-_insert_returns_rows(::PormGMySQL) = false   # MySQL has no `RETURNING` (#1266)
+_insert_returns_rows(@nospecialize(conn::PormGPostgres)) = true
+_insert_returns_rows(@nospecialize(conn::PormGSQLite)) = false
+_insert_returns_rows(@nospecialize(conn::PormGMySQL)) = false   # MySQL has no `RETURNING` (#1266)
 
 # The statement that reads back the row an `INSERT` just wrote, on the same connection, when the
 # engine does not return it (`_insert_returns_rows`): `(sql, params)`, or `nothing` when there is no
@@ -113,22 +113,22 @@ end
 
 # A bulk statement binds one ARRAY per column (`unnest($n::<type>[])`, #672) rather than one
 # parameter per cell, so a chunk's parameter count does not grow with its rows.
-_bulk_binds_column_arrays(::PormGPostgres) = true
-_bulk_binds_column_arrays(::PormGSQLite) = false
-_bulk_binds_column_arrays(::PormGMySQL) = false   # one `?` per cell, as SQLite (#1266)
+_bulk_binds_column_arrays(@nospecialize(conn::PormGPostgres)) = true
+_bulk_binds_column_arrays(@nospecialize(conn::PormGSQLite)) = false
+_bulk_binds_column_arrays(@nospecialize(conn::PormGMySQL)) = false   # one `?` per cell, as SQLite (#1266)
 
 # The prefix of each row in a `VALUES` list that is a derived table: MySQL writes its table value
 # constructor `VALUES ROW(?, ?), …` (#1130 phase 3c-2); SQLite's `VALUES (?, ?), …` needs none, and
 # PostgreSQL binds column arrays instead (`_bulk_binds_column_arrays`).
-_values_row_prefix(::PormGPostgres) = ""
-_values_row_prefix(::PormGSQLite) = ""
-_values_row_prefix(::PormGMySQL) = "ROW"
+_values_row_prefix(@nospecialize(conn::PormGPostgres)) = ""
+_values_row_prefix(@nospecialize(conn::PormGSQLite)) = ""
+_values_row_prefix(@nospecialize(conn::PormGMySQL)) = "ROW"
 
 # A pre-allocated id written into a `generated_always` identity needs `OVERRIDING SYSTEM VALUE`.
 # SQLite has no identity column to override.
-_overrides_generated_identity(::PormGPostgres) = true
-_overrides_generated_identity(::PormGSQLite) = false
-_overrides_generated_identity(::PormGMySQL) = false   # AUTO_INCREMENT takes an explicit value
+_overrides_generated_identity(@nospecialize(conn::PormGPostgres)) = true
+_overrides_generated_identity(@nospecialize(conn::PormGSQLite)) = false
+_overrides_generated_identity(@nospecialize(conn::PormGMySQL)) = false   # AUTO_INCREMENT takes an explicit value
 
 # Draw `n` primary keys for `bulk_insert(returning = …)` before the rows are written (#671).
 _allocate_ids(model, conn::PormGPostgres, pk, n, settings) = _allocate_pg_ids(model, conn, pk, n)
@@ -139,53 +139,53 @@ _allocate_ids(model, conn::PormGMySQL, pk, n, settings) =
     why = "Let the INSERT generate them, or supply them in the table."))
 # SQLite's allocator reads and writes `sqlite_sequence`, so it runs inside a transaction; PostgreSQL's
 # `nextval` needs none.
-_allocates_ids_in_transaction(::PormGPostgres) = false
-_allocates_ids_in_transaction(::PormGSQLite) = true
-_allocates_ids_in_transaction(::PormGMySQL) = false   # `_allocate_ids` refuses first
+_allocates_ids_in_transaction(@nospecialize(conn::PormGPostgres)) = false
+_allocates_ids_in_transaction(@nospecialize(conn::PormGSQLite)) = true
+_allocates_ids_in_transaction(@nospecialize(conn::PormGMySQL)) = false   # `_allocate_ids` refuses first
 
 # How a bulk INSERT with `on_conflict = :nothing` counts the rows it skipped (#670, #1267). PostgreSQL
 # and SQLite report the rows they wrote. MySQL reports the rows a multi-row INSERT carried and how many
 # met a duplicate key (`backend_insert_report`), and nothing for a one-row INSERT, which is therefore
 # sent without the clause and counted 0 when it raises a duplicate key (measured on 8.4).
-_counts_skips_from_report(::PormGPostgres) = false
-_counts_skips_from_report(::PormGSQLite) = false
-_counts_skips_from_report(::PormGMySQL) = true
+_counts_skips_from_report(@nospecialize(conn::PormGPostgres)) = false
+_counts_skips_from_report(@nospecialize(conn::PormGSQLite)) = false
+_counts_skips_from_report(@nospecialize(conn::PormGMySQL)) = true
 
 # `get_or_create` runs its get + insert + read-back in one transaction: SQLite has no atomic
 # insert-or-read, so the steps are serialized; PostgreSQL's `ON CONFLICT` is atomic on its own.
-_serializes_get_or_create(::PormGPostgres) = false
-_serializes_get_or_create(::PormGSQLite) = true
+_serializes_get_or_create(@nospecialize(conn::PormGPostgres)) = false
+_serializes_get_or_create(@nospecialize(conn::PormGSQLite)) = true
 # MySQL's miss is a plain INSERT the unique index guards: a duplicate raises, and the winner is re-read
 # (#1267). Holding a lock from the get to the insert would deadlock two sessions creating different
 # keys in one index gap (measured on 8.4: a `FOR UPDATE` on a missing key, then the inserts, gave 1213).
-_serializes_get_or_create(::PormGMySQL) = false
+_serializes_get_or_create(@nospecialize(conn::PormGMySQL)) = false
 
 # A cascading delete locks every parent row, top-down, before it reads one (#770). SQLite's
 # writers are already serialized for the whole transaction, so nothing can change under it.
-_locks_cascade_parents(::PormGPostgres) = true
-_locks_cascade_parents(::PormGSQLite) = false
+_locks_cascade_parents(@nospecialize(conn::PormGPostgres)) = true
+_locks_cascade_parents(@nospecialize(conn::PormGSQLite)) = false
 # MySQL locks rows as PostgreSQL does (InnoDB row locks, `FOR UPDATE` / `FOR SHARE`), and its writers
 # are not serialized, so a parent could change under the cascade the same way (#1130).
-_locks_cascade_parents(::PormGMySQL) = true
+_locks_cascade_parents(@nospecialize(conn::PormGMySQL)) = true
 
 # A mutation's own target in a subquery of its predicate — `UPDATE t … WHERE "Tb"."pk" IN (SELECT …
 # FROM t …)`, the selection half of a joined update or delete (#765) — is read through a derived
 # table: MySQL refuses a statement that reads the table it writes (error 1093) and accepts it once the
 # subquery is materialized first (measured on 8.4, #1130). PostgreSQL and SQLite read it as written.
-_materializes_target_key_set(::PormGPostgres) = false
-_materializes_target_key_set(::PormGSQLite) = false
-_materializes_target_key_set(::PormGMySQL) = true
+_materializes_target_key_set(@nospecialize(conn::PormGPostgres)) = false
+_materializes_target_key_set(@nospecialize(conn::PormGSQLite)) = false
+_materializes_target_key_set(@nospecialize(conn::PormGMySQL)) = true
 
 # A joined UPDATE whose SET reads a joined table (`update("x" => F("fk__col"))`): PostgreSQL and SQLite
 # (3.33+) name the joined tables in `UPDATE … FROM`; MySQL lists them after `UPDATE` and qualifies each
 # SET column with the target's alias, since an unqualified one is ambiguous there once a joined table
 # has a column of that name (measured on 8.4: the multi-table form updates and counts the matched
 # rows). Both are an inner join, with the join conditions in WHERE.
-_update_from_sql(::PormGPostgres, table, alias, set_parts, from_clause, where_sql) =
+_update_from_sql(@nospecialize(conn::PormGPostgres), table, alias, set_parts, from_clause, where_sql) =
   _update_from_clause_sql(table, alias, set_parts, from_clause, where_sql)
-_update_from_sql(::PormGSQLite, table, alias, set_parts, from_clause, where_sql) =
+_update_from_sql(@nospecialize(conn::PormGSQLite), table, alias, set_parts, from_clause, where_sql) =
   _update_from_clause_sql(table, alias, set_parts, from_clause, where_sql)
-_update_from_sql(::PormGMySQL, table, alias, set_parts, from_clause, where_sql) = """
+_update_from_sql(@nospecialize(conn::PormGMySQL), table, alias, set_parts, from_clause, where_sql) = """
   UPDATE $(table) AS $(alias), $(from_clause)
   SET $(join((string(alias, ".", p) for p in set_parts), ", "))
   WHERE $(where_sql)
@@ -214,28 +214,28 @@ _update_row_count(conn::PormGMySQL, settings, sql, parameters) =
 # at its new value: MySQL's single-table UPDATE (measured on 8.4; its multi-table order is unspecified).
 # PostgreSQL and SQLite evaluate every item against the row as it was (#1130,
 # `_refuse_set_reading_assigned`).
-_assigns_set_in_order(::PormGPostgres) = false
-_assigns_set_in_order(::PormGSQLite) = false
-_assigns_set_in_order(::PormGMySQL) = true
+_assigns_set_in_order(@nospecialize(conn::PormGPostgres)) = false
+_assigns_set_in_order(@nospecialize(conn::PormGSQLite)) = false
+_assigns_set_in_order(@nospecialize(conn::PormGMySQL)) = true
 
 # `select_for_update()` takes a real row lock. On SQLite the clause renders `""` (#26), so the guard
 # that exists because of the lock itself — no `distinct()` — does not apply. The transaction
 # requirement is not one of these: it holds on both engines (#1237).
-_locks_rows(::PormGPostgres) = true
-_locks_rows(::PormGSQLite) = false
-_locks_rows(::PormGMySQL) = true   # InnoDB row locks (#1269)
+_locks_rows(@nospecialize(conn::PormGPostgres)) = true
+_locks_rows(@nospecialize(conn::PormGSQLite)) = false
+_locks_rows(@nospecialize(conn::PormGMySQL)) = true   # InnoDB row locks (#1269)
 
 # #1111, #1034 phase 3 step 2a — a `Sum` over an operand the type walk cannot name may not be the
 # integer the operands add up to, so its quotient may keep a fraction an integer quotient drops. Over
 # a type the walk names the sum is rendered as one (`_sums_bigint`); over an unnamed one PostgreSQL's
 # `sum(bigint)` is a `numeric` (`15 / 2` is `7.5`), where SQLite's sum of integers is an integer. The
 # division refusal (`_INTEGER_QUOTIENT_DEPARTURE`) fires on an engine that answers `true`.
-_untyped_sum_departs(::PormGPostgres) = true
-_untyped_sum_departs(::PormGSQLite) = false
+_untyped_sum_departs(@nospecialize(conn::PormGPostgres)) = true
+_untyped_sum_departs(@nospecialize(conn::PormGSQLite)) = false
 # MySQL's `SUM` of integers is a `DECIMAL` whatever their width, and its `/` keeps the fraction
 # (measured on 8.4: `SUM(15) / 2` is `7.5`). A sum the walk names is turned back into the integer
 # (`_sums_integers_as_decimal`); one it cannot name is not, so its quotient departs (#1130 phase 2b).
-_untyped_sum_departs(::PormGMySQL) = true
+_untyped_sum_departs(@nospecialize(conn::PormGMySQL)) = true
 
 # #1310 — the engine picks the meaning of `+`, `-`, `*`, `/` and of an ordering from its operands' own
 # types, so arithmetic or a comparison beside a date, a timestamp or an interval needs no type from
@@ -244,16 +244,16 @@ _untyped_sum_departs(::PormGMySQL) = true
 # interval's text (`'00:01:30' * 2` is `0`, #1301), MySQL on the number a date's digits spell — so PormG
 # writes that SQL for the type, and an operand the type walk cannot name is refused beside one
 # (`_refuse_unnamed_temporal`, `expression_render.jl`).
-_types_temporal_operands(::PormGPostgres) = true
-_types_temporal_operands(::PormGSQLite) = false
-_types_temporal_operands(::PormGMySQL) = false
+_types_temporal_operands(@nospecialize(conn::PormGPostgres)) = true
+_types_temporal_operands(@nospecialize(conn::PormGSQLite)) = false
+_types_temporal_operands(@nospecialize(conn::PormGMySQL)) = false
 
 # `SUM` over an integer is a DECIMAL (MySQL: `SUM(INT)` and `SUM(BIGINT)` alike), so `Dialect.SUM` casts
 # it back to the integer the sum of integers means. PostgreSQL widens only `sum(bigint)` to `numeric`,
 # which `_sums_bigint` handles; SQLite's sum of integers is an integer.
-_sums_integers_as_decimal(::PormGPostgres) = false
-_sums_integers_as_decimal(::PormGSQLite) = false
-_sums_integers_as_decimal(::PormGMySQL) = true
+_sums_integers_as_decimal(@nospecialize(conn::PormGPostgres)) = false
+_sums_integers_as_decimal(@nospecialize(conn::PormGSQLite)) = false
+_sums_integers_as_decimal(@nospecialize(conn::PormGMySQL)) = true
 
 # #1110 — the widest declared decimal (`Cast(x, "numeric(p, s)")`, an `output_field` naming one) the
 # engine hands back WITHOUT applying the declaration, so the read path applies it: the read view records
@@ -270,13 +270,13 @@ _sums_integers_as_decimal(::PormGMySQL) = true
 # casts every integer to its 64-bit `SIGNED`, which wraps or clamps past 64 bits, so every width is
 # guarded. SQLite applies no range below 64 bits and saturates past them, which nothing can detect, so
 # only the 16- and 32-bit casts are.
-_guards_integer_cast(::PormGPostgres, ::Int) = false
-_guards_integer_cast(::PormGSQLite, bits::Int) = bits < 64
-_guards_integer_cast(::PormGMySQL, ::Int) = true
+_guards_integer_cast(@nospecialize(conn::PormGPostgres), ::Int) = false
+_guards_integer_cast(@nospecialize(conn::PormGSQLite), bits::Int) = bits < 64
+_guards_integer_cast(@nospecialize(conn::PormGMySQL), ::Int) = true
 
-_unapplied_decimal_width(::PormGPostgres) = 0
-_unapplied_decimal_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
-_unapplied_decimal_width(::PormGMySQL) = 65
+_unapplied_decimal_width(@nospecialize(conn::PormGPostgres)) = 0
+_unapplied_decimal_width(@nospecialize(conn::PormGSQLite)) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
+_unapplied_decimal_width(@nospecialize(conn::PormGMySQL)) = 65
 
 # #1330 — the widest `DecimalField(max_digits = p, …)` whose assignment the engine leaves unchecked, so an
 # expression `update` writes the value through PormG's width guard (`Dialect.decimal_assignment_guard_sql`);
@@ -285,17 +285,17 @@ _unapplied_decimal_width(::PormGMySQL) = 65
 # nothing. MySQL's strict `sql_mode` refuses it too (error 1264, SQLSTATE 22003). SQLite's NUMERIC
 # affinity stores it, and the #1110 read then raises 22003 on every read of the row; up to
 # `SQLITE_EXACT_DECIMAL_DIGITS` that read applies the width, and a wider field is read unchecked too.
-_unchecked_decimal_assignment_width(::PormGPostgres) = 0
-_unchecked_decimal_assignment_width(::PormGSQLite) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
-_unchecked_decimal_assignment_width(::PormGMySQL) = 0
+_unchecked_decimal_assignment_width(@nospecialize(conn::PormGPostgres)) = 0
+_unchecked_decimal_assignment_width(@nospecialize(conn::PormGSQLite)) = Dialect.SQLITE_EXACT_DECIMAL_DIGITS
+_unchecked_decimal_assignment_width(@nospecialize(conn::PormGMySQL)) = 0
 
 # `Greatest`/`Least` skip a NULL argument natively. SQLite renders the scalar `MAX`/`MIN`, which
 # return NULL when any argument is, so PormG rewrites the operands (#844).
-_greatest_skips_nulls(::PormGPostgres) = true
-_greatest_skips_nulls(::PormGSQLite) = false
+_greatest_skips_nulls(@nospecialize(conn::PormGPostgres)) = true
+_greatest_skips_nulls(@nospecialize(conn::PormGSQLite)) = false
 # MySQL's `GREATEST`/`LEAST` return NULL when any argument is NULL (measured on 8.4: `GREATEST(1, NULL,
 # 3)` is NULL), so the operands are rewritten there too, and MySQL renders its own `GREATEST` over them.
-_greatest_skips_nulls(::PormGMySQL) = false
+_greatest_skips_nulls(@nospecialize(conn::PormGMySQL)) = false
 
 # The bitwise operators (`&`, `|`, `<<`, `>>`, `~`, `xor`) mean the signed integer PostgreSQL and SQLite
 # compute: `~5` is `-6`, and `>>` is arithmetic (`-8 >> 1` is `-4`). MySQL computes every one of them on
@@ -306,28 +306,28 @@ _greatest_skips_nulls(::PormGMySQL) = false
 # count of 64 or more is outside a 64-bit shift, and the engines already differ there: PostgreSQL takes
 # it modulo the operand's width, SQLite shifts every bit out, and on MySQL `1 << 64` is 0, so `<<` gives
 # 0 and the `>>` quotient is NULL.
-_bitwise_sql(::PormGPostgres, op::String, left::AbstractString, right::AbstractString) = "($(left) $(op) $(right))"
-_bitwise_sql(::PormGSQLite, op::String, left::AbstractString, right::AbstractString) = "($(left) $(op) $(right))"
-function _bitwise_sql(::PormGMySQL, op::String, left::AbstractString, right::AbstractString)
+_bitwise_sql(@nospecialize(conn::PormGPostgres), op::String, left::AbstractString, right::AbstractString) = "($(left) $(op) $(right))"
+_bitwise_sql(@nospecialize(conn::PormGSQLite), op::String, left::AbstractString, right::AbstractString) = "($(left) $(op) $(right))"
+function _bitwise_sql(@nospecialize(conn::PormGMySQL), op::String, left::AbstractString, right::AbstractString)
   op == ">>" && return "CAST(FLOOR(CAST($(left) AS DECIMAL(20, 0)) / (1 << $(right))) AS SIGNED)"
   return "CAST(($(left) $(op) $(right)) AS SIGNED)"
 end
-_bitwise_not_sql(::PormGPostgres, operand::AbstractString) = "~($(operand))"
-_bitwise_not_sql(::PormGSQLite, operand::AbstractString) = "~($(operand))"
-_bitwise_not_sql(::PormGMySQL, operand::AbstractString) = "CAST(~($(operand)) AS SIGNED)"
+_bitwise_not_sql(@nospecialize(conn::PormGPostgres), operand::AbstractString) = "~($(operand))"
+_bitwise_not_sql(@nospecialize(conn::PormGSQLite), operand::AbstractString) = "~($(operand))"
+_bitwise_not_sql(@nospecialize(conn::PormGMySQL), operand::AbstractString) = "CAST(~($(operand)) AS SIGNED)"
 # `xor` is PostgreSQL's `#` and MySQL's `^`. SQLite has no operator for it, so it is `(a | b) - (a & b)`,
 # which names each side twice: `sides()` renders both sides afresh on every call, so each parameter is
 # bound where its marker sits.
-function _xor_sql(::PormGPostgres, sides::Function)
+function _xor_sql(@nospecialize(conn::PormGPostgres), sides::Function)
   left, right = sides()
   return "($(left) # $(right))"
 end
-function _xor_sql(::PormGSQLite, sides::Function)
+function _xor_sql(@nospecialize(conn::PormGSQLite), sides::Function)
   left1, right1 = sides()
   left2, right2 = sides()
   return "((($(left1)) | ($(right1))) - (($(left2)) & ($(right2))))"
 end
-function _xor_sql(::PormGMySQL, sides::Function)
+function _xor_sql(@nospecialize(conn::PormGMySQL), sides::Function)
   left, right = sides()
   return "CAST(($(left) ^ $(right)) AS SIGNED)"
 end
@@ -336,25 +336,25 @@ end
 # (`Cast(x, "boolean")`, `output_field = "boolean"`) over booleans or integers is `((x) <> 0)` there,
 # and refused over anything else (`_mysql_declared_output`). PostgreSQL casts to `boolean`; SQLite's
 # declarations take `sqlite_cast_sql`.
-_normalizes_boolean_cast(::PormGPostgres) = false
-_normalizes_boolean_cast(::PormGSQLite) = false
-_normalizes_boolean_cast(::PormGMySQL) = true
+_normalizes_boolean_cast(@nospecialize(conn::PormGPostgres)) = false
+_normalizes_boolean_cast(@nospecialize(conn::PormGSQLite)) = false
+_normalizes_boolean_cast(@nospecialize(conn::PormGMySQL)) = true
 
 # NULL placement is emulated with an `(expr IS NULL)` sort key, because the engine has no
 # `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). The version is the capability table's
 # `:nulls_order` row (#1163); the fact is whether this engine falls back when the row says no.
-_emulates_nulls_order(::PormGPostgres) = false
-_emulates_nulls_order(conn::PormGSQLite) = !_supports(conn, :nulls_order)
+_emulates_nulls_order(@nospecialize(conn::PormGPostgres)) = false
+_emulates_nulls_order(@nospecialize(conn::PormGSQLite)) = !_supports(conn, :nulls_order)
 # MySQL has no `NULLS FIRST`/`NULLS LAST` at any version (measured on 8.4: a syntax error), so it always
 # falls back (#1271). Where the key would hold a projection's alias that a FROM column also names, it
 # holds the projection's SQL instead (#1130, `_projection_null_key`), on every engine that emulates.
-_emulates_nulls_order(::PormGMySQL) = true
+_emulates_nulls_order(@nospecialize(conn::PormGMySQL)) = true
 
 # A list membership (`__@in`) binds the whole list as ONE array parameter (`= ANY($1)`), rather than
 # one placeholder per element.
-_binds_list_as_array(::PormGPostgres) = true
-_binds_list_as_array(::PormGSQLite) = false
-_binds_list_as_array(::PormGMySQL) = false   # no array binding: one `?` per element
+_binds_list_as_array(@nospecialize(conn::PormGPostgres)) = true
+_binds_list_as_array(@nospecialize(conn::PormGSQLite)) = false
+_binds_list_as_array(@nospecialize(conn::PormGMySQL)) = false   # no array binding: one `?` per element
 
 # A whole JSON document compared with a JSON column (`filter("payload" => doc)`, get_or_create's and
 # update_or_create's lookups): the marker the bound document text takes. PostgreSQL types the untyped `$1`
@@ -363,44 +363,44 @@ _binds_list_as_array(::PormGMySQL) = false   # no array binding: one `?` per ele
 # `CAST(doc AS JSON) = ?` is 0 over the same text); `CAST(? AS JSON)` parses it, and then the two compare
 # as `jsonb` does, whatever the key order or `1` against `1.0` (measured, `IN` and `NOT IN` too). A list
 # (`__@in`) is one marker per element, and an empty list stays empty, the membership that matches nothing.
-_json_document_marker(::PormGPostgres, marker::AbstractString) = String(marker)
-_json_document_marker(::PormGSQLite, marker::AbstractString) = String(marker)
-_json_document_marker(::PormGMySQL, marker::AbstractString) =
+_json_document_marker(@nospecialize(conn::PormGPostgres), marker::AbstractString) = String(marker)
+_json_document_marker(@nospecialize(conn::PormGSQLite), marker::AbstractString) = String(marker)
+_json_document_marker(@nospecialize(conn::PormGMySQL), marker::AbstractString) =
   isempty(marker) ? "" : join(("CAST($(m) AS JSON)" for m in split(marker, ", ")), ", ")
 
 # A JSON path lookup extracts TEXT (`#>>`), so a value compared with it binds as text and an ordering
 # casts it to `numeric`. SQLite's `json_extract` keeps the JSON type, so a number stays a number.
-_json_path_extracts_text(::PormGPostgres) = true
-_json_path_extracts_text(::PormGSQLite) = false
+_json_path_extracts_text(@nospecialize(conn::PormGPostgres)) = true
+_json_path_extracts_text(@nospecialize(conn::PormGSQLite)) = false
 # MySQL reads the value as text too (`Dialect._json_extract_expr`), as PostgreSQL does (#1130 phase 5b).
-_json_path_extracts_text(::PormGMySQL) = true
+_json_path_extracts_text(@nospecialize(conn::PormGMySQL)) = true
 
 # What a JSON path lookup's ordering comparison (`@gt`, `@lte`, …) compares with the bound number. As
 # text on PostgreSQL, so it is cast to `numeric`; SQLite's value keeps its JSON type. MySQL compares
 # text with a number as a double (measured on 8.4: `'15' >= 10`, `'2.5' < 10`, a 39-digit integer above
 # it), so its text is compared bare. Outside the meaning, a key that holds non-numeric text: PostgreSQL
 # raises, SQLite ranks text above every number, and MySQL reads the text as 0.
-_json_numeric_operand(::PormGPostgres, column::AbstractString) = "($(column))::numeric"
-_json_numeric_operand(::PormGSQLite, column::AbstractString) = String(column)
-_json_numeric_operand(::PormGMySQL, column::AbstractString) = String(column)
+_json_numeric_operand(@nospecialize(conn::PormGPostgres), column::AbstractString) = "($(column))::numeric"
+_json_numeric_operand(@nospecialize(conn::PormGSQLite), column::AbstractString) = String(column)
+_json_numeric_operand(@nospecialize(conn::PormGMySQL), column::AbstractString) = String(column)
 
 # #1324 — the spelling of a duration's seconds, which the refusal of a number function over a duration
 # names (`_duration_math_refusal`): `EPOCH` reads them on PostgreSQL, and on MySQL as the count of
 # microseconds over 10^6. SQLite has no `EPOCH` part, so the refusal there names none.
-_duration_seconds_spelling(::PormGPostgres) = "Extract(d, \"epoch\")"
-_duration_seconds_spelling(::PormGSQLite) = nothing
-_duration_seconds_spelling(::PormGMySQL) = "Extract(d, \"epoch\")"
+_duration_seconds_spelling(@nospecialize(conn::PormGPostgres)) = "Extract(d, \"epoch\")"
+_duration_seconds_spelling(@nospecialize(conn::PormGSQLite)) = nothing
+_duration_seconds_spelling(@nospecialize(conn::PormGMySQL)) = "Extract(d, \"epoch\")"
 
 # #1387 — whether `Extract(x, "epoch")` reads the seconds of a date, a timestamp or a time, which the
 # refusal of a number function over one names (`_non_number_math_refusal`). PostgreSQL reads all three
 # (a time's seconds since midnight); MySQL a date's and a timestamp's, and refuses a time's
 # (`Dialect.EXTRACT`); SQLite has no `EPOCH` part.
-_extracts_epoch_of(::PormGPostgres, ::Union{CDate,CDateTime,CTime}) = true
-_extracts_epoch_of(::PormGSQLite, ::Union{CDate,CDateTime,CTime}) = false
-_extracts_epoch_of(::PormGMySQL, ::Union{CDate,CDateTime}) = true
-_extracts_epoch_of(::PormGMySQL, ::CTime) = false
+_extracts_epoch_of(@nospecialize(conn::PormGPostgres), ::Union{CDate,CDateTime,CTime}) = true
+_extracts_epoch_of(@nospecialize(conn::PormGSQLite), ::Union{CDate,CDateTime,CTime}) = false
+_extracts_epoch_of(@nospecialize(conn::PormGMySQL), ::Union{CDate,CDateTime}) = true
+_extracts_epoch_of(@nospecialize(conn::PormGMySQL), ::CTime) = false
 
 # What `inspect_query` reports as the `:dialect` and the `:bucketing` of the parameters.
-_inspection_dialect(::PormGPostgres) = (:postgresql, :numbered)
-_inspection_dialect(::PormGSQLite) = (:sqlite, :positional)
-_inspection_dialect(::PormGMySQL) = (:mysql, :positional)
+_inspection_dialect(@nospecialize(conn::PormGPostgres)) = (:postgresql, :numbered)
+_inspection_dialect(@nospecialize(conn::PormGSQLite)) = (:sqlite, :positional)
+_inspection_dialect(@nospecialize(conn::PormGMySQL)) = (:mysql, :positional)

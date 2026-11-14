@@ -176,19 +176,19 @@ _operand_domain(::Val{:SUM}) = (:number, :interval)   # #1324: the total of the 
 # other `:promoting` functions render on PostgreSQL over a non-integer (`_computed_kind`, `expression_kind.jl`). PostgreSQL
 # widens `sum(smallint|integer)` to `bigint` and `sum(bigint)` to `numeric`, which PormG casts back to
 # the `bigint` (#1147 step 2, `_sums_bigint`): the sum of integers is an integer on every engine.
-_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = CInt64()
-_computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, ::PormGPostgres) = CDecimal(nothing, nothing)
-_computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
-_computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGPostgres) = nothing
-_computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGSQLite) = k
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGPostgres)) = CInt64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, @nospecialize(conn::PormGPostgres)) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:SUM}, ::Symbol, k::Union{CFloat64,CInterval}, @nospecialize(conn::PormGPostgres)) = k
+_computed_kind(::Val{:SUM}, ::Symbol, ::Any, @nospecialize(conn::PormGPostgres)) = nothing
+_computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, @nospecialize(conn::PormGSQLite)) = k
 # MySQL (#1130): the sum of integers is a DECIMAL there, turned back into a `BIGINT` (`x DIV 1`) by the
 # build (`_sums_integers_as_decimal`); a DECIMAL sums to a DECIMAL and a DOUBLE to a DOUBLE. A duration
 # is the microseconds it stores, summed to a DECIMAL that reads back as the interval it is.
-_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = CInt64()
-_computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, ::PormGMySQL) = CDecimal(nothing, nothing)
-_computed_kind(::Val{:SUM}, ::Symbol, ::CFloat64, ::PormGMySQL) = CFloat64()
-_computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, ::PormGMySQL) = k
-_computed_kind(::Val{:SUM}, ::Symbol, ::Any, ::PormGMySQL) = nothing
+_computed_kind(::Val{:SUM}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGMySQL)) = CInt64()
+_computed_kind(::Val{:SUM}, ::Symbol, ::CDecimal, @nospecialize(conn::PormGMySQL)) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:SUM}, ::Symbol, ::CFloat64, @nospecialize(conn::PormGMySQL)) = CFloat64()
+_computed_kind(::Val{:SUM}, ::Symbol, k::CInterval, @nospecialize(conn::PormGMySQL)) = k
+_computed_kind(::Val{:SUM}, ::Symbol, ::Any, @nospecialize(conn::PormGMySQL)) = nothing
 
 """
     Avg(x; distinct::Bool = false)
@@ -224,17 +224,17 @@ _result_rule(::Val{:AVG}) = :numeric
 _operand_domain(::Val{:AVG}) = (:number, :interval)   # #1324: the mean duration
 # `AVG` renders bare too: PostgreSQL averages a `double precision` to one and an interval to an
 # interval, and every other number to a `numeric`. SQLite answers a REAL, but an interval stays one.
-_computed_kind(::Val{:AVG}, ::Symbol, k::Union{CFloat64,CInterval}, ::PormGPostgres) = k
-_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, ::PormGPostgres) = CDecimal(nothing, nothing)
-_computed_kind(::Val{:AVG}, ::Symbol, ::Any, ::PormGPostgres) = nothing
-_computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, ::PormGSQLite) = k
+_computed_kind(::Val{:AVG}, ::Symbol, k::Union{CFloat64,CInterval}, @nospecialize(conn::PormGPostgres)) = k
+_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, @nospecialize(conn::PormGPostgres)) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:AVG}, ::Symbol, ::Any, @nospecialize(conn::PormGPostgres)) = nothing
+_computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, @nospecialize(conn::PormGSQLite)) = k
 # MySQL (#1130) averages a DOUBLE to a DOUBLE and an integer or a DECIMAL to a DECIMAL, which the read
 # parser turns into the float or decimal the call means (#1121); a duration's microseconds to the
 # interval, rounded to a whole microsecond as SQLite rounds its milliseconds.
-_computed_kind(::Val{:AVG}, ::Symbol, ::CFloat64, ::PormGMySQL) = CFloat64()
-_computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, ::PormGMySQL) = k
-_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, ::PormGMySQL) = CDecimal(nothing, nothing)
-_computed_kind(::Val{:AVG}, ::Symbol, ::Any, ::PormGMySQL) = nothing
+_computed_kind(::Val{:AVG}, ::Symbol, ::CFloat64, @nospecialize(conn::PormGMySQL)) = CFloat64()
+_computed_kind(::Val{:AVG}, ::Symbol, k::CInterval, @nospecialize(conn::PormGMySQL)) = k
+_computed_kind(::Val{:AVG}, ::Symbol, ::Union{CInt16,CInt32,CInt64,CDecimal}, @nospecialize(conn::PormGMySQL)) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:AVG}, ::Symbol, ::Any, @nospecialize(conn::PormGMySQL)) = nothing
 """
   Count(x; distinct::Bool = false)
 
@@ -1521,10 +1521,10 @@ end
 _result_rule(::Val{:ABS}) = :promoting
 _operand_domain(::Val{:ABS}) = (:number,)   # #900, #1324: a duration has no absolute value
 # #1147: over an integer PostgreSQL's own `abs(int2|int4|int8)` renders, which keeps its type.
-_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGPostgres)) = k
 # #1130: so does MySQL's `ABS` over a column (an `INT` stays an `INT`, measured on 8.4); over another
 # integer expression `Dialect.ABS` adds `+ 0`, a `BIGINT`, which this names as the integer it is.
-_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = k
+_computed_kind(::Val{:ABS}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGMySQL)) = k
 
 """
     Round(column, precision=0)
@@ -1569,12 +1569,12 @@ _operand_domain(::Val{:ROUND}) = (:number,)   # #1324
 # Django's `Round` (a `Transform`) does: a rounded float is a float, a rounded decimal a decimal.
 _output_kind(::Val{:ROUND}, ::Symbol, ks) = _operand_meaning(first(ks))
 # #1196: over an integer `Dialect.ROUND` renders that integer on both engines (`integer_kind`).
-_computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
-_computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGSQLite) = _sqlite_number_kind(k)
+_computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGPostgres)) = k
+_computed_kind(::Val{:ROUND}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGSQLite)) = _sqlite_number_kind(k)
 # #1130: MySQL's `ROUND` over an integer is a `BIGINT`; over anything else `Dialect.ROUND` rounds a
 # DECIMAL (the operand itself, or cast to one), so it is a decimal whatever the operand.
-_computed_kind(::Val{:ROUND}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, ::PormGMySQL) = CInt64()
-_computed_kind(::Val{:ROUND}, ::Symbol, ::Any, ::PormGMySQL) = CDecimal(nothing, nothing)
+_computed_kind(::Val{:ROUND}, ::Symbol, ::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGMySQL)) = CInt64()
+_computed_kind(::Val{:ROUND}, ::Symbol, ::Any, @nospecialize(conn::PormGMySQL)) = CDecimal(nothing, nothing)
 
 """
     NullIf(field1, field2)
@@ -1781,7 +1781,7 @@ _result_rule(::Val{:FLOOR}) = :promoting
 _operand_domain(::Val{:FLOOR}) = (:number,)   # #1324
 # #1147: PostgreSQL has no `floor(integer)`, so over an integer it renders `FLOOR((x)::numeric)` cast back
 # to the operand's type (`Dialect.FLOOR`): the integer it was.
-_computed_kind(::Val{:FLOOR}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:FLOOR}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGPostgres)) = k
 
 """
     Ceil(column)
@@ -1797,7 +1797,7 @@ end
 _result_rule(::Val{:CEIL}) = :promoting
 _operand_domain(::Val{:CEIL}) = (:number,)   # #1324
 # #1147: as `Floor`'s, cast back to the operand's type (`Dialect.CEIL`).
-_computed_kind(::Val{:CEIL}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, ::PormGPostgres) = k
+_computed_kind(::Val{:CEIL}, ::Symbol, k::Union{CInt16,CInt32,CInt64}, @nospecialize(conn::PormGPostgres)) = k
 
 
 

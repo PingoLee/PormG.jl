@@ -104,7 +104,7 @@ end
 # puts them (first in ascending order), not where PormG's placement says. On SQLite that exit is only
 # taken before 3.30; on MySQL it would be every such term, so it is refused here, before the shared
 # arm. A projection ordered by its alias renders no `?` and keeps the placement.
-function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, conn::PormGMySQL;
+function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, @nospecialize(conn::PormGMySQL);
                          null_flag::Union{Nothing,AbstractString} = nothing)
   null_flag === nothing && occursin('?', string(expr)) && throw(_capability_error(conn, :nulls_order,
     "Ordering by an expression that binds a value";
@@ -386,13 +386,13 @@ end
 # A no-op on PostgreSQL apart from the `$N` numbering, which travels with the text.
 # #1611: the window renderers by name, as explicit branches over the eight names the constructors build
 # (`getfield(Dialect, Symbol(name))` was a binding looked up at run time). One function per call shape.
-function _window_no_column_sql(name::String, over::String, conn::_SQLEngine)
+function _window_no_column_sql(name::String, over::String, @nospecialize(conn::_SQLEngine))
   name == "RANK" && return Dialect.RANK(over, conn)
   name == "DENSE_RANK" && return Dialect.DENSE_RANK(over, conn)
   name == "ROW_NUMBER" && return Dialect.ROW_NUMBER(over, conn)
   throw(QueryBuildError("$(name) requires a column argument; got nothing"))
 end
-function _window_column_sql(name::String, column::String, over::String, conn::_SQLEngine)
+function _window_column_sql(name::String, column::String, over::String, @nospecialize(conn::_SQLEngine))
   name == "FIRST_VALUE" && return Dialect.FIRST_VALUE(column, over, conn)
   name == "LAST_VALUE" && return Dialect.LAST_VALUE(column, over, conn)
   throw(QueryBuildError("The window function $(name) takes no column argument."))
@@ -700,7 +700,7 @@ function _check_temporal_expression(v::FObject, row::_TemporalRow, part::String,
 end
 # The reason holds on every engine; the spelling it names is the engine's (`_duration_seconds_spelling`).
 # A clock part has a reading on some engine, just not one meaning; a `TIMEZONE` part has none.
-function _duration_part_refusal(label::String, what::String, conn)
+function _duration_part_refusal(label::String, what::String, @nospecialize(conn))
   spelling = _duration_seconds_spelling(conn)
   remedy = spelling === nothing ? "$(_backend_name(conn)) has no spelling for a duration's seconds." :
     "For a duration's seconds, write $(spelling)."
@@ -835,7 +835,7 @@ _text_operand_advice(operand) = operand isa SQLText ?
 # bag and is called with its typed arguments (`Substr`, #1332); the rest are handed their options as
 # `Dialect.FnOptions`, built here from the resolved `kwargs` (#1610): the one place the string-keyed
 # bag becomes typed slots, so no renderer reads a key.
-function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, conn::_SQLEngine)
+function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, @nospecialize(conn::_SQLEngine))
   name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
   return _dialect_function_sql(name, column, Dialect.FnOptions(kwargs), conn)
 end
@@ -862,7 +862,7 @@ const _FN_OPTIONS_RENDERERS = let found = String[]
   Tuple(sort!(found))
 end
 let arms = [:(name == $s && return Dialect.$(Symbol(s))(column, opts, conn)) for s in _FN_OPTIONS_RENDERERS]
-  @eval function _dialect_function_sql(name::AbstractString, column, opts::Dialect.FnOptions, conn::_SQLEngine)
+  @eval function _dialect_function_sql(name::AbstractString, column, opts::Dialect.FnOptions, @nospecialize(conn::_SQLEngine))
     $(arms...)
     throw(QueryBuildError("No SQL function renderer is named $(name)."))
   end
@@ -1239,7 +1239,7 @@ _declared_output_function(v::SQLTypeFunction)::Bool =
 # #1356, #1405 — the integer type a `Cast` or a declared `output_field` names, where this engine's own cast
 # does not apply that integer's range (`_guards_integer_cast`), or `nothing`: any other type, and an engine
 # whose cast is the meaning.
-function _guarded_integer_type(v::SQLTypeFunction, conn::_SQLEngine)::Union{String,Nothing}
+function _guarded_integer_type(v::SQLTypeFunction, @nospecialize(conn::_SQLEngine))::Union{String,Nothing}
   v isa FObject || return nothing
   type = _declared_cast(v)
   (type isa AbstractString && !isempty(type)) || return nothing

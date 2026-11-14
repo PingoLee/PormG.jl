@@ -1,4 +1,5 @@
-# The juliac --trim entry of the fixture app (#1616, #1599): boot, one write, one typed read.
+# The juliac --trim entry of the fixture app (#1616, #1599): boot, two refused writes, one write, one
+# typed read.
 #   JIT:  julia --project=test/trim test/trim/main.jl <run dir>
 #   exe:  <build dir>/main <run dir>         (see README.md)
 # The steps and their output are in `steps.jl`, shared with the read-only entry `read.jl`.
@@ -9,6 +10,7 @@ function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
     dir = start_step(args)
     boot_step(dir) || return Cint(1)
+    refused_step() || return Cint(6)
     try
         M.Race.objects.create("year" => 2009, "round" => 6, "circuitid" => 1,
                               "name" => "Monaco Grand Prix", "date" => Date(2009, 5, 24))

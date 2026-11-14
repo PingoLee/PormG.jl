@@ -1234,8 +1234,24 @@ function _pattern_operand(@nospecialize(column0::AbstractString), @nospecialize(
       "Error in filter '$(label)': a pattern lookup (`@contains`, `@startswith`, `@regex`, …) matches " *
       "text, and this is $(what). $(instead)$(cast) (#1183)."))
   end
-  return Dialect._pattern_text_operand(instruc.connection, Val(kind), column)
+  return _pattern_text_operand_at(instruc.connection, kind, column)
 end
+
+# #1599 group 3: the kind is a run-time `Symbol`, so `Val(kind)` named no method the compiler could see,
+# and the call was a dynamic one. One arm per kind the Dialect methods take, each with a literal `Val`,
+# so each is a static call over the engine union; any other kind builds its `Val` as before, behind
+# `@noinline`, and gets the same method or the same `MethodError`.
+function _pattern_text_operand_at(@nospecialize(conn::ConnType), kind::Symbol, column::String)
+  kind === :integer && return Dialect._pattern_text_operand(conn, Val(:integer), column)
+  kind === :date && return Dialect._pattern_text_operand(conn, Val(:date), column)
+  kind === :time && return Dialect._pattern_text_operand(conn, Val(:time), column)
+  kind === :uuid && return Dialect._pattern_text_operand(conn, Val(:uuid), column)
+  kind === :inet && return Dialect._pattern_text_operand(conn, Val(:inet), column)
+  kind === :cidr && return Dialect._pattern_text_operand(conn, Val(:cidr), column)
+  return _pattern_text_operand_open(conn, kind, column)
+end
+@noinline _pattern_text_operand_open(@nospecialize(conn), kind::Symbol, column::String) =
+  Dialect._pattern_text_operand(conn, Val(kind), column)
 
 # The formatter a filter value goes through. A pattern lookup's value is a FRAGMENT of the column's
 # text — of an address (`"10.20."`), a UUID (`"550e"`), a date (`"2009"`), a `"YYYY-MM"` label — which

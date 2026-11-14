@@ -144,8 +144,8 @@ end
 function _refuse_explain_options(connection, analyze::Bool, buffers::Bool, verbose::Bool)
   (analyze || buffers || verbose) || return nothing
   requested = join([name for (name, on) in (("analyze", analyze), ("buffers", buffers), ("verbose", verbose)) if on], ", ")
-  throw(_capability_error(connection, :explain_options, "explain($(requested) = true)";
-                           why = "Call explain() without them for the plan this backend gives."))
+  throw(Dialect._capability_error_at(connection, :explain_options, "explain($(requested) = true)",
+                                     "Call explain() without them for the plan this backend gives."))
 end
 function _explain_sql(connection::PormGSQLite, sql::AbstractString; analyze::Bool, buffers::Bool, verbose::Bool)
   _refuse_explain_options(connection, analyze, buffers, verbose)

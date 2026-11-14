@@ -361,7 +361,8 @@ function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwar
     # #696: `output_field` becomes the bind cast `$n::<type>` here — a fourth place the type string
     # reaches the SQL text. The dialect helper validates it and gives the engine's spelling.
     _casts_bind_parameters(instruc.connection) || return nothing
-    declared = Dialect.cast_type_sql(output_field, instruc.connection; context="output_field")
+    # #1599 group 3: the type name read from the keyword dictionary, at its type (`_cast_type_sql_at`).
+    declared = _cast_type_sql_at(output_field, instruc.connection, "output_field")
     # #1222: a `Case`'s literal default binds as the type of its branches, not of the cast.
     if key == "else"
       branch_type = _case_default_bind_type(v, value, instruc)

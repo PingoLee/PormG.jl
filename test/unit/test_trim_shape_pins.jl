@@ -3186,6 +3186,108 @@ end
     end
   end
 
+  # What: group 3's second half: the capability lookups the query builder makes, and the Dialect calls a
+  #   value left dynamic (#1599 layer 5, group 3).
+  # Expected:
+  #   - the three Dialect barriers reach a pool PormG builds at its concrete type through `with_pool`
+  #     (a static call per pool type) and keep exactly one dynamic call, for anything else;
+  #   - every capability lookup in src/querybuilder/ goes through them, except the write path's
+  #     (execution_write.jl and execution_bulk.jl, not scanned, the bulk key allocation fact and the
+  #     deferred-foreign-key delete check; layer 7, #1694) and `_require_outer_join_feature`'s, which walks
+  #     to the pool itself (#1784);
+  #   - the run-time `Val`, the cast's type name, the full-text configuration and NTH_VALUE's column are
+  #     typed at the call site (no dynamic call in the helpers), `_pattern_text_operand` and `SUBSTR`
+  #     take the engine `@nospecialize`;
+  #   - every answer, render and refusal equals the direct call's.
+  # Why: inside a function that holds the instruction the connection is a union of abstract engine
+  #   types, and the capability table specializes on it (#1682), so each lookup was a dynamic call: about
+  #   27 verifier rows on each fixture, and with a barrier alone, still one dynamic call at run time.
+  @testset "the query builder's capability lookups reach the pool's concrete type, and its Dialect values are typed (#1599 layer 5, group 3)" begin
+    QB = PormG.QueryBuilder; D = PormG.Dialect; K = PormG.Kernel; CP = PormG.ConnectionPool
+    # 1. The barriers: one dynamic call each (the open arm, for a value that is no engine); an engine
+    #    goes through `with_pool`, whose closed set calls the table at each concrete pool (pinned by the
+    #    #1622 testset), where the lookup makes no dynamic call (#1682).
+    for (f, tt) in ((D._supports_at, (Any, Symbol)), (D._capability_error_at, (Any, Symbol, String)),
+                    (D._capability_error_at, (Any, Symbol, String, String)),
+                    (D._require_feature_at, (Any, Symbol, String)))
+      @test length(_dynamic_calls(f, tt)) == 1
+    end
+    dialect_src = read(joinpath(pkgdir(PormG), "src", "Dialect.jl"), String)
+    @test count("conn isa _SQLEngine && return with_pool(", dialect_src) == 4
+    @test isempty(_dynamic_calls(K._supports, (CP.SQLiteConnectionPool, Symbol)))
+    # 2. No bare capability lookup left in the query builder but the write path's, and
+    #    `_require_outer_join_feature`'s (its own `with_pool` walk). Each exemption names its line.
+    reviewed = ("engine_facts.jl" => "_capability_error(conn, :preallocated_keys",
+                "deletion.jl" => "_supports(connection, :deferred_foreign_keys)",
+                "deletion.jl" => "_capability_error(connection, :deferred_foreign_keys",
+                "build_query.jl" => "_require_feature_on(pool, feature::Symbol, what::String)::Nothing = _require_feature(pool, feature, what)",
+                "build_query.jl" => "return _require_feature(conn, feature, what)")
+    bare = String[]
+    for f in sort(readdir(joinpath(pkgdir(PormG), "src", "querybuilder"); join = true))
+      endswith(f, ".jl") || continue
+      (endswith(f, "execution_write.jl") || endswith(f, "execution_bulk.jl")) && continue   # layer 7, #1694
+      lines = split(read(f, String), '\n')
+      for (i, l) in enumerate(lines)
+        s = strip(l); startswith(s, "#") && continue
+        occursin(r"(?<![\w.])(?:(?:PormG|Kernel)\.)?(_supports|_capability_error|_require_feature)\(", l) || continue
+        any(r -> endswith(f, r.first) && occursin(r.second, l), reviewed) && continue
+        push!(bare, "$(basename(f)):$(i): $(s)")
+      end
+    end
+    @test bare == String[]
+    # 3. The value sites, typed: no dynamic call in the helpers, and the Dialect methods despecialized.
+    @test isempty(_dynamic_calls(QB._pattern_text_operand_at, (QB.ConnType, Symbol, String)))
+    @test isempty(_dynamic_calls(QB._cast_type_sql_at, (AbstractString, QB.ConnType, String)))
+    @test isempty(_dynamic_calls(QB._ts_vector_sql_at, (String, Any, QB.ConnType)))
+    @test isempty(_dynamic_calls(QB._emulates_nulls_order, (K.PormGSQLite,)))
+    @test isempty(_dynamic_calls(c -> PormG.Dialect.SUBSTR(Any["t.a", 2], c), (K._SQLEngine,)))
+    # NTH_VALUE's typed arm (`_get_select_query(::WindowFunction)`): a `String` column and an `Int` n.
+    @test isempty(_dynamic_calls(c -> PormG.Dialect.NTH_VALUE("t.a", 2, "ORDER BY x", c), (QB.ConnType,)))
+    @test occursin("resolved_column isa String && n isa Int &&",
+                   read(joinpath(pkgdir(PormG), "src", "querybuilder", "select_nodes.jl"), String))
+    # the dynamic calls that take the engine (argument 2 of the method's code: the function is argument 1)
+    dyn_in(ci) = [string(s) for s in ci.code if s isa Expr && s.head === :call &&
+                  !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin) && Core.Argument(2) in s.args[2:end]]
+    for m in methods(D._pattern_text_operand)
+      @test m.nospecialize & 1 == 1   # the engine is the first argument
+      # and the body, at its declared types, passes the engine to no dynamic call (it refuses through the
+      # barrier, not the table directly)
+      @test (m.sig, [c for (ci, _) in Base.code_typed_by_type(m.sig; optimize = true) for c in
+                     dyn_in(ci)]) == (m.sig, String[])
+    end
+    for m in methods(D.SUBSTR)
+      @test m.nospecialize & 2 == 2   # and SUBSTR's second
+    end
+    # 4. The same answers, renders and refusals as the direct calls.
+    pg, sl, my = _TspStandInPGPool(), _TspStandInPool(), _TspStandInMyPool()
+    real = CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+    function outcome(f)
+      try
+        return (:ok, f())
+      catch e
+        return (:err, typeof(e), sprint(showerror, e))
+      end
+    end
+    for c in (pg, sl, my, real), feat in (:full_text_search, :network_types, :nulls_order,
+                                           :negative_round_precision, :window_groups_frame, :explain_options)
+      @test D._supports_at(c, feat) == K._supports(c, feat)
+      @test outcome(() -> sprint(showerror, D._capability_error_at(c, feat, "what", "why text"))) ==
+            outcome(() -> sprint(showerror, K._capability_error(c, feat, "what"; why = "why text")))
+    end
+    @test outcome(() -> D._supports_at(nothing, :full_text_search)) == outcome(() -> K._supports(nothing, :full_text_search))
+    for c in (pg, sl, my), kind in (:integer, :date, :time, :uuid, :inet, :cidr, :text)
+      @test outcome(() -> QB._pattern_text_operand_at(c, kind, "t.a")) ==
+            outcome(() -> D._pattern_text_operand(c, Val(kind), "t.a"))
+    end
+    for c in (pg, sl, my), t in ("integer", "varchar(10)", "date[]", "nope"), ctx in ("Cast", "output_field")
+      @test outcome(() -> QB._cast_type_sql_at(t, c, ctx)) == outcome(() -> D.cast_type_sql(t, c; context = ctx))
+      @test outcome(() -> QB._cast_type_sql_at(SubString(t), c, ctx)) == outcome(() -> D.cast_type_sql(SubString(t), c; context = ctx))
+    end
+    for c in (pg, sl, my), cfg in ("english", nothing, :simple)
+      @test outcome(() -> QB._ts_vector_sql_at("t.a", cfg, c)) == outcome(() -> D.ts_vector_sql("t.a", cfg, c))
+    end
+  end
+
   # What: `SQLField.field` (#1698 phase 2, first slice): the closed set of what it holds (`FieldPartNode`)
   #   and the walk it is read through (`with_field_part`).
   # Expected: the slot is still typed `FieldPart` (its members are defined after `SQLField`); every

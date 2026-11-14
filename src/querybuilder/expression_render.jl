@@ -842,9 +842,9 @@ function _duration_units(@nospecialize(p), @nospecialize(conn))::Int64
     _period_nanoseconds(period)
   catch e
     e isa InvalidValueError || rethrow()
-    throw(_capability_error(conn, :calendar_intervals, "A duration of months or years in interval arithmetic";
-                            why = "An interval is a number of $(_interval_unit_name(conn)) there, and a month " *
-                                  "has no fixed length. Use weeks, days or a time: Day(30), Hour(1)."))
+    throw(Dialect._capability_error_at(conn, :calendar_intervals, "A duration of months or years in interval arithmetic",
+                                       "An interval is a number of $(_interval_unit_name(conn)) there, and a month " *
+                                       "has no fixed length. Use weeks, days or a time: Day(30), Hour(1)."))
   end
   return _ns_to_units(ns, _interval_unit_ns(conn))
 end

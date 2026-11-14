@@ -517,12 +517,12 @@ end
 # address is never printed (#971).
 function add_parameter!(instruc::SQLInstruction, value::Union{Sockets.IPAddr,AbstractVector};
                         contains::Bool=false, operator::String="", sql_type::Union{Nothing,String}=nothing)
-  if !_supports(instruc.connection, :network_types) && (value isa Sockets.IPAddr || any(x -> x isa Sockets.IPAddr, value))
-    throw(_capability_error(instruc.connection, :network_types,
+  if !Dialect._supports_at(instruc.connection, :network_types) && (value isa Sockets.IPAddr || any(x -> x isa Sockets.IPAddr, value))
+    throw(Dialect._capability_error_at(instruc.connection, :network_types,
       "A `Sockets.$(value isa Sockets.IPAddr ? nameof(typeof(value)) : :IPAddr)` literal " *
-      "(a `Value(ip\"…\")`, a function operand or a `Case` branch)";
-      why = "PormG refuses it rather than bind its text, which would not compare as an address; " *
-            "pass `string(address)` if you only need the text."))
+      "(a `Value(ip\"…\")`, a function operand or a `Case` branch)",
+      "PormG refuses it rather than bind its text, which would not compare as an address; " *
+      "pass `string(address)` if you only need the text."))
   end
   return with_collector(_add_parameter_on, instruc.parameters, value, contains, operator, sql_type)::String
 end

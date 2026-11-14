@@ -2633,7 +2633,7 @@ function _close_driver_handle!(pool::_SQLEngine, @nospecialize(conn);
     Threads.@spawn begin
       # `_wait_settled` polls on its own Timer and never touches the driver, so a connection whose
       # work never drains costs a bounded wait rather than a wedged task.
-      _wait_settled(() -> _sqlite_outstanding(conn) == 0, close_seconds)
+      _wait_settled(_sqlite_drained_probe(conn), close_seconds)
       # A deferred task: the latest world, see `_call_latest`.
       try
         _with_handle(_handle_close_latest, pool, conn)
@@ -3322,6 +3322,14 @@ function _settle_probe(@nospecialize(handle))
   end
   return () -> settled[]
 end
+
+# "Has the global worker finished every statement it has for `conn`?" (#327), as a probe for
+# `_wait_settled`. Built here, where `conn` is an unspecialized argument, so the probe's type does not
+# depend on the handle's (#1599 layer 2). Built inside the deferred close's task, from a capture with
+# no inferred type, the closure's type was computed from the handle at run time
+# (`#87#88{SQLite.DB}`), and a `juliac --trim` image had no `timedwait` for it: the task died at that
+# call, and the handle was never closed.
+_sqlite_drained_probe(@nospecialize(conn)) = () -> _sqlite_outstanding(conn) == 0
 
 # Bounded, non-throwing settle wait. `timedwait` polls the predicate on its own Timer and never
 # touches the driver, so a handle that never settles costs a bounded wait rather than a wedged

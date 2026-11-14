@@ -928,6 +928,40 @@ end
     end
   end
 
+  # What: the deferred SQLite close (#327), the task that closes a handle once the worker has finished
+  #   every statement it still holds for it (#1599 layer 2).
+  # Expected: the task waits through `_wait_settled(_sqlite_drained_probe(conn), close_seconds)`; the probe
+  #   has one concrete type with no parameters, the same for any handle, and answers whether the ledger
+  #   holds work for that handle; `_wait_settled` over it makes no dynamic call.
+  # Why: the task built its probe as `() -> _sqlite_outstanding(conn) == 0`, capturing `conn` from the task's
+  #   own untyped field, so the closure's type was computed from the handle at run time
+  #   (`#87#88{SQLite.DB}`). A `juliac --trim` image had no `timedwait` for that type: the task died at the
+  #   call and the handle was never closed (the read-only fixture's `tasks` run: still open after 60 s).
+  @testset "the deferred SQLite close waits on a probe whose type does not depend on the handle (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    i = findfirst("function _close_driver_handle!(", src)
+    @test i !== nothing
+    j = findnext("\nend\n", src, last(i))
+    @test occursin("_wait_settled(_sqlite_drained_probe(conn), close_seconds)", src[first(i):last(j)])
+
+    db = SQLite.DB()
+    p = CP._sqlite_drained_probe(db)
+    @test typeof(p) === typeof(CP._sqlite_drained_probe(:not_a_handle))
+    @test isconcretetype(typeof(p)) && isempty(typeof(p).parameters)
+    @test p() === true
+    CP._sqlite_pending_inc!(db)
+    try
+      @test p() === false
+    finally
+      CP._sqlite_pending_dec!(db)
+    end
+    @test p() === true
+    @test isempty(_dynamic_calls(CP._wait_settled, (typeof(p), Float64)))
+    @test CP._wait_settled(p, 1.0) === true
+    close(db)
+  end
+
   # What: the SQLite extension's statement parameters, its typed read's cursor and its retry's lock check
   #   (#1599 layer 2).
   # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`

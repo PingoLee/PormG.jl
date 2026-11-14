@@ -636,6 +636,59 @@ end
   @test rebuilt.options == PGExt._SESSION_OPTIONS
 end
 
+# What: the keywords each typed connect arm (`_dial_keywords`) hands `Postgres.Connection`, for the four
+#   shapes `_dial` types (a password or none, an `sslmode` or none, `options` always set), read from real
+#   connection strings through `_checked_params` and `_with_session_options` as `_open_connection` does.
+# Expected: the keywords are exactly `ConnectionParams`' fields with the params' values, plus `style`,
+#   which is what Postgres.jl's own `DBInterface.connect(Connection, params)` passes; every keyword is
+#   one the constructor declares; and the fields `_dial` types (`password`, `options`, `sslmode`) plus
+#   the ones it requires unset (`_DIAL_UNSET`) are every optional field of `ConnectionParams`. `_dial`
+#   hands each of the five the typed arm with the params' own values, and a string that sets a field of
+#   `_DIAL_UNSET` the driver's connect; and that connect is still the plain keyword call the arms copy.
+# Why: `_dial` makes the driver's keyword call itself, at concrete types, because the driver's call was a
+#   `MethodError` in a trimmed build (#1599 layer 2). An arm that dropped or changed a value would connect
+#   differently, and an optional field added upstream must fail here rather than be dropped.
+@testset "each typed connect arm passes what the driver's connect passes (#1599)" begin
+  CParams = Postgres.ConnectionParams
+  optional = Set(f for f in fieldnames(CParams) if fieldtype(CParams, f) isa Union)
+  @test optional == Set((:password, :options, :sslmode, PGExt._DIAL_UNSET...))
+  declared = Set(Iterators.flatten(Base.kwarg_decl(m) for m in methods(Postgres.Connection)))
+  shapes = 0
+  for dsn in ("host=h port=6543 user=u password=p dbname=d", "host=h user=u dbname=d",
+              "host=h user=u password=p dbname=d sslmode=require", "host=h user=u dbname=d sslmode=disable",
+              "host=h user=u password=p dbname=d options='-c search_path=f1'")
+    p = PGExt._with_session_options(PGExt._checked_params(dsn))
+    @test p.options isa String && all(f -> getfield(p, f) === nothing, PGExt._DIAL_UNSET)
+    kw = PGExt._dial_keywords(p, p.password, p.options, p.sslmode)
+    @test Set(keys(kw)) == Set((fieldnames(CParams)..., :style))
+    @test issubset(keys(kw), declared)
+    @test all(f -> isequal(kw[f], getfield(p, f)), fieldnames(CParams))
+    @test kw.style isa PGExt._PormGStyle
+    # `_dial` hands the arm exactly these three values, at their own types.
+    took = PGExt._dial(p, (q, pw, o, sm) -> (:shape, q === p, pw, o, sm), q -> (:open,))
+    @test took[1:2] == (:shape, true) && isequal(took[3:5], (p.password, p.options, p.sslmode))
+    @test typeof(took[3:5]) == Tuple{typeof(p.password), String, typeof(p.sslmode)}
+    shapes += 1
+  end
+  @test shapes == 5
+  # A shape outside the four takes the driver's own connect, with the params as they are.
+  for dsn in ("host=h dbname=d connect_timeout=5", "host=h dbname=d application_name=f1",
+              "host=h dbname=d sslmode=verify-full sslrootcert=/ca.pem")
+    p = PGExt._with_session_options(PGExt._checked_params(dsn))
+    @test !all(f -> getfield(p, f) === nothing, PGExt._DIAL_UNSET)
+    @test PGExt._dial(p, (q, pw, o, sm) -> (:shape,), q -> (:open, q === p)) == (:open, true)
+  end
+  # The arms stand in for the driver's connect only while it is the plain keyword call it is in the
+  # versions `[compat]` admits: a default or a check added there must be reviewed against them.
+  driver_src = replace(read(joinpath(pkgdir(Postgres), "src", "Postgres.jl"), String), "\r\n" => "\n")
+  @test occursin("""
+    function DBInterface.connect(::Type{Connection}, params::ConnectionParams; debug::Union{Bool, Nothing}=nothing, reconnect::Union{Bool, Nothing}=nothing, statement_cache_maxsize::Union{Integer, Nothing}=nothing, numeric_overflow::Union{Symbol, Nothing}=nothing, style::API.AbstractPostgresStyle=PostgresStyle())
+        actual_maxsize = isnothing(statement_cache_maxsize) ? params.statement_cache_maxsize : statement_cache_maxsize
+        Connection(host=params.host, user=params.user, password=params.password, dbname=params.dbname, port=params.port, debug=something(debug, params.debug), reconnect=something(reconnect, params.reconnect), application_name=params.application_name, options=params.options, connect_timeout=params.connect_timeout, sslmode=params.sslmode, sslrootcert=params.sslrootcert, sslcert=params.sslcert, sslkey=params.sslkey, sslcapath=params.sslcapath, sslservername=params.sslservername, gssencmode=params.gssencmode, krbsrvname=params.krbsrvname, gssdelegation=params.gssdelegation, statement_timeout=params.statement_timeout, statement_cache_maxsize=actual_maxsize, numeric_overflow=something(numeric_overflow, params.numeric_overflow), style=style)
+    end
+    """, driver_src)
+end
+
 @testset "results decode to the types LibPQ.jl delivers (#788)" begin
   Decimal = PGExt.Decimals.Decimal
   UTC = PGExt.TimeZones.TimeZone("UTC")
@@ -673,14 +726,95 @@ end
   @test PGExt._pg_bpchar("ab ") == "ab"
 end
 
+# What: the registry entry `_parser_entry` builds for each parser `_register_types!` registers, against the
+#   entry Postgres.jl's own `register_type!` builds for the same OID, type and parser.
+# Expected: the same Julia type, and the same value from each entry's caster for every sample text. The
+#   connection method `register_type!` still writes `API.register_type!`'s entry into
+#   `conn.type_registry` under `conn.lock`, the fields `_register_parser!` writes at the types it writes.
+# Why: `_register_parser!` builds the entry itself, through Postgres.jl internals (`API.TypeInfo`,
+#   `API.CastFn`, the `type_registry` field), because `register_type!`'s untyped parser made the build a
+#   dynamic call in a trimmed image (#1599 layer 2). A change to those internals must fail here, not
+#   change a decoded value.
+@testset "a parser's registry entry is the one register_type! builds (#1599)" begin
+  API = Postgres.API
+  @test fieldtype(PGExt._Conn, :type_registry) == Dict{Int, API.TypeInfo}
+  @test fieldtype(PGExt._Conn, :lock) == ReentrantLock
+  driver_src = read(joinpath(pkgdir(Postgres), "src", "Postgres.jl"), String)
+  @test occursin("@lock conn.lock API.register_type!(conn.type_registry, oid, julia_type; parser=parser)", driver_src)
+  ZDT = PGExt.TimeZones.ZonedDateTime
+  for (oid, T, parser, samples) in (
+      (1700, PGExt.Decimals.Decimal, PGExt._pg_numeric, ["12.3400", "-0.5", "7"]),
+      (1184, ZDT, PGExt._pg_timestamptz, ["2024-02-29 10:11:12.5+00", "2024-02-29 10:11:12-03", "infinity"]),
+      (1114, PGExt.Dates.DateTime, PGExt._pg_timestamp, ["2024-02-29 10:11:12.123456", "-infinity"]),
+      (1042, String, PGExt._pg_bpchar, ["ab ", "Monaco"]))
+    ours = PGExt._parser_entry(T, parser)
+    theirs = API.register_type!(Dict{Int, API.TypeInfo}(), oid, T; parser = parser)[oid]
+    @test ours.julia_type === theirs.julia_type === T
+    registry = Dict{Int, API.TypeInfo}()
+    for s in samples
+      @test (oid, s, isequal(ours.parser(s, registry), theirs.parser(s, registry))) == (oid, s, true)
+      @test isequal(ours.parser(s, registry), parser(s))
+    end
+  end
+end
+
 @testset "parameters bind as LibPQ.jl binds them (#788)" begin
   @test PGExt._bind(nothing) === nothing
+  # A bare byte vector binds as an array literal, as LibPQ renders it, not as bytea. The collector's
+  # vector arrives as the text Postgres.jl binds (#1599 layer 2, below).
   bound = PGExt._bind(Any[UInt8[1, 2], "x", 3])
-  @test bound[1] == [1, 2] && bound[1] isa Vector{Int}
-  @test bound[2] == "x" && bound[3] == 3
+  @test Postgres.build_unchecked_params(bound) == ["{1, 2}", "x", "3"] && bound isa Vector{PGExt._PgBound}
   @test PGExt._bind((UInt8[1], 2)) isa Tuple
   query = PormG.QueryBuilder.PgParameterizedQuery("", Any[UInt8[5], "y"], 2)
-  @test PGExt._bind(query) == Any[[5], "y"]
+  @test Postgres.build_unchecked_params(PGExt._bind(query)) == ["{5}", "y"]
+end
+
+# What: the text `_bind` hands Postgres.jl for a collector's `Vector{Any}`, over every kind the walk in
+#   `_wire_text` names and kinds it leaves to the open arm, NULL among them.
+# Expected: Postgres.jl's own conversion of what `_bind` returns, through both its bindings
+#   (`build_unchecked_params` for an unnamed statement, `bind_params!` for a prepared one), equals its
+#   conversion of the vector `_bind` returned before, `map(_bind_value, values)`: the statement receives
+#   the same parameters. A value with no text raises the same error at the same point (after the
+#   parameter count is checked), not in `_bind`.
+# Why: `_bind` now builds the wire text itself, at each value's concrete type, because Postgres.jl's
+#   per-value `_param` over a `Vector{Any}` was a dispatch a trimmed image had no code for (#1599 layer
+#   2). A kind the walk converted differently would bind a different value.
+# A value whose text cannot be built: `string` of it throws.
+struct _NoText1599 end
+Base.show(io::IO, ::_NoText1599) = throw(ArgumentError("this value has no text"))
+
+@testset "the wire text binds the parameters the values bound (#1599)" begin
+  Decimal = PGExt.Decimals.Decimal
+  D = PGExt.Dates
+  kinds = Any["Monaco", "", "naïve 'quote' \\ ", 1950, -3, typemax(Int64), 2.5, -0.0, 1.0e-300, Inf, NaN,
+              true, false, nothing, missing, D.Date(2008, 5, 25), D.DateTime(2008, 5, 25, 14, 0, 0),
+              D.DateTime(2008, 5, 25, 14, 0, 0, 7), parse(Decimal, "12.34"), parse(Decimal, "-0.001"),
+              UInt8[1, 2], UInt8[], [1, 2, 3], Int32(7), Float32(1.5), D.Time(14, 0), ["Spa", "Monza"],
+              [1.5, missing], SubString("Interlagos", 1, 5), :symbol, 'c', UInt8(9)]
+  old(values) = Postgres.build_unchecked_params(map(PGExt._bind_value, values))
+  bound = PGExt._bind(kinds)
+  @test bound isa Vector{PGExt._PgBound}
+  @test isequal(Postgres.build_unchecked_params(bound), old(kinds))
+  for v in kinds
+    @test isequal((v, isequal(Postgres.build_unchecked_params(PGExt._bind(Any[v])), old(Any[v]))), (v, true))
+  end
+  @test isempty(PGExt._bind(Any[])) && PGExt._bind(Any[]) isa Vector{PGExt._PgBound}
+  # The prepared statement's binding gives the same text too.
+  dest(n) = Vector{Union{String, Missing}}(missing, n)
+  a, b = dest(length(kinds)), dest(length(kinds))
+  Postgres.bind_params!(a, bound, "sql"); Postgres.bind_params!(b, map(PGExt._bind_value, kinds), "sql")
+  @test isequal(a, b)
+  # A value with no text fails where it did: inside the driver's binding, after the count check, with the
+  # same error; `_bind` itself does not raise.
+  for vals in (Any["Monaco", _NoText1599()], Any["Monaco", 1950, _NoText1599()])
+    caught(f) = try f(); nothing catch e; e end
+    new_bound = PGExt._bind(vals)
+    old_bound = map(PGExt._bind_value, vals)
+    for run in (v -> Postgres.build_unchecked_params(v), v -> Postgres.bind_params!(dest(2), v, "SELECT \$1, \$2"))
+      e_new, e_old = caught(() -> run(new_bound)), caught(() -> run(old_bound))
+      @test e_new !== nothing && typeof(e_new) == typeof(e_old) && sprint(showerror, e_new) == sprint(showerror, e_old)
+    end
+  end
 end
 
 @testset "errors classify by SQLSTATE, never by message text (#788)" begin

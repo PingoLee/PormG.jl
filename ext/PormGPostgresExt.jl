@@ -654,11 +654,26 @@ end
 
 _pg_bpchar(s::AbstractString, _registry = nothing)::String = rstrip(s, ' ')
 
+# A parser's registry entry, built as `Postgres.register_type!` builds it (#1599 layer 2). That function
+# takes `parser::Union{Function, Nothing}` and only passes it on, so Julia compiles it for `Function`
+# rather than for the parser at hand, and the `CastFn(parser)` its `TypeInfo` builds is a dynamic call: a
+# trimmed build raised `MethodError` on it at every connect. Here the parser's type is a parameter, so
+# the entry is built statically. It writes the connection's registry under the connection's lock, as
+# `register_type!` does; `test_postgres_ext.jl` checks the entry against `register_type!`'s, so a
+# change to Postgres.jl's internals (`API.TypeInfo`, `API.CastFn`, `type_registry`) fails there.
+_parser_entry(::Type{T}, parser::F) where {T, F} = Postgres.API.TypeInfo(T, Postgres.API.CastFn(parser))
+
+function _register_parser!(conn::Postgres.Connection, oid::Int, ::Type{T}, parser::F) where {T, F}
+  info = _parser_entry(T, parser)
+  @lock conn.lock conn.type_registry[oid] = info
+  return conn
+end
+
 function _register_types!(conn::Postgres.Connection)
-  Postgres.register_type!(conn, 1700, Decimals.Decimal; parser = _pg_numeric)                # numeric
-  Postgres.register_type!(conn, 1184, TimeZones.ZonedDateTime; parser = _pg_timestamptz)     # timestamptz
-  Postgres.register_type!(conn, 1114, DateTime; parser = _pg_timestamp)                      # timestamp
-  Postgres.register_type!(conn, 1042, String; parser = _pg_bpchar)                           # bpchar
+  _register_parser!(conn, 1700, Decimals.Decimal, _pg_numeric)                                # numeric
+  _register_parser!(conn, 1184, TimeZones.ZonedDateTime, _pg_timestamptz)                     # timestamptz
+  _register_parser!(conn, 1114, DateTime, _pg_timestamp)                                      # timestamp
+  _register_parser!(conn, 1042, String, _pg_bpchar)                                           # bpchar
   for oid in (2950, 114, 3802)                                                               # uuid, json, jsonb
     Postgres.register_type!(conn, oid, String)
   end
@@ -675,9 +690,50 @@ end
 
 # ── Connections ──────────────────────────────────────────────────────────────
 
+# #1599 layer 2: Postgres.jl's `DBInterface.connect(Connection, params)` hands the keyword-only
+# `Connection` constructor the optional parameters as they sit in `ConnectionParams`, typed
+# `Union{Nothing, …}`, so the keyword call's type is known only at run time. A trimmed build had no code
+# for it: every connect raised `MethodError` on `kwcall`, which `PoolConnectError` wrapped like a refused
+# port. `_dial` makes the same call itself, at concrete types, for the shapes PormG's connections take:
+# `options` is always set (`_with_session_options`), the password and `sslmode` are set or not, and the
+# other optional parameters (`_DIAL_UNSET`) are unset. Each arm passes the values the driver's connect
+# passes (`_dial_keywords`, pinned against `ConnectionParams` in `test_postgres_ext.jl`); any other shape
+# takes the driver's connect, one dynamic call behind `@noinline`.
+const _DIAL_UNSET = (:application_name, :connect_timeout, :sslrootcert, :sslcert, :sslkey, :sslcapath,
+                     :sslservername, :gssencmode, :krbsrvname, :statement_timeout)
+
+_dial_keywords(p::Postgres.ConnectionParams, password::Union{Nothing, String}, options::String,
+               sslmode::Union{Nothing, String}) =
+  (host = p.host, user = p.user, password = password, dbname = p.dbname, port = p.port, debug = p.debug,
+   reconnect = p.reconnect, application_name = nothing, options = options, connect_timeout = nothing,
+   sslmode = sslmode, sslrootcert = nothing, sslcert = nothing, sslkey = nothing, sslcapath = nothing,
+   sslservername = nothing, gssencmode = nothing, krbsrvname = nothing, gssdelegation = p.gssdelegation,
+   statement_timeout = nothing, statement_cache_maxsize = p.statement_cache_maxsize,
+   numeric_overflow = p.numeric_overflow, style = _PormGStyle())
+
+_dial_shape(p::Postgres.ConnectionParams, password::Union{Nothing, String}, options::String,
+            sslmode::Union{Nothing, String}) =
+  Postgres.Connection(; _dial_keywords(p, password, options, sslmode)...)
+
+@noinline _dial_open(p::Postgres.ConnectionParams) =
+  DBInterface.connect(Postgres.Connection, p; style = _PormGStyle())
+
+# `shape` and `open` are the two calls, arguments so `test_postgres_ext.jl` can check which one each
+# connection string takes and with what, without connecting.
+function _dial(p::Postgres.ConnectionParams, shape::S = _dial_shape, open::O = _dial_open) where {S, O}
+  options = p.options
+  (options isa String && all(f -> getfield(p, f) === nothing, _DIAL_UNSET)) || return open(p)
+  password = p.password
+  sslmode = p.sslmode
+  if password isa String
+    return sslmode isa String ? shape(p, password, options, sslmode) : shape(p, password, options, nothing)
+  end
+  return sslmode isa String ? shape(p, nothing, options, sslmode) : shape(p, nothing, options, nothing)
+end
+
 function _open_connection(pool::_Pool)::Postgres.Connection
   params = _with_session_options(_checked_params(pool.connection_string))
-  conn = DBInterface.connect(Postgres.Connection, params; style = _PormGStyle())
+  conn = _dial(params)
   try
     _register_types!(conn)
   catch
@@ -722,10 +778,10 @@ _bind_value(v) = v
 function _bind(params)
   resolved = params isa PormGPostgresParam ? params.parameters : params
   resolved === nothing && return nothing
-  # #1599 layer 2: the collector delivers a `Vector{Any}`, mapped with a walk over `_bind_value`'s two
-  # methods, so each value is converted without a dispatch at run time. Any other container (a collector
-  # whose `parameters` is a tuple or a typed vector) takes the open arm, the `map` this was before.
-  resolved isa Vector{Any} && return map(_bind_value_any, resolved)
+  # #1599 layer 2: the collector delivers a `Vector{Any}`, handed over so Postgres.jl builds each value's
+  # text without a dispatch at run time (`_wire_texts`). Any other container (a collector whose
+  # `parameters` is a tuple or a typed vector) takes the open arm, the `map` this was before.
+  resolved isa Vector{Any} && return _wire_texts(resolved)
   return _bind_other(resolved)
 end
 @noinline _bind_other(@nospecialize(resolved)) = map(_bind_value, resolved)
@@ -733,6 +789,48 @@ end
 _bind_value_any(@nospecialize(v)) =
   v isa Vector{UInt8} ? _bind_value(v) : v isa AbstractVector{UInt8} ? _bind_value_other(v) : v
 @noinline _bind_value_other(@nospecialize(v)) = _bind_value(v)
+
+# Each value as the text Postgres.jl binds for it (#1599 layer 2). Postgres.jl turns every parameter into
+# its wire text with `_param` (a `String`, or `missing` for NULL), one value at a time, so a `Vector{Any}`
+# made that call a dispatch per value, and `map` over one sized its result from the first value's type at
+# run time: a trimmed build had no code for either. The values are converted as `map` converted them
+# (`_bind_value_any`) into one `Vector{Any}`, and Postgres.jl gets a `Vector{_PgBound}`, a concrete
+# element type naming each value by its index, so its `_param` call is static and reaches the method
+# below, which builds the text with the same `_param` at the value's concrete type for the kinds PormG
+# binds and the open arm for any other value. Postgres.jl binds that
+# `String` as itself and `missing` as NULL, so the statement receives the same parameters;
+# `test_postgres_ext.jl` checks that against the driver's own conversion of the old vector. The text is
+# built inside Postgres.jl's own `_param` call, so a value whose text fails fails where it did: after the
+# parameter count is checked, in the statement's task. A query-logging style would see the `_PgBound`
+# values as the statement's `params`; `_PormGStyle` logs nothing.
+struct _PgBound
+  values::Vector{Any}
+  i::Int
+end
+Postgres._param(b::_PgBound)::Union{String, Missing} = _wire_text(b.values[b.i])
+
+function _wire_texts(values::Vector{Any})::Vector{_PgBound}
+  converted = Vector{Any}(undef, length(values))
+  bound = Vector{_PgBound}(undef, length(values))
+  for i in eachindex(values)
+    converted[i] = _bind_value_any(values[i])
+    bound[i] = _PgBound(converted, i)
+  end
+  return bound
+end
+_wire_text(@nospecialize(v))::Union{String, Missing} =
+  v isa String ? Postgres._param(v) :
+  v isa Int64 ? Postgres._param(v) :
+  v isa Float64 ? Postgres._param(v) :
+  v isa Bool ? Postgres._param(v) :
+  v === nothing ? Postgres._param(nothing) :
+  v isa Missing ? Postgres._param(missing) :
+  v isa Date ? Postgres._param(v) :
+  v isa DateTime ? Postgres._param(v) :
+  v isa Decimals.Decimal ? Postgres._param(v) :
+  v isa Vector{Int} ? Postgres._param(v) :
+  _wire_text_other(v)
+@noinline _wire_text_other(@nospecialize(v))::Union{String, Missing} = Postgres._param(v)
 
 # An interrupt that lands during a TLS read reaches us wrapped in the TLS layer's own error, with the
 # `InterruptException` as its `cause`. Core recognises an abandoned await by the `InterruptException`
@@ -838,8 +936,21 @@ PormG.backend_execute(pool::_Pool, conn::Postgres.Connection, sql::String, param
 # The async handle is a plain Task, as the SQLite extension's is: core only `fetch`es and `wait`s it.
 # A Postgres.jl connection serializes concurrent use on its own lock. The task is in the caller's
 # threadpool (`PormG._statement_task`, #1577), as LibPQ's statement runs on the caller's thread.
+#
+# The task's closure captures the bound parameters, so its type carries theirs. `_bind` returns a
+# `Vector{_PgBound}`, `nothing` or, from its open arm, any container, so the closure's type was known only
+# at run time and the `_statement_task` call was dynamic: a trimmed build had no code for it (#1599 layer
+# 2). The closure is built in `_statement_on`, after a split on the two concrete results; the open arm's
+# container takes one dynamic call behind `@noinline`, as before.
 function PormG.backend_execute_async(pool::_Pool, conn::Postgres.Connection, sql::String, params)
   bound = _bind(params)
+  bound isa Vector{_PgBound} && return _statement_on(pool, conn, sql, bound)
+  bound === nothing && return _statement_on(pool, conn, sql, nothing)
+  return _statement_on_other(pool, conn, sql, bound)
+end
+@noinline _statement_on_other(pool::_Pool, conn::Postgres.Connection, sql::String, @nospecialize(bound)) =
+  _statement_on(pool, conn, sql, bound)
+function _statement_on(pool::_Pool, conn::Postgres.Connection, sql::String, bound)
   # The leak scan's stamp (#1637): set before the task starts, cleared when the statement ends, so a
   # lease whose statement is still running is not reported as one nobody returned.
   mark = PormG.ConnectionPool._note_statement_start!(pool, conn)

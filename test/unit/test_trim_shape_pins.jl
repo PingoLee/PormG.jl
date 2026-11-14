@@ -4264,10 +4264,63 @@ end
     end
     for vals in (Any[UInt8[1, 2], "Monaco", 3], Any[1, 2], Any["Spa", nothing])
       bound = pgx._bind(QB.PgParameterizedQuery("", vals, length(vals)))
-      @test typeof(bound) == typeof(map(pgx._bind_value, vals)) && bound == map(pgx._bind_value, vals)
+      # The text Postgres.jl binds (#1599 layer 2, below): what the driver makes of the vector `_bind`
+      # returned before, which `test_postgres_ext.jl` checks over every kind.
+      @test isequal(Postgres.build_unchecked_params(bound), Postgres.build_unchecked_params(map(pgx._bind_value, vals)))
     end
     @test pgx._bind((UInt8[7], "Imola")) == ([7], "Imola")
     @test pgx._bind(nothing) === nothing
+  end
+
+  # What: the Postgres.jl extension's wire text for a `Vector{Any}` of parameters (`_wire_texts`, the
+  #   per-value walk `_wire_text`), and Postgres.jl's two bindings (`bind_params!` for a prepared statement,
+  #   `build_unchecked_params` for an unnamed one) over the `Vector{_PgBound}` `_bind` returns, six calls
+  #   deep, through the extension's `_param(::_PgBound)`.
+  # Expected: no dynamic call but the open arm `_wire_text_other`, which is not walked, and the spelling of
+  #   a value inside `print` (Decimals' `print`, which `_param(::Decimal)` reaches through `string`, as
+  #   before). That it binds what Postgres.jl bound before, and fails where it failed, is pinned in
+  #   `test_postgres_ext.jl`.
+  # Why: Postgres.jl calls `_param` on each value, a dispatch per value on a `Vector{Any}`, and `map` over
+  #   one sized its result from the first value's type at run time: with the connect typed, the trimmed
+  #   Postgres.jl fixture raised `MethodError` on `Vector{T}(undef, n)`, then on `_param(::String)`, at
+  #   its first statement (#1599 layer 2, #1614).
+  @testset "the Postgres.jl parameters reach the driver as wire text, statically (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    @test isdefined(pgx, :_wire_texts) && _dynamic_calls(pgx._wire_texts, (Vector{Any},)) == String[]
+    @test isdefined(pgx, :_wire_text) && _dynamic_calls(pgx._wire_text, (Any,)) == String[]
+    @test pgx._bind(QB.PgParameterizedQuery("", Any["Monaco", 2008], 2)) isa Vector{pgx._PgBound}
+    W = Vector{pgx._PgBound}
+    @test _dynamic_calls(Postgres._param, (pgx._PgBound,)) == String[]
+    spelling(s) = occursin(r"^Tuple\{typeof\((Base\.)?print(_to_string)?\), ", s)
+    for (f, tt) in ((Postgres.build_unchecked_params, (W,)),
+                    (Postgres.bind_params!, (Vector{Union{String, Missing}}, W, String)))
+      found = _dynamic_calls_deep(f, tt; depth = 6, skip = (pgx._wire_text_other, Postgres.param_mismatch))
+      @test (f, filter(!spelling, found)) == (f, String[])
+    end
+  end
+
+  # What: the Postgres.jl extension's async statement, `backend_execute_async`, on each collector type, and
+  #   `_statement_on`, which builds the task's closure, at the two bound types `_bind` returns concretely.
+  # Expected: no dynamic call; the open arm `_statement_on_other` is a static call into a `@nospecialize`
+  #   barrier.
+  # Why: the closure captures the bound parameters, so its type carried `_bind`'s inferred result, which is
+  #   not concrete, and the `_statement_task` call was dynamic: with the parameters typed, the trimmed
+  #   Postgres.jl fixture raised `MethodError` on `_statement_task` at its first statement (#1599 layer 2,
+  #   #1614).
+  @testset "the Postgres.jl statement task is started without a dynamic call (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    P = PormG.ConnectionPool.PostgresConnectionPool{:postgres}
+    for T in (QB.PgParameterizedQuery, QB.SQLiteParameterizedQuery, QB.MySQLParameterizedQuery, Nothing)
+      @test (T, _dynamic_calls(PormG.backend_execute_async, (P, pgx._Conn, String, T))) == (T, String[])
+    end
+    for B in (Vector{pgx._PgBound}, Nothing)
+      @test isdefined(pgx, :_statement_on) &&
+            (B, _dynamic_calls(pgx._statement_on, (P, pgx._Conn, String, B))) == (B, String[])
+    end
+    # The collector's values take the typed arm, not the open one.
+    @test typeof(pgx._bind(QB.PgParameterizedQuery("", Any["Monaco"], 1))) === Vector{pgx._PgBound}
   end
 
   # What: the MySQL extension's result cursor, `_materialize`, at the two cursors `_run` hands it (a
@@ -4438,6 +4491,40 @@ end
     @test !isempty(filter(param_call, _dynamic_calls_deep(myx._run, (MySQL.Connection, String, Vector{Any}); depth = 8)))
     pool = P("host='127.0.0.1' user='u' password='p' dbname='f1'"; pool_size = 1)
     @test typeof(myx._bind(pool, QB.PgParameterizedQuery("", Any["Monaco", 2008, nothing], 3))) === B
+  end
+
+  # What: the Postgres.jl connect, `_dial`, and its four typed arms (`_dial_shape`: a password or none,
+  #   an `sslmode` or none, `options` always set).
+  # Expected: `_dial` and every arm make no dynamic call, while the driver's own
+  #   `DBInterface.connect(Connection, params)`, which the open arm `_dial_open` keeps for any other
+  #   shape, still makes one. That the arms pass the driver's values is pinned in `test_postgres_ext.jl`.
+  # Why: the driver's connect hands the keyword-only constructor `Union{Nothing, …}` values, so its
+  #   keyword call was dynamic, and the trimmed Postgres.jl fixture raised `MethodError` on `kwcall` at
+  #   every connect, wrapped in `PoolConnectError` (#1599 layer 2, #1614).
+  @testset "the Postgres.jl connect calls the constructor at concrete keyword types (#1599 layer 2)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    CParams = Postgres.ConnectionParams
+    @test isdefined(pgx, :_dial) && _dynamic_calls(pgx._dial, (CParams,)) == String[]
+    @test isdefined(pgx, :_dial) &&
+          _dynamic_calls(pgx._dial, (CParams, typeof(pgx._dial_shape), typeof(pgx._dial_open))) == String[]
+    for pw in (String, Nothing), sm in (String, Nothing)
+      @test isdefined(pgx, :_dial_shape) &&
+            (pw, sm, _dynamic_calls(pgx._dial_shape, (CParams, pw, String, sm))) == (pw, sm, String[])
+    end
+    @test !isempty(_dynamic_calls_kw(Postgres.DBInterface.connect, (Type{Postgres.Connection}, CParams)))
+  end
+
+  # What: the result types the Postgres.jl extension registers on each new connection
+  #   (`_register_types!`), followed four calls deep.
+  # Expected: no dynamic call. That each entry matches what `Postgres.register_type!` builds is pinned in
+  #   `test_postgres_ext.jl`.
+  # Why: `register_type!` takes its parser as `Union{Function, Nothing}` and only passes it on, so it is
+  #   compiled for `Function`, and the `CastFn(parser)` it builds was dynamic: once the connect was typed,
+  #   the trimmed Postgres.jl fixture authenticated and then raised `MethodError` on `CastFn` while
+  #   registering `_pg_numeric` (#1599 layer 2, #1614).
+  @testset "the Postgres.jl result types are registered without a dynamic call (#1599 layer 2)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    @test isdefined(pgx, :_parser_entry) && _dynamic_calls_deep(pgx._register_types!, (pgx._Conn,); depth = 4) == String[]
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

@@ -2332,11 +2332,12 @@ end
   end
 
   # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
-  #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`).
-  # Expected: `validate_field_data` takes its value unspecialized, and neither its keyword body nor the walk
-  #   makes a dynamic call (the open arm makes one, whatever the field's type); the walk returns the same
-  #   value, or raises the same error type with the same text, as the direct `_validate_field_value` call
-  #   it replaces, over fields x values x operations.
+  #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`) and the format
+  #   step's keyword call (`_format_single` → `_format_single_at`).
+  # Expected: `validate_field_data` and `_format_single` take their value unspecialized, and neither their
+  #   keyword bodies nor the walks make a dynamic call (each open arm makes one, whatever the field's type);
+  #   each returns the same value, or raises the same error type with the same text, as the code it
+  #   replaces, over fields x values x operations (x connections for the format step).
   # Why: a write's values come out of `SQLObjectQuery.insert::OrderedDict{String,Any}`, so each call on one is
   #   a run-time dispatch, and a trimmed image raises `MethodError` when nothing was compiled for the type it
   #   meets. Measured on main 4384550db: the full entry's binary stopped at the `validate_field_data` keyword
@@ -2369,6 +2370,10 @@ end
     catch e
       (:err, typeof(e), sprint(showerror, e))
     end
+    # `PormGBytes` defines no `isequal`: two payloads are the same when their bytes are.
+    samevalue(x, y) = isequal(x, y) || (typeof(x) === typeof(y) && isstructtype(typeof(x)) && nfields(x) > 0 &&
+                                        all(i -> samevalue(getfield(x, i), getfield(y, i)), 1:nfields(x)))
+    same(a, b) = a[1] === b[1] && a[2] === b[2] && samevalue(a[3], b[3])
     model = M.Model("tsp_write_race", raceid = M.IDField(), year = M.IntegerField(), name = M.CharField(max_length = 8),
       notes = M.TextField(null = true), points = M.FloatField(), price = M.DecimalField(max_digits = 5, decimal_places = 2),
       date = M.DateField(), start_at = M.DateTimeField(null = true), lap = M.TimeField(), uid = M.UUIDField(),
@@ -2382,8 +2387,44 @@ end
                  Int16(3), :sym, Dict("a" => 1), ["ab", "c"], ["abcd"], UInt8[1, 2, 3, 4, 5], Dates.Minute(1), [1, 2]]
     old(f, v, op) = QB._validate_field_value(model, f, QB._validate_field_name(model, f, op), v, op)
     for f in model.field_names, v in values, op in ("insert", "update")
-      @test isequal(outcome(() -> QB.validate_field_data(model, f, v, op)), outcome(() -> old(f, v, op)))
+      @test same(outcome(() -> QB.validate_field_data(model, f, v, op)), outcome(() -> old(f, v, op)))
     end
+
+    # Wall 2, the format step's keyword call: the value unspecialized, the field's two facts read before the
+    # walk, so the body is compiled per value type only.
+    for n in (:_format_single_at, :_format_single_other, :_format_single_value)
+      @test has(n)
+    end
+    @test only(methods(QB._format_single)).nospecialize != 0
+    if has(:_format_single_at)
+      @test isempty(_dynamic_calls_kw(QB._format_single, (M.sIntegerField, String, Any, String)))
+      @test isempty(_dynamic_calls(QB._format_single_at, (Function, Bool, String, Any, String)))
+      @test length(_dynamic_calls(QB._format_single_other, (Function, Bool, String, Any, String))) == 1
+      @test only(methods(QB._format_single_value)).nospecialize != 0
+    end
+    # The same answer as the old body, which read the field inside it.
+    old_fs(f_meta, field, value, op, conn) = begin
+      QB._refuse_collection(f_meta, field, value, op)
+      formatted = try
+        QB._write_formatter(f_meta, conn)(value)
+      catch e
+        e isa PormG.InvalidValueError && throw(QB.with_location(e; op = op, field = field))
+        rethrow()
+      end
+      formatted = QB._single_value(formatted, field, op)
+      QB._contains_nul(formatted) && throw(PormG.InvalidValueError(
+        "The value contains a NUL character (\\0). " * QB.NUL_REFUSAL_REASON, :nul; op = op, field = field))
+      formatted
+    end
+    CP = PormG.ConnectionPool
+    conns = Any[nothing, CP.SQLiteConnectionPool(":memory:"; pool_size = 1), CP.MySQLConnectionPool("host='x'"; pool_size = 1)]
+    fs_values = vcat(values, Any["a\0b", Any["a", 1], (1, 2), Dates.Second(3), Int64[]])
+    for f in model.field_names, v in fs_values, c in conns
+      f_meta = model.fields[f]
+      @test same(outcome(() -> QB._format_single(f_meta, f, v, "insert"; conn = c)),
+                    outcome(() -> old_fs(f_meta, f, v, "insert", c)))
+    end
+    foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

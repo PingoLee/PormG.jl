@@ -481,10 +481,46 @@ _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) |
 # through there (`_write_formatter`). Without one it is the field's own, which every engine but MySQL
 # writes; the callers that pass none never reach MySQL (`bulk_copy`) or only compare the text (the
 # `returning` key match).
-function _format_single(f_meta, field::AbstractString, value, op::AbstractString; conn = nothing)
-  _refuse_collection(f_meta, field, value, op)
+#
+# #1599 layer 7: the value arrives untyped (`SQLObjectQuery.insert`'s `Any`, a bulk row's cell), so the
+# keyword call takes it unspecialized, and `_format_single_at` hands it to the body at its concrete type,
+# as `_validate_field_value_at` does for the value checks. The full fixture entry's `create` stopped at
+# this keyword call in a trimmed image. The two facts the body needs from the field, its write formatter
+# and whether it takes a collection, are read here, once per field type, so the body is compiled once
+# per value type rather than once per field and value type (a split on both compiled 406 bodies and
+# about 9,000 verifier rows). Reading them first changes nothing: neither can raise.
+function _format_single(f_meta, field::AbstractString, @nospecialize(value), op::AbstractString; conn = nothing)
+  return _format_single_at(_write_formatter(f_meta, conn), _takes_collection(f_meta), field, value, op)
+end
+
+@noinline function _format_single_at(@nospecialize(formatter), takes::Bool, field::AbstractString,
+                                     @nospecialize(value), op::AbstractString)
+  value isa String && return _format_single_value(formatter, takes, field, value, op)
+  value isa Int64 && return _format_single_value(formatter, takes, field, value, op)
+  value isa Float64 && return _format_single_value(formatter, takes, field, value, op)
+  value isa Bool && return _format_single_value(formatter, takes, field, value, op)
+  value isa SubString{String} && return _format_single_value(formatter, takes, field, value, op)
+  value isa Dates.Date && return _format_single_value(formatter, takes, field, value, op)
+  value isa Dates.DateTime && return _format_single_value(formatter, takes, field, value, op)
+  value isa Dates.Time && return _format_single_value(formatter, takes, field, value, op)
+  value isa TimeZones.ZonedDateTime && return _format_single_value(formatter, takes, field, value, op)
+  value isa Decimals.Decimal && return _format_single_value(formatter, takes, field, value, op)
+  value isa UUIDs.UUID && return _format_single_value(formatter, takes, field, value, op)
+  value isa Int32 && return _format_single_value(formatter, takes, field, value, op)
+  value isa Nothing && return _format_single_value(formatter, takes, field, value, op)
+  value isa Missing && return _format_single_value(formatter, takes, field, value, op)
+  return _format_single_other(formatter, takes, field, value, op)
+end
+# Any other value: one dynamic call, on the value.
+@noinline _format_single_other(@nospecialize(formatter), takes::Bool, field::AbstractString, @nospecialize(value),
+                               op::AbstractString) =
+  _format_single_value(formatter, takes, field, value, op)
+
+# The body. `takes` is `_takes_collection(f_meta)`: what `_refuse_collection` asks of the field.
+function _format_single_value(@nospecialize(formatter), takes::Bool, field::AbstractString, value, op::AbstractString)
+  value isa _CollectionValue && !takes && _single_value(value, field, op)
   formatted = try
-    _write_formatter(f_meta, conn)(value)
+    formatter(value)
   catch e
     e isa InvalidValueError && throw(with_location(e; op = op, field = field))
     rethrow()

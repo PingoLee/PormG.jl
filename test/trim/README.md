@@ -1,16 +1,19 @@
 # The `juliac --trim` fixture app
 
 A minimal F1 application built with `juliac --trim`, the measuring stick for #1599 (a PormG app
-built as a trimmed binary). It is #1616's first checkbox: the app is committed here; the CI job that
-builds it on every PR is a workflow change, the maintainer's.
+built as a trimmed binary). It is #1616's first checkbox.
 
 What it does (`main.jl`): boot with the connection built in code (`register_connection` and
 `Models.set_models(models; key)`, #1606 — no `connection.yml` is read), one `Race.objects.create`,
 and one `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the
-struct `list(show_query = :struct)` writes (#1632). Each step prints one line.
+struct `list(show_query = :struct)` writes (#1632). Each step prints one line. The read-only entry,
+`read.jl`, runs the same boot and read without the write; the steps both entries share are in
+`steps.jl`.
 
-Not a test the suite runs: it needs Julia 1.13 and JuliaC, and today the binary stops before the
-query (the walls left are in #1599's tables).
+Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary stops at
+the write (layer 7, the walls left are in #1599's tables); the read-only entry's binary returns its
+row (#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only entry and
+its CI job" below).
 
 ## Drivers
 
@@ -47,6 +50,45 @@ the end of the verifier report, which a spinner line overwrote (#1599 round 1). 
 `--trim=unsafe-warn` the verifier lists every dynamic call it cannot resolve ("Error #N"), and the
 binary still links; a call with no compiled target then raises a catchable `MethodError` at run
 time, which `main` prints with the function it missed.
+
+## The read-only entry and its CI job
+
+`read.jl` is `main.jl` without the write: boot, then the typed read. Since #1788 its trimmed binary
+prints the row its JIT control prints, and exits 0:
+
+```
+step	main	entered
+step	ext	true
+step	boot	ok
+step	query	1 rows
+step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	elapsed_ms	1
+```
+
+Build and run it like the full entry, from the repository root:
+
+```
+julia --project=test/trim test/trim/prep.jl run
+julia --project=test/trim test/trim/read.jl run          # the JIT control: boot, 1 row
+
+mkdir -p build && cd build
+JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe read \
+  --trim=unsafe-warn --experimental ../test/trim/read.jl 2>&1 | tee build.log
+cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
+```
+
+The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
+fails with the same exit code (1 boot, 2 write, 3 read).
+
+**The workflow** (`.github/workflows/trim.yml`, named `Trim (juliac)`) builds this entry with the
+Julia and JuliaC versions above, runs the binary under a 300 s timeout, and fails unless it exits 0
+and prints the `row` line above. The timeout is there because a task body the image never compiled
+dies silently, so a broken binary hangs rather than crashes (#1788). The verifier's rows are
+reported, never checked: `rows.py` and `classify.py --layers` go to the job summary, and the build log
+and both tables are uploaded as the `trim-read-only` artifact. It runs nightly, by hand
+(`workflow_dispatch`), and on a pull request that changes `test/trim/` or the workflow file. It does
+not run on every pull request: a trimmed build takes several minutes. A change in `src/` that could
+break the trimmed read is checked by running it by hand on the branch, or by the next nightly run.
 
 ## The MySQL variant
 

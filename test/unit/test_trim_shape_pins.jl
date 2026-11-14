@@ -1023,7 +1023,7 @@ end
 
     @test X._is_sqlite_locked_error(SQLite.SQLiteException("database is locked"))
     @test X._is_sqlite_locked_error(SQLite.SQLiteException("DATABASE TABLE IS LOCKED: drivers"))
-    @test X._is_sqlite_locked_error(ErrorException("database is locked"))   # the open arm, as before
+    @test X._is_sqlite_locked_error(ErrorException("database is locked"))   # read at its type since #1599
     @test !X._is_sqlite_locked_error(SQLite.SQLiteException("no such table: drivers"))
     @test !X._is_sqlite_locked_error(InterruptException())
     # A message with invalid UTF-8 answers as `string(e)` does, where `lowercase` on the message would throw.
@@ -4632,6 +4632,38 @@ end
       @test (typeof(e), f, PormG._unowned_field(e, f) === old(e, f)) == (typeof(e), f, true)
     end
     @test PormG._unowned_inner(PormG.StatementError("SQLite", driver)) === driver
+  end
+
+  # What: each driver extension's interrupt walk (`_interrupt_in_causes`), on an exception typed `Any`,
+  #   followed four calls deep, core's open arm `_unowned_field_open` not followed; and the SQLite lock
+  #   check (`_is_sqlite_locked_error`) on an `InterruptException` and an `ErrorException`.
+  # Expected: no dynamic call in either walk: the driver's own errors (`MySQL.Protocol.Error`,
+  #   `StmtError`, `ProtocolError`, `TimeoutError`; `Postgres.Error`, `PostgresInterfaceError`) are read at
+  #   their types (`_driver_cause`). The lock check answers both exceptions in arms of its own, without
+  #   `_error_text`'s `string`, and answers as `string(e)` did, over messages that test the escape rule
+  #   (a newline, a quote, a `$`, an invalid byte, a tab).
+  # Why: core's walk does not know the driver's errors, so a statement the server refused reached its open
+  #   arm's `hasproperty`, which had no code in a trimmed image: the trimmed MySQL and Postgres.jl reads
+  #   surfaced a missing table as `StatementError(cause = MethodError: hasproperty(::StmtError, …))`. The
+  #   lock check's `string(e)` had none either, so a Ctrl-C on SQLite's worker became a `MethodError`
+  #   (#1599, #1794's residue).
+  @testset "the drivers' error paths read their own exceptions at their types (#1599 layer 2)" begin
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    slx = Base.get_extension(PormG, :PormGSQLiteExt)
+    skip = isdefined(PormG, :_unowned_field_open) ? (PormG._unowned_field_open,) : ()
+    for X in (myx, pgx)
+      @test (X, _dynamic_calls_deep(X._interrupt_in_causes, (Any, Int); depth = 4, skip = skip)) == (X, String[])
+    end
+    ir = sprint(show, first(only(code_typed(slx._is_sqlite_locked_error, (Any,); optimize = false))))
+    @test occursin("InterruptException", ir) && occursin("ErrorException", ir)
+    @test !slx._is_sqlite_locked_error(InterruptException())
+    for m in ("database is locked", "DATABASE TABLE IS LOCKED: drivers", "no such table: drivers",
+              "database is\nlocked", "database is \"locked\"", "\$database is locked", "database is locked \xff",
+              "database\tis locked", "database is lock\x65d", "")
+      e = ErrorException(m)
+      @test (m, slx._is_sqlite_locked_error(e)) == (m, slx._is_locked_text(lowercase(string(e))))
+    end
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

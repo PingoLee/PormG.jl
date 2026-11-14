@@ -29,8 +29,19 @@ const _SQLITE_LOCK_RETRY_MAX_DELAY = 0.25
 # phrases are letters and spaces and neither an escape (`\xff`) nor U+FFFD can split or make one. The
 # message field is typed `AbstractString`; SQLite.jl builds it as a `String`. Any other value takes the
 # call it took before, behind `@noinline`.
+#
+# Two more are answered without `string` (#1599): in a trimmed image `string` on an untyped exception has no
+# code, so the lock check replaced the error it was asked about with a `MethodError`. `string` prints an
+# `InterruptException` as `InterruptException()`, which holds neither phrase, and an `ErrorException` as
+# `ErrorException("…")` around its escaped message, which holds one exactly when `_phrase_text` of the
+# message does, for the reason above.
 function _is_sqlite_locked_error(@nospecialize(e))::Bool
   if e isa SQLite.SQLiteException
+    msg = e.msg
+    msg isa String && return _is_locked_text(PormG._phrase_text(msg))
+  end
+  e isa InterruptException && return false
+  if e isa ErrorException
     msg = e.msg
     msg isa String && return _is_locked_text(PormG._phrase_text(msg))
   end

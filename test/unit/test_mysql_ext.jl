@@ -869,6 +869,30 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The interrupt walk reads MySQL.jl's own errors at their types (#1599)
+# What: `_driver_cause`, the interrupt walk's field read, on each error type it reads at its type and on
+#   one it hands to core's walk.
+# Expected: each listed type keeps Base's `getproperty` and `propertynames`, and `_driver_cause` answers
+#   what `hasproperty(e, :cause) ? getproperty(e, :cause) : nothing` answers. No SQL.
+# Why: the reads replace core's open arm (`hasproperty`), which had no code in a trimmed image (#1599);
+#   under the JIT they must answer exactly as it did.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the interrupt walk reads MySQL.jl's own errors at their types (#1599)" begin
+  P = MySQL.Protocol
+  for T in (P.Error, P.StmtError, P.ProtocolError, P.TimeoutError)
+    @test (T, which(getproperty, Tuple{T, Symbol}).module, which(propertynames, Tuple{T}).module) == (T, Base, Base)
+  end
+  old(e) = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
+  for e in Any[_my_err(1146), P.StmtError(1146, "Table 'f1.ghost' doesn't exist", "42S02"),
+               P.ProtocolError("short packet"), P.TimeoutError("read timed out"),
+               P.TLSNegotiationError("handshake", InterruptException()), ErrorException("x")]
+    @test (typeof(e), _MyExt._driver_cause(e) === old(e)) == (typeof(e), true)
+  end
+  @test _MyExt._interrupt_in_causes(P.TLSNegotiationError("handshake", InterruptException()))
+  @test !_MyExt._interrupt_in_causes(_my_err(1146))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A refused MySQL cancel warns, unless the session has already ended (#1719)
 # What: the logger `backend_cancel_query!` calls when `KILL QUERY` fails. A server refusal (1095, not
 #   the session's owner) or a failed second connection warns that the statement may still be running;

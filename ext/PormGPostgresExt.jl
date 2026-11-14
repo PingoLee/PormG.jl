@@ -872,12 +872,25 @@ _wire_text(@nospecialize(v))::Union{String, Missing} =
 # (#315), so it is rethrown bare. The chain is walked a few levels deep and nothing driver-specific is
 # named. `@nospecialize`, and the field read through core's `_unowned_field` (#1599 layer 2): every call
 # hands it a caught exception or a cause, typed `Any`, so the walk was a dispatch at run time per call.
+#
+# The driver's own errors are read at their types first (`_driver_cause`): core's walk does not know them,
+# and its open arm's `hasproperty` had no code in a trimmed image, so a statement the server refused
+# surfaced as `MethodError: hasproperty(::Postgres.API.Error, ::Symbol)` (#1599).
 function _interrupt_in_causes(@nospecialize(e), depth::Int = 4)::Bool
   e isa InterruptException && return true
   depth > 0 || return false
-  cause = PormG._unowned_field(e, :cause)
+  cause = _driver_cause(e)
   return cause !== nothing && _interrupt_in_causes(cause, depth - 1)
 end
+
+# `e.cause` when `e` has one, as `PormG._unowned_field` answers it. The errors Postgres.jl raises on a
+# statement or a connection are tested by `isa` and read at their types (`PormG._known_field`, which
+# answers what `hasproperty` does: each keeps Base's `getproperty`, `test_postgres_ext.jl` checks);
+# anything else goes to core's walk.
+_driver_cause(@nospecialize(e)) =
+  e isa Postgres.Error ? PormG._known_field(e, :cause) :
+  e isa Postgres.PostgresInterfaceError ? PormG._known_field(e, :cause) :
+  PormG._unowned_field(e, :cause)
 
 function _with_bare_interrupt(f)
   try

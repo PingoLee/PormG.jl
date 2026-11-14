@@ -621,13 +621,27 @@ end
 # Postgres.jl extension's rule, on the same socket layer.
 #
 # `@nospecialize`, and the field read through core's `_unowned_field` (#1599 layer 2), as the Postgres.jl
-# extension does: every call hands it a caught exception or a cause, typed `Any`.
+# extension does: every call hands it a caught exception or a cause, typed `Any`. The driver's own errors
+# are read at their types first (`_driver_cause`): core's walk does not know them, and its open arm's
+# `hasproperty` had no code in a trimmed image, so a statement the server refused surfaced as
+# `MethodError: hasproperty(::MySQL.Protocol.StmtError, ::Symbol)` (#1599).
 function _interrupt_in_causes(@nospecialize(e), depth::Int = 4)::Bool
   e isa InterruptException && return true
   depth > 0 || return false
-  cause = PormG._unowned_field(e, :cause)
+  cause = _driver_cause(e)
   return cause !== nothing && _interrupt_in_causes(cause, depth - 1)
 end
+
+# `e.cause` when `e` has one, as `PormG._unowned_field` answers it. The errors MySQL.jl raises on a
+# statement or a connection are tested by `isa` and read at their types (`PormG._known_field`, which
+# answers what `hasproperty` does: each keeps Base's `getproperty`, `test_mysql_ext.jl` checks); anything
+# else goes to core's walk.
+_driver_cause(@nospecialize(e)) =
+  e isa MySQL.Protocol.Error ? PormG._known_field(e, :cause) :
+  e isa MySQL.Protocol.StmtError ? PormG._known_field(e, :cause) :
+  e isa MySQL.Protocol.ProtocolError ? PormG._known_field(e, :cause) :
+  e isa MySQL.Protocol.TimeoutError ? PormG._known_field(e, :cause) :
+  PormG._unowned_field(e, :cause)
 
 function _with_bare_interrupt(f)
   try

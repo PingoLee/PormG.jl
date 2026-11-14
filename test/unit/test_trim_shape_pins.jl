@@ -3160,7 +3160,8 @@ end
         end
       end
     end
-    @test checked >= 190
+    # The exact count records the set: a method added, removed or renamed in it changes it.
+    @test checked == 192
     for name in write_facts, m in methods(getglobal(QB, name))
       @test m.nospecialize == 0
     end

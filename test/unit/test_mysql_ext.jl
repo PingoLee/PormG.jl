@@ -777,6 +777,38 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The values MySQL.jl binds are the same in the closed union (#1599)
+# What: `_bind` over a collector's `Vector{Any}`, for every kind `_BoundValue` lists (Decimal and
+#   ZonedDateTime after `_bind_value`), mixed, NULLs among them, and for kinds outside it.
+# Expected: the same values with the same types as the `Vector{Any}` of `_bind_value` it returned before,
+#   so the same signature (`param_signature`) and the same bytes per value (`encode_param_value!`); in a
+#   `Vector{_BoundValue}` when every value is in the union, in the `Vector{Any}` otherwise.
+# Why: the union is there so MySQL.jl's per-value encoding is static in a trimmed image (#1599 layer 2).
+#   MySQL.jl encodes each value by its own type, so a value converted on the way in would bind
+#   differently: an `Int32` must stay an `Int32`, not become an `Int64`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the values MySQL.jl binds are the same in the closed union (#1599)" begin
+  pool = _my_pool()
+  TZ = _MyExt.TimeZones
+  zdt = TZ.ZonedDateTime(Dates.DateTime(1991, 3, 10, 14, 30), TZ.TimeZone("America/Sao_Paulo"))
+  inside = Any["Senna", "", 1988, -1, typemax(Int64), 2.5, -0.0, true, false, nothing, missing,
+               Dates.Date(1988, 4, 3), Dates.DateTime(1988, 4, 3, 13, 0, 0, 5), Decimal(0, 255, -1), zdt]
+  outside = Any[Int32(7), Float32(1.5), UInt8(3), Dates.Time(14, 0), SubString("Monaco", 1, 3)]
+  encoded(v) = (v === nothing || v === missing) ? UInt8[] : (buf = UInt8[]; MySQL.encode_param_value!(buf, v); buf)
+  for (vals, container) in ((inside, Vector{_MyExt._BoundValue}), (vcat(inside, outside), Vector{Any}),
+                            (Any["Monaco", 1950], Vector{_MyExt._BoundValue}), (Any[Int32(1)], Vector{Any}))
+    before = Any[_MyExt._bind_value(v) for v in vals]
+    for params in (PormG.QueryBuilder.PgParameterizedQuery("", vals, length(vals)), copy(vals))
+      bound = _MyExt._bind(pool, params)
+      @test typeof(bound) === container
+      @test isequal(bound, before) && map(typeof, bound) == map(typeof, before)
+      @test MySQL.param_signature(bound) == MySQL.param_signature(before)
+      @test map(encoded, bound) == map(encoded, before)
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A refused MySQL cancel warns, unless the session has already ended (#1719)
 # What: the logger `backend_cancel_query!` calls when `KILL QUERY` fails. A server refusal (1095, not
 #   the session's owner) or a failed second connection warns that the statement may still be running;

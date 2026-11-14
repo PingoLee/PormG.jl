@@ -4221,7 +4221,8 @@ end
   #   paths that call it (`backend_execute`, `backend_execute_async` and its statement closure); then what
   #   it binds, against the comprehension it replaced: a `Vector{Any}` of `_bind_value` over the values.
   # Expected: no dynamic call (the open arms for another collector or container are skipped), and the
-  #   same values in a `Vector{Any}`, `nothing` for no values, the same refusal past the limit.
+  #   same values of the same types (in a `Vector{_BoundValue}` since #1599's MySQL statement wall, below),
+  #   `nothing` for no values, the same refusal past the limit.
   # Why: the collector's `parameters` slot is `Union{AbstractVector, Tuple}`, so `isempty`, `length` and
   #   the comprehension over `_bind_value`'s three methods were dispatched at run time, and the statement
   #   closure captured `_bind`'s `Any`: 26 rows in the MySQL trim fixture (#1599 layer 2).
@@ -4246,7 +4247,7 @@ end
       expected = Any[myx._bind_value(v) for v in vals]
       for params in (QB.PgParameterizedQuery("", vals, length(vals)), copy(vals))
         bound = myx._bind(pool, params)
-        @test typeof(bound) === Vector{Any} && isequal(bound, expected)
+        @test isequal(bound, expected) && map(typeof, bound) == map(typeof, expected)
       end
       mq = QB.MySQLParameterizedQuery(); append!(mq.where_params, vals)
       @test isequal(myx._bind(pool, mq), expected)
@@ -4343,6 +4344,29 @@ end
     kwtypes = unique(map(T -> fieldtype(T, 4), Base.return_types(myx._connect_args, (Dict{String, String},))))
     @test isdefined(myx, :_ConnectKeywords) && kwtypes == [myx._ConnectKeywords]
     @test _dynamic_calls(myx._dial, (P,)) == String[]
+  end
+
+  # What: what MySQL.jl does with the values the MySQL extension binds: `_run` over a `Vector{_BoundValue}`,
+  #   the container `_bind` returns when every value is of a kind PormG binds, followed eight calls deep,
+  #   against the same over a `Vector{Any}`.
+  # Expected: no dynamic call on a parameter's type (`param_code`, `param_type`, `encode_param_value!`, the
+  #   long-data check) over the union, while a `Vector{Any}` still has them, which is why the union is
+  #   there; a collector of such values comes back in it. That the values and their types, so the bytes
+  #   MySQL.jl sends, are the same is pinned in `test_mysql_ext.jl`.
+  # Why: MySQL.jl encodes each value by its type, one value at a time, so over a `Vector{Any}` every one of
+  #   those calls was a dispatch per value: with the connect typed, the trimmed MySQL fixture raised
+  #   `MethodError` on `param_code(::String)` at its first statement (#1599 layer 2, #1614).
+  @testset "the MySQL parameters reach MySQL.jl in a closed union (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    P = PormG.ConnectionPool.MySQLConnectionPool
+    param_call(s) = occursin(r"param_code|param_type|encode_param_value!|indexed_iterate|== 0xf", s)
+    @test isdefined(myx, :_BoundValue)
+    B = isdefined(myx, :_BoundValue) ? Vector{myx._BoundValue} : Vector{Any}
+    @test filter(param_call, _dynamic_calls_deep(myx._run, (MySQL.Connection, String, B); depth = 8)) == String[]
+    @test !isempty(filter(param_call, _dynamic_calls_deep(myx._run, (MySQL.Connection, String, Vector{Any}); depth = 8)))
+    pool = P("host='127.0.0.1' user='u' password='p' dbname='f1'"; pool_size = 1)
+    @test typeof(myx._bind(pool, QB.PgParameterizedQuery("", Any["Monaco", 2008, nothing], 3))) === B
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

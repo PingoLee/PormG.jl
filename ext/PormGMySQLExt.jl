@@ -314,7 +314,15 @@ _bind_value(v) = v
 # as it is: over its three methods the compiler splits the call into `isa` branches, so it is static, and
 # a fourth method would make it dynamic, which the trim pin catches. Any other collector or container
 # takes the open arm, the code this was before.
-function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{Any}}
+#
+# The values reach MySQL.jl in a `Vector{_BoundValue}` when every one is of a kind in that union, the
+# kinds PormG binds (#1599 layer 2). MySQL.jl encodes each value by its type (`param_code`,
+# `encode_param_value!`, the long-data check), one value at a time, so over a `Vector{Any}` each of those
+# calls was a dispatch per value, and a trimmed image raised `MethodError` on `param_code` at the first
+# statement; over the union they are split into static branches. The values and their types are the
+# same, so MySQL.jl sends the same bytes. A value of any other kind keeps the `Vector{Any}`.
+const _BoundValue = Union{Nothing, Missing, Bool, Int64, Float64, String, Date, DateTime}
+function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{_BoundValue}, Vector{Any}}
   resolved = params isa PormG.QueryBuilder.ParamCollector ? params.parameters :
              params isa AbstractPormGParam ? _other_param_values(params) : params
   resolved isa Vector{Any} && return _bind_vector(pool, resolved)
@@ -322,12 +330,26 @@ function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{Any}}
 end
 @noinline _other_param_values(@nospecialize(params)) = params.parameters
 
-function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector{Any}}
+function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector{_BoundValue}, Vector{Any}}
   isempty(resolved) && return nothing
   _check_parameter_count(pool, length(resolved))
-  bound = Vector{Any}(undef, length(resolved))
+  values = Vector{_BoundValue}(undef, length(resolved))
   for i in eachindex(resolved)
-    bound[i] = _bind_value(resolved[i])
+    v = _bind_value(resolved[i])
+    v isa _BoundValue || return _bind_rest(values, resolved, i, v)
+    values[i] = v
+  end
+  return values
+end
+# A value outside the union: the values so far, this one and the rest, in a `Vector{Any}`.
+function _bind_rest(values::Vector{_BoundValue}, resolved::Vector{Any}, i::Int, @nospecialize(v))::Vector{Any}
+  bound = Vector{Any}(undef, length(resolved))
+  for j in 1:i-1
+    bound[j] = values[j]
+  end
+  bound[i] = v
+  for j in i+1:lastindex(resolved)
+    bound[j] = _bind_value(resolved[j])
   end
   return bound
 end

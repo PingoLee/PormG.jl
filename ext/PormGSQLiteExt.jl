@@ -19,11 +19,26 @@ const _SQLITE_LOCK_RETRY_MAX_ATTEMPTS = 20
 const _SQLITE_LOCK_RETRY_BASE_DELAY = 0.005
 const _SQLITE_LOCK_RETRY_MAX_DELAY = 0.25
 
-function _is_sqlite_locked_error(e)::Bool
-  msg = lowercase(string(e))
-  # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
-  return occursin("database is locked", msg) || occursin("database table is locked", msg)
+# `e` is whatever the statement threw, caught as `Any`: taken unspecialized, so the retry's call is one
+# compiled method and not one per exception type, which a `juliac --trim` image has no code for (#1599
+# layer 2: the trimmed read's first statement error stopped here with a `MethodError`). SQLite.jl's own
+# error, the one a lock raises, is read at its type, through the classifiers' `_phrase_text` (#1714):
+# the message lowercased, a malformed character (invalid bytes in an identifier, echoed back) first
+# replaced, so it never throws. The old text was `string(e)`, the type name around the escaped message;
+# lowercased, that holds one of the two phrases exactly when `_phrase_text` of the message does, since the
+# phrases are letters and spaces and neither an escape (`\xff`) nor U+FFFD can split or make one. The
+# message field is typed `AbstractString`; SQLite.jl builds it as a `String`. Any other value takes the
+# call it took before, behind `@noinline`.
+function _is_sqlite_locked_error(@nospecialize(e))::Bool
+  if e isa SQLite.SQLiteException
+    msg = e.msg
+    msg isa String && return _is_locked_text(PormG._phrase_text(msg))
+  end
+  return _is_locked_text(lowercase(_error_text(e)))
 end
+@noinline _error_text(@nospecialize(e))::String = string(e)
+# server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
+_is_locked_text(msg::String)::Bool = occursin("database is locked", msg) || occursin("database table is locked", msg)
 
 function _sqlite_with_retry(op::Function)
   attempt = 1
@@ -105,6 +120,51 @@ function _create_sqlite_connection(connection_string::String; read_only::Bool = 
   return new_conn
 end
 
+# The statement's positional parameters, bound by value type (#1599 layer 2). SQLite.jl binds a vector
+# of parameters with one `bind!(stmt, i, values[i])` per value, and PormG's collector holds them as
+# `Vector{Any}`, so each was a call on an `Any`: one dispatch per value under the JIT, and in a
+# `juliac --trim` image a call with no compiled target (the trimmed read stopped at
+# `bind!(::Stmt, ::Int64, ::String)`). Wrapped in `_SQLiteBinds`, the vector reaches this extension's
+# `SQLite.bind!` method instead of SQLite.jl's positional one. It has the same body, one positional
+# `bind!` per placeholder after the same count check and message, with each value's call made at the
+# types the SQLite collector binds (`sqlite_bind_value`). Any other value (a `ManualParams` entry) takes
+# the call it took before, one dynamic `bind!`. A tuple, a named collection or `nothing` is handed over
+# as it was.
+struct _SQLiteBinds{V<:AbstractVector} <: AbstractVector{Any}
+  values::V
+end
+Base.size(b::_SQLiteBinds) = size(b.values)
+Base.getindex(b::_SQLiteBinds, i::Int) = b.values[i]
+Base.IndexStyle(::Type{<:_SQLiteBinds}) = IndexLinear()
+
+_sqlite_binds(params::AbstractVector) = _SQLiteBinds(params)
+_sqlite_binds(params) = params
+
+function SQLite.bind!(stmt::SQLite.Stmt, b::_SQLiteBinds)
+  values = b.values
+  nparams = SQLite.C.sqlite3_bind_parameter_count(SQLite._get_stmt_handle(stmt))
+  (nparams == length(values)) || throw(
+    SQLite.SQLiteException("values should be provided for all query placeholders"),
+  )
+  for i in 1:nparams
+    @inbounds _sqlite_bind_one!(stmt, i, values[i])
+  end
+end
+
+# One arm per type `sqlite_bind_value` hands over, each a static call into SQLite.jl's own method.
+@noinline function _sqlite_bind_one!(stmt::SQLite.Stmt, i::Int, @nospecialize(v))
+  v isa String && return SQLite.bind!(stmt, i, v)
+  v isa Int64 && return SQLite.bind!(stmt, i, v)
+  v isa Float64 && return SQLite.bind!(stmt, i, v)
+  v isa Bool && return SQLite.bind!(stmt, i, v)
+  v isa Missing && return SQLite.bind!(stmt, i, v)
+  v isa Nothing && return SQLite.bind!(stmt, i, v)
+  v isa Int32 && return SQLite.bind!(stmt, i, v)
+  v isa Vector{UInt8} && return SQLite.bind!(stmt, i, v)
+  return _sqlite_bind_open!(stmt, i, v)
+end
+@noinline _sqlite_bind_open!(stmt::SQLite.Stmt, i::Int, @nospecialize(v)) = SQLite.bind!(stmt, i, v)
+
 # Prepare an UNREGISTERED statement, execute it, fully materialize the result rows into a
 # connection-independent rowtable, and finalize the statement deterministically.
 #
@@ -135,7 +195,7 @@ function _sqlite_execute_materialized(conn::SQLite.DB, sql::String, params)
   try
     cursor = params === nothing ?
       SQLite.DBInterface.execute(stmt) :
-      SQLite.DBInterface.execute(stmt, params)
+      SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
     return Tables.rowtable(cursor)
   finally
     SQLite.DBInterface.close!(stmt)
@@ -197,12 +257,20 @@ function _sqlite_decode_rows(conn::SQLite.DB, sql::String, params,
                              decode::PormG.QueryBuilder._RowDecoder{T})::Vector{T} where T
   stmt = SQLite.Stmt(conn, sql; register = false)
   try
-    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, params)
-    return _sqlite_rows_into(T, q, decode)
+    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
+    # #1599 layer 2: SQLite.jl builds its cursor as `Query{strict}` from a keyword, so the call returns
+    # an abstract `Query` to inference, and the call below was dynamic: the trimmed read stopped at
+    # `_sqlite_rows_into(::DataType, ::Query{false}, …)`. PormG never passes `strict`, so the cursor is
+    # `Query{false}` (a parameter of `Query` on every SQLite.jl from the 1.6.1 floor up); any other
+    # takes the same call through one `@noinline` arm.
+    q isa SQLite.Query{false} && return _sqlite_rows_into(T, q, decode)
+    return _sqlite_rows_into_open(T, q, decode)
   finally
     SQLite.DBInterface.close!(stmt)
   end
 end
+@noinline _sqlite_rows_into_open(::Type{T}, @nospecialize(q), decode::PormG.QueryBuilder._RowDecoder{T}) where T =
+  _sqlite_rows_into(T, q, decode)::Vector{T}
 
 # The rows, stepped with `iterate` (the first row is already stepped by `execute`; each further one is
 # one step, under the lock each SQLite.jl version takes for it, and an error status raises there as it

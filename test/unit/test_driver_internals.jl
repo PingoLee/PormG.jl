@@ -126,7 +126,13 @@ const PINNED_NAMES = _NamePin[
   (name = "SQLite.C.sqlite3_column_int64",      status = :internal,   reader = "_sqlite_cell"),
   (name = "SQLite.C.sqlite3_column_double",     status = :internal,   reader = "_sqlite_cell"),
   (name = "SQLite.sqlitevalue",                 status = :internal,   reader = "_sqlite_cell (TEXT and BLOB)"),
-  (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into"),
+  (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into, SQLite.bind!(::Stmt, ::_SQLiteBinds)"),
+  # #1599 layer 2: the positional parameters are bound by this extension's `bind!` method on its own vector
+  # type, the body of SQLite.jl's positional one (1.6.1 through 1.11 have the same), and the typed read's
+  # cursor is narrowed to `Query{false}` before its rows are stepped.
+  (name = "SQLite.bind!",                       status = :documented, reader = "SQLite.bind!(::Stmt, ::_SQLiteBinds), _sqlite_bind_one!"),
+  (name = "SQLite.C.sqlite3_bind_parameter_count", status = :internal, reader = "SQLite.bind!(::Stmt, ::_SQLiteBinds)"),
+  (name = "SQLite.Query",                       status = :documented, reader = "_sqlite_decode_rows"),
   # MySQL.jl
   (name = "MySQL.Connection",                   status = :documented, reader = "PormG.backend_execute, _open_connection, _run, …"),
   (name = "MySQL.connection_id",                status = :documented, reader = "PormG.backend_cancel_query!"),
@@ -193,7 +199,7 @@ const PINNED_FIELDS = _FieldPin[
   (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
   (type = SQLite.Query, fields = [:stmt, :names], status = :internal, reader = "_sqlite_rows_into (#1605)"),
   (type = SQLite.SQLiteException, fields = [:msg], status = :internal,
-   reader = "PormG.backend_classify_error, backend_error_fields"),
+   reader = "PormG.backend_classify_error, backend_error_fields, _is_sqlite_locked_error"),
   # MySQL.jl. `_ok_info` returns "" when the cursor has no `ok` field; the pin is what keeps that
   # branch from hiding a rename.
   (type = MySQL.Cursor, fields = [:rows_affected], status = :documented, reader = "_materialize"),

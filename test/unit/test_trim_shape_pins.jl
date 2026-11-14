@@ -838,8 +838,8 @@ end
     end
   end
 
-  # What: the pool's calls into code that may be defined later than the task making them (the SQLite
-  #   worker's `backend_execute`, a deferred or reaped `close`).
+  # What: the pool's calls into code that may be defined later than the task making them (a deferred or
+  #   reaped `close`; the SQLite worker reaches the latest world through a `@cfunction`, pinned below).
   # Expected: ConnectionPool.jl spells `invokelatest(` once, in `_call_latest`; the helper forwards its
   #   arguments and result and holds no dynamic call (the builtin is not one).
   # Why: six call sites each carried their own copy of the world-age reason (#1609, I11). One owner
@@ -853,6 +853,111 @@ end
     @test occursin("@noinline", only(sites))   # the build reaches it only out of line (#1609)
     @test PormG.ConnectionPool._call_latest(+, 1, 2) === 3
     @test isempty(_dynamic_calls(PormG.ConnectionPool._call_latest, (typeof(+), Int, Int)))
+  end
+
+  # What: the SQLite worker, the one task every SQLite statement runs on (#1599 layer 2).
+  # Expected: `_ensure_sqlite_async_worker!` spawns the named loop `_sqlite_worker_loop` with the queue as a
+  #   captured argument, never a `begin … end` body; the loop makes no dynamic call (the statement runs
+  #   through a `ccall` of the pointer the caller took); the statement's runner, the method that pointer
+  #   names, makes no dynamic call over a concrete pool with a plain statement or a typed read's decoder;
+  #   and the caller takes that pointer with no dynamic call.
+  # Why: a `juliac --trim` image compiles a spawned body only when the closure `@spawn` builds captures a
+  #   value. The worker's body read only globals, so it was never compiled: its task died with a
+  #   `MethodError` at its first call, and the trimmed SQLite read waited on the queue until it was killed
+  #   (#1599, round on 089f8fe). And a statement the worker called through its `Any` slot had no compiled
+  #   target for the typed read's row type; a `@cfunction` taken by the caller at the statement's type is
+  #   reached statically. Both measured in a minimal trimmed program first.
+  @testset "the SQLite worker starts and runs its statements in a trimmed image (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    i = findfirst("function _ensure_sqlite_async_worker!()", src)
+    j = findfirst("function _sqlite_worker_loop(", src)
+    @test i !== nothing && j !== nothing && first(j) > last(i)
+    starter = src[last(i):first(j)]
+    spawns = [l for l in split(starter, '\n') if occursin("@spawn", l) && !startswith(lstrip(l), "#")]
+    @test length(spawns) == 1
+    @test occursin("@spawn _sqlite_worker_loop(queue)", only(spawns))
+    @test occursin("queue = _sqlite_async_work_queue", starter)
+
+    @test isempty(_dynamic_calls(CP._sqlite_worker_loop, (Channel{CP.SQLiteAsyncWorkItem},)))
+
+    QB = PormG.QueryBuilder
+    D = QB._RowDecoder{NamedTuple{(:surname,), Tuple{String}}, Tuple{PormG.ReadParser}}
+    for S in (CP._SQLiteStatement{CP.SQLiteConnectionPool, Nothing, Nothing},
+              CP._SQLiteStatement{CP.SQLiteConnectionPool, Vector{Any}, Nothing},
+              CP._SQLiteStatement{CP.SQLiteConnectionPool, Nothing, D})
+      @test isempty(_dynamic_calls(CP._run_sqlite_statement, (S, Any)))
+      @test isempty(_dynamic_calls(CP._sqlite_statement_runner, (S,)))
+    end
+    # One method, so the pointer names one target.
+    @test length(methods(CP._run_sqlite_statement)) == 1
+  end
+
+  # What: the SQLite extension's statement parameters, its typed read's cursor and its retry's lock check
+  #   (#1599 layer 2).
+  # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`
+  #   binds each value of the types `sqlite_bind_value` hands over with a static call (any other value
+  #   through one `@noinline` open arm), with the rows, the count check and its message unchanged; the
+  #   typed read steps SQLite.jl's cursor at its concrete type; the lock check takes the caught exception
+  #   unspecialized and reads SQLite.jl's error at its type.
+  # Why: SQLite.jl binds a vector with one `bind!(stmt, i, values[i])` per value, a call on an `Any`, and
+  #   the trimmed read stopped at `bind!(::Stmt, ::Int64, ::String)`; its cursor comes back as an abstract
+  #   `Query`, and the read then stopped at the row walk; the retry's `_is_sqlite_locked_error(e)` was
+  #   compiled per exception type, and the trimmed binary had none for the one it caught.
+  @testset "the SQLite extension binds, steps its cursor and checks a lock without a dynamic call (#1599 layer 2)" begin
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    @test isempty(_dynamic_calls(X._sqlite_bind_one!, (SQLite.Stmt, Int, Any)))
+    # The count of placeholders is SQLite.jl's own call on its statement handle. Where SQLite.jl infers
+    # that handle concretely (current releases, which a trimmed build resolves) the method makes no
+    # dynamic call; at the 1.6.1 floor `_get_stmt_handle` reads an abstract `Ref`, and that count is the
+    # one call left, the same one SQLite.jl's own positional `bind!` makes there.
+    bind_calls = _dynamic_calls(SQLite.bind!, (SQLite.Stmt, X._SQLiteBinds{Vector{Any}}))
+    if isconcretetype(only(Base.return_types(SQLite._get_stmt_handle, (SQLite.Stmt,))))
+      @test isempty(bind_calls)
+    else
+      @test !isempty(bind_calls) && all(c -> occursin("sqlite3_bind_parameter_count", c), bind_calls)
+    end
+    @test isempty(_dynamic_calls(X._is_sqlite_locked_error, (Any,)))
+    # The cursor SQLite.jl returns is narrowed to `Query{false}`, so the rows are stepped by a static call
+    # (the trimmed read stopped at `_sqlite_rows_into(::DataType, ::Query{false}, …)`).
+    Dsl = PormG.QueryBuilder._RowDecoder{NamedTuple{(:surname,), Tuple{String}}, Tuple{PormG.ReadParser}}
+    @test isempty(_dynamic_calls(X._sqlite_decode_rows, (SQLite.DB, String, Vector{Any}, Dsl)))
+    @test X._sqlite_binds(Any[1]) isa X._SQLiteBinds{Vector{Any}}
+    @test X._sqlite_binds((1,)) === (1,)          # a tuple is handed over as it was
+    @test X._sqlite_binds(nothing) === nothing
+
+    db = SQLite.DB()
+    SQLite.execute(db, "CREATE TABLE t (a, b, c, d, e, f, g)")
+    vals = Any["Senna", Int64(3), 1.5, true, missing, Int32(7), UInt8[0x01, 0x02]]
+    SQLite.execute(db, "INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?)", vals)
+    stmt = SQLite.Stmt(db, "SELECT * FROM t WHERE a = ? AND b = ? AND f = ? AND g = ?"; register = false)
+    probe = Any["Senna", Int64(3), Int32(7), UInt8[0x01, 0x02]]
+    rows_plain = X.Tables.rowtable(SQLite.DBInterface.execute(stmt, probe))
+    cursor = SQLite.DBInterface.execute(stmt, X._sqlite_binds(probe))
+    @test cursor isa SQLite.Query{false}      # the type `_sqlite_decode_rows` narrows the cursor to
+    rows_typed = X.Tables.rowtable(cursor)
+    @test isequal(rows_plain, rows_typed) && length(rows_typed) == 1
+    # A value outside the arms takes SQLite.jl's own method (here `Float32`, an `AbstractFloat`).
+    rows_open = X.Tables.rowtable(SQLite.DBInterface.execute(
+      SQLite.Stmt(db, "SELECT ? AS x"; register = false), X._sqlite_binds(Any[Float32(2.5)])))
+    @test rows_open[1].x == 2.5
+    short = try
+      SQLite.DBInterface.execute(stmt, X._sqlite_binds(Any["Senna"])); nothing
+    catch e
+      e
+    end
+    @test short isa SQLite.SQLiteException && short.msg == "values should be provided for all query placeholders"
+    SQLite.DBInterface.close!(stmt)
+    close(db)
+
+    @test X._is_sqlite_locked_error(SQLite.SQLiteException("database is locked"))
+    @test X._is_sqlite_locked_error(SQLite.SQLiteException("DATABASE TABLE IS LOCKED: drivers"))
+    @test X._is_sqlite_locked_error(ErrorException("database is locked"))   # the open arm, as before
+    @test !X._is_sqlite_locked_error(SQLite.SQLiteException("no such table: drivers"))
+    @test !X._is_sqlite_locked_error(InterruptException())
+    # A message with invalid UTF-8 answers as `string(e)` does, where `lowercase` on the message would throw.
+    @test !X._is_sqlite_locked_error(SQLite.SQLiteException("no such table: t\xff"))
+    @test X._is_sqlite_locked_error(SQLite.SQLiteException("database is locked \xff"))
   end
 
   # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /
@@ -3180,23 +3285,21 @@ end
 
     # The sites the reflection above cannot reach (inside a `lock` closure, an `invoke`d callee, a
     # spawned task): by source, every driver call on a handle in `src/` goes through `_with_handle`, and
-    # `close` on a handle only through its named helpers. The SQLite
-    # worker's two statement calls are the reviewed exception: they run through `_call_latest`, the
-    # world-age helper #1609 owns, and are not a #1683 site.
+    # `close` on a handle only through its named helpers. The SQLite worker's two statement calls go
+    # through `_with_handle` too, in `_sqlite_statement_call` (#1599 layer 2; they ran through
+    # `_call_latest` before and were reviewed here as an exception).
     # Driver generics that take a handle, called directly or handed on as a value (`_call_latest(f, …)`,
     # `invokelatest(f, …)`), and `close` on a handle, called or broadcast.
     generic = raw"backend_(?:is_alive|renew_connection|execute_async|execute_rows|execute|cancel_query!|drain_connection!|copy_in!|ping)"
     driver_call = Regex(raw"\b(" * generic * raw")\(|(?:_call_latest|invokelatest)\((" * generic * raw"|close),")
     close_call = r"(?<!\w)close\.?\((?:conn|retired|dead|new_conn|handle|handles|h|old|pool\.connections)\b"
-    # The named helpers the barrier calls, by their exact definitions, and the SQLite worker's two
-    # statement calls (#1609's `_call_latest`), each expected exactly once.
+    # The named helpers the barrier calls, by their exact definitions, each expected exactly once.
     helpers = ("_handle_close(pool, conn) = close(conn)", "_handle_close_latest(pool, conn) = _call_latest(close, conn)",
                "_handle_renew(pool, conn) = backend_renew_connection(pool, conn)",
                "_handle_renew(pool, conn, read_only::Bool) = backend_renew_connection(pool, conn; read_only = read_only)")
-    # Backend.jl's default `backend_execute_rows` (a driver without a typed read) is reached only from that
-    # worker, so it is the same exception.
-    reviewed = ("_call_latest(backend_execute_rows, item.pool, item.conn", "_call_latest(backend_execute, item.pool, item.conn",
-                "backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
+    # Backend.jl's default `backend_execute_rows` (a driver without a typed read) is reached only from the
+    # SQLite worker, through `_with_handle`, with the handle it was given: the reviewed exception.
+    reviewed = ("backend_execute_rows(pool::PormGBackend, conn, sql::String, params, decode) =",
                 "decode_on_worker(decode, backend_execute(pool, conn, sql, params))")
     # Every file in src/, AdvisoryLock.jl included since #1708.
     files = sort!([joinpath(root, f) for (root, _, fs) in walkdir(joinpath(pkgdir(PormG), "src")) for f in fs

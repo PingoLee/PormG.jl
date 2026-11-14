@@ -797,10 +797,12 @@ end
 # ── The latest world, for a task that outlives its own (#1609) ──────────────
 #
 # A task runs in the world age it was created in, so a long-lived one cannot see methods defined after
-# it started: a driver extension loaded later, a Revise reload, a unit test's mock handle. The SQLite
-# worker lives forever, and a deferred or reaped close can run long after the code that scheduled it.
-# Every call they make into code that may be redefined goes through here, so the reason is written
-# once. `Vararg{Any,N}` so the tail is specialized.
+# it started: a driver extension loaded later, a Revise reload, a unit test's mock handle. A deferred
+# or reaped close can run long after the code that scheduled it. Every call such a task makes into code
+# that may be redefined goes through here, so the reason is written once. `Vararg{Any,N}` so the tail
+# is specialized. The SQLite worker, which lives forever, reaches the latest world another way: its
+# statements arrive as `@cfunction` pointers, and a call through one runs in the latest world
+# (`_sqlite_statement_runner`, #1599 layer 2).
 #
 # A trimmed build calls `f(args...)` directly, and JuliaC decides that, not PormG. The verifier does not
 # accept the builtin on any signature ("trim verification not yet implemented for builtin
@@ -3020,27 +3022,58 @@ end
 # `backend_execute` (sync) and `backend_execute_async` (async). The SQLite async
 # worker below stays in core but dispatches each statement through `backend_execute`.
 
+# The statement the worker runs, at the types its caller holds (#1599 layer 2): the pool at its concrete
+# type, the parameters and, for a typed read (#1605), the row decoder. With no decoder the worker calls
+# `backend_execute`; with one, `backend_execute_rows`, and the decoder runs on the worker, where SQLite's
+# statement is stepped and finalized. The handle is not a field: a pool slot holds it untyped, so the
+# worker passes it beside the statement, from the work item, and it reaches the driver through
+# `_with_handle`.
+struct _SQLiteStatement{P<:PormGSQLite,Q,D}
+  pool::P
+  sql::String
+  params::Q
+  decode::D   # `nothing`, or the typed read's `QueryBuilder._RowDecoder`
+end
+
+# One method: it is what the `@cfunction` below names.
+_run_sqlite_statement(s::_SQLiteStatement, @nospecialize(conn)) =
+  _sqlite_statement_call(s.pool, conn, s.sql, s.params, s.decode)
+_sqlite_statement_call(pool, @nospecialize(conn), sql::String, params, ::Nothing) =
+  _with_handle(backend_execute, pool, conn, sql, params)
+_sqlite_statement_call(pool, @nospecialize(conn), sql::String, params, decode) =
+  _with_handle(backend_execute_rows, pool, conn, sql, params, decode)
+
+# A C pointer to `_run_sqlite_statement` at the statement's own type, taken by the caller, which knows
+# that type; the worker calls the pointer (`_run_on_worker`). Why a pointer and not a call: the worker
+# reads the statement out of a queue of one item type, so to it the statement is an `Any`, and a call
+# on an `Any` dispatches at run time. Under the JIT that compiles the method then. A `juliac --trim`
+# image compiles only what it can reach statically, so the typed read's `backend_execute_rows` for the
+# caller's row type had no code and the worker answered a `MethodError`. A `@cfunction` is reached
+# statically, at the type it names: the trim verifier checks that its target is compiled. Measured in a
+# minimal trimmed program: a job called through an `Any` field missed its method, as a parametric
+# struct, a closure or a concrete struct alike, and the same job through this pointer ran.
+#
+# A call through a `@cfunction` runs in the latest world, as `invokelatest` does, so the worker, a task
+# that lives forever, still reaches a method defined after it started (a driver extension loaded later,
+# a Revise reload, a unit test's mock handle; see `_call_latest`). An exception raised in the statement
+# propagates through the pointer call to the worker's `catch`, as from a direct call.
+_sqlite_statement_runner(::S) where {S<:_SQLiteStatement} =
+  @cfunction(_run_sqlite_statement, Any, (Ref{S}, Any))
+
 mutable struct SQLiteAsyncWorkItem
   pool::PormGSQLite
   conn::Any
-  sql::String
-  params::Any
+  run::Ptr{Cvoid}        # `_sqlite_statement_runner(job)`
+  job::Any               # the `_SQLiteStatement` that `run` takes, with `conn`
   response::Channel{Any}
   mark::_StatementMark   # the leak scan's stamp for this statement (#1637); cleared when it ends
 end
 
+_run_on_worker(item::SQLiteAsyncWorkItem) = ccall(item.run, Any, (Any, Any), item.job, item.conn)
+
 struct SQLiteAsyncResponse
   success::Bool
   payload::Any
-end
-
-# #1605: a statement whose rows the worker decodes before answering (the typed read's `decode`, see
-# `fetch`). It rides in the work item's `params` slot, so the item gains no field; the worker unwraps it
-# and calls `backend_execute_rows`, and the decoder runs on the worker, where SQLite's statement is
-# stepped and finalized.
-struct _DecodeWith{P,D}
-  params::P
-  decode::D
 end
 
 # A single global worker serializes all SQLite async operations across all pool instances.
@@ -3096,41 +3129,48 @@ function _ensure_sqlite_async_worker!()
   Base.lock(_sqlite_async_worker_lock) do
     _sqlite_async_worker_started[] && return
 
-    Threads.@spawn begin
-      while true
-        item = take!(_sqlite_async_work_queue)
-        # Build the response and drop the ledger entry BEFORE waking the awaiter (#327). Ordering,
-        # not bookkeeping: it is what makes "my await returned" IMPLY "the ledger is drained", and
-        # callers rely on that implication. `_renew_or_discard_connection!` reads the ledger the
-        # moment a failed ROLLBACK's await comes back, and #71/#139 both assert the close it does
-        # there is SYNCHRONOUS. Decrementing after the `put!` leaves the awaiter free to resume
-        # first, see stale outstanding work, and defer that close instead — rarely, which is the
-        # worst frequency a guarantee can fail at. The decrement is safe the instant
-        # `backend_execute` returns: the worker is off the handle, and the `put!` below touches only
-        # the response channel.
-        response = try
-          # Dispatches into the SQLite extension's backend_execute (materialized + retry), in the
-          # latest world: this task lives forever (see `_call_latest`). A typed read's statement
-          # (#1605) carries its decoder, and the worker decodes the rows before answering.
-          params = item.params
-          SQLiteAsyncResponse(true, params isa _DecodeWith ?
-            _call_latest(backend_execute_rows, item.pool, item.conn, item.sql, params.params, params.decode) :
-            _call_latest(backend_execute, item.pool, item.conn, item.sql, params))
-        catch e
-          SQLiteAsyncResponse(false, e)
-        finally
-          # The matching half of the increment in `sqlite_execute_async`. In the `finally` so it also
-          # covers a `backend_execute` that threw — and so a response channel nobody is listening to
-          # any more (the awaiting task may have been killed by the very Ctrl-C this exists for)
-          # cannot leak a count and defer that connection's close forever.
-          _sqlite_pending_dec!(item.conn)
-          _note_statement_end!(item.pool, item.mark)   # the statement has ended (#1637)
-        end
-        put!(item.response, response)
-      end
-    end
+    # The loop is a named function, spawned with the queue as a captured argument (#1599 layer 2). A
+    # `juliac --trim` image compiles a spawned body only when the closure `@spawn` builds captures a
+    # value: the compiler then sees the closure constructed and compiles its body. A body that reads
+    # only globals is a closure with no fields, a constant that is never constructed, so it was never
+    # compiled; its task died at its first call with a `MethodError` nobody awaited, and every SQLite
+    # statement waited on the queue forever. Measured in a minimal trimmed program: the global-only
+    # body missed its method, and a named function spawned with a captured argument ran.
+    queue = _sqlite_async_work_queue
+    Threads.@spawn _sqlite_worker_loop(queue)
 
     _sqlite_async_worker_started[] = true
+  end
+end
+
+function _sqlite_worker_loop(queue::Channel{SQLiteAsyncWorkItem})
+  while true
+    item = take!(queue)
+    # Build the response and drop the ledger entry BEFORE waking the awaiter (#327). Ordering,
+    # not bookkeeping: it is what makes "my await returned" IMPLY "the ledger is drained", and
+    # callers rely on that implication. `_renew_or_discard_connection!` reads the ledger the
+    # moment a failed ROLLBACK's await comes back, and #71/#139 both assert the close it does
+    # there is SYNCHRONOUS. Decrementing after the `put!` leaves the awaiter free to resume
+    # first, see stale outstanding work, and defer that close instead — rarely, which is the
+    # worst frequency a guarantee can fail at. The decrement is safe the instant
+    # `backend_execute` returns: the worker is off the handle, and the `put!` below touches only
+    # the response channel.
+    response = try
+      # Dispatches into the SQLite extension's backend_execute (materialized + retry), or, for a
+      # typed read (#1605), its backend_execute_rows, which decodes the rows before answering. In
+      # the latest world, as this task lives forever: see `_sqlite_statement_runner`.
+      SQLiteAsyncResponse(true, _run_on_worker(item))
+    catch e
+      SQLiteAsyncResponse(false, e)
+    finally
+      # The matching half of the increment in `sqlite_execute_async`. In the `finally` so it also
+      # covers a `backend_execute` that threw — and so a response channel nobody is listening to
+      # any more (the awaiting task may have been killed by the very Ctrl-C this exists for)
+      # cannot leak a count and defer that connection's close forever.
+      _sqlite_pending_dec!(item.conn)
+      with_pool(_note_statement_end!, item.pool, item.mark)   # the statement has ended (#1637)
+    end
+    put!(item.response, response)
   end
 end
 
@@ -3148,8 +3188,8 @@ function sqlite_execute_async(pool::PormGSQLite, @nospecialize(conn), sql::Strin
   # Stamped when queued, not when the worker takes it: a statement queued behind others is running on
   # the pool's behalf, not a lease nobody returns (#1637).
   mark = _note_statement_start!(pool, conn)
-  work_item = SQLiteAsyncWorkItem(pool, conn, sql, decode === nothing ? params : _DecodeWith(params, decode),
-                                  response, mark)
+  job = _SQLiteStatement(pool, sql, params, decode)
+  work_item = SQLiteAsyncWorkItem(pool, conn, _sqlite_statement_runner(job), job, response, mark)
 
   # Count this statement as outstanding BEFORE it can reach the worker (#327), and synchronously —
   # on the caller's task, not inside the `@async` below. Doing it in the task would leave a window

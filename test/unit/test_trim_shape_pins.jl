@@ -2765,12 +2765,13 @@ end
       @test isempty(_dynamic_calls(M.apply_formatter, (Function, T, Bool)))
     end
     # With an untyped value, each arm is a call on the value at a known function: no call on `f` itself
-    # but the open arm's and the `ArrayFormatter` arm's (a call on the struct, whose one method takes the
-    # value untyped). That residue is the literal's, not the formatter's.
+    # but the `ArrayFormatter` arm's (a call on the struct, whose one method takes the value untyped).
+    # The open arm takes the value `@nospecialize` (#1599 layer 3), so it is an `:invoke`, not a call.
+    # That residue is the literal's, not the formatter's.
     on_any = [replace(c, r"^\d+: " => "") for c in _dynamic_calls(M.apply_formatter, (Function, Any, Bool))]
-    @test count(c -> startswith(c, "PormG.Models._apply_formatter_other("), on_any) == 1
+    @test count(c -> startswith(c, "PormG.Models._apply_formatter_other("), on_any) == 0
     @test count(c -> occursin(r"^\(%\d+\)\(_3\)$", c), on_any) == 1
-    @test all(c -> occursin(r"^(PormG\.Models\.(format_\w+|identity|_apply_formatter_other)\(|Core\.kwcall\(%\d+, PormG\.Models\.format_\w+, _3\)$|\(%\d+\)\(_3\)$)", c), on_any)
+    @test all(c -> occursin(r"^(PormG\.Models\.(format_\w+|identity)\(|Core\.kwcall\(%\d+, PormG\.Models\.format_\w+, _3\)$|\(%\d+\)\(_3\)$)", c), on_any)
     # 2. The open arm is exactly the call a user's formatter made before: one dynamic call per branch.
     @test length(_dynamic_calls(M._apply_formatter_other, (Function, Any, Bool))) == 2
 
@@ -2839,6 +2840,50 @@ end
       @test same(outcome(() -> M.apply_formatter(f, v, ranged)), outcome(() -> direct(f, v, ranged)))
     end
     @test M.apply_formatter(user, 3) == "user:3"
+  end
+
+  # What: the layer-3 residue a trimmed build compiled once per literal type, or read through a boxed
+  #   variable: `apply_formatter`'s open arm, the PostgreSQL array-literal parser and the SQLite
+  #   timestamp normalizer (#1599 layer 3).
+  # Expected: `_apply_formatter_other` takes both the formatter and the value `@nospecialize`, and every
+  #   `apply_formatter` instance invokes its one `(Any, Any, Bool)` copy; `parse_pg_array_literal` and
+  #   `normalize_sqlite_datetime_string` make no dynamic call; their answers are unchanged.
+  # Why: `apply_formatter` is compiled per value type, and each instance carried its own copy of the open
+  #   arm (84 verifier rows on the read-only fixture). `parse_pg_array_literal`'s `skip_ws()` closure
+  #   reassigned the index it captured, which boxed it (192 rows). The timestamp normalizer joined
+  #   captures typed `Union{Nothing, SubString}`, a dynamic call on the SQLite read path.
+  @testset "apply_formatter's open arm, the array-literal parser and the timestamp normalizer are compiled once, statically (#1599 layer 3)" begin
+    M = PormG.Models
+    m = only(methods(M._apply_formatter_other))
+    @test m.nospecialize == 0b011   # `f` and `value`; `ranged` is a `Bool`
+    other_mi(tt) = [s.args[1] for (ci, _) in Base.code_typed_by_type(tt; optimize = true) for s in ci.code
+                    if s isa Expr && s.head === :invoke &&
+                       occursin("_apply_formatter_other", string(s.args[1]))]
+    for T in (Int64, String, Float64, Bool, Dates.Date, Vector{Int64}, Missing)
+      sites = other_mi(Tuple{typeof(M.apply_formatter), Function, T, Bool})
+      @test !isempty(sites)
+      for ci in sites
+        mi = ci isa Core.CodeInstance ? ci.def : ci
+        @test mi.specTypes == Tuple{typeof(M._apply_formatter_other), Any, Any, Bool}
+      end
+    end
+    user = v -> string("user:", v)
+    @test M.apply_formatter(user, 3) == "user:3" && M.apply_formatter(user, "x", false) == "user:x"
+
+    for S in (String, SubString{String})
+      @test isempty(_dynamic_calls(M.parse_pg_array_literal, (S,)))
+    end
+    # An escaped unquoted element keeps its surrounding spaces, as before.
+    @test M.parse_pg_array_literal(" { 1 , \"a b\" ,NULL, \"NULL\" , \\\"q } ") ==
+          Union{Nothing, String}["1", "a b", nothing, "NULL", "\"q "]
+    @test M.parse_pg_array_literal(SubString("x{}", 2)) == Union{Nothing, String}[]
+    @test_throws PormG.InvalidValueError M.parse_pg_array_literal("{1,{2}}")
+
+    @test isempty(_dynamic_calls(M.normalize_sqlite_datetime_string, (String,)))
+    @test M.normalize_sqlite_datetime_string("2009-05-24T14:00:00.1Z") == "2009-05-24T14:00:00.100Z"
+    @test M.normalize_sqlite_datetime_string("2009-05-24T14:00:00.123456+02:00") == "2009-05-24T14:00:00.123+02:00"
+    @test M.normalize_sqlite_datetime_string("2009-05-24T14:00:00-03:00") == "2009-05-24T14:00:00.000-03:00"
+    @test M.normalize_sqlite_datetime_string("2009-05-24") == "2009-05-24"
   end
 
   # What: `Models._pg_decimal_text`, the plain text of a `Decimal` that MySQL's binding sends

@@ -2334,7 +2334,7 @@ end
   # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
   #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`) and the format
   #   step's keyword call (`_format_single` → `_format_single_at`), the formatter call (`Models.apply_formatter`),
-  #   the formatted value's collection and NUL checks (`_checked_formatted`).
+  #   the formatted value's collection and NUL checks (`_checked_formatted`), the bind (`_bind_written_value!`).
   # Expected: `validate_field_data` and `_format_single` take their value unspecialized, and neither their
   #   keyword bodies nor the walks make a dynamic call (each open arm makes one, whatever the field's type);
   #   each returns the same value, or raises the same error type with the same text, as the code it
@@ -2441,6 +2441,34 @@ end
       @test same(outcome(() -> QB._format_single(f_meta, f, v, "insert"; conn = c)),
                     outcome(() -> old_fs(f_meta, f, v, "insert", c)))
     end
+
+    # Wall 6, the bind: the formatted value walked to its type on each engine's collector, one dynamic call in
+    # the open arm, and the same placeholder and the same collected parameter as the direct call.
+    for n in (:_bind_written_value!, :_bind_written_other!)
+      @test has(n)
+    end
+    collectors = (() -> QB.SQLiteParameterizedQuery(), () -> QB.PgParameterizedQuery("", Any[], 0),
+                  () -> QB.MySQLParameterizedQuery())
+    if has(:_bind_written_value!)
+      for mk in collectors
+        C = typeof(mk())
+        @test isempty(_dynamic_calls(QB._bind_written_value!, (C, Any)))
+        @test length(_dynamic_calls(QB._bind_written_other!, (C, Any))) == 1
+      end
+      bound = Any["abc", 7, Int32(7), 2.5, true, nothing, missing, Dates.Date(2009, 5, 24), M.Decimals.Decimal(0, 150, -2),
+                  M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), SubString("abc", 1, 2),
+                  PormG.PormGBytes(UInt8[1, 2]), PormG.PormGArrayLiteral("{1,2}"), Int16(3)]
+      for mk in collectors, v in bound
+        a, b = mk(), mk()
+        ra = outcome(() -> QB._bind_written_value!(a, v))
+        rb = outcome(() -> QB.add_parameter!(b, v))
+        @test same(ra, rb) && samevalue(a, b)
+      end
+    end
+    # The insert's row marshalling makes none of these calls dynamically any more.
+    insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
+                                                           CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
+    @test !any(c -> occursin(r"validate_field_data|_format_single|add_parameter!|kwcall", c), insert_calls)
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 

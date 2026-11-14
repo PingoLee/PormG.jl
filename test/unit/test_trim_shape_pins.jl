@@ -1031,6 +1031,24 @@ end
     @test X._is_sqlite_locked_error(SQLite.SQLiteException("database is locked \xff"))
   end
 
+  # What: the SQLite extension's materialization of a non-typed statement's result
+  #   (`_sqlite_execute_materialized`, with and without parameters), the construction it calls on the
+  #   cursor PormG builds (`_sqlite_rowtable`), and the typed vector it fills (`_sqlite_typed_vector`).
+  # Expected: no dynamic call in any of them; `Tables.rowtable` is reached only through the `@noinline`
+  #   open arm for a cursor that is not `Query{false}`. That the result is `Tables.rowtable`'s, type and
+  #   values, is pinned in `test_sqlite_materialize.jl`.
+  # Why: `Tables.rowtable(cursor)` builds each row as a `NamedTuple` of a type known only at run time, and
+  #   a trimmed image had no code for it, so every non-typed SQLite statement raised `MethodError` there:
+  #   the full fixture's write stopped at its INSERT (#1599 layer 2, #1797's hand-off).
+  @testset "the SQLite extension materializes a result without a dynamic call (#1599 layer 2)" begin
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    @test isdefined(X, :_sqlite_rowtable) && _dynamic_calls(X._sqlite_rowtable, (SQLite.Query{false},)) == String[]
+    @test isdefined(X, :_sqlite_typed_vector) && _dynamic_calls(X._sqlite_typed_vector, (Type, Vector{Any})) == String[]
+    for P in (Nothing, Vector{Any})
+      @test (P, _dynamic_calls(X._sqlite_execute_materialized, (SQLite.DB, String, P))) == (P, String[])
+    end
+  end
+
   # What: the capability lookup by a feature name, `_has_feature(T, ::Symbol)` /
   #   `_feature_since(T, ::Symbol)`, and its callers `_supports` and `_supporting_backends`.
   # Expected: the same answer as the table's `Val` method for every feature on every backend; an

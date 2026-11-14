@@ -145,6 +145,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Bare Literal Function Operands (#705)" include("unit/test_function_literal_operands.jl")
     @testset "Greatest/Least Skip NULL on SQLite (#844)" include("unit/test_greatest_least_null.jl")
     @testset "SQLite Literal Binding, Never a BLOB (#721)" include("unit/test_sqlite_literal_binding.jl")
+    @testset "SQLite Materializes a Result as Tables.rowtable Did (#1599)" include("unit/test_sqlite_materialize.jl")
     @testset "Dedicated Inspection API" include("unit/test_inspect_query.jl")
     @testset "select_for_update(of = …) Targets (#169)" include("unit/test_select_for_update_of.jl")
     @testset "SQL Pretty-printing (#48)" include("unit/test_sql_format.jl")

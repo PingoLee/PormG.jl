@@ -200,10 +200,75 @@ function _sqlite_execute_materialized(conn::SQLite.DB, sql::String, params)
     cursor = params === nothing ?
       SQLite.DBInterface.execute(stmt) :
       SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
-    return Tables.rowtable(cursor)
+    # `Query{false}`, the cursor PormG's call builds (see `_sqlite_decode_rows`); any other is read by
+    # `Tables.rowtable`, as before, behind `@noinline`.
+    cursor isa SQLite.Query{false} && return _sqlite_rowtable(cursor)
+    return _sqlite_rowtable_open(cursor)
   finally
     SQLite.DBInterface.close!(stmt)
   end
+end
+@noinline _sqlite_rowtable_open(@nospecialize(cursor)) = Tables.rowtable(cursor)
+
+# #1599: what `Tables.rowtable(cursor)` returns, built without it. `Tables.rowtable` builds each row as a
+# `NamedTuple` whose type the row's cells decide (SQLite types each cell), through calls on types known only
+# at run time, and a trimmed image had no code for them: every non-typed SQLite statement (a write's
+# INSERT and its read-back, a count, a migration's introspection) raised `MethodError` there. This builds
+# the same `Vector` from builtins, which need no compiled code per type:
+#   - the column names are read once (`q.names`, which `Tables.columnnames(::Query)` returns);
+#   - each cell by its storage class (`_sqlite_value`), the read `Tables.getcolumn` makes on a non-strict
+#     row (`SQLite.getvalue` with `Any`);
+#   - each row as `NamedTuple{names, typeof(cells)}` (`Core.apply_type`, `jl_new_structt`), the row type
+#     `NamedTuple{names}(cells)` makes;
+#   - the vector's element type widened as `collect` widens it (`Base.promote_typejoin` of the row
+#     types), and its elements stored with `memoryrefset!`;
+#   - for no rows, the element type `Tables.rowtable` takes from the cursor's schema then:
+#     `NamedTuple{names, Tuple{q.types...}}`.
+# `test_sqlite_materialize.jl` compares the result with `Tables.rowtable`'s, type and values.
+function _sqlite_rowtable(q::SQLite.Query{false})
+  names = q.names
+  key = (names...,)
+  isempty(q) && return _sqlite_typed_vector(Core.apply_type(NamedTuple, key, (Core.apply_type(Tuple, q.types...))), Any[])
+  handle = SQLite._get_stmt_handle(q.stmt)
+  n = length(names)
+  rows = Any[]
+  eltype_ = Union{}
+  next = iterate(q)
+  while next !== nothing
+    cells = Vector{Any}(undef, n)
+    for j in 1:n
+      cells[j] = _sqlite_value(handle, j)
+    end
+    tup = (cells...,)
+    R = Core.apply_type(NamedTuple, key, typeof(tup))
+    push!(rows, ccall(:jl_new_structt, Any, (Any, Any), R, tup))
+    eltype_ = eltype_ === Union{} ? R : (R <: eltype_ ? eltype_ : Base.promote_typejoin(eltype_, R))
+    next = iterate(q, next[2])
+  end
+  return _sqlite_typed_vector(eltype_, rows)
+end
+
+# A cell by its storage class, as a non-strict `SQLite.getvalue` reads it (1.6.1 through 1.11 read the
+# classes the same way; `test_driver_internals.jl` pins the C names); a BLOB through SQLite.jl's own read.
+@inline function _sqlite_value(handle, col::Int)
+  t = SQLite.C.sqlite3_column_type(handle, col - 1)
+  t == SQLite.C.SQLITE_NULL && return missing
+  t == SQLite.C.SQLITE_INTEGER && return SQLite.C.sqlite3_column_int64(handle, col - 1)
+  t == SQLite.C.SQLITE_FLOAT && return SQLite.C.sqlite3_column_double(handle, col - 1)
+  t == SQLite.C.SQLITE_TEXT && return SQLite.sqlitevalue(String, handle, col)
+  return SQLite.sqlitevalue(Any, handle, col)
+end
+
+# A `Vector{T}` holding `rows`, for a `T` known only at run time: allocated by the runtime
+# (`jl_alloc_array_1d`) and filled through `memoryrefset!`, which check each element against `T` as
+# `setindex!` would, with no method compiled per `T`.
+function _sqlite_typed_vector(@nospecialize(T::Type), rows::Vector{Any})
+  v = ccall(:jl_alloc_array_1d, Any, (Any, Csize_t), Core.apply_type(Vector, T), length(rows))
+  ref = getfield(v, :ref)
+  for i in eachindex(rows)
+    Core.memoryrefset!(Core.memoryrefnew(ref, i, false), rows[i], :not_atomic, false)
+  end
+  return v
 end
 
 # ── Backend interface methods ────────────────────────────────────────────────

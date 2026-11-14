@@ -760,12 +760,61 @@ end
 
 @testset "parameters bind as LibPQ.jl binds them (#788)" begin
   @test PGExt._bind(nothing) === nothing
+  # A bare byte vector binds as an array literal, as LibPQ renders it, not as bytea. The collector's
+  # vector arrives as the text Postgres.jl binds (#1599 layer 2, below).
   bound = PGExt._bind(Any[UInt8[1, 2], "x", 3])
-  @test bound[1] == [1, 2] && bound[1] isa Vector{Int}
-  @test bound[2] == "x" && bound[3] == 3
+  @test Postgres.build_unchecked_params(bound) == ["{1, 2}", "x", "3"] && bound isa Vector{PGExt._PgBound}
   @test PGExt._bind((UInt8[1], 2)) isa Tuple
   query = PormG.QueryBuilder.PgParameterizedQuery("", Any[UInt8[5], "y"], 2)
-  @test PGExt._bind(query) == Any[[5], "y"]
+  @test Postgres.build_unchecked_params(PGExt._bind(query)) == ["{5}", "y"]
+end
+
+# What: the text `_bind` hands Postgres.jl for a collector's `Vector{Any}`, over every kind the walk in
+#   `_wire_text` names and kinds it leaves to the open arm, NULL among them.
+# Expected: Postgres.jl's own conversion of what `_bind` returns, through both its bindings
+#   (`build_unchecked_params` for an unnamed statement, `bind_params!` for a prepared one), equals its
+#   conversion of the vector `_bind` returned before, `map(_bind_value, values)`: the statement receives
+#   the same parameters. A value with no text raises the same error at the same point (after the
+#   parameter count is checked), not in `_bind`.
+# Why: `_bind` now builds the wire text itself, at each value's concrete type, because Postgres.jl's
+#   per-value `_param` over a `Vector{Any}` was a dispatch a trimmed image had no code for (#1599 layer
+#   2). A kind the walk converted differently would bind a different value.
+# A value whose text cannot be built: `string` of it throws.
+struct _NoText1599 end
+Base.show(io::IO, ::_NoText1599) = throw(ArgumentError("this value has no text"))
+
+@testset "the wire text binds the parameters the values bound (#1599)" begin
+  Decimal = PGExt.Decimals.Decimal
+  D = PGExt.Dates
+  kinds = Any["Monaco", "", "naïve 'quote' \\ ", 1950, -3, typemax(Int64), 2.5, -0.0, 1.0e-300, Inf, NaN,
+              true, false, nothing, missing, D.Date(2008, 5, 25), D.DateTime(2008, 5, 25, 14, 0, 0),
+              D.DateTime(2008, 5, 25, 14, 0, 0, 7), parse(Decimal, "12.34"), parse(Decimal, "-0.001"),
+              UInt8[1, 2], UInt8[], [1, 2, 3], Int32(7), Float32(1.5), D.Time(14, 0), ["Spa", "Monza"],
+              [1.5, missing], SubString("Interlagos", 1, 5), :symbol, 'c', UInt8(9)]
+  old(values) = Postgres.build_unchecked_params(map(PGExt._bind_value, values))
+  bound = PGExt._bind(kinds)
+  @test bound isa Vector{PGExt._PgBound}
+  @test isequal(Postgres.build_unchecked_params(bound), old(kinds))
+  for v in kinds
+    @test isequal((v, isequal(Postgres.build_unchecked_params(PGExt._bind(Any[v])), old(Any[v]))), (v, true))
+  end
+  @test isempty(PGExt._bind(Any[])) && PGExt._bind(Any[]) isa Vector{PGExt._PgBound}
+  # The prepared statement's binding gives the same text too.
+  dest(n) = Vector{Union{String, Missing}}(missing, n)
+  a, b = dest(length(kinds)), dest(length(kinds))
+  Postgres.bind_params!(a, bound, "sql"); Postgres.bind_params!(b, map(PGExt._bind_value, kinds), "sql")
+  @test isequal(a, b)
+  # A value with no text fails where it did: inside the driver's binding, after the count check, with the
+  # same error; `_bind` itself does not raise.
+  for vals in (Any["Monaco", _NoText1599()], Any["Monaco", 1950, _NoText1599()])
+    caught(f) = try f(); nothing catch e; e end
+    new_bound = PGExt._bind(vals)
+    old_bound = map(PGExt._bind_value, vals)
+    for run in (v -> Postgres.build_unchecked_params(v), v -> Postgres.bind_params!(dest(2), v, "SELECT \$1, \$2"))
+      e_new, e_old = caught(() -> run(new_bound)), caught(() -> run(old_bound))
+      @test e_new !== nothing && typeof(e_new) == typeof(e_old) && sprint(showerror, e_new) == sprint(showerror, e_old)
+    end
+  end
 end
 
 @testset "errors classify by SQLSTATE, never by message text (#788)" begin

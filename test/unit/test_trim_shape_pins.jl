@@ -4193,10 +4193,40 @@ end
     end
     for vals in (Any[UInt8[1, 2], "Monaco", 3], Any[1, 2], Any["Spa", nothing])
       bound = pgx._bind(QB.PgParameterizedQuery("", vals, length(vals)))
-      @test typeof(bound) == typeof(map(pgx._bind_value, vals)) && bound == map(pgx._bind_value, vals)
+      # The text Postgres.jl binds (#1599 layer 2, below): what the driver makes of the vector `_bind`
+      # returned before, which `test_postgres_ext.jl` checks over every kind.
+      @test isequal(Postgres.build_unchecked_params(bound), Postgres.build_unchecked_params(map(pgx._bind_value, vals)))
     end
     @test pgx._bind((UInt8[7], "Imola")) == ([7], "Imola")
     @test pgx._bind(nothing) === nothing
+  end
+
+  # What: the Postgres.jl extension's wire text for a `Vector{Any}` of parameters (`_wire_texts`, the
+  #   per-value walk `_wire_text`), and Postgres.jl's two bindings (`bind_params!` for a prepared statement,
+  #   `build_unchecked_params` for an unnamed one) over the `Vector{_PgBound}` `_bind` returns, six calls
+  #   deep, through the extension's `_param(::_PgBound)`.
+  # Expected: no dynamic call but the open arm `_wire_text_other`, which is not walked, and the spelling of
+  #   a value inside `print` (Decimals' `print`, which `_param(::Decimal)` reaches through `string`, as
+  #   before). That it binds what Postgres.jl bound before, and fails where it failed, is pinned in
+  #   `test_postgres_ext.jl`.
+  # Why: Postgres.jl calls `_param` on each value, a dispatch per value on a `Vector{Any}`, and `map` over
+  #   one sized its result from the first value's type at run time: with the connect typed, the trimmed
+  #   Postgres.jl fixture raised `MethodError` on `Vector{T}(undef, n)`, then on `_param(::String)`, at
+  #   its first statement (#1599 layer 2, #1614).
+  @testset "the Postgres.jl parameters reach the driver as wire text, statically (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    @test isdefined(pgx, :_wire_texts) && _dynamic_calls(pgx._wire_texts, (Vector{Any},)) == String[]
+    @test isdefined(pgx, :_wire_text) && _dynamic_calls(pgx._wire_text, (Any,)) == String[]
+    @test pgx._bind(QB.PgParameterizedQuery("", Any["Monaco", 2008], 2)) isa Vector{pgx._PgBound}
+    W = Vector{pgx._PgBound}
+    @test _dynamic_calls(Postgres._param, (pgx._PgBound,)) == String[]
+    spelling(s) = occursin(r"^Tuple\{typeof\((Base\.)?print(_to_string)?\), ", s)
+    for (f, tt) in ((Postgres.build_unchecked_params, (W,)),
+                    (Postgres.bind_params!, (Vector{Union{String, Missing}}, W, String)))
+      found = _dynamic_calls_deep(f, tt; depth = 6, skip = (pgx._wire_text_other, Postgres.param_mismatch))
+      @test (f, filter(!spelling, found)) == (f, String[])
+    end
   end
 
   # What: the MySQL extension's result cursor, `_materialize`, at the two cursors `_run` hands it (a

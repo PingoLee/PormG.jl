@@ -778,10 +778,10 @@ _bind_value(v) = v
 function _bind(params)
   resolved = params isa PormGPostgresParam ? params.parameters : params
   resolved === nothing && return nothing
-  # #1599 layer 2: the collector delivers a `Vector{Any}`, mapped with a walk over `_bind_value`'s two
-  # methods, so each value is converted without a dispatch at run time. Any other container (a collector
-  # whose `parameters` is a tuple or a typed vector) takes the open arm, the `map` this was before.
-  resolved isa Vector{Any} && return map(_bind_value_any, resolved)
+  # #1599 layer 2: the collector delivers a `Vector{Any}`, handed over so Postgres.jl builds each value's
+  # text without a dispatch at run time (`_wire_texts`). Any other container (a collector whose
+  # `parameters` is a tuple or a typed vector) takes the open arm, the `map` this was before.
+  resolved isa Vector{Any} && return _wire_texts(resolved)
   return _bind_other(resolved)
 end
 @noinline _bind_other(@nospecialize(resolved)) = map(_bind_value, resolved)
@@ -789,6 +789,48 @@ end
 _bind_value_any(@nospecialize(v)) =
   v isa Vector{UInt8} ? _bind_value(v) : v isa AbstractVector{UInt8} ? _bind_value_other(v) : v
 @noinline _bind_value_other(@nospecialize(v)) = _bind_value(v)
+
+# Each value as the text Postgres.jl binds for it (#1599 layer 2). Postgres.jl turns every parameter into
+# its wire text with `_param` (a `String`, or `missing` for NULL), one value at a time, so a `Vector{Any}`
+# made that call a dispatch per value, and `map` over one sized its result from the first value's type at
+# run time: a trimmed build had no code for either. The values are converted as `map` converted them
+# (`_bind_value_any`) into one `Vector{Any}`, and Postgres.jl gets a `Vector{_PgBound}`, a concrete
+# element type naming each value by its index, so its `_param` call is static and reaches the method
+# below, which builds the text with the same `_param` at the value's concrete type for the kinds PormG
+# binds and the open arm for any other value. Postgres.jl binds that
+# `String` as itself and `missing` as NULL, so the statement receives the same parameters;
+# `test_postgres_ext.jl` checks that against the driver's own conversion of the old vector. The text is
+# built inside Postgres.jl's own `_param` call, so a value whose text fails fails where it did: after the
+# parameter count is checked, in the statement's task. A query-logging style would see the `_PgBound`
+# values as the statement's `params`; `_PormGStyle` logs nothing.
+struct _PgBound
+  values::Vector{Any}
+  i::Int
+end
+Postgres._param(b::_PgBound)::Union{String, Missing} = _wire_text(b.values[b.i])
+
+function _wire_texts(values::Vector{Any})::Vector{_PgBound}
+  converted = Vector{Any}(undef, length(values))
+  bound = Vector{_PgBound}(undef, length(values))
+  for i in eachindex(values)
+    converted[i] = _bind_value_any(values[i])
+    bound[i] = _PgBound(converted, i)
+  end
+  return bound
+end
+_wire_text(@nospecialize(v))::Union{String, Missing} =
+  v isa String ? Postgres._param(v) :
+  v isa Int64 ? Postgres._param(v) :
+  v isa Float64 ? Postgres._param(v) :
+  v isa Bool ? Postgres._param(v) :
+  v === nothing ? Postgres._param(nothing) :
+  v isa Missing ? Postgres._param(missing) :
+  v isa Date ? Postgres._param(v) :
+  v isa DateTime ? Postgres._param(v) :
+  v isa Decimals.Decimal ? Postgres._param(v) :
+  v isa Vector{Int} ? Postgres._param(v) :
+  _wire_text_other(v)
+@noinline _wire_text_other(@nospecialize(v))::Union{String, Missing} = Postgres._param(v)
 
 # An interrupt that lands during a TLS read reaches us wrapped in the TLS layer's own error, with the
 # `InterruptException` as its `cause`. Core recognises an abandoned await by the `InterruptException`

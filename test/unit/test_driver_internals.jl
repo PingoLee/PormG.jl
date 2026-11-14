@@ -54,6 +54,10 @@ const PINNED_NAMES = _NamePin[
   # `test_postgres_ext.jl` compares it with `register_type!`'s.
   (name = "Postgres.API.TypeInfo",              status = :internal,   reader = "_parser_entry (_register_types!)"),
   (name = "Postgres.API.CastFn",                status = :internal,   reader = "_parser_entry (_register_types!)"),
+  # #1599 layer 2: a parameter's wire text, as Postgres.jl's binding makes it, at the value's type; the
+  # extension adds a method for its own `_PgBound`. `test_postgres_ext.jl` compares the driver's binding
+  # of a `_PgBound` with its binding of the value.
+  (name = "Postgres._param",                    status = :internal,   reader = "_wire_text, _wire_text_other, _param(::_PgBound) (_bind)"),
   # LibPQ.jl
   (name = "LibPQ.Connection",                   status = :documented, reader = "PormG.backend_execute, backend_is_alive, backend_cancel_query!, …"),
   (name = "LibPQ.Result",                       status = :documented, reader = "_raise_if_failed, _server_named_failure, _copy_completed"),

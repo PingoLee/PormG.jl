@@ -157,7 +157,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
 
     # Format and add value to parameters — one value, never a collection (#712)
     formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert"; conn = connection)
-    push!(param_values, _bind_written_value!(parameters, formatted))
+    push!(param_values, _bind_written_value!(parameters, formatted)::String)   # every arm returns one
 
   end
 

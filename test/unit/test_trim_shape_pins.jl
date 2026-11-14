@@ -2475,6 +2475,9 @@ end
     @test only(Base.return_types(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
                                  CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))) ==
           Tuple{Vector{String}, Vector{String}, Bool, Vector{String}}
+    # and a placeholder goes into its `String` vector asserted, not converted (a dynamic `convert` in the verifier).
+    @test occursin("push!(param_values, _bind_written_value!(parameters, formatted)::String)",
+                   read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String))
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 

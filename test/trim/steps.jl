@@ -49,9 +49,9 @@ function start_step(args::Vector{String})::String
 end
 
 # Register the connection in code and bind the models (`TrimF1.boot!`). Exit code 1 when it fails.
-function boot_step(dir::String)::Bool
+function boot_step(dir::String, idle_timeout::Int = 0)::Bool
     try
-        TrimF1.boot!(dir)
+        TrimF1.boot!(dir, idle_timeout)
         say("boot", "ok")
         return true
     catch e
@@ -71,6 +71,49 @@ function query_step()::Bool
         return true
     catch e
         failed("query", e); return false
+    end
+end
+
+# The pool's background reaper (#125) closes an idle overflow connection: lease two connections so the
+# pool (`pool_size = 1`) opens an overflow slot, the only kind it reaps, give both back, and wait for the
+# next sweep. The reaper sweeps every `_REAP_INTERVAL` (15 s), so this step takes about that long; it
+# fails, exit code 4, when no sweep closes the connection within 40 s. Needs a boot with a positive
+# `idle_timeout`. A trimmed image never compiled the reaper's task body before #1599's layer-2 fix, so
+# the task died at its first call and nothing was ever reaped.
+function reap_step()::Bool
+    try
+        CP = PormG.ConnectionPool
+        pool = PormG.Configuration.get_settings(TrimF1.KEY).connections::CP.SQLiteConnectionPool
+        c1 = CP.acquire_connection(pool)
+        c2 = CP.acquire_connection(pool)
+        CP.release_connection(pool, c1)
+        CP.release_connection(pool, c2)
+        opened = open_connections(pool)
+        t0 = time_ns()
+        while open_connections(pool) >= opened && time_ns() - t0 < 40_000_000_000
+            sleep(0.25)
+        end
+        ms = string(div(time_ns() - t0, 1_000_000))
+        left = open_connections(pool)
+        if left < opened
+            say("reap", string("closed ", opened - left, " idle overflow connection after ", ms, " ms"))
+            return true
+        end
+        say("reap", string("no connection closed in ", ms, " ms (", opened, " open)"))
+        return false
+    catch e
+        failed("reap", e); return false
+    end
+end
+
+# How many of the pool's slots hold a connection, read under the pool's lock.
+function open_connections(pool::PormG.ConnectionPool.SQLiteConnectionPool)::Int
+    Base.lock(pool.lock) do
+        n = 0
+        for c in pool.connections
+            c === nothing || (n += 1)
+        end
+        n
     end
 end
 

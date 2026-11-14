@@ -129,6 +129,16 @@ julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, 1 row
 build-postgres/main
 ```
 
+Against a server the trimmed binary connects, authenticates, registers its result types, binds the
+parameters and runs the statement. It stops when the pool hands the result to the typed read:
+`ConnectionPool._decoded` is called on the untyped value `await_result` returns, and the image has no
+code for that call, so it raises `MethodError`. With no variables set it stops at the connect, as the JIT
+does. The trimmed connect covers a connection string with a host, port, user, database, a password or
+none and an `sslmode` or none (PormG adds `options` itself). Any other connection parameter
+(`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`, `statement_timeout`, …) takes
+Postgres.jl's own connect, which a trimmed binary has no code for: it fails at the connect with
+`PoolConnectError`, its cause a `MethodError`.
+
 **Authentication roots.** SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth
 through Base64's encode and decode pipes, which keep their stream in a field typed `IO`. A trimmed image
 had no code for the `IOBuffer` methods those calls reach and failed with `MissingCodeError` while

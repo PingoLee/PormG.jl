@@ -3136,8 +3136,10 @@ function _ensure_sqlite_async_worker!()
     # compiled; its task died at its first call with a `MethodError` nobody awaited, and every SQLite
     # statement waited on the queue forever. Measured in a minimal trimmed program: the global-only
     # body missed its method, and a named function spawned with a captured argument ran.
-    queue = _sqlite_async_work_queue
-    Threads.@spawn _sqlite_worker_loop(queue)
+    # SCRATCH (do not merge): the body before #1788, reading only globals, to show the Trim workflow red.
+    Threads.@spawn begin
+      _sqlite_worker_loop(_sqlite_async_work_queue)
+    end
 
     _sqlite_async_worker_started[] = true
   end

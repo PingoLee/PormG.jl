@@ -97,6 +97,11 @@ julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot
 build-mysql/main
 ```
 
+Against a server the trimmed binary connects, binds the parameters and runs the statement. It stops when
+the pool hands the result to the typed read: `ConnectionPool._decoded` is called on the untyped value
+`await_result` returns, and the image has no code for that call, so it raises `MethodError`. With no
+variables set it stops at the connect, as the JIT does.
+
 ## Reading the build log
 
 Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only

@@ -809,6 +809,66 @@ end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The typed read reads a MySQLResult cell by cell as the column walk read it (#1599)
+# What: the typed read's decode of a `MySQLResult` (`_typed_rows_decoded`: `_MySQLCells`' `isa` walk over
+#   each column, row by row) against the column walk it replaced (`_typed_rows_from_table`, over
+#   `Tables.columntable`), for a column of every type `_store_narrowed!` stores (each `_CELL_TYPES` type,
+#   with and without a NULL, an all-NULL column, a column of another type), with a parser; for a result
+#   with two cells the cell rules refuse; for names that miss a field or repeat one; for no rows.
+# Expected: the same rows, each value of its field's type; the same refusal, type and message, naming
+#   the first failing cell in row order; the same error or rows for the odd names; `T[]` for no rows.
+#   No SQL: a materialized result is decoded directly.
+# Why: the cell-by-cell read is there so a trimmed image can decode the result (#1599 layer 6); under the
+#   JIT it must read, convert and refuse exactly as the column walk did.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the typed read reads a MySQLResult cell by cell as the column walk read it (#1599)" begin
+  QB = PormG.QueryBuilder
+  site = QB._TypedReadSite("list", "Race")
+  outcome(f) = try
+    (:ok, f())
+  catch e
+    (:err, typeof(e), sprint(showerror, e))
+  end
+  same(r, ::Type{T}, parsers) where T =
+    isequal(outcome(() -> QB._typed_rows_decoded(T, r, parsers, site)),
+            outcome(() -> QB._typed_rows_from_table(T, r, parsers, site)))
+  result(names, cols, n = length(first(cols))) = _MyExt.MySQLResult(names, AbstractVector[cols...], n, 0, UInt64(0), "")
+  vals = Any[Int64(7), "Senna", Int32(1988), Decimal(0, 255, -1), Dates.Date(1988, 5, 15),
+             Dates.DateTime(1988, 5, 15, 14, 30), 1.5, UInt8[0x01, 0x02], Int8(-1), Int16(2), UInt8(3), UInt16(4),
+             UInt32(5), UInt64(6), Float32(2.5), Dates.Time(14, 0), MySQL.Bit(UInt64(1))]
+  @test map(typeof, vals) == collect(_MyExt._CELL_TYPES)   # one value per stored type, in its order
+  cols, fts = AbstractVector[], Type[]
+  for (R, v) in zip(_MyExt._CELL_TYPES, vals)
+    push!(cols, R[v, v]); push!(fts, R)
+    push!(cols, Union{Missing, R}[missing, v]); push!(fts, Union{Missing, R})
+  end
+  push!(cols, fill(missing, 2)); push!(fts, Union{Nothing, Int64})        # every cell NULL
+  push!(cols, [:monaco, :spa]); push!(fts, Symbol)                         # a type no arm names
+  push!(cols, Int32[1950, 2008]); push!(fts, Int64)                        # a converted width
+  names = [Symbol(:c, k) for k in eachindex(cols)]
+  T = NamedTuple{Tuple(names), Tuple{fts...}}
+  r = result(names, cols)
+  none = ntuple(_ -> PormG.NO_READ_PARSER, length(cols))
+  @test same(r, T, none)
+  rows = QB._typed_rows_decoded(T, r, none, site)
+  @test length(rows) == 2 && rows[1].c2 === missing && rows[2].c1 === Int64(7) && rows[1].c35 === nothing
+  # a parser on a column: a computed float delivered as a `Decimal` reads as a `Float64`
+  F = @NamedTuple{c7::Float64}
+  @test same(result([:c7], [[Decimal(0, 15, -1)]]), F, (PormG.ReadParser(PormG._RP_COMPUTED_FLOAT),))
+  # two refusals: row 1's second field and row 2's first; both walks name row 1's
+  I = @NamedTuple{a::Int64, b::Int64}
+  bad = result([:a, :b], [Union{Missing, Int64}[1, missing], ["x", "y"]])
+  @test same(bad, I, ntuple(_ -> PormG.NO_READ_PARSER, 2))
+  @test outcome(() -> QB._typed_rows_decoded(I, bad, ntuple(_ -> PormG.NO_READ_PARSER, 2), site))[1] === :err
+  # the odd names take the column walk, which raises or reads as it did
+  P2 = ntuple(_ -> PormG.NO_READ_PARSER, 2)
+  @test same(result([:a, :z], [Int64[1], Int64[2]]), I, P2)          # no column for `b`
+  @test same(result([:a, :b, :a], [Int64[1], Int64[2], Int64[3]]), I, P2)   # `a` twice
+  @test same(result([:a, :b], [Int64[], Int64[]], 0), I, P2)
+  @test QB._typed_rows_decoded(I, result([:a, :b], [Int64[], Int64[]], 0), P2, site) == I[]
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # A refused MySQL cancel warns, unless the session has already ended (#1719)
 # What: the logger `backend_cancel_query!` calls when `KILL QUERY` fails. A server refusal (1095, not
 #   the session's owner) or a failed second connection warns that the statement may still be running;

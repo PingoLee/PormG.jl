@@ -1046,3 +1046,70 @@ end
   src = read(joinpath(pkgdir(PormG), "ext", "PormGPostgresExt.jl"), String)
   @test occursin(r"function __init__\(\)\n  Base\.generating_output\(\) && return nothing\n  _DRIVER_VERSION === nothing \|\| _check_driver_floor\(_DRIVER_VERSION\)\n", src)
 end
+
+# What: the typed read's decode of a `Postgres.Result` (`_typed_rows_decoded`: `_PgCells`' `isa` walk over
+#   each row's cells) against the column walk it replaced (`_typed_rows_from_table`, over
+#   `Tables.columntable`), for a cell of every type `_PG_CELL_TYPES` names, with and without a NULL, a
+#   column of another type, with a parser; for a result with two cells the cell rules refuse; for names
+#   that miss a field or repeat one; for no rows. Each column's type is the union of its cells' types,
+#   as Postgres.jl widens it.
+# Expected: the same rows, each value of its field's type; the same refusal, type and message, naming
+#   the first failing cell in row order; the same error or rows for the odd names; `T[]` for no rows.
+#   No SQL: a materialized result is decoded directly.
+# Why: the cell-by-cell read is there so a trimmed image can decode the result (#1599 layer 6); under the
+#   JIT it must read, convert and refuse exactly as the column walk did.
+@testset "the typed read reads a Postgres.jl result cell by cell as the column walk read it (#1599)" begin
+  QB = PormG.QueryBuilder
+  Dates, Decimals = PGExt.Dates, PGExt.Decimals
+  site = QB._TypedReadSite("list", "Race")
+  outcome(f) = try
+    (:ok, f())
+  catch e
+    (:err, typeof(e), sprint(showerror, e))
+  end
+  same(r, ::Type{T}, parsers) where T =
+    isequal(outcome(() -> QB._typed_rows_decoded(T, r, parsers, site)),
+            outcome(() -> QB._typed_rows_from_table(T, r, parsers, site)))
+  function result(names, rows)
+    types = Type[reduce((a, b) -> Union{a, b}, unique(typeof(row[j]) for row in rows); init = Union{})
+                 for j in eachindex(names)]
+    lookup = Dict(n => j for (j, n) in enumerate(names))
+    return Postgres.Result(names, types, [Postgres.ResultRow(Any[row...], names, types, lookup, i)
+                                          for (i, row) in enumerate(rows)], "SELECT $(length(rows))", length(rows))
+  end
+  TZ = PGExt.TimeZones
+  vals = Any[Int64(7), "Senna", Int32(1988), Decimals.Decimal(0, 255, -1), Dates.Date(1988, 5, 15),
+             Dates.DateTime(1988, 5, 15, 14, 30), TZ.ZonedDateTime(Dates.DateTime(1988, 5, 15, 14, 30), TZ.TimeZone("UTC")),
+             1.5, true, Int16(2), Float32(2.5), Dates.Time(14, 0), UInt8[0x01], UInt32(5), 'S']
+  @test map(typeof, vals) == collect(PGExt._PG_CELL_TYPES)   # one value per named type, in its order
+  row1, row2, fts = Any[], Any[], Type[]
+  for v in vals
+    push!(row1, v); push!(row2, v); push!(fts, typeof(v))
+    push!(row1, missing); push!(row2, v); push!(fts, Union{Missing, typeof(v)})
+  end
+  push!(row1, Int32[1, 2]); push!(row2, Int32[3]); push!(fts, Vector{Int32})   # a type no arm names
+  push!(row1, Int32(1950)); push!(row2, Int32(2008)); push!(fts, Int64)         # a converted width
+  push!(row1, missing); push!(row2, missing); push!(fts, Union{Nothing, String})
+  names = [Symbol(:c, k) for k in eachindex(fts)]
+  T = NamedTuple{Tuple(names), Tuple{fts...}}
+  r = result(names, [row1, row2])
+  none = ntuple(_ -> PormG.NO_READ_PARSER, length(fts))
+  @test same(r, T, none)
+  rows = QB._typed_rows_decoded(T, r, none, site)
+  @test length(rows) == 2 && rows[1].c2 === missing && rows[2].c1 === Int64(7) && rows[1].c33 === nothing
+  # a parser on a column: a computed float delivered as a `Decimal` reads as a `Float64`
+  @test same(result([:c7], [Any[Decimals.Decimal(0, 15, -1)]]), @NamedTuple{c7::Float64},
+             (PormG.ReadParser(PormG._RP_COMPUTED_FLOAT),))
+  # two refusals: row 1's second field and row 2's first; both walks name row 1's
+  I = @NamedTuple{a::Int64, b::Int64}
+  P2 = ntuple(_ -> PormG.NO_READ_PARSER, 2)
+  bad = result([:a, :b], [Any[1, "x"], Any[missing, "y"]])
+  @test same(bad, I, P2)
+  @test outcome(() -> QB._typed_rows_decoded(I, bad, P2, site))[1] === :err
+  # the odd names take the column walk, which raises or reads as it did
+  @test same(result([:a, :z], [Any[1, 2]]), I, P2)               # no column for `b`
+  @test same(result([:a, :b, :a], [Any[1, 2, 3]]), I, P2)        # `a` twice
+  empty = Postgres.Result([:a, :b], Type[Int64, Int64], Postgres.ResultRow[], "SELECT 0", 0)
+  @test same(empty, I, P2)
+  @test QB._typed_rows_decoded(I, empty, P2, site) == I[]
+end

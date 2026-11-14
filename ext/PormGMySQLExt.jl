@@ -550,6 +550,34 @@ function _copy_as(::Type{E}, col::Vector{Any})::Vector{E} where {E}
   return out
 end
 
+# #1599: the typed read over this result, cell by cell (`QueryBuilder._typed_rows_by_cell`). A column is
+# stored at one of the types `_store_narrowed!` gives it: `Vector{R}` or `Vector{Union{Missing, R}}` for
+# `R` in `_CELL_TYPES`, or `Vector{Missing}` when every cell is NULL. The reader tests the column against
+# each and hands the cell to the parser and the cell rules at that type, so each call is static; any
+# other column (the `identity.` arm, an empty `Vector{Any}`) takes the same call through one `@noinline`
+# arm. Through `Tables.columntable`, the column table's type was decided at run time, and a trimmed image
+# had no code for the walk over it (`Tables.rowcount`).
+struct _MySQLCells
+  result::MySQLResult
+end
+
+PormG.QueryBuilder._typed_rows_decoded(::Type{T}, result::MySQLResult, parsers::Tuple,
+                                       site::PormG.QueryBuilder._TypedReadSite) where T =
+  PormG.QueryBuilder._typed_rows_by_cell(T, result, _MySQLCells(result), result.nrows, result.names, parsers, site)
+
+@noinline _mysql_cell_at(::Type{FT}, col::AbstractVector, i::Int, parser, name::Symbol, site) where FT =
+  PormG.QueryBuilder._typed_value(FT, PormG.QueryBuilder._typed_parse(parser, col[i]), name, i, site)
+
+@eval function (c::_MySQLCells)(::Type{FT}, j::Int, i::Int, parser, name::Symbol, site)::FT where FT
+  col = c.result.columns[j]
+  col isa Vector{Missing} && return _mysql_cell_at(FT, col, i, parser, name, site)
+  $(Expr(:block, (:(col isa $V && return _mysql_cell_at(FT, col::$V, i, parser, name, site))
+                  for R in _CELL_TYPES for V in (Vector{R}, Vector{Union{Missing, R}}))...))
+  return _mysql_cell_open(FT, col, i, parser, name, site)
+end
+@noinline _mysql_cell_open(::Type{FT}, @nospecialize(col), i::Int, parser, name::Symbol, site) where FT =
+  PormG.QueryBuilder._typed_value(FT, PormG.QueryBuilder._typed_parse(parser, col[i]), name, i, site)::FT
+
 # The open arm: `identity.`, as before, whose result type is known only at run time.
 @noinline function _store_other!(columns::Vector{AbstractVector}, j::Int, col::Vector{Any})::Nothing
   columns[j] = identity.(col)

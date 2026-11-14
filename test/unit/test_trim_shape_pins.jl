@@ -4573,6 +4573,33 @@ end
     @test isdefined(CP, :_decoded_typed) && CP._decoded_typed(my, boxed[2], nothing) === :stand_in_result
   end
 
+  # What: the typed read's decode of a MySQL result (`MySQLResult`) and a Postgres.jl one
+  #   (`Postgres.Result`): `_typed_rows_decoded`, the row walk over the cells (`_typed_rows_by_cell`) and
+  #   each driver's cell reader (`_MySQLCells`, `_PgCells`), followed four calls deep.
+  # Expected: no dynamic call. The open arms are not followed: the column walk a result takes when its
+  #   names do not hold each field once, and a cell of a type the reader does not name; nor is the cell
+  #   rule each arm hands a cell to (`_mysql_cell_at`, `_pg_cell_at`), whose own rows are the cell rules'.
+  #   That the rows, and a refusal's cell, are the column walk's is pinned in `test_mysql_ext.jl` and
+  #   `test_postgres_ext.jl`.
+  # Why: the column walk read the result through `Tables.columntable`, whose `NamedTuple` type is decided
+  #   at run time, so the walk over it was dynamic: once the pool handed the result on typed, the trimmed
+  #   reads stopped at `Tables.rowcount` (MySQL) and `Tables.buildcolumns` (Postgres.jl) (#1599 layer 6,
+  #   #1614).
+  @testset "a MySQL or Postgres.jl result is decoded into the row type without a dynamic call (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    T = @NamedTuple{raceid::Int64, year::Int64, name::String, date::Dates.Date, note::Union{Nothing, String}}
+    Ps = NTuple{5, PormG.ReadParser}
+    skip = Any[getfield(m, n) for (m, n) in ((QB, :_typed_rows_from_table_open), (myx, :_mysql_cell_open),
+                                            (myx, :_mysql_cell_at), (pgx, :_pg_cell_open), (pgx, :_pg_cell_at))
+               if isdefined(m, n)]
+    for R in (myx.MySQLResult, Postgres.Result)
+      @test (R, _dynamic_calls_deep(QB._typed_rows_decoded, (Type{T}, R, Ps, QB._TypedReadSite);
+                                    depth = 4, skip = Tuple(skip))) == (R, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

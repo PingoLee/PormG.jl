@@ -49,7 +49,8 @@ const PINNED_NAMES = _NamePin[
   # register the concrete handle type (#1683). `test_trim_shape_pins.jl` checks it against inference.
   (name = "Postgres.Statement",                 status = :internal,   reader = "_Conn (PormG.backend_handle_type)"),
   # #1599 layer 2: the row count reads the driver's result at its type (`backend_num_rows`, #1771's residue).
-  (name = "Postgres.Result",                    status = :internal,   reader = "PormG.backend_num_rows"),
+  # #1599: and the typed read decodes it cell by cell (`_PgCells`), at the type `fetch` narrows it to.
+  (name = "Postgres.Result",                    status = :internal,   reader = "PormG.backend_num_rows, backend_result_type, _PgCells"),
   # #1599 layer 2: a parser's registry entry, built as `register_type!` builds it, at the parser's type;
   # `test_postgres_ext.jl` compares it with `register_type!`'s.
   (name = "Postgres.API.TypeInfo",              status = :internal,   reader = "_parser_entry (_register_types!)"),
@@ -192,6 +193,10 @@ const PINNED_FIELDS = _FieldPin[
                                                :numeric_overflow, :connect_timeout, :sslrootcert, :sslcert,
                                                :sslkey, :sslcapath, :sslservername, :krbsrvname, :statement_timeout],
    status = :internal, reader = "_dial, _dial_keywords"),
+  # #1599: the typed read's cells, read where they are, each row's `Vector{Any}` (`getfield`: a `ResultRow`
+  # answers `getproperty` with its columns). `test_postgres_ext.jl` compares the rows with the column walk's.
+  (type = Postgres.Result, fields = [:names, :rows], status = :internal, reader = "_typed_rows_decoded, _PgCells"),
+  (type = Postgres.ResultRow, fields = [:data], status = :internal, reader = "_PgCells"),
   (type = Postgres.Error, fields = [:code, :message, :table, :column, :constraint], status = :documented,
    reader = "PormG.backend_classify_error, backend_error_fields, _is_lost_connection, …"),
   (type = Postgres.Error, fields = [:routine], status = :internal, reader = "_is_stale_cached_statement"),

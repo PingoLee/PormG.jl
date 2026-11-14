@@ -18,6 +18,11 @@ on:
 
 permissions:
   contents: read
+  actions: write   # julia-actions/cache deletes the caches it replaces
+
+defaults:
+  run:
+    shell: bash    # -eo pipefail: a failed juliac fails its step, not the `tee` after it
 
 concurrency:
   group: trim-${{ github.ref }}
@@ -65,7 +70,7 @@ jobs:
           # A task body the image never compiled dies silently, so a broken binary hangs rather
           # than crashes: the timeout turns the hang into a failure.
           set +e
-          timeout 300 build/read run 2>&1 | tee build/run.txt
+          timeout -k 10 300 build/read run 2>&1 | tee build/run.txt
           status=${PIPESTATUS[0]}
           set -e
           echo "exit status: $status"

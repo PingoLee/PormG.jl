@@ -84,11 +84,15 @@ fails with the same exit code (1 boot, 2 write, 3 read).
 Julia and JuliaC versions above, runs the binary under a 300 s timeout, and fails unless it exits 0
 and prints the `row` line above. The timeout is there because a task body the image never compiled
 dies silently, so a broken binary hangs rather than crashes (#1788). The verifier's rows are
-reported, never checked: `rows.py` and `classify.py --layers` go to the job summary, and the build log
-and both tables are uploaded as the `trim-read-only` artifact. It runs nightly, by hand
+reported, never checked: the binary's step lines, `rows.py` and `classify.py --layers` go to the job
+summary, and the build log, both tables and the step lines are uploaded as the `trim-read-only`
+artifact. It runs nightly, by hand
 (`workflow_dispatch`), and on a pull request that changes `test/trim/` or the workflow file. It does
 not run on every pull request: a trimmed build takes several minutes. A change in `src/` that could
 break the trimmed read is checked by running it by hand on the branch, or by the next nightly run.
+The fixture's `Manifest.toml` is not committed, so each run resolves the latest SQLite.jl and its
+dependencies: a red nightly with no PormG change between it and the last green one may be an upstream
+release, and the job's `Instantiate the fixture` step prints the versions it resolved.
 
 ## The MySQL variant
 

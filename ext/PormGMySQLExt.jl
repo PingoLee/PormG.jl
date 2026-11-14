@@ -103,28 +103,42 @@ end
 # a `START TRANSACTION` it issued as a plain statement (the Postgres.jl extension refuses it for the
 # same reason). `found_rows` makes an UPDATE report the rows it MATCHED, as PostgreSQL and SQLite do,
 # rather than the rows whose value changed — `backend_num_affected_rows` is a matched-row count.
+#
+# #1599: the keywords have one shape, `_ConnectKeywords`, whatever the conninfo holds; a key the conninfo
+# leaves out is `nothing`. A shape built from the keys present was a `NamedTuple` type known only at run
+# time, so `DBInterface.connect`'s keyword call was dynamic, and a trimmed binary had no code for it: every
+# connect raised `MethodError` (wrapped in `PoolConnectError`) before reaching the server. `nothing` is what
+# MySQL.jl reads as a keyword left out: `db`/`port` default to it in `DBInterface.connect`'s signature, and
+# `ConnectOptions` reads every other keyword as `haskey(kw, k) && kw[k] !== nothing` or
+# `get(kw, k, nothing)`. `test/unit/test_mysql_ext.jl` builds `MySQL.ConnectOptions` both ways and fails if
+# a MySQL.jl ever reads them differently.
+const _ConnectKeywords = NamedTuple{
+  (:reconnect, :found_rows, :db, :port, :connect_timeout, :ssl_mode, :ssl_ca, :ssl_cert, :ssl_key),
+  Tuple{Bool, Bool, Union{Nothing, String}, Union{Nothing, Int}, Union{Nothing, Int}, Union{Nothing, Symbol},
+        Union{Nothing, String}, Union{Nothing, String}, Union{Nothing, String}}}
+
 function _connect_args(info::Dict{String, String})
   host = get(info, "host", "localhost")
   user = get(info, "user", "")
   password = get(info, "password", nothing)
-  kw = Pair{Symbol, Any}[:reconnect => false, :found_rows => true]
-  haskey(info, "dbname") && push!(kw, :db => info["dbname"])
-  haskey(info, "port") && push!(kw, :port => _conninfo_int("port", info["port"]))
+  db = get(info, "dbname", nothing)
+  port = haskey(info, "port") ? _conninfo_int("port", info["port"]) : nothing
   # `connect_timeout: 0` is libpq's "no timeout"; MySQL.jl takes no timeout as the keyword left out.
+  connect_timeout = nothing
   if haskey(info, "connect_timeout")
     t = _conninfo_int("connect_timeout", info["connect_timeout"])
-    t > 0 && push!(kw, :connect_timeout => t)
+    t > 0 && (connect_timeout = t)
   end
+  ssl_mode = nothing
   if haskey(info, "sslmode")
     mode = lowercase(strip(info["sslmode"]))
     mode in _SSL_MODES || throw(InvalidConfigurationError(
       "connection.yml: `sslmode:` for `adapter: MySQL` must be one of $(join(_SSL_MODES, ", "))"))
-    push!(kw, :ssl_mode => Symbol(mode))
+    ssl_mode = Symbol(mode)
   end
-  haskey(info, "sslrootcert") && push!(kw, :ssl_ca => info["sslrootcert"])
-  haskey(info, "sslcert") && push!(kw, :ssl_cert => info["sslcert"])
-  haskey(info, "sslkey") && push!(kw, :ssl_key => info["sslkey"])
-  return host, user, password, (; kw...)
+  kw = _ConnectKeywords((false, true, db, port, connect_timeout, ssl_mode, get(info, "sslrootcert", nothing),
+                         get(info, "sslcert", nothing), get(info, "sslkey", nothing)))
+  return host, user, password, kw
 end
 
 # ── Session ──────────────────────────────────────────────────────────────────
@@ -300,7 +314,15 @@ _bind_value(v) = v
 # as it is: over its three methods the compiler splits the call into `isa` branches, so it is static, and
 # a fourth method would make it dynamic, which the trim pin catches. Any other collector or container
 # takes the open arm, the code this was before.
-function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{Any}}
+#
+# The values reach MySQL.jl in a `Vector{_BoundValue}` when every one is of a kind in that union, the
+# kinds PormG binds (#1599 layer 2). MySQL.jl encodes each value by its type (`param_code`,
+# `encode_param_value!`, the long-data check), one value at a time, so over a `Vector{Any}` each of those
+# calls was a dispatch per value, and a trimmed image raised `MethodError` on `param_code` at the first
+# statement; over the union they are split into static branches. The values and their types are the
+# same, so MySQL.jl sends the same bytes. A value of any other kind keeps the `Vector{Any}`.
+const _BoundValue = Union{Nothing, Missing, Bool, Int64, Float64, String, Date, DateTime}
+function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{_BoundValue}, Vector{Any}}
   resolved = params isa PormG.QueryBuilder.ParamCollector ? params.parameters :
              params isa AbstractPormGParam ? _other_param_values(params) : params
   resolved isa Vector{Any} && return _bind_vector(pool, resolved)
@@ -308,12 +330,26 @@ function _bind(pool::_Pool, @nospecialize(params))::Union{Nothing, Vector{Any}}
 end
 @noinline _other_param_values(@nospecialize(params)) = params.parameters
 
-function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector{Any}}
+function _bind_vector(pool::_Pool, resolved::Vector{Any})::Union{Nothing, Vector{_BoundValue}, Vector{Any}}
   isempty(resolved) && return nothing
   _check_parameter_count(pool, length(resolved))
-  bound = Vector{Any}(undef, length(resolved))
+  values = Vector{_BoundValue}(undef, length(resolved))
   for i in eachindex(resolved)
-    bound[i] = _bind_value(resolved[i])
+    v = _bind_value(resolved[i])
+    v isa _BoundValue || return _bind_rest(values, resolved, i, v)
+    values[i] = v
+  end
+  return values
+end
+# A value outside the union: the values so far, this one and the rest, in a `Vector{Any}`.
+function _bind_rest(values::Vector{_BoundValue}, resolved::Vector{Any}, i::Int, @nospecialize(v))::Vector{Any}
+  bound = Vector{Any}(undef, length(resolved))
+  for j in 1:i-1
+    bound[j] = values[j]
+  end
+  bound[i] = v
+  for j in i+1:lastindex(resolved)
+    bound[j] = _bind_value(resolved[j])
   end
   return bound
 end

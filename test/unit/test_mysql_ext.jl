@@ -120,10 +120,53 @@ end
     e = try _MyExt._connect_args(Dict("port" => bad)); nothing catch err; err end
     @test e isa PormG.InvalidConfigurationError && !occursin(bad, sprint(showerror, e))
   end
-  # `connect_timeout: 0` is libpq's "no timeout": the keyword is left out, as MySQL.jl spells it.
-  @test !haskey(_MyExt._connect_args(Dict("connect_timeout" => "0"))[4], :connect_timeout)
+  # `connect_timeout: 0` is libpq's "no timeout": the keyword is `nothing`, which MySQL.jl reads as left
+  # out (#1599: one keyword shape; the equivalence is pinned in the next testset).
+  @test _MyExt._connect_args(Dict("connect_timeout" => "0"))[4].connect_timeout === nothing
   @test _MyExt._connect_args(Dict("connect_timeout" => "7"))[4].connect_timeout == 7
   @test_throws PormG.InvalidConfigurationError _MyExt._parse_conninfo("host='unterminated")
+end
+
+# What: `_connect_args` hands `DBInterface.connect` one keyword shape for every conninfo, and MySQL.jl
+#   builds the same `ConnectOptions` from it, `nothing` for a key the conninfo leaves out, as from the
+#   same keywords with those keys omitted (the shape built before #1599). Compared field by field for no
+#   optional key, all of them, each one alone and all but each one (16 conninfos: every key is seen
+#   absent beside the others and present beside none; each shape compiles MySQL.jl's keyword call anew,
+#   so all 2^7 subsets took a minute). A subset MySQL.jl refuses (`sslcert` without `sslkey`) must raise
+#   the same error both ways. With every key present, each keyword holds its own key's value: both sides
+#   of the comparison come from `_connect_args`, so a swapped slot would pass it.
+#   Expected: identical options or the same error, `typeof(kw) === _ConnectKeywords` for each, and each
+#   conninfo key in its keyword.
+# Why: #1599 — a shape built from the present keys made the connect a dynamic keyword call, and a trimmed
+#   binary raised `MethodError` on it at every connect. The fixed shape passes `nothing` for an absent
+#   key, which is correct only while MySQL.jl reads `nothing` as left out; this fails on a MySQL.jl that
+#   does not, instead of a connection that silently differs.
+@testset "one connect keyword shape builds the options the present keys build (#1599)" begin
+  optional = ("dbname" => "f1", "port" => "3307", "connect_timeout" => "5", "sslmode" => "required",
+              "sslrootcert" => "/etc/ca.pem", "sslcert" => "/etc/c.pem", "sslkey" => "/etc/k.pem")
+  opts_equal(a, b) = all(isequal(getfield(a, f), getfield(b, f)) for f in fieldnames(typeof(a)))
+  outcome(f) = try (:ok, f()) catch e; e isa ArgumentError || rethrow(); (:refused, sprint(showerror, e)) end
+  same(a, b) = a[1] === b[1] && (a[1] === :ok ? opts_equal(a[2], b[2]) : a[2] == b[2])
+  n = refused = 0
+  full = 2^length(optional) - 1
+  masks = unique([0; full; [1 << i for i in 0:length(optional)-1]; [full & ~(1 << i) for i in 0:length(optional)-1]])
+  for mask in masks
+    info = Dict{String, String}("host" => "db.example", "user" => "f1", "password" => "pw")
+    for (i, kv) in enumerate(optional)
+      (mask >> (i - 1)) & 1 == 1 && (info[kv.first] = kv.second)
+    end
+    host, user, password, kw = _MyExt._connect_args(info)
+    @test typeof(kw) === _MyExt._ConnectKeywords
+    mask == full && @test (kw.db, kw.port, kw.connect_timeout, kw.ssl_mode, kw.ssl_ca, kw.ssl_cert, kw.ssl_key) ==
+                          ("f1", 3307, 5, :required, "/etc/ca.pem", "/etc/c.pem", "/etc/k.pem")
+    present = (; (k => v for (k, v) in pairs(kw) if v !== nothing)...)   # the old, present-keys shape
+    fixed = outcome(() -> MySQL.ConnectOptions(host, user, password; kw...))
+    old = outcome(() -> MySQL.ConnectOptions(host, user, password; present...))
+    n += same(fixed, old)
+    refused += old[1] === :refused
+  end
+  @test n == length(masks) == 16
+  @test 0 < refused < length(masks)   # both outcomes were compared
 end
 
 # What: a folder with `adapter: MySQL` loads into a MySQL pool without connecting, and displays as one.
@@ -222,7 +265,7 @@ end
   @test conninfo("mysql://") == ""
   host, user, password, kw = _MyExt._connect_args(_MyExt._parse_conninfo(conninfo("mysql://")))
   @test (host, user, password) == ("localhost", "", nothing)
-  @test !haskey(kw, :port) && !haskey(kw, :db)
+  @test kw.port === nothing && kw.db === nothing
   @test _my_url("mysql://u:p@[::1]:3307/f1") == Dict("username" => "u", "password" => "p", "host" => "::1",
                                                      "port" => "3307", "database" => "f1")
   @test _my_url("mysql://[2001:db8::7]")["host"] == "2001:db8::7"
@@ -731,6 +774,38 @@ end
   e = try; _MyExt._bind(pool, fill(424242, 4097)); nothing; catch err; err; end
   @test e isa PormG.QueryBuildError && occursin("binds 4097 parameters", sprint(showerror, e))
   @test !occursin("424242", sprint(showerror, e))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The values MySQL.jl binds are the same in the closed union (#1599)
+# What: `_bind` over a collector's `Vector{Any}`, for every kind `_BoundValue` lists (Decimal and
+#   ZonedDateTime after `_bind_value`), mixed, NULLs among them, and for kinds outside it.
+# Expected: the same values with the same types as the `Vector{Any}` of `_bind_value` it returned before,
+#   so the same signature (`param_signature`) and the same bytes per value (`encode_param_value!`); in a
+#   `Vector{_BoundValue}` when every value is in the union, in the `Vector{Any}` otherwise.
+# Why: the union is there so MySQL.jl's per-value encoding is static in a trimmed image (#1599 layer 2).
+#   MySQL.jl encodes each value by its own type, so a value converted on the way in would bind
+#   differently: an `Int32` must stay an `Int32`, not become an `Int64`.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the values MySQL.jl binds are the same in the closed union (#1599)" begin
+  pool = _my_pool()
+  TZ = _MyExt.TimeZones
+  zdt = TZ.ZonedDateTime(Dates.DateTime(1991, 3, 10, 14, 30), TZ.TimeZone("America/Sao_Paulo"))
+  inside = Any["Senna", "", 1988, -1, typemax(Int64), 2.5, -0.0, true, false, nothing, missing,
+               Dates.Date(1988, 4, 3), Dates.DateTime(1988, 4, 3, 13, 0, 0, 5), Decimal(0, 255, -1), zdt]
+  outside = Any[Int32(7), Float32(1.5), UInt8(3), Dates.Time(14, 0), SubString("Monaco", 1, 3)]
+  encoded(v) = (v === nothing || v === missing) ? UInt8[] : (buf = UInt8[]; MySQL.encode_param_value!(buf, v); buf)
+  for (vals, container) in ((inside, Vector{_MyExt._BoundValue}), (vcat(inside, outside), Vector{Any}),
+                            (Any["Monaco", 1950], Vector{_MyExt._BoundValue}), (Any[Int32(1)], Vector{Any}))
+    before = Any[_MyExt._bind_value(v) for v in vals]
+    for params in (PormG.QueryBuilder.PgParameterizedQuery("", vals, length(vals)), copy(vals))
+      bound = _MyExt._bind(pool, params)
+      @test typeof(bound) === container
+      @test isequal(bound, before) && map(typeof, bound) == map(typeof, before)
+      @test MySQL.param_signature(bound) == MySQL.param_signature(before)
+      @test map(encoded, bound) == map(encoded, before)
+    end
+  end
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

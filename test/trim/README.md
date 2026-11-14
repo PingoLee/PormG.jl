@@ -120,8 +120,9 @@ release, and the job's `Instantiate the fixture` step prints the versions it res
 
 `mysql/` builds the same app with MySQL.jl in place of SQLite, to measure the MySQL extension
 (`ext/PormGMySQLExt.jl`), which no SQLite build compiles. Its entry, `mysql/main.jl`, boots through
-`register_connection("f1", "mysql://…@127.0.0.1:1/f1"; adapter = "MySQL")` (#1769), so no YAML is
-read, and then runs the typed read only, with no write. Nothing listens on port 1, so no database is
+`register_connection("f1", "mysql://…"; adapter = "MySQL")` (#1769), so no YAML is read, and then
+runs the typed read only, with no write. The server comes from environment variables (`tools/server.jl`),
+read at run time. With none of them set it is `127.0.0.1:1`, where nothing listens, so no database is
 needed: under the JIT the read raises `PoolConnectError`, and the binary stops wherever the trimmed
 read stops first. The write is left out for two reasons: it would fail at the same connect, and the
 binary's write stops at layer 7 before it reaches any driver code.
@@ -140,6 +141,34 @@ JULIA_CPU_TARGET=native juliac --project ../test/trim/mysql --output-exe main \
 ```
 
 The scripts below read its `build.log` the same way.
+
+### Against a MySQL server
+
+| variable | default |
+|---|---|
+| `PORMG_TRIM_HOST` | `127.0.0.1` |
+| `PORMG_TRIM_PORT` | `1` |
+| `PORMG_TRIM_USER` | `f1` |
+| `PORMG_TRIM_DATABASE` | `f1` |
+| `PORMG_TRIM_PASSWORD` | `f1` |
+
+The password is read from its variable only; the binary prints `host:port/database` and never the
+user or the password. Give the fixture a database of its own (`pormg_trim`, say), never the
+integration suite's F1 database: `mysql/prep.jl` empties the `circuit` and `race` tables before it
+seeds them, and refuses a database whose name does not contain `trim`. The host goes into the URL as it
+is, so an IPv6 address is not supported; use a name or an IPv4 address. With the variables exported, from
+the repository root:
+
+```
+julia --project=test/trim/mysql test/trim/mysql/prep.jl  # PormG's DDL, two circuits, one Monaco race
+julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, 1 row
+build-mysql/main
+```
+
+Against a server the trimmed binary connects, binds the parameters and runs the statement. It stops when
+the pool hands the result to the typed read: `ConnectionPool._decoded` is called on the untyped value
+`await_result` returns, and the image has no code for that call, so it raises `MethodError`. With no
+variables set it stops at the connect, as the JIT does.
 
 ## Reading the build log
 

@@ -2334,7 +2334,8 @@ end
   # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
   #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`) and the format
   #   step's keyword call (`_format_single` → `_format_single_at`), the formatter call (`Models.apply_formatter`),
-  #   the formatted value's collection and NUL checks (`_checked_formatted`), the bind (`_bind_written_value!`).
+  #   the formatted value's collection and NUL checks (`_checked_formatted`), the bind (`_bind_written_value!`),
+  #   the statement's column and placeholder lists (`_prepare_row_insert!`).
   # Expected: `validate_field_data` and `_format_single` take their value unspecialized, and neither their
   #   keyword bodies nor the walks make a dynamic call (each open arm makes one, whatever the field's type);
   #   each returns the same value, or raises the same error type with the same text, as the code it
@@ -2469,6 +2470,11 @@ end
     insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
                                                            CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
     @test !any(c -> occursin(r"validate_field_data|_format_single|add_parameter!|kwcall", c), insert_calls)
+    # Wall 7, the statement text: the column and placeholder lists are `String` vectors, so `join` prints each
+    # element statically (over a `Vector{Any}` the trimmed binary raised `MissingCodeError`).
+    @test only(Base.return_types(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
+                                 CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))) ==
+          Tuple{Vector{String}, Vector{String}, Bool, Vector{String}}
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 

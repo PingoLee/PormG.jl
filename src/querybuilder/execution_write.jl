@@ -136,8 +136,12 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     end
   end
 
-  quoted_field_columns = []
-  param_values = []
+  # Typed (#1599 layer 7): the statement `join`s both, and over a `Vector{Any}` each element is printed
+  # through a dynamic call, which stopped the trimmed full fixture entry's `create` (`MissingCodeError`).
+  # Every element is a `String`: a quoted identifier, and a placeholder from a scalar bind (`_format_single`
+  # refuses a collection).
+  quoted_field_columns = String[]
+  param_values = String[]
   pk_exist::Bool = false
   pk_field::Vector{String} = []
   for field in keys(real_obj.insert)

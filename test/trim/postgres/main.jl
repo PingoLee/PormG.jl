@@ -1,5 +1,5 @@
 # The juliac --trim entry of the fixture's Postgres.jl variant (#1599, #1614): `../main.jl`'s app with
-# Postgres.jl in place of SQLite — boot, then one typed read, no write.
+# Postgres.jl in place of SQLite — boot, one typed read and one statement the server refuses (`../tools/failing.jl`), no write.
 #   JIT:  julia --project=test/trim/postgres test/trim/postgres/main.jl
 #   exe:  <build dir>/main                   (see ../README.md, "The Postgres.jl variant")
 #
@@ -28,6 +28,7 @@ Base.Experimental.entrypoint(Base64.decode_slow,
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
 import .models as M
 include(joinpath(@__DIR__, "..", "tools", "server.jl"))
+include(joinpath(@__DIR__, "..", "tools", "failing.jl"))
 
 const KEY = "f1"
 
@@ -113,6 +114,8 @@ function (@main)(args::Vector{String})::Cint
     catch e
         failed("query", e); return Cint(3)
     end
+    # A statement the server refuses reaches the caller as its own error (#1599, ../tools/failing.jl).
+    fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.PostgresConnectionPool{:postgres}) || return Cint(6)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     return Cint(0)
 end

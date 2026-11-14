@@ -636,6 +636,59 @@ end
   @test rebuilt.options == PGExt._SESSION_OPTIONS
 end
 
+# What: the keywords each typed connect arm (`_dial_keywords`) hands `Postgres.Connection`, for the four
+#   shapes `_dial` types (a password or none, an `sslmode` or none, `options` always set), read from real
+#   connection strings through `_checked_params` and `_with_session_options` as `_open_connection` does.
+# Expected: the keywords are exactly `ConnectionParams`' fields with the params' values, plus `style`,
+#   which is what Postgres.jl's own `DBInterface.connect(Connection, params)` passes; every keyword is
+#   one the constructor declares; and the fields `_dial` types (`password`, `options`, `sslmode`) plus
+#   the ones it requires unset (`_DIAL_UNSET`) are every optional field of `ConnectionParams`. `_dial`
+#   hands each of the five the typed arm with the params' own values, and a string that sets a field of
+#   `_DIAL_UNSET` the driver's connect; and that connect is still the plain keyword call the arms copy.
+# Why: `_dial` makes the driver's keyword call itself, at concrete types, because the driver's call was a
+#   `MethodError` in a trimmed build (#1599 layer 2). An arm that dropped or changed a value would connect
+#   differently, and an optional field added upstream must fail here rather than be dropped.
+@testset "each typed connect arm passes what the driver's connect passes (#1599)" begin
+  CParams = Postgres.ConnectionParams
+  optional = Set(f for f in fieldnames(CParams) if fieldtype(CParams, f) isa Union)
+  @test optional == Set((:password, :options, :sslmode, PGExt._DIAL_UNSET...))
+  declared = Set(Iterators.flatten(Base.kwarg_decl(m) for m in methods(Postgres.Connection)))
+  shapes = 0
+  for dsn in ("host=h port=6543 user=u password=p dbname=d", "host=h user=u dbname=d",
+              "host=h user=u password=p dbname=d sslmode=require", "host=h user=u dbname=d sslmode=disable",
+              "host=h user=u password=p dbname=d options='-c search_path=f1'")
+    p = PGExt._with_session_options(PGExt._checked_params(dsn))
+    @test p.options isa String && all(f -> getfield(p, f) === nothing, PGExt._DIAL_UNSET)
+    kw = PGExt._dial_keywords(p, p.password, p.options, p.sslmode)
+    @test Set(keys(kw)) == Set((fieldnames(CParams)..., :style))
+    @test issubset(keys(kw), declared)
+    @test all(f -> isequal(kw[f], getfield(p, f)), fieldnames(CParams))
+    @test kw.style isa PGExt._PormGStyle
+    # `_dial` hands the arm exactly these three values, at their own types.
+    took = PGExt._dial(p, (q, pw, o, sm) -> (:shape, q === p, pw, o, sm), q -> (:open,))
+    @test took[1:2] == (:shape, true) && isequal(took[3:5], (p.password, p.options, p.sslmode))
+    @test typeof(took[3:5]) == Tuple{typeof(p.password), String, typeof(p.sslmode)}
+    shapes += 1
+  end
+  @test shapes == 5
+  # A shape outside the four takes the driver's own connect, with the params as they are.
+  for dsn in ("host=h dbname=d connect_timeout=5", "host=h dbname=d application_name=f1",
+              "host=h dbname=d sslmode=verify-full sslrootcert=/ca.pem")
+    p = PGExt._with_session_options(PGExt._checked_params(dsn))
+    @test !all(f -> getfield(p, f) === nothing, PGExt._DIAL_UNSET)
+    @test PGExt._dial(p, (q, pw, o, sm) -> (:shape,), q -> (:open, q === p)) == (:open, true)
+  end
+  # The arms stand in for the driver's connect only while it is the plain keyword call it is in the
+  # versions `[compat]` admits: a default or a check added there must be reviewed against them.
+  driver_src = replace(read(joinpath(pkgdir(Postgres), "src", "Postgres.jl"), String), "\r\n" => "\n")
+  @test occursin("""
+    function DBInterface.connect(::Type{Connection}, params::ConnectionParams; debug::Union{Bool, Nothing}=nothing, reconnect::Union{Bool, Nothing}=nothing, statement_cache_maxsize::Union{Integer, Nothing}=nothing, numeric_overflow::Union{Symbol, Nothing}=nothing, style::API.AbstractPostgresStyle=PostgresStyle())
+        actual_maxsize = isnothing(statement_cache_maxsize) ? params.statement_cache_maxsize : statement_cache_maxsize
+        Connection(host=params.host, user=params.user, password=params.password, dbname=params.dbname, port=params.port, debug=something(debug, params.debug), reconnect=something(reconnect, params.reconnect), application_name=params.application_name, options=params.options, connect_timeout=params.connect_timeout, sslmode=params.sslmode, sslrootcert=params.sslrootcert, sslcert=params.sslcert, sslkey=params.sslkey, sslcapath=params.sslcapath, sslservername=params.sslservername, gssencmode=params.gssencmode, krbsrvname=params.krbsrvname, gssdelegation=params.gssdelegation, statement_timeout=params.statement_timeout, statement_cache_maxsize=actual_maxsize, numeric_overflow=something(numeric_overflow, params.numeric_overflow), style=style)
+    end
+    """, driver_src)
+end
+
 @testset "results decode to the types LibPQ.jl delivers (#788)" begin
   Decimal = PGExt.Decimals.Decimal
   UTC = PGExt.TimeZones.TimeZone("UTC")

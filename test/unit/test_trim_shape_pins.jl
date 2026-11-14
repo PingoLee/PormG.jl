@@ -4369,6 +4369,27 @@ end
     @test typeof(myx._bind(pool, QB.PgParameterizedQuery("", Any["Monaco", 2008, nothing], 3))) === B
   end
 
+  # What: the Postgres.jl connect, `_dial`, and its four typed arms (`_dial_shape`: a password or none,
+  #   an `sslmode` or none, `options` always set).
+  # Expected: `_dial` and every arm make no dynamic call, while the driver's own
+  #   `DBInterface.connect(Connection, params)`, which the open arm `_dial_open` keeps for any other
+  #   shape, still makes one. That the arms pass the driver's values is pinned in `test_postgres_ext.jl`.
+  # Why: the driver's connect hands the keyword-only constructor `Union{Nothing, …}` values, so its
+  #   keyword call was dynamic, and the trimmed Postgres.jl fixture raised `MethodError` on `kwcall` at
+  #   every connect, wrapped in `PoolConnectError` (#1599 layer 2, #1614).
+  @testset "the Postgres.jl connect calls the constructor at concrete keyword types (#1599 layer 2)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    CParams = Postgres.ConnectionParams
+    @test isdefined(pgx, :_dial) && _dynamic_calls(pgx._dial, (CParams,)) == String[]
+    @test isdefined(pgx, :_dial) &&
+          _dynamic_calls(pgx._dial, (CParams, typeof(pgx._dial_shape), typeof(pgx._dial_open))) == String[]
+    for pw in (String, Nothing), sm in (String, Nothing)
+      @test isdefined(pgx, :_dial_shape) &&
+            (pw, sm, _dynamic_calls(pgx._dial_shape, (CParams, pw, String, sm))) == (pw, sm, String[])
+    end
+    @test !isempty(_dynamic_calls_kw(Postgres.DBInterface.connect, (Type{Postgres.Connection}, CParams)))
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

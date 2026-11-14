@@ -675,9 +675,50 @@ end
 
 # ── Connections ──────────────────────────────────────────────────────────────
 
+# #1599 layer 2: Postgres.jl's `DBInterface.connect(Connection, params)` hands the keyword-only
+# `Connection` constructor the optional parameters as they sit in `ConnectionParams`, typed
+# `Union{Nothing, …}`, so the keyword call's type is known only at run time. A trimmed build had no code
+# for it: every connect raised `MethodError` on `kwcall`, which `PoolConnectError` wrapped like a refused
+# port. `_dial` makes the same call itself, at concrete types, for the shapes PormG's connections take:
+# `options` is always set (`_with_session_options`), the password and `sslmode` are set or not, and the
+# other optional parameters (`_DIAL_UNSET`) are unset. Each arm passes the values the driver's connect
+# passes (`_dial_keywords`, pinned against `ConnectionParams` in `test_postgres_ext.jl`); any other shape
+# takes the driver's connect, one dynamic call behind `@noinline`.
+const _DIAL_UNSET = (:application_name, :connect_timeout, :sslrootcert, :sslcert, :sslkey, :sslcapath,
+                     :sslservername, :gssencmode, :krbsrvname, :statement_timeout)
+
+_dial_keywords(p::Postgres.ConnectionParams, password::Union{Nothing, String}, options::String,
+               sslmode::Union{Nothing, String}) =
+  (host = p.host, user = p.user, password = password, dbname = p.dbname, port = p.port, debug = p.debug,
+   reconnect = p.reconnect, application_name = nothing, options = options, connect_timeout = nothing,
+   sslmode = sslmode, sslrootcert = nothing, sslcert = nothing, sslkey = nothing, sslcapath = nothing,
+   sslservername = nothing, gssencmode = nothing, krbsrvname = nothing, gssdelegation = p.gssdelegation,
+   statement_timeout = nothing, statement_cache_maxsize = p.statement_cache_maxsize,
+   numeric_overflow = p.numeric_overflow, style = _PormGStyle())
+
+_dial_shape(p::Postgres.ConnectionParams, password::Union{Nothing, String}, options::String,
+            sslmode::Union{Nothing, String}) =
+  Postgres.Connection(; _dial_keywords(p, password, options, sslmode)...)
+
+@noinline _dial_open(p::Postgres.ConnectionParams) =
+  DBInterface.connect(Postgres.Connection, p; style = _PormGStyle())
+
+# `shape` and `open` are the two calls, arguments so `test_postgres_ext.jl` can check which one each
+# connection string takes and with what, without connecting.
+function _dial(p::Postgres.ConnectionParams, shape::S = _dial_shape, open::O = _dial_open) where {S, O}
+  options = p.options
+  (options isa String && all(f -> getfield(p, f) === nothing, _DIAL_UNSET)) || return open(p)
+  password = p.password
+  sslmode = p.sslmode
+  if password isa String
+    return sslmode isa String ? shape(p, password, options, sslmode) : shape(p, password, options, nothing)
+  end
+  return sslmode isa String ? shape(p, nothing, options, sslmode) : shape(p, nothing, options, nothing)
+end
+
 function _open_connection(pool::_Pool)::Postgres.Connection
   params = _with_session_options(_checked_params(pool.connection_string))
-  conn = DBInterface.connect(Postgres.Connection, params; style = _PormGStyle())
+  conn = _dial(params)
   try
     _register_types!(conn)
   catch

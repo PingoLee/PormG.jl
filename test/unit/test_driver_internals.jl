@@ -175,6 +175,13 @@ const PINNED_FIELDS = _FieldPin[
   (type = Postgres.ConnectionParams, fields = [:host, :options, :reconnect, :gssencmode, :sslmode, :user,
                                                :password, :application_name],
    status = :internal, reader = "_checked_params, _with_session_options"),
+  # #1599 layer 2: the typed connect passes every field to `Postgres.Connection` as Postgres.jl's own
+  # connect does, and requires the optional ones in `_DIAL_UNSET` unset; `test_postgres_ext.jl` fails
+  # when an optional field is added.
+  (type = Postgres.ConnectionParams, fields = [:dbname, :port, :debug, :gssdelegation, :statement_cache_maxsize,
+                                               :numeric_overflow, :connect_timeout, :sslrootcert, :sslcert,
+                                               :sslkey, :sslcapath, :sslservername, :krbsrvname, :statement_timeout],
+   status = :internal, reader = "_dial, _dial_keywords"),
   (type = Postgres.Error, fields = [:code, :message, :table, :column, :constraint], status = :documented,
    reader = "PormG.backend_classify_error, backend_error_fields, _is_lost_connection, …"),
   (type = Postgres.Error, fields = [:routine], status = :internal, reader = "_is_stale_cached_statement"),

@@ -256,8 +256,20 @@ end
 # query`, no `to_tsvector` — and the query's config applies to the query alone. That is the branch on
 # `field.type` below. A config that differs from the one the column was filled with is the caller's to
 # match, as in Django: the stored document does not say which it was built with.
+#
+# #1599 group 3: the configuration is read from the query's keyword dictionary, untyped, so the call to
+# `Dialect.ts_vector_sql` was a dynamic one. At a `String` or `nothing` it is static over the engine
+# union; any other value makes the call it made before, behind `@noinline`.
+function _ts_vector_sql_at(column::String, @nospecialize(config), @nospecialize(conn::ConnType))
+  config isa String && return Dialect.ts_vector_sql(column, config, conn)
+  config === nothing && return Dialect.ts_vector_sql(column, nothing, conn)
+  return _ts_vector_sql_open(column, config, conn)
+end
+@noinline _ts_vector_sql_open(column::String, @nospecialize(config), @nospecialize(conn)) =
+  Dialect.ts_vector_sql(column, config, conn)
+
 function _render_search_operator(v::SQLTypeOper, column::String, instruc::SQLInstruction)::String
-  _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "The @search lookup"))
+  Dialect._supports_at(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "The @search lookup"))
   field, _ = _operand_field(v, instruc)
   (field !== nothing && field.type in ("VARCHAR", "TEXT", "TSVECTOR")) ||
     throw(FilterError("The \e[31m@search\e[0m lookup searches a text column (a CharField or " *
@@ -272,7 +284,7 @@ function _render_search_operator(v::SQLTypeOper, column::String, instruc::SQLIns
   _is_fts_node(operand, "SEARCH_QUERY") ||
     throw(FilterError("The \e[31m@search\e[0m lookup takes the search text or a SearchQuery(...) (#31)."))
   query = operand::FObject
-  vector = field.type == "TSVECTOR" ? column : Dialect.ts_vector_sql(column, query.kwargs["config"], instruc.connection)
+  vector = field.type == "TSVECTOR" ? column : _ts_vector_sql_at(column, query.kwargs["config"], instruc.connection)
   rendered = _on_join_right(() -> _render_fts_operand(query, instruc), instruc)
   return Dialect.search(instruc.connection, vector, rendered)
 end

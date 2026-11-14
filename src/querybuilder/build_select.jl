@@ -286,7 +286,7 @@ function get_select_query(values::Vector{ProjectionNode}, instruc::SQLInstructio
             # Django's annotate-then-filter — and reads as its `tsvector` text. Only HERE, at the top
             # of the SELECT list, past `_check_fts_render`: wrapped, compared or ordered by, it is still
             # refused, because every other site renders it through `_render_function_typed`.
-            _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "SearchVector"))
+            Dialect._supports_at(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, "SearchVector"))
             # The OUTERMOST query only: a Subquery's single column is a value its parent compares,
             # which is what a SearchVector cannot be.
             instruc.outer === nothing || throw(QueryBuildError(

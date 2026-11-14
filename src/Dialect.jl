@@ -19,6 +19,7 @@ import PormG: PormGSettings, SQLType, SQLInstruction, SQLTypeQ, SQLTypeQor, SQLT
 import PormG: InvalidValueError, BackendCapabilityError, QueryBuildError, InvalidMigrationError, UnsupportedConnectionError
 import PormG: StatementError
 import PormG: _supports, _capability_error, _engine_key  # #1129: the backend capability table (Kernel)
+import PormG: _SQLEngine
 import PormG: _require_feature  # #1163: a version row (window functions on SQLite)
 
 # #1599: the barriers through which a Dialect method that takes the engine `@nospecialize` calls the
@@ -27,19 +28,37 @@ import PormG: _require_feature  # #1163: a version row (window functions on SQLi
 # concrete pool reads the table statically, #1682), so a direct call from it would be one dynamic call
 # site per method. Each barrier holds that call at one site instead; it forwards its arguments
 # unchanged, so the answer and the refusal's type and text are the same.
-@noinline _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString) =
-  _capability_error(conn, feature, what)
-@noinline _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString,
-                               why::AbstractString) = _capability_error(conn, feature, what; why = why)
-@noinline _supports_at(@nospecialize(conn), feature::Symbol)::Bool = _supports(conn, feature)
-@noinline _require_feature_at(@nospecialize(conn), feature::Symbol, what::AbstractString)::Nothing =
-  _require_feature(conn, feature, what)
+#
+# The query builder's capability sites call these too (#1599 group 3), and inside each the connection
+# reaches the table at its concrete type: a pool PormG builds is walked to it through `with_pool`'s
+# closed set, as `QueryBuilder._require_outer_join_feature` does, so at run time the lookup is a static
+# call, not only a fenced dynamic one. Anything else (a test's stand-in pool takes `with_pool`'s open
+# arm; `nothing` or a value that is no engine skips the walk) makes the call it made before.
+@noinline function _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString)
+  conn isa _SQLEngine && return with_pool(_capability_error, conn, feature, what)
+  return _capability_error(conn, feature, what)
+end
+@noinline function _capability_error_at(@nospecialize(conn), feature::Symbol, what::AbstractString,
+                                        why::AbstractString)
+  conn isa _SQLEngine && return with_pool(_capability_error_why, conn, feature, what, why)
+  return _capability_error(conn, feature, what; why = why)
+end
+_capability_error_why(pool, feature::Symbol, what::AbstractString, why::AbstractString) =
+  _capability_error(pool, feature, what; why = why)
+@noinline function _supports_at(@nospecialize(conn), feature::Symbol)::Bool
+  conn isa _SQLEngine && return with_pool(_supports, conn, feature)
+  return _supports(conn, feature)
+end
+@noinline function _require_feature_at(@nospecialize(conn), feature::Symbol, what::AbstractString)::Nothing
+  conn isa _SQLEngine && return with_pool(_require_feature, conn, feature, what)
+  return _require_feature(conn, feature, what)
+end
 # #496: the `db_default` vocabulary (Kernel, layer 1). `db_default_sql` below renders from it, and
 # `Migrations._column_default` compiles the declared side through the same function.
 import PormG: PORTABLE_DB_DEFAULTS
 # #29: index access methods, the operator-class shape, and the `pormg:index` ownership marker.
 import PormG: INDEX_METHODS, INDEX_OPCLASS_RE, INDEX_MARKER, is_valid_db_default_sql
-import PormG.ConnectionPool: fetch
+import PormG.ConnectionPool: fetch, with_pool
 import PormG: postgres_type_map_reverse, date_format_map, sqlite_type_map_reverse
 # The canonical column IR (#507). `alter_field` renders an ALTER from a `ColumnDelta`, which is why
 # these types live in `Kernel` (layer 1) rather than in `Migrations` — this module is included
@@ -1903,11 +1922,11 @@ RPAD(columns::Vector{Any}, format::FnOptions, @nospecialize(conn::PormGMySQL)) =
 # `bigint` form, so the bound position and length are cast, as `LPAD`'s length is; `Substr` refuses
 # either past `typemax(Int32)` when it is built. No option bag (#1346): `_function_sql` calls it with
 # the rendered arguments alone.
-function SUBSTR(columns::Vector{Any}, conn::PormGPostgres)
+function SUBSTR(columns::Vector{Any}, @nospecialize(conn::PormGPostgres))
   len = length(columns) == 3 ? ", ($(columns[3]))::integer" : ""
   return "SUBSTR($(columns[1]), ($(columns[2]))::integer$(len))"
 end
-SUBSTR(columns::Vector{Any}, conn::Union{PormGSQLite,PormGMySQL}) = "SUBSTR($(join(columns, ", ")))"
+SUBSTR(columns::Vector{Any}, @nospecialize(conn::Union{PormGSQLite,PormGMySQL})) = "SUBSTR($(join(columns, ", ")))"
 
 function TRIM(column::String, format::FnOptions, @nospecialize(conn::Union{PormGPostgres,PormGSQLite,PormGMySQL}))
   return "TRIM($(column))"
@@ -4194,31 +4213,31 @@ end
 # Typed into the signature on purpose: an untyped 3-argument Dialect helper matches the
 # `(PormGPostgres, AbstractString, AbstractString)` shape `test_operators.jl` reflects over as an
 # operator renderer (#604).
-_pattern_text_operand(::PormGPostgres, ::Val{:inet}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGPostgres), ::Val{:inet}, column::AbstractString)::String =
   "HOST($(column))"
-_pattern_text_operand(::PormGPostgres, ::Val{:cidr}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGPostgres), ::Val{:cidr}, column::AbstractString)::String =
   "CAST($(column) AS text)"
 # #902: a `uuid` prints lowercase and hyphenated, the text a `UUIDField` stores on SQLite.
-_pattern_text_operand(::PormGPostgres, ::Val{:uuid}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGPostgres), ::Val{:uuid}, column::AbstractString)::String =
   "CAST($(column) AS text)"
 # #1086: a `date`, as the `YYYY-MM-DD` text SQLite stores. `to_char` rather than `::text`, because a
 # cast follows the session's `DateStyle` (`'German'` prints `31.12.2009`), and the fragment must match
 # the same text on both engines.
-_pattern_text_operand(::PormGPostgres, ::Val{:date}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGPostgres), ::Val{:date}, column::AbstractString)::String =
   "to_char($(column), 'YYYY-MM-DD')"
 # #1086 (review): a date part — an integer, printed as its digits on both engines. SQLite's `LIKE` reads
 # an integer as that text already.
-_pattern_text_operand(::PormGPostgres, ::Val{:integer}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGPostgres), ::Val{:integer}, column::AbstractString)::String =
   "CAST($(column) AS text)"
 # #1183: a `time`, as `HH:MM:SS[.ffffff]` with the fraction's trailing zeros dropped — what Julia's
 # `string(::Time)` writes on SQLite. A cast rather than `to_char`: `to_char`'s `.US` always prints six
 # digits, while the cast trims them, and a `time`'s text does not follow `DateStyle`.
-_pattern_text_operand(::PormGPostgres, ::Val{:time}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGPostgres), ::Val{:time}, column::AbstractString)::String =
   "CAST($(column) AS text)"
 # SQLite reads the column as written: it has no network column (#28), and its UUID column is already
 # that text (#902). SQLite only, so a kind added without a PostgreSQL method raises a `MethodError`
 # there rather than rendering a `LIKE` the server rejects.
-_pattern_text_operand(::PormGSQLite, ::Val, column::AbstractString)::String = String(column)
+_pattern_text_operand(@nospecialize(conn::PormGSQLite), ::Val, column::AbstractString)::String = String(column)
 # MySQL (#1130 phase 5b), one method per kind it reads, so a kind added later raises a `MethodError`
 # here too. Each gives PostgreSQL's text, so a pattern matches the same rows (measured on 8.4):
 # - an integer: its digits, `CAST(… AS CHAR)`;
@@ -4228,19 +4247,19 @@ _pattern_text_operand(::PormGSQLite, ::Val, column::AbstractString)::String = St
 #   and trimming the trailing zeros and then a bare `.` gives `10:30:00` and `10:30:00.25`, as
 #   PostgreSQL's cast and Julia's `string(::Time)` write them. The column is named once;
 # - a uuid: the `CHAR(36)` column as written, lowercase and hyphenated, as on SQLite (#902).
-_pattern_text_operand(::PormGMySQL, ::Val{:integer}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:integer}, column::AbstractString)::String =
   "CAST($(column) AS CHAR)"
-_pattern_text_operand(::PormGMySQL, ::Val{:date}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:date}, column::AbstractString)::String =
   "CAST($(column) AS CHAR)"
-_pattern_text_operand(::PormGMySQL, ::Val{:time}, column::AbstractString)::String =
+_pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:time}, column::AbstractString)::String =
   "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM TIME_FORMAT($(column), '%H:%i:%s.%f')))"
-_pattern_text_operand(::PormGMySQL, ::Val{:uuid}, column::AbstractString)::String = String(column)
+_pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:uuid}, column::AbstractString)::String = String(column)
 # A network column is a feature MySQL lacks (`:network_types`): a model that declares one and is queried
 # without a migration reaches here, and gets the refusal every other network lookup gives on MySQL.
-_pattern_text_operand(conn::PormGMySQL, ::Val{:inet}, column::AbstractString)::String =
-  throw(_capability_error(conn, :network_types, "A pattern lookup on an inet column"))
-_pattern_text_operand(conn::PormGMySQL, ::Val{:cidr}, column::AbstractString)::String =
-  throw(_capability_error(conn, :network_types, "A pattern lookup on a cidr column"))
+_pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:inet}, column::AbstractString)::String =
+  throw(_capability_error_at(conn, :network_types, "A pattern lookup on an inet column"))
+_pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:cidr}, column::AbstractString)::String =
+  throw(_capability_error_at(conn, :network_types, "A pattern lookup on a cidr column"))
 
 function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"

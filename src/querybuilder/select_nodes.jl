@@ -106,10 +106,10 @@ end
 # arm. A projection ordered by its alias renders no `?` and keeps the placement.
 function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, @nospecialize(conn::PormGMySQL);
                          null_flag::Union{Nothing,AbstractString} = nothing)
-  null_flag === nothing && occursin('?', string(expr)) && throw(_capability_error(conn, :nulls_order,
-    "Ordering by an expression that binds a value";
-    why = "Project it under a name and order by that name instead, e.g. \e[32mvalues(\"key\" => <expression>)\e[0m " *
-          "and \e[32morder_by(\"key\")\e[0m, which places NULLs with an `(key IS NULL)` sort key."))
+  null_flag === nothing && occursin('?', string(expr)) && throw(Dialect._capability_error_at(conn, :nulls_order,
+    "Ordering by an expression that binds a value",
+    "Project it under a name and order by that name instead, e.g. \e[32mvalues(\"key\" => <expression>)\e[0m " *
+    "and \e[32morder_by(\"key\")\e[0m, which places NULLs with an `(key IS NULL)` sort key."))
   return invoke(_order_term_sql, Tuple{Any,AbstractString,Symbol,Any}, expr, orientation, placement, conn;
                 null_flag = null_flag)
 end
@@ -351,7 +351,7 @@ function _build_over_clause(over::WindowSpec, instruc::SQLInstruction)::String
     if conn !== nothing
       for (needed, feature) in ((Base.startswith(frame, "GROUPS"), :window_groups_frame),
                                 (occursin(" EXCLUDE ", frame), :window_frame_exclusion))
-        needed && !_supports(conn, feature) && throw(_capability_error(conn, feature, "frame = $(repr(frame))"))
+        needed && !Dialect._supports_at(conn, feature) && throw(Dialect._capability_error_at(conn, feature, "frame = $(repr(frame))"))
       end
       frame = Dialect.engine_frame_sql(frame, conn)
     end
@@ -428,7 +428,13 @@ function _get_select_query(v::WindowFunction, instruc::SQLInstruction; _as::Unio
     n = get(v.kwargs, "n", nothing)
     n isa Integer || throw(QueryBuildError("NthValue requires a positive integer n"))
     n <= 0 && throw(QueryBuildError("NthValue n must be a positive integer"))
-    return Dialect.NTH_VALUE(resolved_column, n, _build_over_clause(v.over, instruc), instruc.connection)
+    over_sql = _build_over_clause(v.over, instruc)
+    # #1599 group 3: the rendered column is read untyped; at its `String` (with an `Int` n, the type a
+    # keyword integer has) the call is static over the engine union. Any other value makes the call it
+    # made before, behind `@noinline`, and so the same `MethodError` for a column that is no `String`.
+    resolved_column isa String && n isa Int &&
+      return Dialect.NTH_VALUE(resolved_column, n, over_sql, instruc.connection)
+    return _nth_value_open(resolved_column, n, over_sql, instruc.connection)
   else
     return _window_column_sql(v.function_name, resolved_column, _build_over_clause(v.over, instruc), instruc.connection)
   end
@@ -532,7 +538,7 @@ const _FTS_FUNCTION_NAMES = Dict("SEARCH_VECTOR" => "SearchVector", "SEARCH_QUER
 function _check_fts_render(v::SQLTypeFunction, instruc::SQLInstruction)
   name = get(_FTS_FUNCTION_NAMES, v.function_name, nothing)
   name === nothing && return nothing
-  _supports(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, name))
+  Dialect._supports_at(instruc.connection, :full_text_search) || throw(Dialect.fts_capability_error(instruc.connection, name))
   # #1021: a SearchVector may be PROJECTED under a name (`build_select.jl` renders it past this
   # check), so the message says what is left: comparing and wrapping.
   v.function_name == "SEARCH_VECTOR" && throw(QueryBuildError(
@@ -835,6 +841,19 @@ _text_operand_advice(operand) = operand isa SQLText ?
 # bag and is called with its typed arguments (`Substr`, #1332); the rest are handed their options as
 # `Dialect.FnOptions`, built here from the resolved `kwargs` (#1610): the one place the string-keyed
 # bag becomes typed slots, so no renderer reads a key.
+# #1599 group 3: a cast's type name, read from a keyword dictionary, reaches `Dialect.cast_type_sql` at its
+# `String` type, so the call is static over the engine union; any other string type makes the call it
+# made before, behind `@noinline`.
+function _cast_type_sql_at(@nospecialize(type::AbstractString), @nospecialize(conn::ConnType), context::String)
+  type isa String && return Dialect.cast_type_sql(type, conn; context = context)
+  return _cast_type_sql_open(type, conn, context)
+end
+@noinline _cast_type_sql_open(@nospecialize(type), @nospecialize(conn), context::String) =
+  Dialect.cast_type_sql(type, conn; context = context)
+
+@noinline _nth_value_open(@nospecialize(column), @nospecialize(n), over_sql::String, @nospecialize(conn)) =
+  Dialect.NTH_VALUE(column, n, over_sql, conn)
+
 function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, @nospecialize(conn::_SQLEngine))
   name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
   return _dialect_function_sql(name, column, Dialect.FnOptions(kwargs), conn)
@@ -1045,9 +1064,9 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # backend without the row, built on the others, as Django's `Round.as_sqlite` does.
   if v isa FObject && v.function_name == "ROUND"
     digits = get(v.kwargs, "precision", 0)
-    if digits isa Integer && digits < 0 && !_supports(instruc.connection, :negative_round_precision)
-      throw(_capability_error(instruc.connection, :negative_round_precision, "\e[31mRound(…, $(digits))\e[0m";
-        why = "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
+    if digits isa Integer && digits < 0 && !Dialect._supports_at(instruc.connection, :negative_round_precision)
+      throw(Dialect._capability_error_at(instruc.connection, :negative_round_precision, "\e[31mRound(…, $(digits))\e[0m",
+        "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
     end
     if digits isa Integer && digits != 0
       # #1293: text at `d = 0` is the operand-domain check's (`_check_operand_domain`), as it is under
@@ -1334,7 +1353,7 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   if interval
     target_kind isa CInterval && return identity
     target = target_kind isa CBool ? "BOOLEAN" :
-             Dialect.cast_type_sql(declared, conn; context = v.function_name == "CAST" ? "Cast" : "output_field")
+             _cast_type_sql_at(declared, conn, v.function_name == "CAST" ? "Cast" : "output_field")
     (Base.startswith(target, "CHAR") || target == "JSON") &&
       return sql -> "CAST($(Dialect._mysql_interval_text(sql)) AS $(target))"
     if any(t -> Base.startswith(target, t), ("DATE", "TIME", "BOOLEAN"))

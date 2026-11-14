@@ -344,7 +344,7 @@ _normalizes_boolean_cast(@nospecialize(conn::PormGMySQL)) = true
 # `NULLS FIRST`/`NULLS LAST` (SQLite before 3.30, #75). The version is the capability table's
 # `:nulls_order` row (#1163); the fact is whether this engine falls back when the row says no.
 _emulates_nulls_order(@nospecialize(conn::PormGPostgres)) = false
-_emulates_nulls_order(@nospecialize(conn::PormGSQLite)) = !_supports(conn, :nulls_order)
+_emulates_nulls_order(@nospecialize(conn::PormGSQLite)) = !Dialect._supports_at(conn, :nulls_order)
 # MySQL has no `NULLS FIRST`/`NULLS LAST` at any version (measured on 8.4: a syntax error), so it always
 # falls back (#1271). Where the key would hold a projection's alias that a FROM column also names, it
 # holds the projection's SQL instead (#1130, `_projection_null_key`), on every engine that emulates.

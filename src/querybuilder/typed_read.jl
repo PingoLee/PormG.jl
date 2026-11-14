@@ -265,9 +265,11 @@ end
 # dynamic call: a function barrier under the JIT, and in a `juliac --trim` image a call nothing was
 # compiled for (the trimmed MySQL read stopped at `Tables.rowcount`, the Postgres.jl one at
 # `Tables.buildcolumns`). Each of those two extensions adds a `_typed_rows_decoded` method for its result
-# that comes here with a cell reader: `cells(FT, column, row, parser, name, site)` reads one cell with an
-# `isa` walk over the cell types its driver delivers, and hands it to the parser and the cell rules at
-# its concrete type, with an open arm for any other type. The cells are asked for in the column walk's
+# that comes here with a cell reader: `cells(FT, column, row, parser, name, site)` reads one cell. It
+# tests the few cell types the field's type takes at their types (`_cell_fast`) and hands a match to the
+# parser and the cell rules there; any other cell is parsed at its type in one walk over every type its
+# driver delivers, a walk that does not depend on the field, and reaches the cell rules untyped
+# (`_typed_cell_any`); an open arm takes a type no walk names. The cells are asked for in the column walk's
 # order, rows in order and fields in declaration order, so a refusal names the same cell, and the
 # values reach the parser as the column walk read them.
 #
@@ -283,7 +285,24 @@ end
 @noinline _typed_rows_from_table_open(::Type{T}, @nospecialize(result), parsers::Tuple, site::_TypedReadSite) where T =
   _typed_rows_from_table(T, result, parsers, site)::Vector{T}
 
-# The result column of each field of `T`, by name, or `nothing` when a field has none or a name repeats.
+# The cell types a reader tests at their types for a field holding `X` (`_typed_held(FT)`): those the
+# cell rules convert into `X` without a refusal on their type, as `_typed_coerce` splits them by hand: `X`
+# itself, a signed integer into an integer, an integer or a narrower float into a float (`Decimal` is
+# an `AbstractFloat`, and `_typed_int_to_float` takes an integer into it). Every other cell takes the
+# reader's untyped arm (`_typed_cell_any`), which answers the same: a read that parses its cells, a NULL
+# column, an unsigned integer, a refusal. Few arms per field type keep the compile and the warm walk
+# short; a reader is a `@generated` function over this.
+_cell_fast(::Type{X}, ::Type{R}) where {X,R} =
+  R <: X ||
+  (X <: Integer && !(X <: Bool) && R in (Int8, Int16, Int32, Int64)) ||
+  (X <: AbstractFloat && R in (Int32, Int64, Float32, Float64))
+
+# A cell a reader holds untyped (parsed already): the cell rules, compiled once per field type.
+@noinline _typed_cell_any(::Type{FT}, @nospecialize(v), name::Symbol, i::Int, site::_TypedReadSite) where FT =
+  _typed_value(FT, v, name, i, site)::FT
+
+# The result column of each field of `T`, by name, or `nothing` when a field has none or any column name
+# repeats (the column walk raised on a repeated name too).
 function _typed_cell_columns(::Type{T}, names::Vector{Symbol}) where T
   allunique(names) || return nothing
   cols = ntuple(k -> something(findfirst(==(fieldname(T, k)), names), 0), Val(fieldcount(T)))

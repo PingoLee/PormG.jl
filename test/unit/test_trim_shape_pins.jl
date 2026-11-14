@@ -2324,7 +2324,7 @@ end
     code(f) = join((replace(l, r"#.*$" => "") for l in split(qb_src(f), '\n')), '\n')
     @test count("Models.apply_formatter(", code("many_to_many.jl")) == 2
     @test count("Models.apply_formatter(", code("deletion.jl")) == 1
-    @test count("Models.apply_formatter(", code("value_validation.jl")) == 1
+    @test count("Models.apply_formatter(", code("value_validation.jl")) == 2   # + the write's format step (#1694)
     @test count("Models.apply_formatter(", code("expression_render.jl")) == 2
     @test !occursin(".formatter(", code("many_to_many.jl")) && !occursin(".formatter(", code("deletion.jl"))
     # And the WHERE path's three direct binds go through the walk, beside `_bind_predicate_value`'s.
@@ -2333,7 +2333,7 @@ end
 
   # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
   #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`) and the format
-  #   step's keyword call (`_format_single` → `_format_single_at`).
+  #   step's keyword call (`_format_single` → `_format_single_at`), the formatter call (`Models.apply_formatter`).
   # Expected: `validate_field_data` and `_format_single` take their value unspecialized, and neither their
   #   keyword bodies nor the walks make a dynamic call (each open arm makes one, whatever the field's type);
   #   each returns the same value, or raises the same error type with the same text, as the code it
@@ -2401,6 +2401,11 @@ end
       @test isempty(_dynamic_calls(QB._format_single_at, (Function, Bool, String, Any, String)))
       @test length(_dynamic_calls(QB._format_single_other, (Function, Bool, String, Any, String))) == 1
       @test only(methods(QB._format_single_value)).nospecialize != 0
+      # Wall 3, the formatter: called through `Models.apply_formatter`, never through the slot's `Function`.
+      for T in literal_types
+        calls = _dynamic_calls(QB._format_single_value, (Function, Bool, String, T, String))
+        @test all(c -> occursin("_single_value(", c) || occursin("_contains_nul(", c), calls)
+      end
     end
     # The same answer as the old body, which read the field inside it.
     old_fs(f_meta, field, value, op, conn) = begin

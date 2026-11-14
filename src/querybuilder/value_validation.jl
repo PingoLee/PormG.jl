@@ -520,7 +520,7 @@ end
 function _format_single_value(@nospecialize(formatter), takes::Bool, field::AbstractString, value, op::AbstractString)
   value isa _CollectionValue && !takes && _single_value(value, field, op)
   formatted = try
-    formatter(value)
+    Models.apply_formatter(formatter, value)   # #1599 layer 7: at the formatter's type, not through the slot
   catch e
     e isa InvalidValueError && throw(with_location(e; op = op, field = field))
     rethrow()

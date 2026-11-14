@@ -59,7 +59,10 @@ jobs:
         run: |
           julia --project=test/trim test/trim/prep.jl run-jit
           julia --project=test/trim test/trim/read.jl run-jit
+          julia --project=test/trim test/trim/prep.jl run-jit-tasks
+          julia --project=test/trim test/trim/read.jl run-jit-tasks tasks
       - name: Build the trimmed binary
+        id: build
         run: |
           mkdir -p build && cd build
           JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe read \
@@ -82,6 +85,26 @@ jobs:
             echo "::error::the trimmed read-only binary exited 0 without printing the expected row"
             exit 1
           fi
+      - name: Run the pool's long-lived tasks in the trimmed binary
+        # The reaper and the deferred close (#1599 layer 2): the `tasks` run adds two steps, about 20 s,
+        # that fail with exit 4 or 5 when the task never ran. Runs even when the read above failed.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          julia --project=test/trim test/trim/prep.jl run-tasks
+          set +e
+          timeout -k 10 300 build/read run-tasks tasks 2>&1 | tee build/tasks.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "exit status: $status"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the trimmed binary's tasks run exited with status $status (4 = reaper, 5 = deferred close, 124 = timed out)"
+            exit 1
+          fi
+          grep -q "$(printf 'step\treap\tclosed ')" build/tasks.txt &&
+            grep -q "$(printf 'step\tclose\tdeferred')" build/tasks.txt || {
+            echo "::error::the trimmed binary's tasks run exited 0 without the reap and close lines"
+            exit 1
+          }
       - name: Count the verifier's rows
         if: always()
         run: |
@@ -96,6 +119,10 @@ jobs:
             echo "### The binary's step lines"
             echo '```'
             cat build/run.txt 2>/dev/null || echo "(the binary did not run)"
+            echo '```'
+            echo "### The tasks run's step lines"
+            echo '```'
+            cat build/tasks.txt 2>/dev/null || echo "(the tasks run did not run)"
             echo '```'
             echo "### Verifier rows (rows.py)"
             echo '```'
@@ -116,4 +143,5 @@ jobs:
             build/rows.txt
             build/layers.txt
             build/run.txt
+            build/tasks.txt
           if-no-files-found: warn

@@ -893,6 +893,77 @@ end
     @test length(methods(CP._run_sqlite_statement)) == 1
   end
 
+  # What: the pool reaper's sweeper task (#125, #1599 layer 2).
+  # Expected: `_ensure_reaper!` spawns the named loop `_reaper_loop` with the monitor registry as a
+  #   captured argument (`registry = _POOL_MONITOR`), never a `begin … end` body; the loop, the sweep over
+  #   the registry and `_reap_pool!` over each concrete pool make no dynamic call.
+  # Why: a `juliac --trim` image compiles a spawned body only when it sees the closure `@spawn` builds
+  #   constructed. The sweeper's `begin … end` body read only globals, so it was never compiled: in a
+  #   trimmed long-running application its task died at its first call and no idle or over-lifetime
+  #   connection was ever reaped (the read-only fixture's `reap` step: no connection closed in 40 s). The
+  #   verifier reports no row for such a body, so only the shape can be pinned. A capture of a constant
+  #   bits value (`interval = _REAP_INTERVAL`) is folded the same way, which is why the capture is the
+  #   registry; both measured in a minimal trimmed program.
+  @testset "the pool reaper's sweeper starts in a trimmed image (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    i = findfirst("function _ensure_reaper!(", src)
+    j = findfirst("function _reaper_loop(", src)
+    @test i !== nothing && j !== nothing && first(j) > last(i)
+    starter = src[last(i):first(j)]
+    spawns = [l for l in split(starter, '\n') if occursin("@spawn", l) && !startswith(lstrip(l), "#")]
+    @test length(spawns) == 1
+    @test occursin("@spawn _reaper_loop(registry)", only(spawns))
+    @test occursin("registry = _POOL_MONITOR", starter)
+    # A bits capture would be folded into a constant. A proxy: whether the body is compiled is measured
+    # by the read-only fixture's `tasks` run (test/trim/README.md), not by this file.
+    @test !isbitstype(typeof(CP._POOL_MONITOR))
+
+    R = CP._PoolRegistry{CP.PoolMonitorState}
+    @test isempty(_dynamic_calls(CP._reaper_loop, (R,)))
+    @test isempty(_dynamic_calls(CP._reap_all_pools!, (R,)))
+    for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
+              CP.MySQLConnectionPool)
+      @test (P, _dynamic_calls(CP._reap_pool!, (P,))) == (P, String[])
+    end
+  end
+
+  # What: the deferred SQLite close (#327), the task that closes a handle once the worker has finished
+  #   every statement it still holds for it (#1599 layer 2).
+  # Expected: the task waits through `_wait_settled(_sqlite_drained_probe(conn), close_seconds)`; the probe
+  #   has one concrete type with no parameters, the same for any handle, and answers whether the ledger
+  #   holds work for that handle; `_wait_settled` over it makes no dynamic call.
+  # Why: the task built its probe as `() -> _sqlite_outstanding(conn) == 0`, capturing `conn` from the task's
+  #   own untyped field, so the closure's type was computed from the handle at run time
+  #   (`#87#88{SQLite.DB}`). A `juliac --trim` image had no `timedwait` for that type: the task died at the
+  #   call and the handle was never closed (the read-only fixture's `tasks` run: still open after 60 s).
+  @testset "the deferred SQLite close waits on a probe whose type does not depend on the handle (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    src = read(joinpath(pkgdir(PormG), "src", "ConnectionPool.jl"), String)
+    i = findfirst("function _close_driver_handle!(", src)
+    @test i !== nothing
+    j = findnext("\nend\n", src, last(i))
+    @test occursin("_wait_settled(_sqlite_drained_probe(conn), close_seconds)", src[first(i):last(j)])
+
+    db = SQLite.DB()
+    p = CP._sqlite_drained_probe(db)
+    @test typeof(p) === typeof(CP._sqlite_drained_probe(:not_a_handle))
+    @test isconcretetype(typeof(p)) && isempty(typeof(p).parameters)
+    @test p() === true
+    CP._sqlite_pending_inc!(db)
+    try
+      @test p() === false
+    finally
+      CP._sqlite_pending_dec!(db)
+    end
+    @test p() === true
+    # Not what tells the old shape from the new (given a concrete probe type, the wait was static before
+    # too); the type assertions above are.
+    @test isempty(_dynamic_calls(CP._wait_settled, (typeof(p), Float64)))
+    @test CP._wait_settled(p, 1.0) === true
+    close(db)
+  end
+
   # What: the SQLite extension's statement parameters, its typed read's cursor and its retry's lock check
   #   (#1599 layer 2).
   # Expected: a `Vector{Any}` of parameters reaches SQLite.jl wrapped in `_SQLiteBinds`, whose `bind!`

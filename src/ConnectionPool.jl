@@ -1515,19 +1515,32 @@ function _ensure_reaper!(; generating::Bool = ccall(:jl_generating_output, Cint,
   _reaper_started[] && return
   Base.lock(_reaper_lock) do
     _reaper_started[] && return
-    Threads.@spawn begin
-      while true
-        sleep(_REAP_INTERVAL)
-        try
-          _reap_all_pools!()
-        catch e
-          @debug "Connection-pool reaper sweep failed" exception=e
-        end
-      end
-    end
+    # The sweep is a named function, spawned with the registry it sweeps as a captured argument
+    # (#1599 layer 2), the SQLite worker's shape. A `juliac --trim` image compiles a spawned body only
+    # when it sees the closure `@spawn` builds constructed. A `begin … end` body that reads only
+    # globals is a closure with no fields, and one that captures only a constant bits value (the
+    # interval) is folded into a constant: neither is constructed, so neither body is compiled, and the
+    # task died at its first call with a `MethodError` nobody awaited. Nothing was ever reaped, and the
+    # verifier reports no row for it. Measured in a minimal trimmed program: the globals-only body and
+    # a constant `Float64` capture failed; a captured `Channel`, `Ref` or this registry ran.
+    registry = _POOL_MONITOR
+    Threads.@spawn _reaper_loop(registry)
     _reaper_started[] = true
   end
   return nothing
+end
+
+# The sweeper task's loop: every `_REAP_INTERVAL` seconds, reap every monitored pool. Never returns, and
+# never throws: a failed sweep is logged at debug level and the next one runs on schedule.
+function _reaper_loop(registry::_PoolRegistry{PoolMonitorState})
+  while true
+    sleep(_REAP_INTERVAL)
+    try
+      _reap_all_pools!(registry)
+    catch e
+      @debug "Connection-pool reaper sweep failed" exception=e
+    end
+  end
 end
 
 # The lazy start (#1562): this pool reaps but the sweeper is not running, because reaping was enabled
@@ -1548,9 +1561,10 @@ function _monitor_on_acquire!(pool)
   return nothing
 end
 
-# Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool.
-function _reap_all_pools!()
-  pools = Base.lock(() -> _registry_pools(_POOL_MONITOR), _POOL_MONITOR_LOCK)
+# Snapshot the registry (releasing its lock before taking any pool.lock), then reap each pool. The
+# registry is `_POOL_MONITOR`, the one the sweeper captures; its lock is `_POOL_MONITOR_LOCK`.
+function _reap_all_pools!(registry::_PoolRegistry{PoolMonitorState})
+  pools = Base.lock(() -> _registry_pools(registry), _POOL_MONITOR_LOCK)
   for pool in pools                       # a collected pool has no entry left (its WeakRef reads nothing)
     try
       with_pool(_reap_pool!, pool)        # at the pool's concrete type (#1622); a stand-in takes the open arm
@@ -2619,7 +2633,7 @@ function _close_driver_handle!(pool::_SQLEngine, @nospecialize(conn);
     Threads.@spawn begin
       # `_wait_settled` polls on its own Timer and never touches the driver, so a connection whose
       # work never drains costs a bounded wait rather than a wedged task.
-      _wait_settled(() -> _sqlite_outstanding(conn) == 0, close_seconds)
+      _wait_settled(_sqlite_drained_probe(conn), close_seconds)
       # A deferred task: the latest world, see `_call_latest`.
       try
         _with_handle(_handle_close_latest, pool, conn)
@@ -3308,6 +3322,14 @@ function _settle_probe(@nospecialize(handle))
   end
   return () -> settled[]
 end
+
+# "Has the global worker finished every statement it has for `conn`?" (#327), as a probe for
+# `_wait_settled`. Built here, where `conn` is an unspecialized argument, so the probe's type does not
+# depend on the handle's (#1599 layer 2). Built inside the deferred close's task, from a capture with
+# no inferred type, the closure's type was computed from the handle at run time
+# (`#87#88{SQLite.DB}`), and a `juliac --trim` image had no `timedwait` for it: the task died at that
+# call, and the handle was never closed.
+_sqlite_drained_probe(@nospecialize(conn)) = () -> _sqlite_outstanding(conn) == 0
 
 # Bounded, non-throwing settle wait. `timedwait` polls the predicate on its own Timer and never
 # touches the driver, so a handle that never settles costs a bounded wait rather than a wedged

@@ -49,9 +49,9 @@ function start_step(args::Vector{String})::String
 end
 
 # Register the connection in code and bind the models (`TrimF1.boot!`). Exit code 1 when it fails.
-function boot_step(dir::String)::Bool
+function boot_step(dir::String, idle_timeout::Int = 0)::Bool
     try
-        TrimF1.boot!(dir)
+        TrimF1.boot!(dir, idle_timeout)
         say("boot", "ok")
         return true
     catch e
@@ -71,6 +71,84 @@ function query_step()::Bool
         return true
     catch e
         failed("query", e); return false
+    end
+end
+
+# The `tasks` run's steps, the pool's long-lived tasks in a trimmed image (#1599 layer 2).
+#
+# The pool's background reaper (#125) closes an idle overflow connection: lease two connections so the
+# pool (`pool_size = 1`) opens an overflow slot, the only kind it reaps, give both back, and wait for the
+# next sweep. The reaper sweeps every `_REAP_INTERVAL` (15 s), so this step takes about that long; it
+# fails, exit code 4, when no sweep closes the connection within 40 s. Needs a boot with a positive
+# `idle_timeout`. A trimmed image never compiled the reaper's task body before #1599's layer-2 fix, so
+# the task died at its first call and nothing was ever reaped.
+function reap_step()::Bool
+    try
+        CP = PormG.ConnectionPool
+        pool = PormG.Configuration.get_settings(TrimF1.KEY).connections::CP.SQLiteConnectionPool
+        c1 = CP.acquire_connection(pool)
+        c2 = CP.acquire_connection(pool)
+        opened = open_connections(pool)    # while both are leased, so no sweep can take one first
+        CP.release_connection(pool, c1)
+        CP.release_connection(pool, c2)
+        t0 = time_ns()
+        while open_connections(pool) >= opened && time_ns() - t0 < 40_000_000_000
+            sleep(0.25)
+        end
+        ms = string(div(time_ns() - t0, 1_000_000))
+        left = open_connections(pool)
+        if left < opened
+            say("reap", string("closed ", opened - left, " idle overflow connection after ", ms, " ms"))
+            return true
+        end
+        say("reap", string("no connection closed in ", ms, " ms (", opened, " open)"))
+        return false
+    catch e
+        failed("reap", e); return false
+    end
+end
+
+# A SQLite handle closed while the worker still has a statement for it is closed later, by a task that
+# waits for the statement to end (#327): start a slow statement with `fetch_async`, close the pool at
+# once (`drain_seconds = 0`), and wait for that task to close the handle. Fails, exit code 5, when the
+# close was not deferred or the handle is still open after 60 s. The statement is raw SQL because the
+# step needs one that is still running when the pool closes.
+function close_step()::Bool
+    try
+        CP = PormG.ConnectionPool
+        pool = PormG.Configuration.get_settings(TrimF1.KEY).connections::CP.SQLiteConnectionPool
+        ft = CP.fetch_async(pool, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c " *
+                                  "WHERE x < 5000000) SELECT count(*) AS n FROM c")
+        db = ft.conn::SQLite.DB
+        CP.close_pool!(pool; drain_seconds = 0)
+        if !isopen(db)
+            say("close", "the handle closed at once: the statement had already ended")
+            return false
+        end
+        t0 = time_ns()
+        while isopen(db) && time_ns() - t0 < 60_000_000_000
+            sleep(0.1)
+        end
+        ms = string(div(time_ns() - t0, 1_000_000))
+        if isopen(db)
+            say("close", string("the deferred close did not close the handle in ", ms, " ms"))
+            return false
+        end
+        say("close", string("deferred, the handle closed ", ms, " ms after the pool"))
+        return true
+    catch e
+        failed("close", e); return false
+    end
+end
+
+# How many of the pool's slots hold a connection, read under the pool's lock.
+function open_connections(pool::PormG.ConnectionPool.SQLiteConnectionPool)::Int
+    Base.lock(pool.lock) do
+        n = 0
+        for c in pool.connections
+            c === nothing || (n += 1)
+        end
+        n
     end
 end
 

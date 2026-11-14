@@ -224,6 +224,36 @@ under the JIT (a `precompile` statement does not keep code in a trimmed image). 
 not PormG's: any app trimmed with Postgres.jl against a SCRAM server needs those lines until Base64's
 pipes are typed.
 
+## The error path
+
+A statement that fails on the server must reach the caller as its own error. In a trimmed image the error
+path itself used to fail first: a cause walk's `hasproperty` or a lock check's `string` on an untyped
+exception has no compiled code there, and the `MethodError` it raised replaced the server's error (#1599).
+`tools/failing.jl` runs `SELECT raceid FROM pormg_trim_missing`, against a table no fixture creates, and
+prints what the caller catches: the error's type, and for a `DatabaseError` its SQLSTATE, message and
+cause type. The server variants run it after their read, as the `fail` step (exit code 6 if the statement
+does not raise); on SQLite it is an entry of its own, `fail.jl`, so the read-only binary the workflow
+checks is unchanged. Each binary prints what its JIT control prints:
+
+```
+step	fail	threw StatementError        # SQLite: build/fail <run dir>
+  sqlstate: -
+  message: no such table: pormg_trim_missing
+  cause: SQLiteException
+step	fail	threw StatementError        # MySQL 8.4
+  sqlstate: 42S02
+  message: Table 'pormg_trim.pormg_trim_missing' doesn't exist
+  cause: StmtError
+step	fail	threw StatementError        # PostgreSQL through Postgres.jl
+  sqlstate: 42P01
+  message: relation "pormg_trim_missing" does not exist
+  cause: Error
+```
+
+Build `fail.jl` like `read.jl` (`--output-exe fail … ../test/trim/fail.jl`) and run it with a run directory;
+it needs no seeding. The server variants print the step against a server; at the port-1 default they stop
+at the read's connect first.
+
 ## Reading the build log
 
 Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only

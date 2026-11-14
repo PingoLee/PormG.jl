@@ -129,6 +129,14 @@ julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, 1 row
 build-postgres/main
 ```
 
+**Authentication roots.** SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth
+through Base64's encode and decode pipes, which keep their stream in a field typed `IO`. A trimmed image
+had no code for the `IOBuffer` methods those calls reach and failed with `MissingCodeError` while
+authenticating. `postgres/main.jl` roots them with `Base.Experimental.entrypoint`, which does nothing
+under the JIT (a `precompile` statement does not keep code in a trimmed image). That is upstream residue,
+not PormG's: any app trimmed with Postgres.jl against a SCRAM server needs those lines until Base64's
+pipes are typed.
+
 ## Reading the build log
 
 Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only

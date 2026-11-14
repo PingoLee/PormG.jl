@@ -1,4 +1,5 @@
 [deps]
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 PormG = "7d8d7541-4d3d-4580-80a2-17064efb0993"
 Postgres = "8f23287e-300e-4f50-bc2b-9f1dfe95da84"

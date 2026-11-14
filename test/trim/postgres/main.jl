@@ -10,7 +10,20 @@
 # environment variables (`../tools/server.jl`); unset, it is 127.0.0.1:1, where nothing listens: nothing
 # is contacted at boot, and the read raises `PoolConnectError` under the JIT. Against a server seeded by
 # `prep.jl`, the read returns the Monaco race. Each step prints one line to `Core.stdout`, as in ../main.jl.
-using PormG, Postgres, Dates
+using PormG, Postgres, Dates, Base64
+
+# SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth through Base64's encode
+# and decode pipes, which hold their stream in a field typed `IO`: every write and read on it is a dynamic
+# call, and the trimmed image had no code for the `IOBuffer` methods they reach (`MissingCodeError`
+# during authentication). PormG cannot type that field, so the app roots those methods for `--trim`.
+# `entrypoint` keeps a method in a trimmed image (a `precompile` statement does not) and does nothing
+# under the JIT. Upstream residue: ../README.md, "The Postgres.jl variant".
+Base.Experimental.entrypoint(Base.unsafe_write, (IOBuffer, Ptr{UInt8}, Int))
+Base.Experimental.entrypoint(Base.write, (IOBuffer, UInt8, UInt8, UInt8, UInt8))
+Base.Experimental.entrypoint(Base.eof, (IOBuffer,))
+Base.Experimental.entrypoint(Base64.read_to_buffer, (IOBuffer, Base64.Buffer))
+Base.Experimental.entrypoint(Base64.decode_slow,
+    (UInt8, UInt8, UInt8, UInt8, Base64.Buffer, Int, IOBuffer, Ptr{UInt8}, UInt64, Vector{UInt8}))
 
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
 import .models as M
@@ -54,6 +67,16 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
         Core.println("  cause: ", string(nameof(typeof(c))))
         c isa MethodError && Core.println("  cause missed: ", typeof(c.f))
         c isa MethodError && Core.println("  cause args: ", typeof(c.args))
+    end
+    # A statement's failure, likewise by the cause's type and the SQLSTATE; the server's message is not
+    # printed, since it can quote a bound value.
+    if e isa PormG.StatementError
+        se = e::PormG.StatementError
+        c = se.cause
+        Core.println("  cause: ", string(nameof(typeof(c))))
+        c isa MethodError && Core.println("  cause missed: ", typeof(c.f))
+        c isa MethodError && Core.println("  cause args: ", typeof(c.args))
+        se.sqlstate isa String && Core.println("  sqlstate: ", se.sqlstate)
     end
     try   # the frames, when the trimmed image can symbolize them
         for fr in stacktrace(catch_backtrace())

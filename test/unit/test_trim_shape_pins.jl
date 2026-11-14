@@ -2499,10 +2499,11 @@ end
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 
-  # What: the single-row write's error paths (#1599 layer 7, #1694): the format step's located refusal
-  #   (`with_location`).
-  # Expected: `with_location`'s keyword body makes no dynamic call at the types its callers pass, and it raises
-  #   the same error type with the same text as the code it replaces.
+  # What: the single-row write's error paths (#1599 layer 7, #1694): the formatter refusal every validator's
+  #   `catch` calls (`_formatter_refusal`), and the format step's located refusal (`with_location`).
+  # Expected: no validator calls `_formatter_refusal` dynamically (it takes the caught exception unspecialized),
+  #   and `with_location`'s keyword body makes no dynamic call at the types its callers pass; each raises the
+  #   same error type with the same text as the code it replaces.
   # Why: each is a keyword call whose arguments have no concrete type (the caught exception; the located parts'
   #   run-time types), a run-time dispatch that a trimmed image cannot make where nothing was compiled, so a
   #   refused value raises `MethodError` in place of its refusal. Measured on #1797's head 4279d9785 with the full
@@ -2513,12 +2514,52 @@ end
     QB = PormG.QueryBuilder
     M = PormG.Models
     IVE = PormG.InvalidValueError
+    @test isdefined(QB, :_formatter_refusal_other)
     outcome(g) = try
       r = g(); (:ok, typeof(r), r)
     catch e
       (:err, typeof(e), e isa IVE ? (e.msg, e.kind, e.reason, e.op, e.model, e.field, e.field_type, e.row) :
                                     sprint(showerror, e))
     end
+    model = M.Model("tsp_refusal_race", raceid = M.IDField(), year = M.IntegerField(), name = M.CharField(),
+      price = M.DecimalField(max_digits = 5, decimal_places = 2), date = M.DateField(), lap = M.TimeField(),
+      start_at = M.DateTimeField(), uid = M.UUIDField(), data = M.JSONField(), lap_time = M.DurationField(),
+      ip = M.GenericIPAddressField(), tags = M.ArrayField(M.IntegerField()))
+
+    # The validators' catch arms: the keyword call on the caught exception is static.
+    @test only(methods(QB._formatter_refusal)).nospecialize != 0
+    refusal_call(c) = occursin("_formatter_refusal", c)
+    for v in (QB._validate_decimal_value, QB._validate_date_value, QB._validate_time_value, QB._validate_duration_value,
+              QB._validate_datetime_value, QB._validate_uuid_value, QB._validate_json_value),
+        T in (String, SubString{String})
+      @test !any(refusal_call, _dynamic_calls(v, (M.ModelType, String, T, String)))
+    end
+    for (v, F) in ((QB._validate_network_value, M.sGenericIPAddressField), (QB._validate_array_value, M.sArrayField))
+      @test !any(refusal_call, _dynamic_calls(v, (M.ModelType, String, F, String, String)))
+    end
+    @test isempty(_dynamic_calls_kw(QB._formatter_refusal, (Any, String, M.ModelType, String)))
+    # The refusal is the one the old body raised, for each kind of caught error; Ctrl-C and a stack overflow
+    # are rethrown as they were.
+    old_refusal(e, op, model, field; suggestion = nothing) = begin
+      (e isa InterruptException || e isa StackOverflowError) && rethrow(e)
+      e isa IVE || QB._validation_error(op, model, field, "the value could not be formatted ($(typeof(e)))";
+                                         suggestion = suggestion)
+      QB._validation_error(op, model, field, e.reason; suggestion = suggestion, kind = e.kind)
+    end
+    caught = Any[IVE("not a date", :format), IVE("too long", :range; op = "inner", field = "x"), ArgumentError("bad"),
+                 MethodError(+, ("a", 1)), InexactError(:Int64, Int64, 1.5), InterruptException(), StackOverflowError()]
+    for e in caught, s in (nothing, "pass a Date")
+      @test outcome(() -> QB._formatter_refusal(e, "insert", model, "date"; suggestion = s)) ==
+            outcome(() -> old_refusal(e, "insert", model, "date"; suggestion = s))
+    end
+    # And through the validators, end to end: a refused string on each field with a catch arm.
+    for (f, v) in (("price", "12,5"), ("price", "abc"), ("date", "2009-02-30"), ("date", "not a date"), ("lap", "25:61"),
+                   ("start_at", "yesterday"), ("uid", "not-a-uuid"), ("data", "{bad"), ("lap_time", "fast"),
+                   ("ip", "10.0.0.300"), ("tags", "{1,"))
+      r = outcome(() -> QB.validate_field_data(model, f, v, "insert"))
+      @test r[1] === :err && r[2] === IVE && r[3][6] == f
+    end
+
     # The format step's located refusal: `with_location`'s keyword body, at the types its callers pass (the format
     # step: op and field; a bulk cell: op, model, field and row; a filter: op, field and field type).
     # Followed four calls down (`_dynamic_calls_deep`): the keyword sorter, the constructor and `_render_refusal`

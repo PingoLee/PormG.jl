@@ -2499,6 +2499,56 @@ end
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 
+  # What: the single-row write's error paths (#1599 layer 7, #1694): the format step's located refusal
+  #   (`with_location`).
+  # Expected: `with_location`'s keyword body makes no dynamic call at the types its callers pass, and it raises
+  #   the same error type with the same text as the code it replaces.
+  # Why: each is a keyword call whose arguments have no concrete type (the caught exception; the located parts'
+  #   run-time types), a run-time dispatch that a trimmed image cannot make where nothing was compiled, so a
+  #   refused value raises `MethodError` in place of its refusal. Measured on #1797's head 4279d9785 with the full
+  #   fixture entry's refusal step: the create with a `Bool` for a text column raised `MethodError` at
+  #   `with_location`'s keyword call in the trimmed binary, and the verifier listed 28 rows at the validators'
+  #   calls (the date refusal printed: the image had compiled that call for an `InvalidValueError`).
+  @testset "the single-row write's refusals run at concrete types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    IVE = PormG.InvalidValueError
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), e isa IVE ? (e.msg, e.kind, e.reason, e.op, e.model, e.field, e.field_type, e.row) :
+                                    sprint(showerror, e))
+    end
+    # The format step's located refusal: `with_location`'s keyword body, at the types its callers pass (the format
+    # step: op and field; a bulk cell: op, model, field and row; a filter: op, field and field type).
+    # Followed four calls down (`_dynamic_calls_deep`): the keyword sorter, the constructor and `_render_refusal`
+    # are each one call below the last, and a one-level scan saw the sorter's call into the keyword body resolved
+    # while the body it called was picked at run time (the second wall: `MethodError(var"#_#2#3", …)`).
+    wl_step(e, op::String, field::String) = PormG.with_location(e; op = op, field = field)
+    wl_cell(e, op::String, model::String, field::String, row::Int) =
+      PormG.with_location(e; op = op, model = model, field = field, row = row)
+    wl_filter(e, op::String, field::String, t::Union{Nothing, String}) =
+      PormG.with_location(e; op = op, field = field, field_type = t)
+    @test isempty(_dynamic_calls_deep(wl_step, (IVE, String, String); depth = 4))
+    @test isempty(_dynamic_calls_deep(wl_cell, (IVE, String, String, String, Int); depth = 4))   # static before: one open part
+    @test isempty(_dynamic_calls_deep(wl_filter, (IVE, String, String, Union{Nothing, String}); depth = 4))
+    # The same refusal as the keyword spelling it replaces: a part the error carries is kept, the others filled,
+    # each converted as the constructor converts it (a `Symbol`, a `SubString`, an `Int32` row).
+    old_wl(e; op = nothing, model = nothing, field = nothing, field_type = nothing, row = nothing) =
+      IVE(e.reason, e.kind; op = something(e.op, op, Some(nothing)), model = something(e.model, model, Some(nothing)),
+          field = something(e.field, field, Some(nothing)), field_type = something(e.field_type, field_type, Some(nothing)),
+          row = something(e.row, row, Some(nothing)))
+    errs = (IVE("bad", :format), IVE("bad", :range; op = "inner", field = "a"), IVE("bad", :type; row = 3),
+            IVE("plain message"))
+    parts = ((;), (; op = "insert", field = "date"), (; op = "bulk_insert", model = "Race", field = "date", row = 7),
+             (; op = :filter, field = SubString("date", 1, 4), field_type = "DATE"), (; row = Int32(2)), (; row = 2.0),
+             (; op = "update", row = typemax(UInt64)))
+    for e in errs, kw in parts
+      @test outcome(() -> PormG.with_location(e; kw...)) == outcome(() -> old_wl(e; kw...))
+    end
+
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

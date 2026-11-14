@@ -14,7 +14,7 @@ const KEY = "f1"
 
 """Register the SQLite connection under `KEY` and bind the models to it (#1606). A positive
 `idle_timeout` (seconds) opts the pool into idle reaping, as `connection.yml`'s `idle_timeout` does;
-the read-only entry's `reap` step uses it."""
+the read-only entry's `tasks` run uses it."""
 function boot!(dir::String, idle_timeout::Int = 0)
     PormG.Configuration.register_connection(KEY, joinpath(dir, "f1.sqlite");
         adapter = "SQLite", env = "prod", pool_size = 1, change_db = true, change_data = true,

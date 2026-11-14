@@ -3,7 +3,8 @@
 # and the `Trim (juliac)` workflow builds and runs it (README.md).
 #   JIT:  julia --project=test/trim test/trim/read.jl <run dir>
 #   exe:  <build dir>/read <run dir>
-#   reap: <build dir>/read <run dir> reap    adds the pool reaper's step (about 15 s; see steps.jl)
+#   tasks: <build dir>/read <run dir> tasks  adds the pool's long-lived tasks: the reaper and the
+#          deferred close (about 20 s; see steps.jl)
 # The steps and their output are in `steps.jl`, shared with `main.jl`.
 using TrimF1, PormG, SQLite, Dates
 include("steps.jl")
@@ -11,10 +12,11 @@ include("steps.jl")
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
     dir = start_step(args)
-    reap = length(args) >= 2 && args[2] == "reap"
-    boot_step(dir, reap ? 1 : 0) || return Cint(1)
+    tasks = length(args) >= 2 && args[2] == "tasks"
+    boot_step(dir, tasks ? 1 : 0) || return Cint(1)
     query_step() || return Cint(3)
-    reap && (reap_step() || return Cint(4))
+    tasks && (reap_step() || return Cint(4))
+    tasks && (close_step() || return Cint(5))
     elapsed_step(t0)
     return Cint(0)
 end

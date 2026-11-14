@@ -553,12 +553,45 @@ An SQL expression (an `F` expression, a SQL function, a `Joined` or `CTE` column
 the value checks under `update`, which writes it into the statement as SQL (#1320); under any other
 operation it is refused as an `InvalidValueError` of kind `:type` (#1283).
 """
-function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true,
+function validate_field_data(model::PormGModel, field::String, @nospecialize(value), operation::String; allow_primary_key::Bool = true,
                              allow_generated::Bool = false)
     f_meta = _validate_field_name(model, field, operation; allow_primary_key = allow_primary_key,
                                   allow_generated = allow_generated)
-    return _validate_field_value(model, field, f_meta, value, operation)
+    return _validate_field_value_at(model, field, f_meta, value, operation)
 end
+
+# The value checks at the value's concrete type (#1599 layer 7, #1694). A write's values come out of
+# `SQLObjectQuery.insert::OrderedDict{String,Any}`, so every call into `validate_field_data` offers an
+# untyped value: under the JIT that was one dynamic dispatch per value, and in a `juliac --trim` image
+# a `MethodError` on the keyword call, since nothing was compiled for the value type it met (the full
+# fixture entry's `create` stopped there). `validate_field_data` takes the value unspecialized, so its
+# keyword call resolves to one compiled method, and this walk hands the value on at its type: one arm
+# per type a written value commonly is (the set `_format_literal_value` walks for a filter's value),
+# each the same call. Any other value takes one dynamic call behind `@noinline`, so nothing is refused.
+# `f_meta` is #1604's `AnyField`, and `_validate_field_value` has one method, so the call splits on it.
+@noinline function _validate_field_value_at(model::PormGModel, field::String, f_meta, @nospecialize(value),
+                                            operation::String)
+  value isa String && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Int64 && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Float64 && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Bool && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa SubString{String} && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Dates.Date && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Dates.DateTime && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Dates.Time && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa TimeZones.ZonedDateTime && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Decimals.Decimal && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa UUIDs.UUID && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Int32 && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Nothing && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Missing && return _validate_field_value(model, field, f_meta, value, operation)
+  return _validate_field_value_other(model, field, f_meta, value, operation)
+end
+# `f_meta` unspecialized too: the call dispatches at run time on the value either way, and a field split
+# here compiled one dynamic call per `AnyField` member (58 verifier rows on the full fixture entry).
+@noinline _validate_field_value_other(model::PormGModel, field::String, @nospecialize(f_meta), @nospecialize(value),
+                                      operation::String) =
+  _validate_field_value(model, field, f_meta, value, operation)
 
 """
     validate_value(model, field::AbstractString, value) -> the value as PormG formats it for binding

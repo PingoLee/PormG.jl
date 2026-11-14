@@ -2331,6 +2331,61 @@ end
     @test count("_bind_formatted_value(instruc,", code("filter_nodes.jl")) == 4
   end
 
+  # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
+  #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`).
+  # Expected: `validate_field_data` takes its value unspecialized, and neither its keyword body nor the walk
+  #   makes a dynamic call (the open arm makes one, whatever the field's type); the walk returns the same
+  #   value, or raises the same error type with the same text, as the direct `_validate_field_value` call
+  #   it replaces, over fields x values x operations.
+  # Why: a write's values come out of `SQLObjectQuery.insert::OrderedDict{String,Any}`, so each call on one is
+  #   a run-time dispatch, and a trimmed image raises `MethodError` when nothing was compiled for the type it
+  #   meets. Measured on main 4384550db: the full entry's binary stopped at the `validate_field_data` keyword
+  #   call with an `Int64`; the method is specialized and its keyword body calls `_validate_field_value`
+  #   dynamically.
+  @testset "the single-row write checks its values at their concrete types (#1599 layer 7, write walls)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    has(n) = isdefined(QB, n)
+    for n in (:_validate_field_value_at, :_validate_field_value_other)
+      @test has(n)
+    end
+    literal_types = (String, Int64, Float64, Bool, SubString{String}, Dates.Date, Dates.DateTime, Dates.Time,
+                     M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID, Int32, Nothing, Missing)
+
+    # Wall 1, the value checks.
+    @test only(methods(QB.validate_field_data)).nospecialize != 0
+    @test isempty(_dynamic_calls_kw(QB.validate_field_data, (M.ModelType, String, Any, String)))
+    if has(:_validate_field_value_at)
+      @test isempty(_dynamic_calls(QB._validate_field_value_at, (M.ModelType, String, M.AnyField, Any, String)))
+      @test length(_dynamic_calls(QB._validate_field_value_other, (M.ModelType, String, M.AnyField, Any, String))) == 1
+      for T in literal_types
+        @test isempty(_dynamic_calls(QB._validate_field_value_at, (M.ModelType, String, M.sIntegerField, T, String)))
+      end
+    end
+
+    # The same answer as the direct call: the value, or the error's type and text.
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), sprint(showerror, e))
+    end
+    model = M.Model("tsp_write_race", raceid = M.IDField(), year = M.IntegerField(), name = M.CharField(max_length = 8),
+      notes = M.TextField(null = true), points = M.FloatField(), price = M.DecimalField(max_digits = 5, decimal_places = 2),
+      date = M.DateField(), start_at = M.DateTimeField(null = true), lap = M.TimeField(), uid = M.UUIDField(),
+      done = M.BooleanField(), data = M.JSONField(), blob = M.BinaryField(max_length = 4), lap_time = M.DurationField(),
+      ip = M.GenericIPAddressField(), tags = M.ArrayField(M.CharField(max_length = 3)))
+    values = Any["abc", "123456789", "12.5", "2009-05-24", "10:30", "1:27.452", "550e8400-e29b-41d4-a716-446655440000",
+                 "10.0.0.1", "{\"a\":1}", "{1,2}", SubString("2009-05-24", 1, 10), 7, Int32(7), 0, 123456, 2.5, NaN, true,
+                 Dates.Date(2009, 5, 24), Dates.DateTime(2009, 5, 24, 14), Dates.Time(10, 30),
+                 M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")), M.Decimals.Decimal(0, 150, -2),
+                 M.Decimals.Decimal(0, 123456, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), nothing, missing,
+                 Int16(3), :sym, Dict("a" => 1), ["ab", "c"], ["abcd"], UInt8[1, 2, 3, 4, 5], Dates.Minute(1), [1, 2]]
+    old(f, v, op) = QB._validate_field_value(model, f, QB._validate_field_name(model, f, op), v, op)
+    for f in model.field_names, v in values, op in ("insert", "update")
+      @test isequal(outcome(() -> QB.validate_field_data(model, f, v, op)), outcome(() -> old(f, v, op)))
+    end
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

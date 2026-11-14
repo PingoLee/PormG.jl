@@ -80,12 +80,34 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
 fails with the same exit code (1 boot, 2 write, 3 read).
 
+**The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
+long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
+it works (#1599 layer 2).
+
+- `reap`: the binary boots with `idle_timeout = 1`, leases two connections so the pool
+  (`pool_size = 1`) opens an overflow slot, gives both back, and waits for the background reaper to
+  close the idle one. The reaper sweeps every 15 s, so the step takes about that long. Exit 4 if no
+  sweep closes it within 40 s.
+- `close`: a slow statement started with `fetch_async` is still on the SQLite worker when
+  `close_pool!(pool; drain_seconds = 0)` runs, so the pool defers the handle's close until the
+  statement ends (#327). Exit 5 if the close was not deferred or the handle is still open after 60 s.
+
+```
+julia --project=test/trim test/trim/prep.jl run-tasks && build/read run-tasks tasks
+...
+step	reap	closed 1 idle overflow connection after 15079 ms
+step	close	deferred, the handle closed 707 ms after the pool
+```
+
+It is a separate run, not part of the default one, because it adds about 20 s.
+
 **The workflow** (`.github/workflows/trim.yml`, named `Trim (juliac)`) builds this entry with the
 Julia and JuliaC versions above, runs the binary under a 300 s timeout, and fails unless it exits 0
-and prints the `row` line above. The timeout is there because a task body the image never compiled
+and prints the `row` line above. It then makes the `tasks` run, which fails unless it exits 0 with
+both its lines. The timeout is there because a task body the image never compiled
 dies silently, so a broken binary hangs rather than crashes (#1788). The verifier's rows are
-reported, never checked: the binary's step lines, `rows.py` and `classify.py --layers` go to the job
-summary, and the build log, both tables and the step lines are uploaded as the `trim-read-only`
+reported, never checked: the step lines of both runs, `rows.py` and `classify.py --layers` go to the
+job summary, and the build log, both tables and the step lines are uploaded as the `trim-read-only`
 artifact. It runs nightly, by hand
 (`workflow_dispatch`), and on a pull request that changes `test/trim/` or the workflow file. It does
 not run on every pull request: a trimmed build takes several minutes. A change in `src/` that could

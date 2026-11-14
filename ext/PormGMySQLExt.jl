@@ -432,6 +432,10 @@ struct MySQLResult
   info::String
 end
 
+# #1599: the result this extension's statements deliver, so `ConnectionPool._decoded_typed` hands it to
+# the typed read's decoder at its concrete type (`backend_result_type`'s docstring).
+PormG.backend_result_type(::Type{_Pool}) = MySQLResult
+
 Tables.istable(::Type{MySQLResult}) = true
 Tables.columnaccess(::Type{MySQLResult}) = true
 Tables.columns(r::MySQLResult) = NamedTuple{Tuple(r.names)}(Tuple(r.columns))

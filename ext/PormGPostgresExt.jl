@@ -746,6 +746,9 @@ end
 # #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
 # driver at its concrete type (`backend_handle_type`'s docstring).
 PormG.backend_handle_type(::Type{_Pool}) = _Conn
+# #1599: the result this extension's statements deliver, so `ConnectionPool._decoded_typed` hands it to
+# the typed read's decoder at its concrete type (`backend_result_type`'s docstring).
+PormG.backend_result_type(::Type{_Pool}) = Postgres.Result
 
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 

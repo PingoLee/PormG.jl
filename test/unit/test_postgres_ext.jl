@@ -1112,4 +1112,12 @@ end
   empty = Postgres.Result([:a, :b], Type[Int64, Int64], Postgres.ResultRow[], "SELECT 0", 0)
   @test same(empty, I, P2)
   @test QB._typed_rows_decoded(I, empty, P2, site) == I[]
+  # The comparisons above reach the extension's method, not the column walk compared with itself.
+  @test which(QB._typed_rows_decoded, Tuple{Type{I}, Postgres.Result, typeof(P2), QB._TypedReadSite}).module === PGExt
+  # The equivalence rests on a driver rule: a row's cell always fits its column's declared type, because
+  # Postgres.jl widens `types[j]` to every cell's own as it builds the row (`RowClosure`). The column walk's
+  # copy converted a cell to `types[j]`; the cell walk hands it on as it is. A tripwire on that source.
+  src = read(joinpath(pkgdir(Postgres), "src", "execute.jl"), String)
+  @test occursin("Missing <: f.types[f.i] || (f.types[f.i] = Union{f.types[f.i], Missing})", src)
+  @test occursin("if !(v isa f.types[f.i])", src) && occursin("f.types[f.i] = Union{f.types[f.i], typeof(v)}", src)
 end

@@ -866,6 +866,8 @@ end
   @test same(result([:a, :b, :a], [Int64[1], Int64[2], Int64[3]]), I, P2)   # `a` twice
   @test same(result([:a, :b], [Int64[], Int64[]], 0), I, P2)
   @test QB._typed_rows_decoded(I, result([:a, :b], [Int64[], Int64[]], 0), P2, site) == I[]
+  # The comparisons above reach the extension's method, not the column walk compared with itself.
+  @test which(QB._typed_rows_decoded, Tuple{Type{I}, _MyExt.MySQLResult, typeof(P2), QB._TypedReadSite}).module === _MyExt
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

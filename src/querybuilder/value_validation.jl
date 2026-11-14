@@ -525,38 +525,43 @@ function _format_single_value(@nospecialize(formatter), takes::Bool, field::Abst
     e isa InvalidValueError && throw(with_location(e; op = op, field = field))
     rethrow()
   end
-  formatted = _checked_formatted(formatted, field, op)
-  _contains_nul(formatted) && throw(InvalidValueError(
-    "The value contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul; op = op, field = field))
-  return formatted
+  return _checked_formatted(formatted, field, op)
 end
 
 # The formatted value's checks at its concrete type (#1599 layer 7). `Models.apply_formatter` returns what
 # the formatter returns, untyped (its open arm calls any callable), so a check on it dispatched at run time,
-# and the trimmed full fixture entry stopped at `_single_value(::Int64, ::String, ::String)`. One arm per
-# type a formatter returns for a written value (the value types `_format_single_at` walks, a binary
-# payload, an array literal); anything else takes one dynamic call.
+# and the trimmed full fixture entry stopped at `_single_value(::Int64, ::String, ::String)`, then at
+# `_contains_nul(::Int64)`. One arm per type a formatter returns for a written value (the value types
+# `_format_single_at` walks, a binary payload, an array literal); anything else takes one dynamic call.
 @noinline function _checked_formatted(@nospecialize(formatted), field::AbstractString, op::AbstractString)
-  formatted isa String && return _single_value(formatted, field, op)
-  formatted isa Int64 && return _single_value(formatted, field, op)
-  formatted isa Float64 && return _single_value(formatted, field, op)
-  formatted isa Bool && return _single_value(formatted, field, op)
-  formatted isa SubString{String} && return _single_value(formatted, field, op)
-  formatted isa Dates.Date && return _single_value(formatted, field, op)
-  formatted isa Dates.DateTime && return _single_value(formatted, field, op)
-  formatted isa Dates.Time && return _single_value(formatted, field, op)
-  formatted isa TimeZones.ZonedDateTime && return _single_value(formatted, field, op)
-  formatted isa Decimals.Decimal && return _single_value(formatted, field, op)
-  formatted isa UUIDs.UUID && return _single_value(formatted, field, op)
-  formatted isa Int32 && return _single_value(formatted, field, op)
-  formatted isa Nothing && return _single_value(formatted, field, op)
-  formatted isa Missing && return _single_value(formatted, field, op)
-  formatted isa PormGBytes && return _single_value(formatted, field, op)
-  formatted isa PormGArrayLiteral && return _single_value(formatted, field, op)
+  formatted isa String && return _checked_formatted_value(formatted, field, op)
+  formatted isa Int64 && return _checked_formatted_value(formatted, field, op)
+  formatted isa Float64 && return _checked_formatted_value(formatted, field, op)
+  formatted isa Bool && return _checked_formatted_value(formatted, field, op)
+  formatted isa SubString{String} && return _checked_formatted_value(formatted, field, op)
+  formatted isa Dates.Date && return _checked_formatted_value(formatted, field, op)
+  formatted isa Dates.DateTime && return _checked_formatted_value(formatted, field, op)
+  formatted isa Dates.Time && return _checked_formatted_value(formatted, field, op)
+  formatted isa TimeZones.ZonedDateTime && return _checked_formatted_value(formatted, field, op)
+  formatted isa Decimals.Decimal && return _checked_formatted_value(formatted, field, op)
+  formatted isa UUIDs.UUID && return _checked_formatted_value(formatted, field, op)
+  formatted isa Int32 && return _checked_formatted_value(formatted, field, op)
+  formatted isa Nothing && return _checked_formatted_value(formatted, field, op)
+  formatted isa Missing && return _checked_formatted_value(formatted, field, op)
+  formatted isa PormGBytes && return _checked_formatted_value(formatted, field, op)
+  formatted isa PormGArrayLiteral && return _checked_formatted_value(formatted, field, op)
   return _checked_formatted_other(formatted, field, op)
 end
 @noinline _checked_formatted_other(@nospecialize(formatted), field::AbstractString, op::AbstractString) =
-  _single_value(formatted, field, op)
+  _checked_formatted_value(formatted, field, op)
+
+# A single value (#712), with no NUL in it (#951), in that order.
+function _checked_formatted_value(formatted, field::AbstractString, op::AbstractString)
+  formatted = _single_value(formatted, field, op)
+  _contains_nul(formatted) && throw(InvalidValueError(
+    "The value contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul; op = op, field = field))
+  return formatted
+end
 
 # #1348: what a write binds a field's value through on `conn`. A `DurationField` column is its
 # microseconds on MySQL (a BIGINT, #1130 phase 2b), so a write binds what a filter binds, the

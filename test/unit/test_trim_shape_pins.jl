@@ -2334,7 +2334,7 @@ end
   # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
   #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`) and the format
   #   step's keyword call (`_format_single` → `_format_single_at`), the formatter call (`Models.apply_formatter`),
-  #   the formatted value's collection check (`_checked_formatted`).
+  #   the formatted value's collection and NUL checks (`_checked_formatted`).
   # Expected: `validate_field_data` and `_format_single` take their value unspecialized, and neither their
   #   keyword bodies nor the walks make a dynamic call (each open arm makes one, whatever the field's type);
   #   each returns the same value, or raises the same error type with the same text, as the code it
@@ -2404,17 +2404,20 @@ end
       @test only(methods(QB._format_single_value)).nospecialize != 0
       # Wall 3, the formatter: called through `Models.apply_formatter`, never through the slot's `Function`.
       for T in literal_types
-        calls = _dynamic_calls(QB._format_single_value, (Function, Bool, String, T, String))
-        @test all(c -> occursin("_contains_nul(", c), calls)
+        @test isempty(_dynamic_calls(QB._format_single_value, (Function, Bool, String, T, String)))
       end
     end
-    # Wall 4, the formatted value's collection check: walked to its type, one dynamic call in the open arm.
-    for n in (:_checked_formatted, :_checked_formatted_other)
+    # Walls 4 and 5, the formatted value's collection and NUL checks: walked to its type, one dynamic call in
+    # the open arm.
+    for n in (:_checked_formatted, :_checked_formatted_other, :_checked_formatted_value)
       @test has(n)
     end
     if has(:_checked_formatted)
       @test isempty(_dynamic_calls(QB._checked_formatted, (Any, String, String)))
       @test length(_dynamic_calls(QB._checked_formatted_other, (Any, String, String))) == 1
+      for T in (literal_types..., PormG.PormGBytes, PormG.PormGArrayLiteral)
+        @test isempty(_dynamic_calls(QB._checked_formatted_value, (T, String, String)))
+      end
     end
     # The same answer as the old body, which read the field inside it.
     old_fs(f_meta, field, value, op, conn) = begin

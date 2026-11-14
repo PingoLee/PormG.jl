@@ -4600,6 +4600,40 @@ end
     end
   end
 
+  # What: the cause walks' field read, `_unowned_field(e, field)`, and `_unowned_inner(e)` over it, on an
+  #   exception typed `Any`; each type `_KNOWN_EXCEPTIONS` lists; the open arm.
+  # Expected: neither makes a dynamic call (the open arm `_unowned_field_open` is an `invoke`, and it
+  #   still calls `hasproperty`). Every listed type keeps Base's `getproperty` and `propertynames`, so
+  #   its properties are its fields, and `_unowned_field` answers what `hasproperty`/`getproperty`
+  #   answer, for a listed type and for any other.
+  # Why: `hasproperty` on an untyped exception had no compiled target in a trimmed image, so a statement
+  #   that failed on the server surfaced as `MethodError: hasproperty(::MethodError, ::Symbol)`, which
+  #   replaced the error being reported (#1599 layer 2; the residue of #1795 and #1796).
+  @testset "the cause walk reads a known exception's field without a dynamic call (#1599 layer 2)" begin
+    @test _dynamic_calls(PormG._unowned_field, (Any, Symbol)) == String[]
+    @test _dynamic_calls(PormG._unowned_inner, (Any,)) == String[]
+    @test isdefined(PormG, :_unowned_field_open) &&
+          !isempty(_dynamic_calls(PormG._unowned_field_open, (Any, Symbol)))
+    known = isdefined(PormG, :_KNOWN_EXCEPTIONS) ? PormG._KNOWN_EXCEPTIONS : ()
+    @test !isempty(known)
+    for T in known
+      @test (T, isconcretetype(T), which(getproperty, Tuple{T, Symbol}).module,
+             which(propertynames, Tuple{T}).module) == (T, true, Base, Base)
+    end
+    old(e, f) = hasproperty(e, f) ? getproperty(e, f) : nothing
+    driver = ErrorException("server closed the connection")
+    samples = Any[PormG.StatementError("SQLite", driver), PormG.OperationalError("PostgreSQL", driver),
+                  PormG.IntegrityError("MySQL", driver), PormG.QueryBuildError("no field"),
+                  MethodError(+, (1, "a")), driver, ArgumentError("x"), InterruptException(), EOFError(),
+                  Base.IOError("closed", -104), CapturedException(driver, Any[]),
+                  PormG.PoolConnectError("SQLite", driver, "f1", 1, 0.0),   # defined after Backend.jl: the open arm
+                  (cause = driver,)]                                   # not an exception at all: the open arm
+    for e in samples, f in (:cause, :err, :msg, :adapter)
+      @test (typeof(e), f, PormG._unowned_field(e, f) === old(e, f)) == (typeof(e), f, true)
+    end
+    @test PormG._unowned_inner(PormG.StatementError("SQLite", driver)) === driver
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

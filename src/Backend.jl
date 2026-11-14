@@ -460,9 +460,36 @@ _phrase_text(s::String)::String =
   return nothing
 end
 # The field read itself, `nothing` when `e` has no such property (#1599 layer 2): the one place a cause
-# walk looks a field up by name, shared with the Postgres.jl extension's interrupt walk, so a trimmed
-# image meets that dynamic call here once instead of in each walk.
-@noinline _unowned_field(@nospecialize(e), field::Symbol) = hasproperty(e, field) ? getproperty(e, field) : nothing
+# walk looks a field up by name, shared with the driver extensions' interrupt walks.
+#
+# `hasproperty` on an untyped exception is a dynamic call, and in a trimmed image it had no compiled
+# target: a failing statement whose error path met it surfaced as `MethodError: hasproperty(::MethodError,
+# ::Symbol)`, which replaced the error being reported. So the exception types PormG knows are tested by
+# `isa` first (the #1735 shape), and each is read at its concrete type: `_known_field` answers what
+# `hasproperty`/`getproperty` answer, since every type listed keeps Base's `getproperty` and
+# `propertynames` (`test/unit/test_trim_shape_pins.jl` checks each), so its properties are its fields.
+# Any other exception takes `hasproperty` as before, behind `@noinline`. The driver extensions narrow
+# their own exception types before they call it; PormG's error types defined after this file
+# (`PoolConnectError`, the migration errors) take the open arm.
+const _KNOWN_EXCEPTIONS = (
+  # PormG's own, from `exceptions.jl`; the three `DatabaseError`s keep the driver's `cause`
+  StatementError, OperationalError, IntegrityError, QueryBuildError, FilterError, UnknownFieldError,
+  AmbiguousFieldError, LazyTraversalError, UnsafeMutationError, InvalidValueError, UnsupportedConnectionError,
+  BackendCapabilityError, ProtectedError, DoesNotExist, MultipleObjectsReturned, TransactionError,
+  FieldValidationError, ModelDefinitionError, InvalidConfigurationError, WritesDisabledError,
+  InvalidMigrationError,
+  # Base's, none with a `cause` or an `err`
+  MethodError, ErrorException, ArgumentError, BoundsError, KeyError, InterruptException, EOFError,
+  Base.IOError, TypeError, UndefVarError, AssertionError, InexactError, OverflowError, DomainError,
+  FieldError, InvalidStateException, TaskFailedException, CompositeException, CapturedException)
+
+@inline _known_field(e::T, field::Symbol) where {T} = hasfield(T, field) ? getfield(e, field) : nothing
+
+@eval @noinline function _unowned_field(@nospecialize(e), field::Symbol)
+  $(Expr(:block, (:(e isa $T && return _known_field(e::$T, field)) for T in _KNOWN_EXCEPTIONS)...))
+  return _unowned_field_open(e, field)
+end
+@noinline _unowned_field_open(@nospecialize(e), field::Symbol) = hasproperty(e, field) ? getproperty(e, field) : nothing
 
 backend_error_fields(e) = _NO_ERROR_FIELDS
 

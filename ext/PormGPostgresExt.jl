@@ -654,11 +654,26 @@ end
 
 _pg_bpchar(s::AbstractString, _registry = nothing)::String = rstrip(s, ' ')
 
+# A parser's registry entry, built as `Postgres.register_type!` builds it (#1599 layer 2). That function
+# takes `parser::Union{Function, Nothing}` and only passes it on, so Julia compiles it for `Function`
+# rather than for the parser at hand, and the `CastFn(parser)` its `TypeInfo` builds is a dynamic call: a
+# trimmed build raised `MethodError` on it at every connect. Here the parser's type is a parameter, so
+# the entry is built statically. It writes the connection's registry under the connection's lock, as
+# `register_type!` does; `test_postgres_ext.jl` checks the entry against `register_type!`'s, so a
+# change to Postgres.jl's internals (`API.TypeInfo`, `API.CastFn`, `type_registry`) fails there.
+_parser_entry(::Type{T}, parser::F) where {T, F} = Postgres.API.TypeInfo(T, Postgres.API.CastFn(parser))
+
+function _register_parser!(conn::Postgres.Connection, oid::Int, ::Type{T}, parser::F) where {T, F}
+  info = _parser_entry(T, parser)
+  @lock conn.lock conn.type_registry[oid] = info
+  return conn
+end
+
 function _register_types!(conn::Postgres.Connection)
-  Postgres.register_type!(conn, 1700, Decimals.Decimal; parser = _pg_numeric)                # numeric
-  Postgres.register_type!(conn, 1184, TimeZones.ZonedDateTime; parser = _pg_timestamptz)     # timestamptz
-  Postgres.register_type!(conn, 1114, DateTime; parser = _pg_timestamp)                      # timestamp
-  Postgres.register_type!(conn, 1042, String; parser = _pg_bpchar)                           # bpchar
+  _register_parser!(conn, 1700, Decimals.Decimal, _pg_numeric)                                # numeric
+  _register_parser!(conn, 1184, TimeZones.ZonedDateTime, _pg_timestamptz)                     # timestamptz
+  _register_parser!(conn, 1114, DateTime, _pg_timestamp)                                      # timestamp
+  _register_parser!(conn, 1042, String, _pg_bpchar)                                           # bpchar
   for oid in (2950, 114, 3802)                                                               # uuid, json, jsonb
     Postgres.register_type!(conn, oid, String)
   end

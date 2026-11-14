@@ -726,6 +726,38 @@ end
   @test PGExt._pg_bpchar("ab ") == "ab"
 end
 
+# What: the registry entry `_parser_entry` builds for each parser `_register_types!` registers, against the
+#   entry Postgres.jl's own `register_type!` builds for the same OID, type and parser.
+# Expected: the same Julia type, and the same value from each entry's caster for every sample text. The
+#   connection method `register_type!` still writes `API.register_type!`'s entry into
+#   `conn.type_registry` under `conn.lock`, the fields `_register_parser!` writes at the types it writes.
+# Why: `_register_parser!` builds the entry itself, through Postgres.jl internals (`API.TypeInfo`,
+#   `API.CastFn`, the `type_registry` field), because `register_type!`'s untyped parser made the build a
+#   dynamic call in a trimmed image (#1599 layer 2). A change to those internals must fail here, not
+#   change a decoded value.
+@testset "a parser's registry entry is the one register_type! builds (#1599)" begin
+  API = Postgres.API
+  @test fieldtype(PGExt._Conn, :type_registry) == Dict{Int, API.TypeInfo}
+  @test fieldtype(PGExt._Conn, :lock) == ReentrantLock
+  driver_src = read(joinpath(pkgdir(Postgres), "src", "Postgres.jl"), String)
+  @test occursin("@lock conn.lock API.register_type!(conn.type_registry, oid, julia_type; parser=parser)", driver_src)
+  ZDT = PGExt.TimeZones.ZonedDateTime
+  for (oid, T, parser, samples) in (
+      (1700, PGExt.Decimals.Decimal, PGExt._pg_numeric, ["12.3400", "-0.5", "7"]),
+      (1184, ZDT, PGExt._pg_timestamptz, ["2024-02-29 10:11:12.5+00", "2024-02-29 10:11:12-03", "infinity"]),
+      (1114, PGExt.Dates.DateTime, PGExt._pg_timestamp, ["2024-02-29 10:11:12.123456", "-infinity"]),
+      (1042, String, PGExt._pg_bpchar, ["ab ", "Monaco"]))
+    ours = PGExt._parser_entry(T, parser)
+    theirs = API.register_type!(Dict{Int, API.TypeInfo}(), oid, T; parser = parser)[oid]
+    @test ours.julia_type === theirs.julia_type === T
+    registry = Dict{Int, API.TypeInfo}()
+    for s in samples
+      @test (oid, s, isequal(ours.parser(s, registry), theirs.parser(s, registry))) == (oid, s, true)
+      @test isequal(ours.parser(s, registry), parser(s))
+    end
+  end
+end
+
 @testset "parameters bind as LibPQ.jl binds them (#788)" begin
   @test PGExt._bind(nothing) === nothing
   bound = PGExt._bind(Any[UInt8[1, 2], "x", 3])

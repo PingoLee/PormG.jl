@@ -50,6 +50,10 @@ const PINNED_NAMES = _NamePin[
   (name = "Postgres.Statement",                 status = :internal,   reader = "_Conn (PormG.backend_handle_type)"),
   # #1599 layer 2: the row count reads the driver's result at its type (`backend_num_rows`, #1771's residue).
   (name = "Postgres.Result",                    status = :internal,   reader = "PormG.backend_num_rows"),
+  # #1599 layer 2: a parser's registry entry, built as `register_type!` builds it, at the parser's type;
+  # `test_postgres_ext.jl` compares it with `register_type!`'s.
+  (name = "Postgres.API.TypeInfo",              status = :internal,   reader = "_parser_entry (_register_types!)"),
+  (name = "Postgres.API.CastFn",                status = :internal,   reader = "_parser_entry (_register_types!)"),
   # LibPQ.jl
   (name = "LibPQ.Connection",                   status = :documented, reader = "PormG.backend_execute, backend_is_alive, backend_cancel_query!, …"),
   (name = "LibPQ.Result",                       status = :documented, reader = "_raise_if_failed, _server_named_failure, _copy_completed"),
@@ -169,6 +173,8 @@ const PINNED_FIELDS = _FieldPin[
   # into a `FieldError`. `statement_cache_maxsize` is documented as a connection keyword, not a field.
   (type = Postgres.Connection, fields = [:statement_cache_maxsize, :server_in_transaction, :lock],
    status = :internal, reader = "_execute"),
+  # #1599 layer 2: the registry `register_type!` writes, under the connection's `lock`, written the same way.
+  (type = Postgres.Connection, fields = [:type_registry], status = :internal, reader = "_register_parser!"),
   # Named by the DSN preflight; `_URL_AT_OK_FIELDS` and `_CONNECT_TIME_VALUES` name the last five by
   # field, so a rename would refuse (or stop refusing) a string by accident. The fields mirror the
   # documented keywords, but the struct documents only its keyword constructor.

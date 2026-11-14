@@ -4390,6 +4390,19 @@ end
     @test !isempty(_dynamic_calls_kw(Postgres.DBInterface.connect, (Type{Postgres.Connection}, CParams)))
   end
 
+  # What: the result types the Postgres.jl extension registers on each new connection
+  #   (`_register_types!`), followed four calls deep.
+  # Expected: no dynamic call. That each entry matches what `Postgres.register_type!` builds is pinned in
+  #   `test_postgres_ext.jl`.
+  # Why: `register_type!` takes its parser as `Union{Function, Nothing}` and only passes it on, so it is
+  #   compiled for `Function`, and the `CastFn(parser)` it builds was dynamic: once the connect was typed,
+  #   the trimmed Postgres.jl fixture authenticated and then raised `MethodError` on `CastFn` while
+  #   registering `_pg_numeric` (#1599 layer 2, #1614).
+  @testset "the Postgres.jl result types are registered without a dynamic call (#1599 layer 2)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    @test isdefined(pgx, :_parser_entry) && _dynamic_calls_deep(pgx._register_types!, (pgx._Conn,); depth = 4) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

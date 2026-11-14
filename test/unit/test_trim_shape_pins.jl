@@ -4229,6 +4229,29 @@ end
     end
   end
 
+  # What: the Postgres.jl extension's async statement, `backend_execute_async`, on each collector type, and
+  #   `_statement_on`, which builds the task's closure, at the two bound types `_bind` returns concretely.
+  # Expected: no dynamic call; the open arm `_statement_on_other` is a static call into a `@nospecialize`
+  #   barrier.
+  # Why: the closure captures the bound parameters, so its type carried `_bind`'s inferred result, which is
+  #   not concrete, and the `_statement_task` call was dynamic: with the parameters typed, the trimmed
+  #   Postgres.jl fixture raised `MethodError` on `_statement_task` at its first statement (#1599 layer 2,
+  #   #1614).
+  @testset "the Postgres.jl statement task is started without a dynamic call (#1599 layer 2)" begin
+    QB = PormG.QueryBuilder
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    P = PormG.ConnectionPool.PostgresConnectionPool{:postgres}
+    for T in (QB.PgParameterizedQuery, QB.SQLiteParameterizedQuery, QB.MySQLParameterizedQuery, Nothing)
+      @test (T, _dynamic_calls(PormG.backend_execute_async, (P, pgx._Conn, String, T))) == (T, String[])
+    end
+    for B in (Vector{pgx._PgBound}, Nothing)
+      @test isdefined(pgx, :_statement_on) &&
+            (B, _dynamic_calls(pgx._statement_on, (P, pgx._Conn, String, B))) == (B, String[])
+    end
+    # The collector's values take the typed arm, not the open one.
+    @test typeof(pgx._bind(QB.PgParameterizedQuery("", Any["Monaco"], 1))) === Vector{pgx._PgBound}
+  end
+
   # What: the MySQL extension's result cursor, `_materialize`, at the two cursors `_run` hands it (a
   #   prepared statement's binary cursor with its charset flags, the text protocol's without), followed
   #   six calls deep. The open arms (`_push_other_cell!`, a column type outside MySQL.jl's set;

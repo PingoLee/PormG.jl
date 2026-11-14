@@ -936,8 +936,21 @@ PormG.backend_execute(pool::_Pool, conn::Postgres.Connection, sql::String, param
 # The async handle is a plain Task, as the SQLite extension's is: core only `fetch`es and `wait`s it.
 # A Postgres.jl connection serializes concurrent use on its own lock. The task is in the caller's
 # threadpool (`PormG._statement_task`, #1577), as LibPQ's statement runs on the caller's thread.
+#
+# The task's closure captures the bound parameters, so its type carries theirs. `_bind` returns a
+# `Vector{_PgBound}`, `nothing` or, from its open arm, any container, so the closure's type was known only
+# at run time and the `_statement_task` call was dynamic: a trimmed build had no code for it (#1599 layer
+# 2). The closure is built in `_statement_on`, after a split on the two concrete results; the open arm's
+# container takes one dynamic call behind `@noinline`, as before.
 function PormG.backend_execute_async(pool::_Pool, conn::Postgres.Connection, sql::String, params)
   bound = _bind(params)
+  bound isa Vector{_PgBound} && return _statement_on(pool, conn, sql, bound)
+  bound === nothing && return _statement_on(pool, conn, sql, nothing)
+  return _statement_on_other(pool, conn, sql, bound)
+end
+@noinline _statement_on_other(pool::_Pool, conn::Postgres.Connection, sql::String, @nospecialize(bound)) =
+  _statement_on(pool, conn, sql, bound)
+function _statement_on(pool::_Pool, conn::Postgres.Connection, sql::String, bound)
   # The leak scan's stamp (#1637): set before the task starts, cleared when the statement ends, so a
   # lease whose statement is still running is not reported as one nobody returned.
   mark = PormG.ConnectionPool._note_statement_start!(pool, conn)

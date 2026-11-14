@@ -143,7 +143,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
   quoted_field_columns = String[]
   param_values = String[]
   pk_exist::Bool = false
-  pk_field::Vector{String} = []
+  pk_field = String[]   # not `::Vector{String} = []`: that converted a `Vector{Any}` through a dynamic call
   for field in keys(real_obj.insert)
     # Validation checks
     validate_field_data(model, field, real_obj.insert[field], "insert"; allow_primary_key = true)

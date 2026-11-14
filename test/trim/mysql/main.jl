@@ -99,8 +99,8 @@ function (@main)(args::Vector{String})::Cint
     catch e
         failed("query", e); return Cint(3)
     end
-    # A statement the server refuses reaches the caller as its own error (#1599, ../tools/failing.jl).
-    fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
+    # A statement the server refuses reaches the caller as its own error, after the read's timing (#1599, ../tools/failing.jl).
+    fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)
     return Cint(0)
 end

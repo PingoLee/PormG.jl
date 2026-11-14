@@ -887,6 +887,7 @@ end
 # statement or a connection are tested by `isa` and read at their types (`PormG._known_field`, which
 # answers what `hasproperty` does: each keeps Base's `getproperty`, `test_postgres_ext.jl` checks);
 # anything else goes to core's walk.
+# Not listed, so still on core's open arm in a trimmed image: `Postgres.ConnectionParameterError`.
 _driver_cause(@nospecialize(e)) =
   e isa Postgres.Error ? PormG._known_field(e, :cause) :
   e isa Postgres.PostgresInterfaceError ? PormG._known_field(e, :cause) :

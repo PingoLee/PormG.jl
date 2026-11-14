@@ -4641,7 +4641,7 @@ end
   #   `StmtError`, `ProtocolError`, `TimeoutError`; `Postgres.Error`, `PostgresInterfaceError`) are read at
   #   their types (`_driver_cause`). The lock check answers both exceptions in arms of its own, without
   #   `_error_text`'s `string`, and answers as `string(e)` did, over messages that test the escape rule
-  #   (a newline, a quote, a `$`, an invalid byte, a tab).
+  #   (a newline, a quote, a `$`, an invalid byte, a tab, an escape whose hex digits start the phrase).
   # Why: core's walk does not know the driver's errors, so a statement the server refused reached its open
   #   arm's `hasproperty`, which had no code in a trimmed image: the trimmed MySQL and Postgres.jl reads
   #   surfaced a missing table as `StatementError(cause = MethodError: hasproperty(::StmtError, …))`. The
@@ -4655,12 +4655,18 @@ end
     for X in (myx, pgx)
       @test (X, _dynamic_calls_deep(X._interrupt_in_causes, (Any, Int); depth = 4, skip = skip)) == (X, String[])
     end
-    ir = sprint(show, first(only(code_typed(slx._is_sqlite_locked_error, (Any,); optimize = false))))
-    @test occursin("InterruptException", ir) && occursin("ErrorException", ir)
+    # An `InterruptException` never reaches `_error_text`; an `ErrorException` takes the arm that `show`s
+    # its message at its type (only a message that is not a `String` falls through).
+    ir_int = sprint(show, first(only(code_typed(slx._is_sqlite_locked_error, (InterruptException,); optimize = true))))
+    @test !occursin("_error_text", ir_int)
+    ir_err = sprint(show, first(only(code_typed(slx._is_sqlite_locked_error, (ErrorException,); optimize = false))))
+    @test occursin("sprint", ir_err)
     @test !slx._is_sqlite_locked_error(InterruptException())
     for m in ("database is locked", "DATABASE TABLE IS LOCKED: drivers", "no such table: drivers",
               "database is\nlocked", "database is \"locked\"", "\$database is locked", "database is locked \xff",
-              "database\tis locked", "database is lock\x65d", "")
+              "database\tis locked", "database is lock\x65d", "",
+              # an escape's hex digits supply the phrase's first letters in `string(e)`'s text
+              "\xdatabase is locked", "\u009database is locked", "\x1database is locked")
       e = ErrorException(m)
       @test (m, slx._is_sqlite_locked_error(e)) == (m, slx._is_locked_text(lowercase(string(e))))
     end

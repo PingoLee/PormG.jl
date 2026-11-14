@@ -880,7 +880,8 @@ end
 @testset "the interrupt walk reads MySQL.jl's own errors at their types (#1599)" begin
   P = MySQL.Protocol
   for T in (P.Error, P.StmtError, P.ProtocolError, P.TimeoutError)
-    @test (T, which(getproperty, Tuple{T, Symbol}).module, which(propertynames, Tuple{T}).module) == (T, Base, Base)
+    @test (T, isconcretetype(T), which(getproperty, Tuple{T, Symbol}).module, which(propertynames, Tuple{T}).module,
+           which(hasproperty, Tuple{T, Symbol}).module) == (T, true, Base, Base, Base)
   end
   old(e) = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
   for e in Any[_my_err(1146), P.StmtError(1146, "Table 'f1.ghost' doesn't exist", "42S02"),

@@ -1123,7 +1123,8 @@ end
 #   exactly as it did.
 @testset "the interrupt walk reads Postgres.jl's own errors at their types (#1599)" begin
   for T in (Postgres.Error, Postgres.PostgresInterfaceError)
-    @test (T, which(getproperty, Tuple{T, Symbol}).module, which(propertynames, Tuple{T}).module) == (T, Base, Base)
+    @test (T, isconcretetype(T), which(getproperty, Tuple{T, Symbol}).module, which(propertynames, Tuple{T}).module,
+           which(hasproperty, Tuple{T, Symbol}).module) == (T, true, Base, Base, Base)
   end
   old(e) = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
   for e in Any[_pg_error("42P01"; message = "relation \"ghost\" does not exist"),

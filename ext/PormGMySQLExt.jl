@@ -636,6 +636,8 @@ end
 # statement or a connection are tested by `isa` and read at their types (`PormG._known_field`, which
 # answers what `hasproperty` does: each keeps Base's `getproperty`, `test_mysql_ext.jl` checks); anything
 # else goes to core's walk.
+# Not listed, so still on core's open arm in a trimmed image: `MySQL.Protocol.TLSNegotiationError` and
+# `LocalInfileRefused`, which keep a `cause`.
 _driver_cause(@nospecialize(e)) =
   e isa MySQL.Protocol.Error ? PormG._known_field(e, :cause) :
   e isa MySQL.Protocol.StmtError ? PormG._known_field(e, :cause) :

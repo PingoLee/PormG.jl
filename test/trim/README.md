@@ -231,8 +231,8 @@ path itself used to fail first: a cause walk's `hasproperty` or a lock check's `
 exception has no compiled code there, and the `MethodError` it raised replaced the server's error (#1599).
 `tools/failing.jl` runs `SELECT raceid FROM pormg_trim_missing`, against a table no fixture creates, and
 prints what the caller catches: the error's type, and for a `DatabaseError` its SQLSTATE, message and
-cause type. The server variants run it after their read, as the `fail` step (exit code 6 if the statement
-does not raise); on SQLite it is an entry of its own, `fail.jl`, so the read-only binary the workflow
+cause type. The server variants run it after their read and its timing, as the `fail` step (exit code 6
+unless it raises the server's error: a `DatabaseError` whose cause is not a `MethodError`); on SQLite it is an entry of its own, `fail.jl`, so the read-only binary the workflow
 checks is unchanged. Each binary prints what its JIT control prints:
 
 ```

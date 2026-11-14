@@ -10,7 +10,9 @@
 
 const FAIL_SQL = "SELECT raceid FROM pormg_trim_missing"
 
-# `true` when the statement raised (what the step expects), `false` when it returned.
+# `true` when the statement raised the server's error: a `DatabaseError` whose cause is the driver's,
+# not a `MethodError` from the error path. `false` (the entry exits 6) when it returned or raised anything
+# else, so a binary that still masks the error fails the step, not only its printed lines.
 function fail_step(pool)::Bool
     try
         PormG.ConnectionPool.fetch(pool, FAIL_SQL)
@@ -18,9 +20,14 @@ function fail_step(pool)::Bool
         return false
     catch e
         report_failure(e)
-        return true
+        return _is_server_error(e)
     end
 end
+
+_is_server_error(@nospecialize(e))::Bool =
+    e isa PormG.StatementError ? !(_db_fields(e)[3] isa MethodError) :
+    e isa PormG.OperationalError ? !(_db_fields(e)[3] isa MethodError) :
+    e isa PormG.IntegrityError ? !(_db_fields(e)[3] isa MethodError) : false
 
 _text(::Nothing) = "-"
 _text(s::String) = s

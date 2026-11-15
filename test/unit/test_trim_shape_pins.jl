@@ -3029,6 +3029,103 @@ end
     end
   end
 
+  # What: `bulk_insert`'s path in the full fixture entry (#1599 layer 7, #1694), one assertion group per wall the
+  #   trimmed binary stopped at: the frame built at the source's type, the fill column built and stored at its type,
+  #   the absent-column timestamp fill, the field metadata and source columns collected at declared types, each cell
+  #   read, validated, formatted and bound through a typed walk or one compiled method, the collector, the columns=
+  #   argument and the RETURNING clause unboxed, and the chunk counts summed at their type.
+  # Expected: each helper exists; each walk makes no dynamic call outside its one open arm; the unspecialized
+  #   arguments carry their `nospecialize` bit; the source reads the typed forms and none of the old ones; and
+  #   `_bulk_insert_frame` boxes none of `columns`, `parameters`, `returning_sql`.
+  # Why: each was a call with no compiled target in a trimmed image, and the binary stopped there (21 walls, the
+  #   PR's table). Under the JIT each was a dynamic dispatch per cell or per call. Red on the base (`d51cfe5a1`):
+  #   the helpers are missing and the source has every old form.
+  @testset "bulk_insert runs at concrete types in the full entry (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    eb_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+    nospec(m::Method, i::Int) = (m.nospecialize >> (i - 1)) & 1 == 1
+    only_method(f, tt) = only(methods(f, tt))
+
+    # The frame at the source's type: `bulk_insert`, `_bulk_frame` and `_refuse_non_table` specialize on the
+    # source; `_bulk_insert_frame`, the body after the frame, takes it unspecialized (compiled once).
+    @test !nospec(only_method(QB.bulk_insert, (QB.SQLObjectHandler, Any)), 2)
+    @test !nospec(only_method(QB._bulk_frame, (Any, AbstractString)), 1)
+    @test !nospec(only_method(QB._refuse_non_table, (Any, AbstractString)), 1)
+    @test isdefined(QB, :_bulk_insert_frame)
+    if isdefined(QB, :_bulk_insert_frame)
+      m = only(methods(QB._bulk_insert_frame))
+      @test nospec(m, 5) && count(i -> nospec(m, i), 1:(m.nargs - 1)) == 1   # `src`, the fifth argument, alone
+    end
+    NT = Vector{NamedTuple{(:year, :name), Tuple{Int64, String}}}
+    @test isempty(filter(s -> occursin("Tables", s) || occursin("length", s),
+                         _dynamic_calls(QB._bulk_frame, (NT, String))))
+    @test occursin("push!(lengths, length(stored))", eb_src) && !occursin("row_count = length(columns[names[1]])", eb_src)
+
+    # The fill: the zone through `_now_in`, the formatter through `apply_formatter`, the closure's value
+    # unspecialized, the column built (`_fill_bulk_column`) and stored (`_store_bulk_column!`) at its type.
+    @test !occursin("TimeZone(settings.time_zone)", eb_src)
+    @test count("Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))", eb_src) == 2
+    @test occursin("function inject_fill_column!(field::String, f_meta, @nospecialize(fill_value), per_row::Bool)", eb_src)
+    @test occursin("_fill_bulk_column(fill_value, df.row_count))::AbstractVector", eb_src)
+    @test nospec(only(methods(QB._add_bulk_column!)), 3)
+    walks = ((:_fill_bulk_column, :_fill_bulk_column_other, (Any, Int)),
+             (:_store_bulk_column!, nothing, (Dict{String, AbstractVector}, String, AbstractVector)),
+             (:_bulk_cell, :_bulk_cell_other, (AbstractVector, Int)),
+             (:_bulk_count_total, :_bulk_count_add_other, (Vector{Any},)))
+    for (name, other, tt) in walks
+      @test (name, isdefined(QB, name)) == (name, true)
+      isdefined(QB, name) || continue
+      f = getglobal(QB, name)
+      if other === nothing
+        # The store's open arm is the store itself, written inline: one dynamic `setindex!`.
+        @test length(_dynamic_calls(f, tt)) == 1
+      else
+        @test (name, _dynamic_calls(f, tt)) == (name, String[])
+        @test length(_dynamic_calls(getglobal(QB, other), tt)) == 1
+      end
+    end
+    if isdefined(QB, :_bulk_cell)
+      invoked(f, tt) = [string((s.args[1] isa Core.CodeInstance ? s.args[1].def : s.args[1]).def.name)
+                        for s in only(code_typed(f, tt; optimize = true))[1].code if s isa Expr && s.head === :invoke]
+      for T in (Int64, String, Float64, Bool, Dates.Date, Union{Missing, Int64}, Union{Missing, String})
+        @test (T, "_bulk_cell_other" in invoked(QB._bulk_cell, (Vector{T}, Int))) == (T, false)
+      end
+    end
+
+    # The metadata and the source columns at declared types; the formatted cells as `Any`.
+    @test occursin("metas = Models.AnyField[_validate_field_name(model, field, \"bulk_insert\"", eb_src)
+    @test occursin("sources = AbstractVector[_bulk_column(df, mapping[field]) for field in fields_df]", eb_src)
+    @test occursin("cells = Any[_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index)", eb_src)
+    @test !occursin("sources[j][index], \"bulk_insert\"", eb_src)
+
+    # Validate, format and bind: one compiled method each, through `create`'s walks.
+    vm = only(methods(QB._validate_bulk_cell))
+    @test nospec(vm, 4) && occursin("_validate_field_value_at(model, String(field), f_meta, value, String(op))", eb_src)
+    @test nospec(only(methods(QB._format_bulk_cell)), 4)
+    @test occursin("push!(placeholders, _bind_written_value!(parameters, cell)::String)", eb_src)
+    @test !occursin("[add_parameter!(parameters, cell) for cell in cells]", eb_src)
+
+    # No box: the chunk accumulator is not `columns`, the chunk statement takes its collector as an argument, and
+    # the RETURNING clause is assigned once.
+    @test occursin("chunk_columns = new_columns()", eb_src) && !occursin("\n          columns = new_columns()", eb_src)
+    @test occursin("run_chunk(params) = _bulk_insert(", eb_src) && !occursin("run_chunk()", eb_src)
+    @test occursin("returning_sql = if _returning !== nothing && _insert_returns_rows(connection)", eb_src)
+    isdefined(Main, :core_boxed_vars) || include(joinpath(@__DIR__, "helper_core_box.jl"))
+    if isdefined(QB, :_bulk_insert_frame)
+      boxed = Symbol[]
+      Base.visit(Core.methodtable) do m
+        m isa Method || return
+        endswith(string(m.file), joinpath("querybuilder", "execution_bulk.jl")) || return
+        occursin("_bulk_insert_frame", string(m.name)) || return
+        append!(boxed, Base.invokelatest(getglobal(Main, :core_boxed_vars), Base.uncompressed_ast(m)))
+      end
+      @test isempty(intersect(boxed, [:columns, :parameters, :returning_sql]))
+    end
+
+    # The total at its type.
+    @test count("_bulk_result(_bulk_count_total(results)", eb_src) == 2
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

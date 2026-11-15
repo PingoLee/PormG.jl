@@ -157,7 +157,9 @@ const _TPB_REVIEWED_BOXES = Dict(
   "build_select.jl" => 1,      # get_order_query; #1711 removed get_select_query's (`local kind` in its render closure)
   # #1599 layer 7 (#1694) removed `deletion.jl`'s four: `plan`/`run_plan` are defined before the closure that
   # calls them, `topological_sort`'s visit is a function, `_collector_predicate`'s alias a `RefValue{String}`.
-  "execution_bulk.jl" => 7,    # bulk_insert (4: keyword body, body, its insert loop); _bulk_update (3)
+  # #1599 layer 7 (#1694) removed three of bulk_insert's: the insert loop's chunk accumulator no longer reassigns
+  # `columns`, its collector `parameters` is no closure's capture, and `returning_sql` is assigned once.
+  "execution_bulk.jl" => 4,    # _bulk_insert_frame (1: `allocate_pk`); _bulk_update (3)
   "execution_read.jl" => 1,    # a closure in _filters_name_alias (`mkey`); #1698 removed the `hit` box (a RefValue now)
   "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
                                # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed)

@@ -5093,6 +5093,17 @@ function _ascii_number(cu, from::Int, n::Int)::Int
   return v
 end
 
+# `"UTC"` and the text's six offset bytes (`±hh:mm`), the name TimeZones gives a fixed offset. Copied byte by byte:
+# `string("UTC", …)` went through `print_to_string`, which makes dynamic calls a trimmed image has no code for.
+function _utc_offset_name(cu)::String
+  name = Vector{UInt8}(undef, 9)
+  name[1], name[2], name[3] = UInt8('U'), UInt8('T'), UInt8('C')
+  for k in 0:5
+    name[4 + k] = cu[24 + k]
+  end
+  return String(name)
+end
+
 # The canonical text's value, or `nothing` for any other text.
 function _canonical_zoned(s::String)::Union{Nothing, ZonedDateTime}
   cu = codeunits(s)
@@ -5114,7 +5125,7 @@ function _canonical_zoned(s::String)::Union{Nothing, ZonedDateTime}
     ((sign == UInt8('+') || sign == UInt8('-')) && _is_ascii_digit(cu[25]) && _is_ascii_digit(cu[26]) &&
      cu[27] == UInt8(':') && _is_ascii_digit(cu[28]) && _is_ascii_digit(cu[29])) || return nothing
     offset = (_ascii_number(cu, 25, 2) * 3600 + _ascii_number(cu, 28, 2) * 60) * (sign == UInt8('-') ? -1 : 1)
-    offset == 0 ? _DATETIME_UTC_TZ : FixedTimeZone(string("UTC", SubString(s, 24, 29)), offset)
+    offset == 0 ? _DATETIME_UTC_TZ : FixedTimeZone(_utc_offset_name(cu), offset)
   end
   return ZonedDateTime(DateTime(y, m, d, H, M, S, ms), tz)
 end

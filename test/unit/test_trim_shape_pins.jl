@@ -3016,6 +3016,17 @@ end
       @test isempty(_dynamic_calls(M._canonicalize_datetime_utc, (M.ZonedDateTime,)))
       @test isempty(_dynamic_calls(M._print_zero_padded, (Base.IOBuffer, Int, Int)))
     end
+    # The reflection above passes on `Dates.format` too (its wall shows only in a trimmed image), so the body is
+    # pinned by its text: the fields written by hand, `Dates.format` only in the open arm.
+    @test occursin("function _canonicalize_datetime_utc(value::ZonedDateTime)::String\n  dt = value.utc_datetime", m_src)
+    @test occursin("_print_zero_padded(io, millisecond(dt), 3)", m_src)
+    # and a non-UTC offset's zone name is built from bytes, without `print_to_string`. (Followed deeper, the
+    # parser reaches two calls inside `print_to_string`, from the error messages `Dates.validargs` and TimeZones'
+    # `FixedTimeZone` constructor build: upstream code, on their refusal branches.)
+    if isdefined(M, :_utc_offset_name)
+      @test isempty(_dynamic_calls(M._utc_offset_name, (Base.CodeUnits{UInt8, String},)))
+      @test M._utc_offset_name(codeunits("2009-05-24T14:00:00.000-03:30")) == "UTC-03:30"
+    end
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

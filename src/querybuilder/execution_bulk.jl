@@ -2525,9 +2525,14 @@ _bulk_cell_error(e::InvalidValueError, op::AbstractString, model::PormGModel, fi
 # wrapped for the collection refusal (`_single_value`): the depuration pass's formatter maps a list
 # of text without throwing, so it finds nothing there and the caller rethrows this error as it is.
 # A formatter's own refusal is still reported by the depuration pass, which runs first in the catch.
-function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
+# `value` unspecialized and the checks through `create`'s typed walk (#1599 layer 7, #1694): a cell is read out of an
+# `AbstractVector` column untyped, so a call specialized on it had no compiled target in a trimmed image, and the row
+# loop's `catch` then reported whatever its own depuration pass raised. `_validate_field_value_at` runs the same
+# `_validate_field_value` at the value's concrete type.
+function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, @nospecialize(value), op::AbstractString,
+                             row_index::Integer)
   try
-    _validate_field_value(model, field, f_meta, value, op)
+    _validate_field_value_at(model, String(field), f_meta, value, String(op))
   catch e
     e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
     rethrow()

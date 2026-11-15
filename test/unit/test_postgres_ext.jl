@@ -1121,3 +1121,24 @@ end
   @test occursin("Missing <: f.types[f.i] || (f.types[f.i] = Union{f.types[f.i], Missing})", src)
   @test occursin("if !(v isa f.types[f.i])", src) && occursin("f.types[f.i] = Union{f.types[f.i], typeof(v)}", src)
 end
+
+# What: `_driver_cause`, the interrupt walk's field read, on each error type it reads at its type and on
+#   one it hands to core's walk.
+# Expected: each listed type keeps Base's `getproperty` and `propertynames`, and `_driver_cause` answers
+#   what `hasproperty(e, :cause) ? getproperty(e, :cause) : nothing` answers. No SQL.
+# Why: the reads replace core's open arm (`hasproperty`), which had no code in a trimmed image, so a
+#   statement the server refused surfaced as a `MethodError` (#1599); under the JIT they must answer
+#   exactly as it did.
+@testset "the interrupt walk reads Postgres.jl's own errors at their types (#1599)" begin
+  for T in (Postgres.Error, Postgres.PostgresInterfaceError)
+    @test (T, isconcretetype(T), which(getproperty, Tuple{T, Symbol}).module, which(propertynames, Tuple{T}).module,
+           which(hasproperty, Tuple{T, Symbol}).module) == (T, true, Base, Base, Base)
+  end
+  old(e) = hasproperty(e, :cause) ? getproperty(e, :cause) : nothing
+  for e in Any[_pg_error("42P01"; message = "relation \"ghost\" does not exist"),
+               Postgres.PostgresInterfaceError("connection closed"), CapturedException(InterruptException(), Any[]),
+               ErrorException("x")]
+    @test (typeof(e), PGExt._driver_cause(e) === old(e)) == (typeof(e), true)
+  end
+  @test !PGExt._interrupt_in_causes(_pg_error("42P01"))
+end

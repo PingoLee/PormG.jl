@@ -27,16 +27,20 @@ const _SQLITE_LOCK_RETRY_MAX_DELAY = 0.25
 # replaced, so it never throws. The old text was `string(e)`, the type name around the escaped message;
 # lowercased, that holds one of the two phrases exactly when `_phrase_text` of the message does, since the
 # phrases are letters and spaces and neither an escape (`\xff`) nor U+FFFD can split or make one. The
-# message field is typed `AbstractString`; SQLite.jl builds it as a `String`. Any other value takes the
-# call it took before, behind `@noinline`.
+# message field is typed `AbstractString`; SQLite.jl builds it as a `String`.
+#
+# Any other exception is read through core's `_unowned_string` (#1599), whose typed arms build `string`'s
+# own text (an `InterruptException`, an `ErrorException` with a `String` message, …): `string` on an
+# untyped exception had no code in a trimmed image, so the lock check replaced the error it was asked
+# about with a `MethodError`. A `MethodError` itself answers with its type name, which holds no lock phrase
+# (decided on #1799).
 function _is_sqlite_locked_error(@nospecialize(e))::Bool
   if e isa SQLite.SQLiteException
     msg = e.msg
     msg isa String && return _is_locked_text(PormG._phrase_text(msg))
   end
-  return _is_locked_text(lowercase(_error_text(e)))
+  return _is_locked_text(lowercase(PormG._unowned_string(e)))
 end
-@noinline _error_text(@nospecialize(e))::String = string(e)
 # server-text-match-ok: SQLite has no SQLSTATE here and never localizes its messages
 _is_locked_text(msg::String)::Bool = occursin("database is locked", msg) || occursin("database table is locked", msg)
 

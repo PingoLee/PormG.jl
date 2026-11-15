@@ -123,7 +123,7 @@ function (@main)(args::Vector{String})::Cint
             println(Core.stdout, r.year, " ", r.name, " ", r.date)
         end
     finally
-        PormG.Configuration.close_all!()   # a trimmed binary runs no atexit hook (see below)
+        close_all!()   # a trimmed binary runs no atexit hook (see below)
     end
     return Cint(0)
 end
@@ -202,7 +202,7 @@ binary runs no `atexit` hook**, PormG's included: a program built with `juliac -
 one returns from `main` without running it, where its JIT control runs it. So close the pools yourself
 before `main` returns, in a `finally` so an error path closes them too:
 
-- `PormG.Configuration.close_all!()` closes every registered pool, the call the exit hook makes
+- `close_all!()`, exported by PormG, closes every registered pool: the call the exit hook makes
   ([API](api.md));
 - `PormG.Configuration.close_pool!("f1")` closes one.
 

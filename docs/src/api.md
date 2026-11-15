@@ -858,7 +858,8 @@ PormG.Configuration.env("tenant_monaco")   # "prod"
 
 Closes every registered pool without waiting for connections still checked out; the entries stay
 registered (#1229). It is what PormG runs at process exit, for a script or a test that wants to
-release its connections early.
+release its connections early. `PormG` exports it, so after `using PormG` it is `close_all!()`
+(#1599).
 
 ### `Models.connection_key(model)`
 
@@ -1189,7 +1190,12 @@ on SQLite a write needs `mode = :write`) — and `with_read_retry`, which runs a
 dropped connection when you vouch it is safe to repeat
 
 ### Utilities & lifecycle
-`upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`
+`upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`, `close_all!`
+
+`close_all!()` closes every registered pool, the call PormG's exit hook makes; it is
+`Configuration.close_all!` (#1229), exported since #1599. A program built with `juliac --trim` runs
+no `atexit` hook, so it calls `close_all!()` before `main` returns
+([Static Compilation](static_compilation.md#Closing-the-pools-before-main-returns)).
 
 `PormG.import_models(path; into = Main)` is the function form of `@import_models` (#1232), for a
 script or a REPL that compares several databases: it includes the models file at `path` (relative to

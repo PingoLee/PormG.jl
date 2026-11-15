@@ -123,6 +123,12 @@ using .Generator
 
 include("Configuration.jl")
 using .Configuration
+# `close_all!` (#1229) is `public` in Configuration; PormG exports it (#1599) as the end of a
+# program's lifecycle, Django's `connections.close_all()`. A `juliac --trim` binary runs no `atexit`
+# hook, so there it is the only thing that closes the pools. `import`, not the `using` above: a
+# `public` name is not brought in by `using`, and re-exporting needs the binding here.
+import .Configuration: close_all!
+export close_all!
 
 include("ConnectionPool.jl")
 using .ConnectionPool

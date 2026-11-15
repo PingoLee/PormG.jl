@@ -1967,7 +1967,13 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
           if pg_arrays
             foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
           else
-            push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
+            # A loop, not a comprehension (#1599 layer 7): the comprehension's closure captured `parameters`,
+            # which this loop reassigns after each chunk, so it was boxed. The same placeholders, in order.
+            placeholders = String[]
+            for cell in cells
+              push!(placeholders, add_parameter!(parameters, cell))
+            end
+            push!(rows, "($(join(placeholders, ", ")))")
           end
         catch e
           _depuration_values_bulk_insert(fields_df, mapping, model, df, index)

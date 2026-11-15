@@ -287,3 +287,74 @@ Base.invokelatest(() -> Circuit.objects.filter("circuitid" => 13).delete(; show_
     @test filter(l -> occursin("# recompile", l), compiled(r"PormG\.QueryBuilder\.")) == String[]
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL extension: loaded, which a throwing typed-read workload would prevent (#1614)
+# `PormGMySQLExt` compiles the typed read's cell readers over an in-memory result at precompile time
+# (`_typed_read_workload`). A step that throws makes Julia skip the extension, quietly: `using MySQL`
+# still succeeds and every MySQL call then raises "requires MySQL". The lookup names the cause.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "MySQL extension loaded (a throwing typed-read workload would block it, #1614)" begin
+  @test Base.get_extension(PormG, :PormGMySQLExt) !== nothing
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL typed read: the cell readers' code is in the extension's image (#1614)
+# A first typed MySQL read compiled the parse walk over every stored cell type (`_mysql_parsed`) and,
+# per field type, the generated reader and the cell rules on an untyped cell (`_typed_cell_any`): about
+# 4 s on a 7-field read, before #1614's workload compiled them into the image. The process loads only
+# PormG and MySQL: a package that invalidates a callee (DataFrames does, through Decimals, #1802) discards part
+# of the image's code, and the first read compiles it again. None of them is a root a
+# `--trace-compile` run would print (they compile inside the read's row walk), so this asks the method
+# table instead: in a fresh process that has only loaded PormG and MySQL, called nothing, each instance
+# must hold a code instance valid in this world with native code (`invoke`). Without the workload none of
+# these instances exists in a fresh process. Skipped under code coverage, which does not use the package
+# images' native code (see the #1732 testset above); CI runs this file alone without it.
+# ─────────────────────────────────────────────────────────────────────────────
+const _MYSQL_IMAGE_1614 = raw"""
+using PormG, MySQL
+const ext = Base.get_extension(PormG, :PormGMySQLExt)
+# The types through the extension's own bindings: the test environment need not hold the packages.
+const Dates, Decimal, ZonedDateTime = ext.Dates, ext.Decimals.Decimal, ext.TimeZones.ZonedDateTime
+const QB = PormG.QueryBuilder
+const RP, SITE = PormG.ReadParser, QB._TypedReadSite
+function native(f, sig)
+  for m in methods(f), mi in Base.specializations(m)
+    mi isa Core.MethodInstance && mi.specTypes == Tuple{Core.Typeof(f), sig...} || continue
+    isdefined(mi, :cache) || return false
+    ci = mi.cache
+    return ci.max_world == typemax(UInt) && ci.invoke != C_NULL
+  end
+  return false
+end
+reader = ext._MySQLCells(ext.MySQLResult(Symbol[], AbstractVector[], 0, 0, UInt64(0), ""))
+println("_mysql_parsed\t", native(ext._mysql_parsed, (AbstractVector, Int, RP)))
+for X in (Int64, Int32, Int16, Float64, String, Vector{UInt8}, Dates.Date, Dates.Time, Dates.DateTime, ZonedDateTime, Decimal,
+          Dates.CompoundPeriod, Bool), FT in (X, Union{Nothing, X})
+  println("reader ", FT, "\t", native(reader, (Type{FT}, Int, Int, RP, Symbol, SITE)))
+  println("_typed_cell_any ", FT, "\t", native(QB._typed_cell_any, (Type{FT}, Any, Symbol, Int, SITE)))
+end
+# A typed arm: an `IntegerField` read into `Int64` over MySQL's `INT` column (`Int32`).
+println("_mysql_cell_at Int64 Vector{Int32}\t",
+        native(ext._mysql_cell_at, (Type{Int64}, Vector{Int32}, Int, RP, Symbol, SITE)))
+"""
+
+@testset "MySQL typed read: the cell readers' code is in the extension's image (#1614)" begin
+  if Base.JLOptions().code_coverage != 0
+    @test_skip "the check needs the package images' native code, which coverage turns off"
+  else
+    script = tempname() * ".jl"
+    write(script, _MYSQL_IMAGE_1614)
+    out, err = IOBuffer(), IOBuffer()
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script`
+    ok = success(pipeline(cmd; stdout = out, stderr = err))
+    rm(script; force = true)
+    # The child's stderr is printed on a failure: a precompile or load error is otherwise invisible.
+    @test ok || (@info "the image check's process failed" stderr = String(take!(err)); false)
+    lines = filter(!isempty, split(String(take!(out)), '\n'))
+    # 1 walk + 26 field types × (reader, cell rules) + 1 typed arm.
+    @test length(lines) == 54
+    # Printed on a failure, so the red run names each instance the image does not carry.
+    @test filter(l -> !endswith(l, "\ttrue"), lines) == String[]
+  end
+end

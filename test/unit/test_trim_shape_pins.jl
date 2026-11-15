@@ -2802,6 +2802,10 @@ end
       end
     end
     @test occursin("parameters = _engine_collector(connection, instruction.parameters)", ew_src)
+    # The SET value's bind, through `create`'s typed walk (`_bind_written_value!`, pinned arm by arm above): it was
+    # `add_parameter!(parameters, formatted_value)` on the untyped formatted value.
+    @test occursin("placeholder = _bind_written_value!(parameters, formatted_value)::String", ew_src)
+    @test !occursin("add_parameter!(parameters, formatted_value)", ew_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

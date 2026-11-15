@@ -1778,7 +1778,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
         else
           formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
-          placeholder = add_parameter!(parameters, formatted_value)
+          placeholder = _bind_written_value!(parameters, formatted_value)::String   # at its type, as `create`'s bind (#1599 layer 7)
           push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
         end
       end

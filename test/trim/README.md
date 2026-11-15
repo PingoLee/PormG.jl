@@ -140,11 +140,12 @@ step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 ```
 
-On a non-zero exit, the job's error names what each exit code means (2 write, 3 read, 6 a create was
-not refused, 7 update, 8 delete, 124 timed out). The rows are reported as in the read-only job, in the
+On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
+create was not refused with an `InvalidValueError`, 7 update, 8 delete, 124 timed out). The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
-builds run side by side. Its triggers are the workflow's: a change under `src/` that could break the
-trimmed write is checked by running the workflow by hand on the branch, or by the next nightly run.
+builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
+extension both SQLite jobs build. A change under `src/` that could break the trimmed write is checked
+by running the workflow by hand on the branch, or by the next nightly run.
 
 ## The MySQL variant
 
@@ -305,8 +306,9 @@ server's message and a cause that is not a `MethodError`. The rows are reported 
 the job summary and the `trim-mysql` and `trim-postgres` artifacts, never checked. The passwords in the
 workflow are throwaway values for those containers, which the run discards; they belong to no other server.
 
-Besides the SQLite job's triggers, a pull request that changes `ext/PormGMySQLExt.jl` or
-`ext/PormGPostgresExt.jl` runs the workflow, since only these jobs compile them. A change under `src/` does
+Besides the fixture and the workflow file, a pull request that changes `ext/PormGMySQLExt.jl`,
+`ext/PormGPostgresExt.jl` or `ext/PormGSQLiteExt.jl` runs the workflow, since only its jobs compile
+them in a trimmed build. A change under `src/` does
 not, as for the SQLite job. Neither variant commits a `Manifest.toml`, so each run resolves the newest
 MySQL.jl or Postgres.jl that PormG's `[compat]` admits: as for SQLite, a red nightly with no PormG change
 may be a driver release, and the `Instantiate the fixture` step prints the versions.

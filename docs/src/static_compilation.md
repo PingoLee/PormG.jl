@@ -3,8 +3,8 @@
 !!! warning "Experimental"
     Building a PormG application into a standalone executable with `juliac --trim` is **experimental**.
     One kind of read is known to work, on three drivers, and the single-row write on SQLite. Other
-    writes do not work yet, and what this page describes may change between releases without an
-    upgrade note. Work in progress is tracked in
+    writes have not run in a trimmed binary yet, and what this page describes may change between
+    releases without an upgrade note. Work in progress is tracked in
     [#1599](https://github.com/PingoLee/PormG.jl/issues/1599) (the trimmed application) and
     [#1614](https://github.com/PingoLee/PormG.jl/issues/1614) (the drivers).
 
@@ -56,11 +56,15 @@ against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is 
   - any write on MySQL or through Postgres.jl;
   - `bulk_insert`, `bulk_update`, `bulk_copy` and the other bulk writers;
   - a delete that cascades or sets a foreign key to NULL;
-  - the other write terminals (`get_or_create`, `update_or_create`, an upsert).
-- **Timestamp text in another shape.** A timestamp PormG reads or validates as text is parsed by hand
-  in PormG's own shape (`2009-05-24T14:00:00.000+00:00`). Any other shape (no milliseconds, a
-  `+hhmm` offset, a zone name) goes through TimeZones.jl's parser, which a trimmed binary cannot run. A
-  non-UTC offset in PormG's shape is parsed by the same code, but has not run trimmed.
+  - the other write terminals (`get_or_create`, `update_or_create`, an upsert, deleting one row
+    through `delete(row)`).
+- **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
+  by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three
+  digits: PormG's own text, `2009-05-24T14:00:00.000+00:00`, is that shape, and it has run trimmed on
+  SQLite. Text with no offset goes through Dates' `DateTime` parser instead; on SQLite's read path,
+  text with any other offset spelling (`+hhmm`, a zone name) goes through TimeZones.jl's parser, which
+  a trimmed binary cannot run. Neither has run trimmed, and neither has a non-UTC offset, though the
+  hand parser reads it.
 - **LibPQ.** A binary built with LibPQ aborts before `main` runs, with
   `InitError(:Infinity, MethodError(...))`. LibPQ depends on Infinity.jl, whose `__init__` uses
   Requires' `@require`, which a trimmed binary cannot run. The cause is upstream. Use Postgres.jl

@@ -1,5 +1,5 @@
 # The juliac --trim entry of the fixture app (#1616, #1599): boot, two refused writes, one write, one
-# typed read, one update and one delete.
+# typed read, one update, one delete and one bulk_insert of two rows.
 #   JIT:  julia --project=test/trim test/trim/main.jl <run dir>
 #   exe:  <build dir>/main <run dir>         (see README.md)
 # The steps and their output are in `steps.jl`, shared with the read-only entry `read.jl`.
@@ -21,6 +21,7 @@ function (@main)(args::Vector{String})::Cint
     query_step() || return Cint(3)
     update_step() || return Cint(7)
     delete_step() || return Cint(8)
+    bulk_step() || return Cint(9)
     elapsed_step(t0)
     return Cint(0)
 end

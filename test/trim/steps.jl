@@ -138,6 +138,24 @@ function delete_step()::Bool
     end
 end
 
+# `bulk_insert` (#1694), after the delete: two Monaco races from a `Vector` of `NamedTuple`s, the input a
+# trimmed program holds at a concrete type, leaving the three auto-filled fields to the write's own fill.
+# A typed read then sees both. Exit code 9 when the call raises, its count is not 2, or the read does not
+# return the two rows. `bulk_insert` returns `(count, rows)` with `rows = nothing` without `returning=`,
+# asserted at that type so the step prints the count without a call on an untyped value.
+function bulk_step()::Bool
+    try
+        rows = [(year = 2010, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
+                (year = 2011, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2011, 5, 29))]
+        r = PormG.bulk_insert(M.Race.objects, rows)::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        back = M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)
+        say("bulk", string(r.count, " rows; ", length(back), " read back"))
+        return r.count == 2 && length(back) == 2 && back[1].year == 2010 && back[2].year == 2011
+    catch e
+        failed("bulk", e); return false
+    end
+end
+
 # The `tasks` run's steps, the pool's long-lived tasks in a trimmed image (#1599 layer 2).
 #
 # The pool's background reaper (#125) closes an idle overflow connection: lease two connections so the

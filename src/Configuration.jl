@@ -2769,8 +2769,17 @@ _offline_load_error(key::String)::InvalidConfigurationError = InvalidConfigurati
     close_all!() -> Nothing
 
 Close every registered connection pool (#1229), without waiting for connections still checked out.
-The entries stay registered, so a later query reopens a pool. The public name of what PormG runs at
-process exit; a script or a test calls it to release its connections early.
+The entries stay registered, so a later query reopens a pool. It is what PormG runs at process exit,
+and it is exported from `PormG` (#1599): a script or a test calls it to release its connections
+early, and a `juliac --trim` binary, which runs no `atexit` hook, calls it before `main` returns.
+
+```julia
+try
+    M.Race.objects.filter("circuitid__country" => "Monaco").list()
+finally
+    close_all!()
+end
+```
 """
 close_all!()::Nothing = (__cleanup__(); nothing)
 

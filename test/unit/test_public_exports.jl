@@ -71,6 +71,10 @@ const EXPECTED_TOPLEVEL = Set([
     :setup, :install_ai_skills,
     # #1232: the function form of `@import_models`, public and qualified-call-only on the same grounds.
     :import_models,
+    # #1599: the explicit end of a program's lifecycle (Django's `connections.close_all()`), the call
+    # PormG's exit hook makes. A `juliac --trim` binary runs no `atexit` hook, so it must call this.
+    # The binding is `Configuration.close_all!` (#1229), which stays `public` there.
+    :close_all!,
 ])
 
 # The SQL function library, namespaced under PormG.Functions (NOT exported by PormG).
@@ -119,6 +123,24 @@ const EXPECTED_FUNCTIONS = Set([
         end
         # Control: something genuinely exported DOES arrive, so the probe itself is not vacuous.
         @test isdefined(mod, :object)
+    end
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # `close_all!` is exported, and it is the registry's function, not a copy (#1599)
+    # Expected: a bare `using PormG` binds `close_all!`, `PormG.close_all! === PormG.Configuration.close_all!`,
+    # and the name stays `public` in Configuration, where #1229 declared it. Why: a `juliac --trim`
+    # binary runs no `atexit` hook, so the exported call is how a program closes its pools before
+    # `main` returns; a second definition would drift from what the exit hook runs.
+    # ─────────────────────────────────────────────────────────────────────────
+    @testset "close_all! is exported and is Configuration's function (#1599)" begin
+        @test Base.isexported(PormG, :close_all!)
+        @test PormG.close_all! === PormG.Configuration.close_all!
+        @test Base.ispublic(PormG.Configuration, :close_all!)
+        @test !Base.isexported(PormG.Configuration, :close_all!)
+        mod = Module(:PormGCloseAllProbe)
+        Core.eval(mod, :(using PormG))
+        @test isdefined(mod, :close_all!)
+        @test Core.eval(mod, :close_all!) === PormG.Configuration.close_all!
     end
 
     # The SQL function constructors must NOT be exported at the top level (the whole point

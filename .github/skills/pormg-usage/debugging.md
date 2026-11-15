@@ -170,6 +170,9 @@ pool_stats("db")
 - `in_use` that never comes down → an un-awaited `FetchTask` ([`async.md`](async.md)), or a manual
   `acquire_connection` with no `release_connection` in a `finally`.
 - `pool_stats` of a key whose pool was never built raises (a zeroed snapshot would look healthy).
+- `close_all!()` closes every registered pool (the entries stay registered; a later query reopens
+  one). PormG runs it at process exit; call it yourself to release connections early, or at the end
+  of a `juliac --trim` program's `main`, which runs no `atexit` hook.
 
 ## `@pormg_debug`
 

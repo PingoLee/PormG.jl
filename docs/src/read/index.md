@@ -268,8 +268,9 @@ result straight into `T`, and every call on the way is typed. The terminals that
 `Any` are JIT-only: `.list()`, `.first()` and `.get()` without a type (their `PormGRow` rows),
 `list(:dict)`, `list(:json)`, a raw `fetch` or `execute`, and reading a query as a Tables.jl table
 (`DataFrame(query)`). Under the JIT nothing changes, and every terminal works as this page describes.
-A trimmed build does not yet run a query end to end; [#1599](https://github.com/PingoLee/PormG.jl/issues/1599)
-tracks the rest of the work.
+A trimmed binary runs the typed read end to end on SQLite, MySQL and PostgreSQL through Postgres.jl;
+writes do not work yet. [Static Compilation](../static_compilation.md) says what works, how to build,
+and what each driver needs.
 
 #### Writing `T`: `show_query = :struct`
 

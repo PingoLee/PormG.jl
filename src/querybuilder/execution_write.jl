@@ -58,15 +58,18 @@ struct _FieldRowDecoder
 end
 
 function _FieldRowDecoder(model::PormGModel, connection)
+  # Each field read by its key (`model.fields[k]`, typed by the dict's value type), not out of the dict's pairs:
+  # under the oldest OrderedCollections the floor admits, the pair's field was inferred untyped, and each call on
+  # it was a run-time dispatch (CI's floor-resolve job). The same fields, in the same order.
   rev = Dict{String,Symbol}()
   if Models.model_has_db_column(model)
-    for (k, f) in model.fields
-      rev[Models.field_db_column(f, string(k))] = Symbol(k)
+    for k in keys(model.fields)
+      rev[Models.field_db_column(model.fields[k], string(k))] = Symbol(k)
     end
   end
   parsers = Dict{Symbol,ReadParser}()
-  for (fname, f) in model.fields
-    kind = _field_read_kind(f)   # #965: a boolean reads as a `Bool` on SQLite too
+  for fname in keys(model.fields)
+    kind = _field_read_kind(model.fields[fname])   # #965: a boolean reads as a `Bool` on SQLite too
     kind === nothing || (parsers[Symbol(fname)] = read_parser(kind, connection, fname))   # #1110: a raise names it
   end
   return _FieldRowDecoder(rev, parsers, Base.RefValue{Union{Nothing,Exception}}(nothing))

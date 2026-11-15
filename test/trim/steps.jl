@@ -7,7 +7,9 @@
 # missed and the argument types; for a PormG refusal, its message.
 const M = TrimF1.M
 
-# Pasted unedited from `M.Race.objects.list(show_query = :struct)` on SQLite (#1632).
+# Pasted from `M.Race.objects.list(show_query = :struct)` on SQLite (#1632), without the two columns the
+# write fills itself (`updated_on`, `token`): the typed read projects the struct's fields, so the read is
+# the one it was before they were added.
 struct RaceRow
     raceid::Int64     # IDField
     year::Int64       # IntegerField
@@ -21,6 +23,7 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
 
 @noinline function failed(step::String, @nospecialize(e))
     say(step, string("threw ", nameof(typeof(e))))
+    e isa PormG.InvalidValueError && Core.println("  msg: ", (e::PormG.InvalidValueError).msg)
     e isa MethodError && Core.println("  missed: ", typeof(e.f))
     e isa MethodError && Core.println("  args: ", typeof(e.args))
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)

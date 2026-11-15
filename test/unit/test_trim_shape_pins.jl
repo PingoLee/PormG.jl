@@ -2590,6 +2590,79 @@ end
 
   end
 
+  # What: the single-row write's default fill (#1599 layer 7, #1694): the value of an `auto_now`/`auto_now_add`/
+  #   `auto_add` field (`_fill_formatted!`, and `_now_in` for a timestamp's current time), stored in
+  #   `SQLObjectQuery.insert::OrderedDict{String,Any}`.
+  # Expected: the fill makes no dynamic call (its open arm makes one) and stores what the slot call stored,
+  #   `_now_in` makes none and gives `now(TimeZone(zone))`'s zone, and the insert's marshalling calls no formatter
+  #   and stores no fill dynamically.
+  # Why: the fill called the field's `Function` slot, stored its untyped result and parsed the connection's zone
+  #   name at run time: code a trimmed image cannot run. Measured on #1797's head 4279d9785: 48 verifier rows at
+  #   the three fills in the full fixture entry, and with the fixture's three auto-filled fields the binary's
+  #   `create` raised
+  #   `MethodError(!=, (SubString, SubString))` in `TimeZone("UTC")`.
+  @testset "the single-row write's default fill runs at concrete types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    CP = PormG.ConnectionPool
+    has(n) = isdefined(QB, n)
+    for n in (:_fill_formatted!, :_fill_other!, :_now_in)
+      @test has(n)
+    end
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), sprint(showerror, e))
+    end
+    model = M.Model("tsp_fill_race", raceid = M.IDField(), year = M.IntegerField(),
+      created_at = M.DateTimeField(auto_now_add = true), updated_on = M.DateField(auto_now = true),
+      token = M.UUIDField(auto_add = true))
+
+    # The default fill: the formatter at its own type, the text stored at its type, one dynamic call in the open
+    # arm, and the same insert as the slot call.
+    OD = QB.OrderedCollections.OrderedDict{String, Any}
+    if has(:_fill_formatted!)
+      for (F, V) in ((typeof(M.format_timezone_sql), M.ZonedDateTime), (typeof(M.format_date_sql), Dates.Date),
+                     (typeof(M.format_uuid_sql), M.UUIDs.UUID), (Function, M.ZonedDateTime), (Function, Dates.Date),
+                     (Function, M.UUIDs.UUID))
+        @test isempty(_dynamic_calls(QB._fill_formatted!, (OD, String, F, V)))
+      end
+      @test length(_dynamic_calls(QB._fill_other!, (OD, String, Any))) == 1
+      fills = Any[("created_at", M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC"))), ("updated_on", Dates.Date(2009, 5, 24)),
+                  ("token", M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"))]
+      for (f, v) in fills, other in (identity, x -> missing, x -> error("refused"))
+        for g in (model.fields[f].formatter, other)
+          a = OD("year" => 2009); b = OD("year" => 2009)
+          ra = outcome(() -> QB._fill_formatted!(a, f, g, v))
+          rb = outcome(() -> (b[f] = g(v); nothing))
+          @test isequal(ra, rb) && isequal(collect(a), collect(b)) && all(k -> typeof(a[k]) === typeof(b[k]), keys(a))
+        end
+      end
+    end
+    # The current time: UTC is the constant `TimeZone("UTC")` returns, so no zone name is parsed; any other zone is
+    # `TimeZone(zone)`'s, as before.
+    if has(:_now_in)
+      @test isempty(_dynamic_calls(QB._now_in, (String,)))
+      @test only(Base.return_types(QB._now_in, (String,))) === M.ZonedDateTime
+      @test QB._now_in("UTC").timezone === M.TimeZone("UTC") === M._DATETIME_UTC_TZ
+      # The zone, or the same refusal (a legacy name, an unknown one).
+      for zone in ("America/Sao_Paulo", "Europe/Paris", "UTC+3", "Europe/Monaco", "Mars/Olympus")
+        @test isequal(outcome(() -> QB._now_in(zone).timezone), outcome(() -> M.TimeZone(zone)))
+      end
+      t0 = M.now(M.TimeZone("UTC")); t = QB._now_in("UTC"); t1 = M.now(M.TimeZone("UTC"))
+      @test t0 <= t <= t1
+    end
+    # and the insert's fill takes it from there: the one zone parse left in the file is `update`'s fill.
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test count("now(TimeZone(settings.time_zone))", ew_src) == 1 && occursin("_now_in(settings.time_zone)", ew_src)
+    # The insert's marshalling stores no fill through a dynamic call, and calls no formatter slot (the SQLite id
+    # reservation's store is the next commit's).
+    insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
+                                                           CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
+    @test count(c -> occursin("setindex!", c), insert_calls) <= 1
+    @test !any(c -> occursin(r"^\d+: \(%\d+\)\(", c), insert_calls)
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

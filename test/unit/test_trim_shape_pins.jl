@@ -2591,15 +2591,16 @@ end
   end
 
   # What: the single-row write's default fill (#1599 layer 7, #1694): the value of an `auto_now`/`auto_now_add`/
-  #   `auto_add` field (`_fill_formatted!`, and `_now_in` for a timestamp's current time), stored in
+  #   `auto_add` field (`_fill_formatted!`, and `_now_in` for a timestamp's current time), and the SQLite id
+  #   reservation `create` reads inside a transaction (`_allocate_sqlite_ids`), both stored in
   #   `SQLObjectQuery.insert::OrderedDict{String,Any}`.
   # Expected: the fill makes no dynamic call (its open arm makes one) and stores what the slot call stored,
-  #   `_now_in` makes none and gives `now(TimeZone(zone))`'s zone, and the insert's marshalling calls no formatter
-  #   and stores no fill dynamically.
-  # Why: the fill called the field's `Function` slot, stored its untyped result and parsed the connection's zone
-  #   name at run time: code a trimmed image cannot run. Measured on #1797's head 4279d9785: 48 verifier rows at
-  #   the three fills in the full fixture entry, and with the fixture's three auto-filled fields the binary's
-  #   `create` raised
+  #   `_now_in` makes none and gives `now(TimeZone(zone))`'s zone, the insert's marshalling stores nothing and
+  #   calls no formatter dynamically, and the reservation infers `Vector{Int64}`.
+  # Why: the fill called the field's `Function` slot and stored its untyped result, parsed the connection's zone
+  #   name at run time, and the reservation's ids were `Any`: code a trimmed image cannot run. Measured on
+  #   #1797's head 4279d9785: 52 verifier rows at the three fills and the reservation in the full fixture entry,
+  #   and with the fixture's three auto-filled fields the binary's `create` raised
   #   `MethodError(!=, (SubString, SubString))` in `TimeZone("UTC")`.
   @testset "the single-row write's default fill runs at concrete types (#1599 layer 7, #1694)" begin
     QB = PormG.QueryBuilder
@@ -2655,12 +2656,14 @@ end
     # and the insert's fill takes it from there: the one zone parse left in the file is `update`'s fill.
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
     @test count("now(TimeZone(settings.time_zone))", ew_src) == 1 && occursin("_now_in(settings.time_zone)", ew_src)
-    # The insert's marshalling stores no fill through a dynamic call, and calls no formatter slot (the SQLite id
-    # reservation's store is the next commit's).
+    # The insert's marshalling stores nothing in the insert through a dynamic call, and calls no formatter slot.
     insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
                                                            CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
-    @test count(c -> occursin("setindex!", c), insert_calls) <= 1
+    @test !any(c -> occursin("setindex!", c), insert_calls)
     @test !any(c -> occursin(r"^\d+: \(%\d+\)\(", c), insert_calls)
+    # The SQLite id reservation infers its ids: `create` reads the first and stores it in the insert.
+    @test only(Base.return_types(QB._allocate_sqlite_ids, (M.ModelType, CP.SQLiteConnectionPool, String, Int,
+                                 PormG.Kernel.Settings))) == Vector{Int64}
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

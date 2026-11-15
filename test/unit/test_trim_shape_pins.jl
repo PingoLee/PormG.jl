@@ -2678,9 +2678,11 @@ end
       t0 = M.now(M.TimeZone("UTC")); t = QB._now_in("UTC"); t1 = M.now(M.TimeZone("UTC"))
       @test t0 <= t <= t1
     end
-    # and the insert's fill takes it from there: the one zone parse left in the file is `update`'s fill.
+    # and both fills take it from there, the insert's and `update`'s (#1694's update step): no zone is parsed
+    # in the file.
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
-    @test count("now(TimeZone(settings.time_zone))", ew_src) == 1 && occursin("_now_in(settings.time_zone)", ew_src)
+    @test count("now(TimeZone(settings.time_zone))", ew_src) == 0 && count("_now_in(settings.time_zone)", ew_src) == 2
+    @test count("_fill_formatted!(objct.insert, field, model.fields[field].formatter", ew_src) == 2
     # The insert's marshalling stores nothing in the insert through a dynamic call, and calls no formatter slot.
     insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
                                                            CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))

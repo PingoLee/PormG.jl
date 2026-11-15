@@ -1702,13 +1702,14 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     parameters = instruction.parameters
     fields = model.field_names
 
-    # Check if the fields need to be updated automatically
+    # Check if the fields need to be updated automatically. Filled as `create` fills them (#1599 layer 7): the
+    # formatter at its type, the text stored at its type, UTC's current time without parsing the zone name.
     for field in fields
       if !haskey(objct.insert, field)
         if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
-          objct.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
+          _fill_formatted!(objct.insert, field, model.fields[field].formatter, _now_in(settings.time_zone))
         elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
-          objct.insert[field] = model.fields[field].formatter(today())
+          _fill_formatted!(objct.insert, field, model.fields[field].formatter, today())
         end
       end
     end

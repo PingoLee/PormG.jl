@@ -824,10 +824,12 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
       return true, f_meta.default, false
     elseif f_meta.type == "TIMESTAMPTZ"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-        value = settings === nothing ? now(TimeZone("UTC")) : Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))
+        value = settings === nothing ? now(TimeZone("UTC")) :
+          Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))
         return true, value, false
       elseif operation == :update && f_meta.auto_now
-        value = settings === nothing ? now(TimeZone("UTC")) : Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))
+        value = settings === nothing ? now(TimeZone("UTC")) :
+          Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))
         return true, value, false
       end
     elseif f_meta.type == "DATE"
@@ -1970,8 +1972,9 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
     # cell as `row[mapping[field]]` looked the column up by NAME every time, which was over a third of
     # a 100k-row insert's client-side time. `metas[j]` and `sources[j]` stay in `fields_df` order —
     # the order the INSERT column list and the row source are built in.
-    # Typed by the field union and the frame's column type (#1599 layer 7): an untyped comprehension widens its element type as it goes,
-    # through code a trimmed image does not have (`MissingCodeError` in `collect_to_with_first!`).
+    # Typed by the field union and the frame's column type (#1599 layer 7): an untyped comprehension widens its
+    # element type as it goes, through code a trimmed image does not have (`MissingCodeError` in
+    # `collect_to_with_first!`).
     metas = Models.AnyField[_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
     sources = AbstractVector[_bulk_column(df, mapping[field]) for field in fields_df]
 

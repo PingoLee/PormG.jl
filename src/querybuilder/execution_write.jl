@@ -38,6 +38,81 @@ function _row_to_field_keyed_dict(row, model::PormGModel, connection)::Dict{Symb
   return dict
 end
 
+# The insert's read-back, decoded into the field-keyed row where the driver's result is concrete (#1599
+# layer 7, #1694). The read-back selects the model's declared columns, so each column's field and read
+# parser are known before the statement runs; the decoder carries them to `fetch`, as the typed read's
+# `_RowDecoder` carries its parsers. On SQLite the worker steps the statement straight into these Dicts
+# (`backend_execute_rows`, in the extension); MySQL's materialized result, and a stand-in pool's, are
+# decoded by the call below. Before, `fetch(…) |> Tables.rowtable` and `pairs(row)` made a call on a row
+# type decided at run time, which a trimmed image has no code for.
+#
+# The row is `_row_to_field_keyed_dict`'s: each column keyed by its field's name (by its own name when it
+# is no field's column), and a field's cell through the parser `_field_value_parser` returns, applied as
+# the concrete `ReadParser` it is made from. `failure` carries an error raised while building a row on
+# SQLite's worker back to `fetch`, which raises it as it was raised (`decoded_on_worker`), as when the
+# rows were parsed after `fetch` returned.
+struct _FieldRowDecoder
+  rev::Dict{String,Symbol}           # a column → its field's name; empty when no field sets `db_column`
+  parsers::Dict{Symbol,ReadParser}   # a field's read parser, for a field that has one
+  failure::Base.RefValue{Union{Nothing,Exception}}
+end
+
+function _FieldRowDecoder(model::PormGModel, connection)
+  rev = Dict{String,Symbol}()
+  if Models.model_has_db_column(model)
+    for (k, f) in model.fields
+      rev[Models.field_db_column(f, string(k))] = Symbol(k)
+    end
+  end
+  parsers = Dict{Symbol,ReadParser}()
+  for (fname, f) in model.fields
+    kind = _field_read_kind(f)   # #965: a boolean reads as a `Bool` on SQLite too
+    kind === nothing || (parsers[Symbol(fname)] = read_parser(kind, connection, fname))   # #1110: a raise names it
+  end
+  return _FieldRowDecoder(rev, parsers, Base.RefValue{Union{Nothing,Exception}}(nothing))
+end
+
+# The key a result column gives the row, and the parser of the field it names (none for a column that is no
+# field's: `_RP_NONE` returns its value unchanged).
+_field_key(d::_FieldRowDecoder, column::Symbol)::Symbol = isempty(d.rev) ? column : get(d.rev, String(column), column)
+_field_parser(d::_FieldRowDecoder, key::Symbol)::ReadParser = get(d.parsers, key, NO_READ_PARSER)
+
+# A materialized result (MySQL's, a stand-in pool's): its rows, each through the keys and parsers above.
+function (d::_FieldRowDecoder)(result)::Vector{Dict{Symbol,Any}}
+  out = Dict{Symbol,Any}[]
+  for row in Tables.rowtable(result)
+    dict = Dict{Symbol,Any}()
+    for (k, v) in pairs(row)
+      key = _field_key(d, Symbol(k))
+      dict[key] = _field_parser(d, key)(v)
+    end
+    push!(out, dict)
+  end
+  return out
+end
+
+# The worker's half and `fetch`'s, as for `_RowDecoder` (typed_read.jl).
+function decode_on_worker(d::_FieldRowDecoder, result)::Vector{Dict{Symbol,Any}}
+  try
+    return d(result)
+  catch e
+    (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement
+    d.failure[] = e
+    return Dict{Symbol,Any}[]
+  end
+end
+function decoded_on_worker(d::_FieldRowDecoder, result)
+  f = d.failure[]
+  f === nothing || throw(f)
+  return result::Vector{Dict{Symbol,Any}}
+end
+
+# The read-back statement's rows: SQLite's has no parameter, MySQL's binds the key in its own collector.
+_read_back_rows(connection, sql::String, ::Nothing, decoder::_FieldRowDecoder) =
+  fetch(connection, sql; params = nothing, _decode = decoder)::Vector{Dict{Symbol,Any}}
+_read_back_rows(connection, sql::String, params::AbstractPormGParam, decoder::_FieldRowDecoder) =
+  fetch(connection, sql; params = params, _decode = decoder)::Vector{Dict{Symbol,Any}}
+
 # The columns a write hands its row back through (#1490): every declared field that owns a column, in
 # declaration order, quoted. `RETURNING` and the SQLite/MySQL read-backs name them rather than `*`, so
 # the statement's result type follows the model and not the table. Under the Postgres.jl statement
@@ -256,15 +331,17 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # the previous incomplete-Dict return.
     # `inserted`, not `result`: a thunk local named like the RETURNING branch's `result` above is that
     # captured variable, reassigned, so it was a `Core.Box` (#1697).
+    # The read-back is decoded as it is read (`_FieldRowDecoder`, #1599 layer 7): `rows[1]` is the
+    # field-keyed, parsed row `_row_to_field_keyed_dict` built from the driver's row before.
+    decoder = _FieldRowDecoder(model, connection)
     do_insert = () -> begin
       inserted = fetch(settings, sql, parameters)
       read_back = _inserted_row_query(connection, model, real_obj.insert, inserted, safe_table_name)
-      rows = read_back === nothing ? () :
-        (read_back[2] === nothing ? fetch(settings, read_back[1]) : fetch(settings, read_back[1], read_back[2])) |>
-        Tables.rowtable
+      rows = read_back === nothing ? Dict{Symbol, Any}[] :
+        _read_back_rows(connection, read_back[1], read_back[2], decoder)
       isempty(rows) ?
         Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-        _row_to_field_keyed_dict(rows[1], model, connection)
+        rows[1]
     end
 
     # INSERT and the row read-back must run on one connection (last_insert_rowid() and the OK packet's

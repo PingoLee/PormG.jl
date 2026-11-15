@@ -2691,6 +2691,40 @@ end
                                  PormG.Kernel.Settings))) == Vector{Int64}
   end
 
+  # What: the insert's read-back (#1599 layer 7, #1694): the decoder that carries each column's field and read
+  #   parser to `fetch` (`QueryBuilder._FieldRowDecoder`), the read-back's fetch (`_read_back_rows`), and the SQLite
+  #   extension's `backend_execute_rows` method that steps the statement into the field-keyed Dicts.
+  # Expected: the decoder is a concrete type with concrete fields, and none of these makes a dynamic call; the
+  #   read-back's rows infer `Vector{Dict{Symbol,Any}}`; `insert` reads its row back through them.
+  # Why: the read-back was `fetch(…) |> Tables.rowtable` and `pairs(row)` on a row type decided at run time.
+  #   Measured on main e875884: the full fixture entry's `create` raised `MethodError(|>, (Vector{NamedTuple{…}},
+  #   typeof(Tables.rowtable)))` there, after its INSERT; with the decoder the write completes and the read after
+  #   it returns the new row (`test/unit/test_insert_read_back_decoder.jl` holds the equivalence).
+  @testset "the insert's read-back is decoded on SQLite's worker at concrete types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    CP = PormG.ConnectionPool
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    has = isdefined(QB, :_FieldRowDecoder) && isdefined(QB, :_read_back_rows) && isdefined(X, :_sqlite_field_rows)
+    @test has
+    if has
+      D = QB._FieldRowDecoder
+      @test isconcretetype(D) && all(isconcretetype, fieldtypes(D))
+      @test isempty(_dynamic_calls(QB._FieldRowDecoder, (PormG.Models.ModelType, CP.SQLiteConnectionPool)))
+      @test isempty(_dynamic_calls(QB._read_back_rows, (CP.SQLiteConnectionPool, String, Nothing, D)))
+      @test only(Base.return_types(QB._read_back_rows, (CP.SQLiteConnectionPool, String, Nothing, D))) ==
+            Vector{Dict{Symbol, Any}}
+      @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, D)))
+      for P in (Nothing, Vector{Any})
+        @test (P, _dynamic_calls(X._sqlite_field_rows, (SQLite.DB, String, P, D))) == (P, String[])
+      end
+      @test isempty(_dynamic_calls(X._sqlite_field_rows_into, (SQLite.Query{false}, D)))
+      @test isempty(_dynamic_calls(X._sqlite_field_cell, (Ptr{Cvoid}, Int, PormG.ReadParser)))
+    end
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test occursin("_read_back_rows(connection, read_back[1], read_back[2], decoder)", ew_src)
+    @test !occursin("fetch(settings, read_back[1])", ew_src)
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

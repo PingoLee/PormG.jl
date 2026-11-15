@@ -3020,6 +3020,24 @@ _finalize_with(pool::_SQLEngine, @nospecialize(conn), @nospecialize(rollback_err
                @nospecialize(body_error), abandoned_await::Bool) =
   Core.kwcall(_FinalizeKeywords((rollback_error, renew, body_error, abandoned_await)),
               finalize_transaction_connection!, pool, conn)
+# The same on a settings entry, the call `finalize_transaction_connection!(settings, …)` makes (#1599 layer 7,
+# #1694): `delete()`'s hand-rolled lifecycle finalizes through its settings. That method reaches the pool
+# through `with_pool`, which specializes on its arguments, so with errors from a `catch` (`Any`) it was a
+# dispatch at run time: the trimmed full fixture entry's `delete` raised `MethodError(kwcall, …)` there, in
+# place of its own error. The pool is walked here as `with_pool` walks it, each arm the static call above;
+# a pool `with_pool` does not list takes the call it took.
+function _finalize_with(settings::Settings, @nospecialize(conn), @nospecialize(rollback_error), renew::Bool,
+                        @nospecialize(body_error), abandoned_await::Bool)
+  pool = settings.connections
+  pool isa SQLiteConnectionPool && return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  pool isa PostgresConnectionPool{:libpq} &&
+    return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  pool isa PostgresConnectionPool{:postgres} &&
+    return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  pool isa MySQLConnectionPool && return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  return finalize_transaction_connection!(settings, conn; rollback_error = rollback_error, renew = renew,
+                                          body_error = body_error, abandoned_await = abandoned_await)
+end
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never

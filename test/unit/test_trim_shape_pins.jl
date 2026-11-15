@@ -2845,6 +2845,18 @@ end
     end
     er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
     @test occursin("n = _fetch_row_count(settings, sql, instruction.parameters)", er_src)
+
+    # `delete()`'s own transaction lifecycle. Its terminal finalize: the keyword call on the two caught errors (`Any`)
+    # had no target, and the trimmed binary raised that `MethodError` in place of the delete's own error.
+    # `_finalize_with` on the settings walks the pool as `with_pool` does; its one dynamic call is the open arm.
+    S = PormG.Kernel.Settings
+    @test hasmethod(CP._finalize_with, (S, Any, Any, Bool, Any, Bool))
+    if hasmethod(CP._finalize_with, (S, Any, Any, Bool, Any, Bool))
+      @test length(_dynamic_calls(CP._finalize_with, (S, Any, Any, Bool, Any, Bool))) == 1
+    end
+    del_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "deletion.jl"), String)
+    @test occursin("_finalize_with(settings, conn, rollback_error, false, body_error, false)", del_src)
+    @test !occursin("finalize_transaction_connection!(settings, conn; rollback_error=rollback_error", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

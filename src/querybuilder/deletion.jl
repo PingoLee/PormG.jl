@@ -460,7 +460,10 @@ function delete(objct::SQLObjectHandler;
           end
           rethrow(e)
         finally
-          finalize_transaction_connection!(settings, conn; rollback_error=rollback_error, body_error=body_error)
+          # `finalize_transaction_connection!(settings, conn; rollback_error, body_error)`, through `_finalize_with`
+          # (#1599 layer 7): the two errors are `Any`, so the keyword call had no target in a trimmed image,
+          # which then raised that `MethodError` in place of the delete's own error.
+          _finalize_with(settings, conn, rollback_error, false, body_error, false)
         end
       end
     end

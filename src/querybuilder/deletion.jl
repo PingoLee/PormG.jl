@@ -249,6 +249,69 @@ function delete(objct::SQLObjectHandler;
 
     # Definition of run_deletions (backend agnostic)
     results = []
+    # `plan` and `run_plan` are defined before `run_deletions`, which calls them (#1599 layer 7, #1694): a closure
+    # capturing a variable assigned after it was created holds it in a `Core.Box`, so each call was a run-time
+    # dispatch on the boxed value, and the trimmed full fixture entry's `delete` raised `MethodError` on `plan`.
+    # One plan over one root query: collect the cascade, probing each path.
+    plan = function(root_objct, skip_self_cascade::Bool = false)
+      collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
+      add_objects_to_collector!(collector, root_objct, model)
+      process_collector!(collector)
+      return collector
+    end
+
+    # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
+    # the key step (#1342), so the root is not locked a second time.
+    run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
+      # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
+      # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
+      # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
+      #
+      # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
+      # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
+      # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
+      # The root is locked here anyway when the plan holds more entries of its own model than the key
+      # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
+      # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
+      if _locks_cascade_parents(connection)
+        for lock_model in _models_to_lock(collector)
+          root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
+          res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
+          push!(results, res)
+        end
+      end
+
+      # Process fast deletes first (objects that can be deleted directly).
+      # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
+      # (the collector is built here since #452), and two meanings for one name in one scope is a
+      # reading hazard even where Julia's loop scoping makes it harmless.
+      for (fast_model, fast_keys) in collector.fast_deletes
+        res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
+        push!(results, res)
+        # Remove from objects to prevent double deletion
+        delete!(collector.objects, fast_model)
+      end
+
+      # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
+      # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
+      # statement count is still one per (field, value, model).
+      for ((field, value), affected_models) in collector.field_updates
+        for (affected_model, path_keys) in affected_models
+          res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
+          push!(results, res)
+        end
+      end
+    
+      # Execute deletions in the sorted order
+      for model_to_delete in collector.sorted_models
+        _array = get(collector.objects, model_to_delete, [])        
+        if !isempty(_array)
+          res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+          push!(results, res)
+        end
+      end
+    end
+
     # `conn` unspecialized (#1599 layer 7): every caller holds it untyped (a pool slot, the transaction context).
     run_deletions = function(@nospecialize(conn),)
       # Plan INSIDE the transaction (#452).
@@ -346,65 +409,6 @@ function delete(objct::SQLObjectHandler;
       return nothing
     end
 
-    # One plan over one root query: collect the cascade, probing each path.
-    plan = function(root_objct, skip_self_cascade::Bool = false)
-      collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
-      add_objects_to_collector!(collector, root_objct, model)
-      process_collector!(collector)
-      return collector
-    end
-
-    # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
-    # the key step (#1342), so the root is not locked a second time.
-    run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
-      # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
-      # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
-      # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
-      #
-      # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
-      # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
-      # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
-      # The root is locked here anyway when the plan holds more entries of its own model than the key
-      # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
-      # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
-      if _locks_cascade_parents(connection)
-        for lock_model in _models_to_lock(collector)
-          root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
-          res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
-          push!(results, res)
-        end
-      end
-
-      # Process fast deletes first (objects that can be deleted directly).
-      # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
-      # (the collector is built here since #452), and two meanings for one name in one scope is a
-      # reading hazard even where Julia's loop scoping makes it harmless.
-      for (fast_model, fast_keys) in collector.fast_deletes
-        res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
-        push!(results, res)
-        # Remove from objects to prevent double deletion
-        delete!(collector.objects, fast_model)
-      end
-
-      # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
-      # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
-      # statement count is still one per (field, value, model).
-      for ((field, value), affected_models) in collector.field_updates
-        for (affected_model, path_keys) in affected_models
-          res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
-          push!(results, res)
-        end
-      end
-    
-      # Execute deletions in the sorted order
-      for model_to_delete in collector.sorted_models
-        _array = get(collector.objects, model_to_delete, [])        
-        if !isempty(_array)
-          res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
-          push!(results, res)
-        end
-      end
-    end
 
     tx_conn = transaction_connection_for(settings)
     if show_query !== :execute

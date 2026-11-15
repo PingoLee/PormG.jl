@@ -2888,6 +2888,10 @@ end
     # terminal's shallow copy, whose `values` the planner replaces, and the entry predicate's is `update`'s copy.
     @test !occursin("deepcopy(", del_src)
     @test count("_terminal_copy(", del_src) == 3 && occursin("work = _mutation_copy(key[:objct].object)", del_src)
+    # `plan` and `run_plan` are defined before `run_deletions`, which calls them: defined after, each was captured
+    # in a `Core.Box` and called by run-time dispatch on the boxed value.
+    @test findfirst("    plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
+    @test findfirst("    run_plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

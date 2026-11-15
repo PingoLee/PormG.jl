@@ -24,6 +24,7 @@ using Test
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using PormG
 using Dates
+using DataFrames
 
 const _BIT_QB = PormG.QueryBuilder
 const _BIT_M = PormG.Models
@@ -100,8 +101,22 @@ catch e
   (:err, typeof(e), sprint(showerror, e))
 end
 
-# What: `_bulk_frame` against the old body, over a row table, a column table, an empty table, a schemaless row
-#   table, columns of different lengths, and a value that is no table.
+# A column table whose names repeat, with columns of different lengths: legal for Tables.jl's interface, and the
+# case that tells "the lengths of the columns the store kept" (the old read-back) from "every column seen".
+struct _BITDupCols
+  served::Base.RefValue{Int}
+end
+_BIT_Tables.istable(::Type{_BITDupCols}) = true
+_BIT_Tables.columnaccess(::Type{_BITDupCols}) = true
+_BIT_Tables.columns(x::_BITDupCols) = x
+_BIT_Tables.schema(::_BITDupCols) = _BIT_Tables.Schema((:year, :year), (Int, Int))
+_BIT_Tables.columnnames(::_BITDupCols) = (:year, :year)
+const _BIT_DUP = ([2010, 2011], [2010, 2011, 2012])
+_BIT_Tables.getcolumn(x::_BITDupCols, ::Symbol) = (x.served[] = x.served[] % 2 + 1; _BIT_DUP[x.served[]])
+
+# What: `_bulk_frame` against the old body, over a row table, a row table with six column types, a column table,
+#   a DataFrame, an empty table, a schemaless row table, columns of different lengths, a column table whose names
+#   repeat, and a value that is no table.
 # Expected: the same names, the same columns (type and values; a row table is copied into fresh columns by
 #   `Tables.columns` on every call, old and new alike), the same row count; or the same error type and message.
 #   A column table's vectors are the caller's own, uncopied (#132).
@@ -110,12 +125,18 @@ end
 @testset "the bulk frame is the frame the old body built (#1599 layer 7, #1694)" begin
   rows = [(year = 2010, round = 6, name = "Monaco Grand Prix"), (year = 2011, round = 6, name = "Monaco Grand Prix")]
   coltab = (year = [2010, 2011], name = ["Monaco Grand Prix", "Monaco Grand Prix"])
-  srcs = Any[rows, coltab, NamedTuple{(:year,), Tuple{Int}}[], Any[(year = 2010,), (year = 2011,)],
+  wide = [(year = 2010, name = "Monaco Grand Prix", date = Date(2010, 5, 16), points = 25.0, sprint = false, round = Int32(6))]
+  srcs = Any[rows, wide, coltab, DataFrame(year = [2010, 2011], name = ["Monaco Grand Prix", "Monaco Grand Prix"]),
+             NamedTuple{(:year,), Tuple{Int}}[], Any[(year = 2010,), (year = 2011,)],
              (year = [2010, 2011], name = ["Monaco Grand Prix"]), 2010, NamedTuple()]
   for src in srcs
-    @test (src, _bit_frame_outcome(() -> _BIT_QB._bulk_frame(src, "bulk_insert"))) ==
-          (src, _bit_frame_outcome(() -> _bit_old_frame(src, "bulk_insert")))
+    @test (repr(src), _bit_frame_outcome(() -> _BIT_QB._bulk_frame(src, "bulk_insert"))) ==
+          (repr(src), _bit_frame_outcome(() -> _bit_old_frame(src, "bulk_insert")))
   end
+  # The repeated names: each body gets a fresh source, served the same way (the first `getcolumn` call returns the
+  # 2-row column, the second the 3-row one).
+  @test _bit_frame_outcome(() -> _BIT_QB._bulk_frame(_BITDupCols(Ref(0)), "bulk_insert")) ==
+        _bit_frame_outcome(() -> _bit_old_frame(_BITDupCols(Ref(0)), "bulk_insert"))
   fr = _BIT_QB._bulk_frame(coltab, "bulk_insert")
   @test fr.columns["year"] === coltab.year && fr.columns["name"] === coltab.name
 end

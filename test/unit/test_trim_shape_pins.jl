@@ -3060,10 +3060,16 @@ end
       m = only(methods(QB._bulk_insert_frame))
       @test nospec(m, 5) && count(i -> nospec(m, i), 1:(m.nargs - 1)) == 1   # `src`, the fifth argument, alone
     end
-    NT = Vector{NamedTuple{(:year, :name), Tuple{Int64, String}}}
-    @test isempty(filter(s -> occursin("Tables", s) || occursin("length", s),
-                         _dynamic_calls(QB._bulk_frame, (NT, String))))
-    @test occursin("push!(lengths, length(stored))", eb_src) && !occursin("row_count = length(columns[names[1]])", eb_src)
+    # The fixture's row type, and one with more column types than inference splits (six): neither makes a dynamic
+    # Tables.jl call, a dynamic `length` or a dynamic store.
+    for NT in (Vector{NamedTuple{(:year, :name), Tuple{Int64, String}}},
+               Vector{NamedTuple{(:year, :name, :date, :points, :sprint, :round),
+                                 Tuple{Int64, String, Dates.Date, Float64, Bool, Int32}}})
+      @test (NT, filter(s -> occursin("Tables", s) || occursin("length", s) || occursin("setindex!", s),
+                        _dynamic_calls(QB._bulk_frame, (NT, String)))) == (NT, String[])
+    end
+    @test occursin("_store_bulk_column!(columns, key, column)", eb_src) && occursin("lengths[key] = _bulk_length(column)", eb_src)
+    @test !occursin("row_count = length(columns[names[1]])", eb_src)
 
     # The fill: the zone through `_now_in`, the formatter through `apply_formatter`, the closure's value
     # unspecialized, the column built (`_fill_bulk_column`) and stored (`_store_bulk_column!`) at its type.
@@ -3075,6 +3081,7 @@ end
     walks = ((:_fill_bulk_column, :_fill_bulk_column_other, (Any, Int)),
              (:_store_bulk_column!, nothing, (Dict{String, AbstractVector}, String, AbstractVector)),
              (:_bulk_cell, :_bulk_cell_other, (AbstractVector, Int)),
+             (:_bulk_length, :_bulk_length_other, (AbstractVector,)),
              (:_bulk_count_total, :_bulk_count_total_other, (Vector{Any},)))
     for (name, other, tt) in walks
       @test (name, isdefined(QB, name)) == (name, true)

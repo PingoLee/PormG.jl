@@ -125,6 +125,12 @@ end
 end
 @noinline _bulk_cell_other(@nospecialize(column::AbstractVector), i::Int) = column[i]
 
+# A frame column's length (#1599 layer 7): `length` of any `Vector` is a field read, whatever its element type;
+# any other column takes one dynamic call.
+@noinline _bulk_length(@nospecialize(column::AbstractVector))::Int =
+  column isa Vector ? length(column) : _bulk_length_other(column)
+@noinline _bulk_length_other(@nospecialize(column::AbstractVector))::Int = length(column)
+
 # The rows a bulk write's chunks counted, summed (#1599 layer 7, #1694). `sum(results; init = 0)` over the untyped
 # results dispatched `add_sum` at run time, which a trimmed image cannot run. Each chunk counts an `Int`
 # (`_affected_row_count`'s type), added at that type, so the loop stays an `Int`; the first count of any other type
@@ -176,16 +182,23 @@ function _bulk_frame(src, op::AbstractString)::_BulkFrame
   cols = Tables.columns(src)
   names = String[]
   columns = Dict{String, AbstractVector}()
-  # Each column's length, measured here while the column is still at the type `Tables.getcolumn` gives
-  # it (#1599 layer 7): read back out of the `AbstractVector` store, `length` had no compiled target in
-  # a trimmed image. The same lengths, compared the same way.
-  lengths = Int[]
+  # Each column stored and measured at its own type (#1599 layer 7): read back out of the `AbstractVector` store,
+  # `length` had no compiled target in a trimmed image, and a row type with more column types than inference
+  # splits made the store itself a dynamic `setindex!`. The lengths are keyed by name, as the store is, so a
+  # name a table repeats keeps its last column's length, as the old read-back did.
+  lengths = Dict{String, Int}()
   for name in Tables.columnnames(cols)
     column = Tables.getcolumn(cols, name)
-    push!(names, String(name))
-    stored = column isa AbstractVector ? column : collect(column)
-    columns[String(name)] = stored
-    push!(lengths, length(stored))
+    key = String(name)
+    push!(names, key)
+    if column isa AbstractVector
+      _store_bulk_column!(columns, key, column)
+      lengths[key] = _bulk_length(column)
+    else
+      stored = collect(column)
+      columns[key] = stored
+      lengths[key] = length(stored)
+    end
   end
   if isempty(names)
     # No columns: nothing to write, which is an empty table only when it also has no rows.
@@ -193,8 +206,8 @@ function _bulk_frame(src, op::AbstractString)::_BulkFrame
       throw(QueryBuildError("Error in $(op), the table has rows but no columns"))
     return _BulkFrame(names, columns, 0)
   end
-  row_count = lengths[1]
-  all(==(row_count), lengths) ||
+  row_count = lengths[names[1]]
+  all(name -> lengths[name] == row_count, names) ||
     throw(QueryBuildError("Error in $(op), the table's columns have different lengths"))
   return _BulkFrame(names, columns, row_count)
 end

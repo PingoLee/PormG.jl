@@ -127,16 +127,25 @@ end
 
 # The rows a bulk write's chunks counted, summed (#1599 layer 7, #1694). `sum(results; init = 0)` over the untyped
 # results dispatched `add_sum` at run time, which a trimmed image cannot run. Each chunk counts an `Int`
-# (`_affected_row_count`'s type), added at that type; any other count takes `total + r`, which is what `add_sum`
-# computes from `init = 0`. The same total.
+# (`_affected_row_count`'s type), added at that type, so the loop stays an `Int`; the first count of any other type
+# hands the rest to `_bulk_count_total_other`, which adds them as `total + r`, what `add_sum` computes from
+# `init = 0`. The same total.
 function _bulk_count_total(results::Vector{Any})
   total = 0
-  for r in results
-    total = r isa Int ? total + r : _bulk_count_add_other(total, r)
+  for k in eachindex(results)
+    r = results[k]
+    r isa Int || return _bulk_count_total_other(results, total, k)
+    total += r
   end
   return total
 end
-@noinline _bulk_count_add_other(total, @nospecialize(r)) = total + r
+@noinline function _bulk_count_total_other(results::Vector{Any}, total::Int, from::Int)
+  t = total
+  for k in from:lastindex(results)
+    t = t + results[k]
+  end
+  return t
+end
 
 # The one refusal for an argument that is not a table, shared by the writers and their curried forms.
 #

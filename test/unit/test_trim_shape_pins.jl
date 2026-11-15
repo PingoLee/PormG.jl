@@ -3043,6 +3043,10 @@ end
   @testset "bulk_insert runs at concrete types in the full entry (#1599 layer 7, #1694)" begin
     QB = PormG.QueryBuilder
     eb_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+    # The insert body alone: `_bulk_update` keeps its own `columns` accumulator and `results` sum, untouched here.
+    bi_at = findfirst("function _bulk_insert_frame(", eb_src)
+    bi_src = bi_at === nothing ? "" : eb_src[first(bi_at):first(something(findnext("\nend\n", eb_src, last(bi_at)), bi_at))]
+    @test !isempty(bi_src)
     nospec(m::Method, i::Int) = (m.nospecialize >> (i - 1)) & 1 == 1
     only_method(f, tt) = only(methods(f, tt))
 
@@ -3071,7 +3075,7 @@ end
     walks = ((:_fill_bulk_column, :_fill_bulk_column_other, (Any, Int)),
              (:_store_bulk_column!, nothing, (Dict{String, AbstractVector}, String, AbstractVector)),
              (:_bulk_cell, :_bulk_cell_other, (AbstractVector, Int)),
-             (:_bulk_count_total, :_bulk_count_add_other, (Vector{Any},)))
+             (:_bulk_count_total, :_bulk_count_total_other, (Vector{Any},)))
     for (name, other, tt) in walks
       @test (name, isdefined(QB, name)) == (name, true)
       isdefined(QB, name) || continue
@@ -3081,7 +3085,9 @@ end
         @test length(_dynamic_calls(f, tt)) == 1
       else
         @test (name, _dynamic_calls(f, tt)) == (name, String[])
-        @test length(_dynamic_calls(getglobal(QB, other), tt)) == 1
+        o = getglobal(QB, other)
+        ott = other === :_bulk_count_total_other ? (Vector{Any}, Int, Int) : tt
+        @test length(_dynamic_calls(o, ott)) == 1   # the open arm: the one call the walk leaves dynamic
       end
     end
     if isdefined(QB, :_bulk_cell)
@@ -3093,23 +3099,23 @@ end
     end
 
     # The metadata and the source columns at declared types; the formatted cells as `Any`.
-    @test occursin("metas = Models.AnyField[_validate_field_name(model, field, \"bulk_insert\"", eb_src)
-    @test occursin("sources = AbstractVector[_bulk_column(df, mapping[field]) for field in fields_df]", eb_src)
-    @test occursin("cells = Any[_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index)", eb_src)
-    @test !occursin("sources[j][index], \"bulk_insert\"", eb_src)
+    @test occursin("metas = Models.AnyField[_validate_field_name(model, field, \"bulk_insert\"", bi_src)
+    @test occursin("sources = AbstractVector[_bulk_column(df, mapping[field]) for field in fields_df]", bi_src)
+    @test occursin("cells = Any[_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index)", bi_src)
+    @test !occursin("sources[j][index]", bi_src)
 
     # Validate, format and bind: one compiled method each, through `create`'s walks.
     vm = only(methods(QB._validate_bulk_cell))
     @test nospec(vm, 4) && occursin("_validate_field_value_at(model, String(field), f_meta, value, String(op))", eb_src)
     @test nospec(only(methods(QB._format_bulk_cell)), 4)
-    @test occursin("push!(placeholders, _bind_written_value!(parameters, cell)::String)", eb_src)
-    @test !occursin("[add_parameter!(parameters, cell) for cell in cells]", eb_src)
+    @test occursin("push!(placeholders, _bind_written_value!(parameters, cell)::String)", bi_src)
+    @test !occursin("add_parameter!(parameters, cell)", bi_src)
 
     # No box: the chunk accumulator is not `columns`, the chunk statement takes its collector as an argument, and
     # the RETURNING clause is assigned once.
-    @test occursin("chunk_columns = new_columns()", eb_src) && !occursin("\n          columns = new_columns()", eb_src)
-    @test occursin("run_chunk(params) = _bulk_insert(", eb_src) && !occursin("run_chunk()", eb_src)
-    @test occursin("returning_sql = if _returning !== nothing && _insert_returns_rows(connection)", eb_src)
+    @test count("chunk_columns = new_columns()", bi_src) == 2 && !occursin(r"\n\s+columns = new_columns\(\)", bi_src)
+    @test occursin("run_chunk(params) = _bulk_insert(", bi_src) && !occursin("run_chunk()", bi_src)
+    @test occursin("returning_sql = if _returning !== nothing && _insert_returns_rows(connection)", bi_src)
     isdefined(Main, :core_boxed_vars) || include(joinpath(@__DIR__, "helper_core_box.jl"))
     if isdefined(QB, :_bulk_insert_frame)
       boxed = Symbol[]
@@ -3123,7 +3129,7 @@ end
     end
 
     # The total at its type.
-    @test count("_bulk_result(_bulk_count_total(results)", eb_src) == 2
+    @test count("_bulk_result(_bulk_count_total(results)", bi_src) == 2 && !occursin("sum(results", bi_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

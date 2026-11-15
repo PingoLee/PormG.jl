@@ -1,0 +1,129 @@
+name: Floor resolve
+
+# Prove the LOWER end of each non-stdlib `[compat]` range still works (#574).
+#
+# WHEN IT RUNS: when a release is cut, not on every pull request (the maintainer's decision,
+# 2026-11-15). A version tag push (`v*`) runs it on the tagged commit, and `workflow_dispatch` runs
+# it on any branch by hand, which is how to check a release branch BEFORE tagging it:
+#
+#   gh workflow run floor-resolve.yml --ref <branch>
+#
+# It was a job in CI.yml, on every push to main and every PR, until then. The job below is the same
+# job, step for step.
+#
+# Nothing else in this repository ever resolves a floor. CI.yml's `test` job resolves
+# newest-allowed; a developer resolves whatever their already-built `Manifest.toml`
+# holds, and `Manifest.toml` is gitignored so it never moves on its own. Every
+# declared lower bound is therefore an assertion only this workflow checks — and the failure is
+# expensive in BOTH directions:
+#
+#   * Floor too low  — PormG is broken at a version it claims to support, and the
+#     first environment to land there belongs to somebody else.
+#   * Floor removed  — #558 narrowed `Decimals` to "0.5"; every LibPQ release pins
+#     Decimals 0.4, so all four test jobs died before a testset ran. #560 narrowed
+#     `OrderedCollections` to "2" and made any app capped at OC 1 unresolvable.
+#
+# READ A RED RUN AGAINST `test/unit/test_compat_guards.jl` BEFORE MOVING ANY BOUND.
+# Red here has two readings with opposite fixes. Usually the floor is genuinely too
+# low and the bound should be RAISED. But for `Decimals 0.4` and `OrderedCollections
+# 1` the floor is load-bearing — that file records why, with the measurements — and
+# raising it is precisely the wrong edit; there the job is telling you to fix PormG.
+#
+# Of the two scratch envs a `[compat]` narrowing must be resolved in before it lands,
+# this job covers the FIRST: it installs LibPQ, so a `Decimals` narrowing fails its
+# resolve here. It cannot cover the SECOND — a consuming app's declared dependency
+# set lives in another repository, and #560's break was invisible to every PormG-side
+# run. Raising a hard `[deps]` floor still owes that measurement by hand.
+#
+# Since it no longer runs on pull requests, a PR that breaks a floor (a CompatHelper bump, a new
+# call into a dependency) is green until the next release runs this workflow. A PR that changes a
+# `[compat]` range, or that uses a dependency API whose age is in doubt, is worth one run by hand on
+# its branch (the command above).
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  floor-resolve:
+    name: Floor resolve — oldest allowed dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          # One Julia, and it is the `julia = "1.13"` compat floor. This job is about
+          # PACKAGE versions — CI.yml's `test` matrix covers the Julia version —
+          # and pairing the oldest Julia with the oldest packages is the true lower
+          # end of what PormG claims to support.
+          version: '1.13'
+
+      - uses: julia-actions/cache@v2
+
+      - uses: julia-actions/julia-downgrade-compat@v2
+        with:
+          # Every stdlib, listed. NOTE this input is INERT in `mode: alldeps` — the
+          # action consults it only on the `forcedeps` path. Stdlibs are handled instead
+          # by `julia_version` below: Resolver.jl treats them as fixed at that Julia, so
+          # `Dates = "1"` admits 1.11.0 and `SHA = "0.7, 1"` admits 0.7.0 either way. The
+          # list is kept so a later switch to `forcedeps` is correct by default.
+          #
+          # That also settles `SHA = "0.7, 1"`: SHA is a stdlib, 0.7.0 on 1.12 and
+          # 1.13, so the "1" arm is unreachable and there is no second version for this
+          # job to try. The entry stays spanning regardless — it costs nothing and keeps
+          # PormG resolvable if a Julia ever does ship SHA 1.x.
+          skip: Base64, Dates, Logging, Printf, Random, SHA, Sockets, UUIDs, InteractiveUtils, Test
+          # There is no `test/Project.toml` — the test target is declared through the
+          # root `[extras]`/`[targets]`, which the action merges in by itself.
+          #
+          # Consequence worth knowing: the action floor-pins the WHOLE `[extras]` table,
+          # not just `[targets].test`. That includes the profiling-only tooling
+          # (FlameGraphs, ProfileView, SnoopCompile, SnoopCompileCore), which PormG never
+          # loads in any test but whose floors now have to co-resolve — and ProfileView
+          # drags in the Gtk4 JLL chain. If one of those ever fails to resolve at its
+          # floor, this job reds on tooling rather than on PormG; the fix then is to move
+          # it out of `[extras]`, not to weaken the job.
+          projects: '.'
+          # `alldeps` also min-resolves weakdep CONSTRAINTS. Measured, it currently adds
+          # nothing over `deps`: the drivers arrive via the `[extras]` promotion path
+          # regardless of mode, and `Revise` — weak-only, required by nothing installed —
+          # never enters the manifest at all. Kept as `alldeps` so that a weakdep which
+          # does become reachable gets floored without needing a workflow edit.
+          mode: alldeps
+          # Must match setup-julia above. The default `'1'` already means the runner's
+          # Julia, so this is belt-and-braces against the two drifting apart.
+          julia_version: '1.13'
+
+      - uses: julia-actions/julia-buildpkg@v1
+
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          # Disables exactly one Aqua check, `stale_deps` — see the comment at the Aqua
+          # testset in test/runtests.jl. Short version: the step above rewrote
+          # Project.toml, promoting the `[targets].test` packages into `[deps]` (listed in
+          # that comment; CSV and DataFrames among them since #1344), which `src/` never
+          # imports, so stale_deps here judges a project layout that exists nowhere else.
+          PORMG_FLOOR_RESOLVE: "1"
+        with:
+          # Both of these guard against the same silent failure — a green job that tested
+          # the newest versions after all:
+          #   * allow_reresolve — at its `true` default, a re-resolve is allowed to move
+          #     versions off the floor manifest. Note this is a backstop, NOT the thing
+          #     that pins the test env: what does that is the downgrade step promoting the
+          #     test-target deps into `[deps]`, so `Pkg.test` runs from the locked
+          #     manifest. If that promotion ever stopped happening, the sandbox's own
+          #     resolve would SUCCEED at the ceiling and raise nothing for this to catch —
+          #     so a green run is not by itself proof the floor was tested. The resolved
+          #     versions are printed in the step's log; read them when in doubt.
+          #   * force_latest_compatible_version — its `auto` default means "true when the
+          #     PR was opened by Dependabot or CompatHelper". This workflow no longer runs on
+          #     pull requests, so `auto` would resolve to false here today; it stays `false`
+          #     explicitly so that a pull_request trigger added back later cannot silently
+          #     run a dependency bump at the ceiling and report a floor job green.
+          allow_reresolve: false
+          force_latest_compatible_version: false
+          # Same as CI.yml's test matrix (#819): -O0 changes generated code, not behavior,
+          # so it changes nothing this job checks.
+          optimize: '0'

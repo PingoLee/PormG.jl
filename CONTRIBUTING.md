@@ -149,7 +149,15 @@ and runs against `db_my` on a MySQL `GET_LOCK` taken there too (`PORMG_TEST_LOCK
 the wait, default 900; `PORMG_TEST_LOCK=0` opts out); SQLite is exempt because `f1.sqlite` is per
 checkout.
 
-**Compat floors.** CI's `floor-resolve` job resolves every `[compat]` range at its minimum (#574).
+**Compat floors.** The `Floor resolve` workflow (`.github/workflows/floor-resolve.yml`) resolves
+every `[compat]` range at its minimum and runs the unit suite there (#574). It runs when a release is
+cut, on a version tag push, not on pull requests. A change to a `[compat]` range, or a new call into a
+dependency whose age is in doubt, is worth a run by hand on its branch:
+
+```
+gh workflow run floor-resolve.yml --ref <branch>
+```
+
 `test/unit/test_compat_guards.jl` records why some floors are load-bearing and must not be raised;
 read a red run against that file before moving a bound.
 

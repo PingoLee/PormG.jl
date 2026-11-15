@@ -23,8 +23,8 @@ end
 # the integration suite through Postgres.jl (#788) would otherwise change every pool built here.
 delete!(ENV, "PORMG_POSTGRES_DRIVER")
 
-# Set only by CI's `floor-resolve` job (#574), which runs this suite against a machine-rewritten
-# Project.toml. It gates exactly one Aqua check — see the comment at the Aqua testset below.
+# Set only by the `floor-resolve` job (#574; floor-resolve.yml, run when a release is cut), which
+# runs this suite against a machine-rewritten Project.toml. It gates exactly one Aqua check — see the comment at the Aqua testset below.
 const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
 
 @testset "PormG Unit Tests" begin
@@ -34,7 +34,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
             # package. Profiling tools (SnoopCompile, etc.) live in [extras], which Aqua's
             # stale_deps never inspects — so they need no exemption here (#209).
             #
-            # ...with ONE environment excepted (#574). CI's `floor-resolve` job runs against a
+            # ...with ONE environment excepted (#574). The `floor-resolve` job runs against a
             # `Project.toml` that `julia-downgrade-compat` has REWRITTEN: to let `Pkg.test` run
             # from a locked manifest it promotes the `[targets].test` names into `[deps]` and
             # deletes them from `[weakdeps]` — the drivers (LibPQ, MySQL, Postgres, SQLite), Aqua,

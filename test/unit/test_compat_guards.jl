@@ -64,8 +64,10 @@
 # back to `true`/`auto`, fails the CONTRACT 3 testset.
 #
 # The other half, and how to read the two together (#574):
-#   `.github/workflows/CI.yml` -> the `floor-resolve` job now resolves each non-stdlib `[compat]`
-#   range at its MINIMUM allowed version (`julia-downgrade-compat`) and runs this suite there,
+#   `.github/workflows/floor-resolve.yml` -> the `floor-resolve` job resolves each non-stdlib
+#   `[compat]` range at its MINIMUM allowed version (`julia-downgrade-compat`) and runs this suite
+#   there. It runs when a release is cut (a `v*` tag push, or by hand with `workflow_dispatch`), not
+#   on every pull request: it was a CI.yml job until the maintainer moved it, 2026-11-15. It runs
 #   with LibPQ and SQLite installed. (Stdlibs have no minimum to resolve — their version is the
 #   Julia version.) That job is the direction this file cannot check: whether the declared floor
 #   still WORKS. This file checks the opposite direction — whether the floor is still DECLARED.
@@ -339,7 +341,7 @@ end
 # catches is INVISIBLE to every other test. Reverting `planner.jl`'s `OrderedDict{String, String}`
 # back to `OrderedDict` fails nothing in the unit suite — every local and CI environment resolves
 # OrderedCollections >= 1.3, where inference happens to produce the concrete type. Only the
-# floor-resolve job sees it, minutes later and on a job that can be red for unrelated reasons.
+# floor-resolve job sees it, and that job runs only when a release is cut (floor-resolve.yml).
 # #549 already showed that a convention nothing enforces does not hold.
 #
 # Scope: only the forms where inference is actually load-bearing — a generator (`for`) or an
@@ -397,17 +399,24 @@ end
 #
 # The `floor-resolve` job is asserted too, for the MIRROR-IMAGE reason (#574): there force-latest
 # on a CompatHelper PR would silently resolve the ceiling and report a floor job green. Both ends
-# of the same input, and neither is a preference.
+# of the same input, and neither is a preference. The job lives in its own workflow,
+# `floor-resolve.yml`, run when a release is cut rather than on every pull request (the
+# maintainer's decision, 2026-11-15). There `auto` would resolve to false today, since no pull
+# request triggers it; the explicit `false` keeps that true if a pull_request trigger comes back.
 #
 # Mutation gates: deleting the `with:` block under the `test` job's `julia-runtest` step fails the
 # first assertion; deleting `floor-resolve`'s fails the second. Flipping either to `true` fails it
-# too — the scan matches the value, not merely the key.
+# too — the scan matches the value, not merely the key. Moving the floor job back into CI.yml, or
+# giving its workflow a `pull_request` trigger, fails the release-only testset below.
 #
 # Deterministic, DB-free, no network.
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "CI does not force the ceiling of a spanning [compat] range (#599)" begin
-  ci_workflow = joinpath(pkgdir(PormG), ".github", "workflows", "CI.yml")
+  workflows = joinpath(pkgdir(PormG), ".github", "workflows")
+  ci_workflow = joinpath(workflows, "CI.yml")
+  floor_workflow = joinpath(workflows, "floor-resolve.yml")
   @test isfile(ci_workflow)
+  @test isfile(floor_workflow)
 
   # A DECLARATION of this input set to `false`, judged on code only: trailing comments are
   # stripped and comment-only lines dropped. That is not cosmetic — BOTH jobs that carry this
@@ -419,12 +428,13 @@ end
     occursin(r"^\s*force_latest_compatible_version:\s*false\s*$", first(split(line, '#')))
   end
 
-  # The lines belonging to one top-level job: from `  <name>:` (exactly two spaces) up to the
-  # next key at that indent. Section-aware on purpose — both `test` and `floor-resolve` declare
-  # this input, so a flat file scan cannot say which job it found, and #599 is specifically
-  # about the `test` job.
-  function job_lines(job::AbstractString)
-    lines = readlines(ci_workflow)
+  # The lines belonging to one top-level job of a workflow file: from `  <name>:` (exactly two
+  # spaces) up to the next key at that indent. Section-aware on purpose — both `test` and
+  # `floor-resolve` declare this input, so a flat file scan cannot say which job it found, and #599
+  # is specifically about the `test` job. `test` is read from CI.yml, `floor-resolve` from its own
+  # workflow.
+  function job_lines(job::AbstractString, workflow::AbstractString = ci_workflow)
+    lines = readlines(workflow)
     start = findfirst(l -> l == "  $(job):", lines)
     start === nothing && return nothing
     stop = findfirst(l -> occursin(r"^  \S", l), lines[(start + 1):end])
@@ -435,7 +445,7 @@ end
   # A mis-spelled job name must fail as itself, never as a silent `false` that reads like a
   # finding about the workflow.
   @test job_lines("test") !== nothing
-  @test job_lines("floor-resolve") !== nothing
+  @test job_lines("floor-resolve", floor_workflow) !== nothing
   @test job_lines("PormGNotAJob") === nothing
 
   # The sectioning is real, checked on content UNIQUE to each job rather than on the job names —
@@ -449,8 +459,8 @@ end
   # reason.
   @test any(l -> strip(l) == "matrix:", job_lines("test"))
   @test !any(l -> occursin("julia-downgrade-compat", l), job_lines("test"))
-  @test any(l -> occursin("julia-downgrade-compat", l), job_lines("floor-resolve"))
-  @test !any(l -> strip(l) == "matrix:", job_lines("floor-resolve"))
+  @test any(l -> occursin("julia-downgrade-compat", l), job_lines("floor-resolve", floor_workflow))
+  @test !any(l -> strip(l) == "matrix:", job_lines("floor-resolve", floor_workflow))
 
   # The comment stripping is real, checked against synthetic lines rather than against a job
   # that happens to declare the right thing anyway. Without the strip, the first two of these
@@ -468,5 +478,46 @@ end
   @test declares_false(job_lines("test"))
   # `floor-resolve` has carried it since #574, for the mirror-image reason: force-latest there
   # would resolve the CEILING and report a floor job green.
-  @test declares_false(job_lines("floor-resolve"))
+  @test declares_false(job_lines("floor-resolve", floor_workflow))
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The floor resolve runs when a release is cut, not on every pull request (#574)
+# The maintainer's decision (2026-11-15): `floor-resolve` moved out of CI.yml into
+# `.github/workflows/floor-resolve.yml`, triggered by a version tag push (`v*`) and by
+# `workflow_dispatch` only. It used to run on every push to main and every PR. The testset above
+# checks what the job does; this one checks when it runs, so moving it back into every PR's CI is
+# a reviewed change to this file rather than a quiet edit to a workflow.
+#
+# Mutation gates: putting the `floor-resolve` job back in CI.yml fails the first assertion; adding
+# `pull_request:` (or a branch push) to floor-resolve.yml's `on:` fails the third; dropping the tag
+# trigger or `workflow_dispatch` fails the fourth or fifth.
+#
+# Deterministic, DB-free, no network: a text scan of two workflow files.
+# ─────────────────────────────────────────────────────────────────────────────
+@testset "the floor resolve runs on a release tag or by hand, not on every PR (#574)" begin
+  workflows = joinpath(pkgdir(PormG), ".github", "workflows")
+  ci_lines = readlines(joinpath(workflows, "CI.yml"))
+  floor_lines = readlines(joinpath(workflows, "floor-resolve.yml"))
+
+  # Not a job in CI.yml any more (a job key is `  <name>:` at exactly two spaces).
+  @test !any(l -> l == "  floor-resolve:", ci_lines)
+  @test any(l -> l == "  floor-resolve:", floor_lines)
+
+  # The `on:` block: from `on:` to the next top-level key, comments dropped.
+  start = findfirst(==("on:"), floor_lines)
+  @test start !== nothing
+  if start !== nothing
+    rest = floor_lines[(start + 1):end]
+    stop = findfirst(l -> occursin(r"^\S", l), rest)
+    on_block = filter(l -> !isempty(strip(l)) && !startswith(strip(l), "#"),
+                      rest[1:(stop === nothing ? length(rest) : stop - 1)])
+    # The triggers it names, at the block's first indent: exactly these two.
+    triggers = Set(strip(first(split(l, ':'))) for l in on_block if occursin(r"^  \S", l))
+    @test triggers == Set(["workflow_dispatch", "push"])
+    # The push is a tag push, of version tags, and of nothing else (no `branches:`).
+    @test any(l -> occursin(r"^\s+tags:\s*$", l), on_block)
+    @test any(l -> occursin(r"^\s+-\s*'v\*'\s*$", l), on_block)
+    @test !any(l -> occursin(r"^\s+branches:", l), on_block)
+  end
 end

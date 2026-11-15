@@ -1290,11 +1290,14 @@ function _collector_predicate(connection::_SQLEngine,
   parameters = get_parameter(connection)
   set_context!(parameters, :where)
   arms = String[]
-  alias = ""
+  # A typed holder the closure writes (#1599 layer 7, #1694): reassigned inside `build_one`, `alias` was a
+  # `Core.Box`, so the tuple this returns was untyped, and the `DELETE` text built from it in a trimmed image
+  # raised `MissingCodeError` at `string(…)`.
+  alias = Base.RefValue{String}("")
   for key in keys
     build_one = () -> begin
       instruction = _build_entry(connection, key, parameters)
-      alias = quote_identifier(instruction.alias, connection)
+      alias[] = quote_identifier(instruction.alias, connection)
       instruction
     end
     push!(arms, _mutation_predicate(build_one, parameters))
@@ -1305,10 +1308,10 @@ function _collector_predicate(connection::_SQLEngine,
     # others would drop a WHERE whose other arms had already bound values — markers and values out of
     # step — and a filtered root that rendered no predicate would delete every row. Refuse both.
     (length(arms) == 1 && isempty(keys[1][:objct].object.filter)) || error(_emsg("PormG internal error in delete(): a path rendered no row predicate (one of $(length(arms)) collected) — this should not happen; please report it."))
-    return "", parameters, alias
+    return "", parameters, alias[]
   end
   where_sql = length(arms) == 1 ? arms[1] : join(("($(arm))" for arm in arms), " OR ")
-  return where_sql, parameters, alias
+  return where_sql, parameters, alias[]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

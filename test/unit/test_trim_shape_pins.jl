@@ -2952,6 +2952,10 @@ end
           occursin("update_field(connection, affected_model::Models.ModelType,", del_src) &&
           occursin("delete_objects(connection, model_to_delete::Models.ModelType,", del_src) &&
           occursin("lock_objects(connection, lock_model::Models.ModelType,", del_src)
+    # The entry predicate's alias in a typed holder: reassigned in the closure it was a `Core.Box`, and the tuple
+    # `_collector_predicate` returns was untyped (the DELETE text built from it had no target).
+    @test only(Base.return_types(QB._collector_predicate, (CP.SQLiteConnectionPool, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}}))) ==
+          Tuple{String, QB.SQLiteParameterizedQuery, String}
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

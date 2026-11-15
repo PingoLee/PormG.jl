@@ -2944,6 +2944,14 @@ end
     # `run_plan` takes its connection unspecialized, as `run_deletions` does: specialized, each call with the untyped
     # connection dispatched at run time.
     @test occursin("run_plan = function(@nospecialize(conn), collector::DeletionCollector, root_locked::Bool)", del_src)
+    # The statement functions take the connection unspecialized, and `run_plan` hands each its model at its type.
+    for f in (QB.delete_objects, QB.update_field, QB.lock_objects, QB._require_statement_conn)
+      @test (f, only(methods(f)).nospecialize != 0) == (f, true)
+    end
+    @test occursin("delete_objects(connection, fast_model::Models.ModelType,", del_src) &&
+          occursin("update_field(connection, affected_model::Models.ModelType,", del_src) &&
+          occursin("delete_objects(connection, model_to_delete::Models.ModelType,", del_src) &&
+          occursin("lock_objects(connection, lock_model::Models.ModelType,", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

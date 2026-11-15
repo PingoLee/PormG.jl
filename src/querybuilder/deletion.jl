@@ -276,7 +276,7 @@ function delete(objct::SQLObjectHandler;
       if _locks_cascade_parents(connection)
         for lock_model in _models_to_lock(collector)
           root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
-          res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
+          res = lock_objects(connection, lock_model::Models.ModelType, collector.objects[lock_model], show_query, conn)
           push!(results, res)
         end
       end
@@ -286,7 +286,8 @@ function delete(objct::SQLObjectHandler;
       # (the collector is built here since #452), and two meanings for one name in one scope is a
       # reading hazard even where Julia's loop scoping makes it harmless.
       for (fast_model, fast_keys) in collector.fast_deletes
-        res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
+        # Each model at its concrete type, as the planner reads them (#1599 layer 7): the collector keys them `PormGModel`.
+        res = delete_objects(connection, fast_model::Models.ModelType, fast_keys, show_query, deleted_counter, conn)
         push!(results, res)
         # Remove from objects to prevent double deletion
         delete!(collector.objects, fast_model)
@@ -297,7 +298,7 @@ function delete(objct::SQLObjectHandler;
       # statement count is still one per (field, value, model).
       for ((field, value), affected_models) in collector.field_updates
         for (affected_model, path_keys) in affected_models
-          res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
+          res = update_field(connection, affected_model::Models.ModelType, field, value, path_keys, show_query, conn)
           push!(results, res)
         end
       end
@@ -306,7 +307,7 @@ function delete(objct::SQLObjectHandler;
       for model_to_delete in collector.sorted_models
         _array = get(collector.objects, model_to_delete, [])        
         if !isempty(_array)
-          res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
+          res = delete_objects(connection, model_to_delete::Models.ModelType, _array, show_query, deleted_counter, conn)
           push!(results, res)
         end
       end
@@ -1234,18 +1235,18 @@ end
 #     ever fired, the enclosing transaction would roll the statement back, which is the outcome we
 #     want; but do not read it as guarding the write.
 # ─────────────────────────────────────────────────────────────────────────────
-_affected_row_count(connection::PormGPostgres, result, conn)::Int =
+_affected_row_count(connection::PormGPostgres, result, @nospecialize(conn))::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
-function _affected_row_count(connection::PormGSQLite, result, conn)::Int
+function _affected_row_count(connection::PormGSQLite, result, @nospecialize(conn))::Int
   _require_statement_conn(conn)
   changes, _ = _with_transaction_with(connection, "SELECT changes();", conn, false, nothing)
   return Int(first(Tables.rowtable(changes))[1])
 end
 # MySQL's OK packet counts the rows the statement matched (the pool connects with `found_rows`), so a
 # DELETE's count is its rows, and an UPDATE's includes a row whose value did not change (#1130).
-_affected_row_count(connection::PormGMySQL, result, conn)::Int =
+_affected_row_count(connection::PormGMySQL, result, @nospecialize(conn))::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
-_require_statement_conn(conn) = conn === nothing &&
+_require_statement_conn(@nospecialize(conn)) = conn === nothing &&
   error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1373,7 +1374,7 @@ function _models_to_lock(collector::DeletionCollector)::Vector{PormGModel}
 end
 
 function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-    show_query::Symbol, conn)
+    show_query::Symbol, @nospecialize(conn))
   isempty(keys) && error(_emsg("PormG internal error in delete(): lock_objects was called with no keys for $(model.name) — this should not happen; please report it."))
   where_sql, parameters, alias = _collector_predicate(connection, keys)
   sql = "SELECT count(*) FROM (SELECT 1 FROM $(safe_table_identifier(Models.model_table_name(model), connection)) AS $(alias)" *
@@ -1398,7 +1399,7 @@ function _build_entry(connection::_SQLEngine, key::Dict{Symbol, Union{String, SQ
 end
 
 function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Symbol, deleted_counter::Dict{String, Integer}, conn)
+   show_query::Symbol, deleted_counter::Dict{String, Integer}, @nospecialize(conn))   # held untyped (#1599 layer 7)
   @pormg_debug false
   isempty(keys) && error(_emsg("PormG internal error in delete(): delete_objects was called with no keys for $(model.name) — this should not happen; please report it."))
 
@@ -1437,7 +1438,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, conn)
+function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, @nospecialize(conn))
   # Update field values using query object like CASCADE
   @pormg_debug false
   isempty(keys) && error(_emsg("PormG internal error in delete(): update_field was called with no keys for $(model.name) — this should not happen; please report it."))

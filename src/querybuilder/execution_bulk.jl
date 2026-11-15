@@ -125,6 +125,19 @@ end
 end
 @noinline _bulk_cell_other(@nospecialize(column::AbstractVector), i::Int) = column[i]
 
+# The rows a bulk write's chunks counted, summed (#1599 layer 7, #1694). `sum(results; init = 0)` over the untyped
+# results dispatched `add_sum` at run time, which a trimmed image cannot run. Each chunk counts an `Int`
+# (`_affected_row_count`'s type), added at that type; any other count takes `total + r`, which is what `add_sum`
+# computes from `init = 0`. The same total.
+function _bulk_count_total(results::Vector{Any})
+  total = 0
+  for r in results
+    total = r isa Int ? total + r : _bulk_count_add_other(total, r)
+  end
+  return total
+end
+@noinline _bulk_count_add_other(total, @nospecialize(r)) = total + r
+
 # The one refusal for an argument that is not a table, shared by the writers and their curried forms.
 #
 # A PormG query is a Tables.jl source (#1344 phase 1), but not a bulk input: reading it would run its
@@ -2100,9 +2113,9 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
     end
 
     # Executed, each chunk contributed its inserted-row count (#670).
-    _returning === nothing && return _bulk_result(sum(results; init = 0))
+    _returning === nothing && return _bulk_result(_bulk_count_total(results))
     # A table of the caller's kind (#1344 phase 4), one row per input row.
-    return _bulk_result(sum(results; init = 0), _returning_table(src, _returning, returned_rows))
+    return _bulk_result(_bulk_count_total(results), _returning_table(src, _returning, returned_rows))
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
 bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))

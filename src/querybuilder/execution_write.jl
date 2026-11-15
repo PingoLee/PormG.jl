@@ -165,6 +165,20 @@ const _FOUND_ROW_HEAD = "SELECT *"
 end
 @noinline _bind_written_other!(parameters, @nospecialize(value)) = add_parameter!(parameters, value)
 
+# The query an `update` builds from (#668): the caller's, with `values()` emptied, as a new struct whose
+# every other slot is shared with the caller's (#1599 layer 7, #1694). It was `deepcopy(real_obj)` and
+# `empty!` of the copy's `values`; a deep copy walks the query's object graph by run-time dispatch, and the
+# trimmed full fixture entry's `update` stopped in it (`MissingCodeError` at
+# `deepcopy_internal(::Vector{Int32}, ::IdDict)`). The build writes nothing into the query it renders
+# (#1624), so it needs no deep copy, as the read terminals' `_terminal_copy` does not; `filter` and `order`
+# are fresh containers, as there. `parameters` is not carried: the build never reads the slot.
+function _mutation_copy(q::SQLObjectQuery)::SQLObjectQuery
+  return SQLObjectQuery(model=q.model, connect_key=q.connect_key, values=ProjectionNode[], filter=copy(q.filter),
+    insert=q.insert, limit=q.limit, offset=q.offset, order=copy(_order_terms(q)), group=q.group, having=q.having,
+    list_joins=q.list_joins, distinct=q.distinct, for_update=q.for_update, ctes=q.ctes, custom_join=q.custom_join,
+    alias_join=q.alias_join, parameters=nothing, projection_kinds=q.projection_kinds)
+end
+
 # A field's automatic value (`auto_now`, `auto_now_add`, `auto_add`), formatted and stored in the insert
 # (#1599 layer 7, #1694). The formatter is called at its own type (`Models.apply_formatter`), not through
 # the field's `Function` slot, which a trimmed image cannot dispatch. The insert holds `Any`, and storing
@@ -1666,8 +1680,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # `F("points") * 2`) filed its operands into the `:select` bucket, which flattens ahead of SET and
     # WHERE: a positional misbind on SQLite (wrong value, wrong rows, no error), and bound-but-unused
     # `$N` on PostgreSQL. Aggregates and alias filters were refused above, so emptying drops nothing.
-    work = deepcopy(real_obj)
-    empty!(work.values)
+    work = _mutation_copy(real_obj)
     # `get_alias` is a counter: a second build on the SAME alias object would name its target "R1",
     # not "Tb". A joined update builds twice (#765 — selection, then fence), so the fence gets an
     # untouched copy of whatever the caller passed; `nothing` makes a fresh one either way.
@@ -1806,8 +1819,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           else
             # #1431: the key selection prints the joins verbatim, so their types are checked here.
             _require_outer_joins(instruction)
-            fence_work = deepcopy(real_obj)
-            empty!(fence_work.values)
+            fence_work = _mutation_copy(real_obj)
             mark = nested_parameter_mark(parameters)
             fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
                           mutation=true, defer_outer_join_check=true)

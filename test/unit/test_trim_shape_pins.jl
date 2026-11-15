@@ -2725,6 +2725,38 @@ end
     @test !occursin("fetch(settings, read_back[1])", ew_src)
   end
 
+  # What: the full entry's `update` and `delete` (#1599 layer 7, #1694, after the write completed): the walls
+  #   each verb hits in a trimmed image, one per commit. `update`'s query copy (`_mutation_copy`).
+  # Expected: `update` builds from a shallow copy of the caller's query with `values` emptied and `filter` and
+  #   `order` fresh, every other slot shared, made without a dynamic call; no `deepcopy` of the query is left
+  #   in `update`.
+  # Why: `deepcopy(real_obj)` walks the query's object graph by run-time dispatch; the trimmed full entry's
+  #   `update` raised `MissingCodeError` at `deepcopy_internal(::Vector{Int32}, ::IdDict)`. The build writes
+  #   nothing into the query (#1624): `update(…; show_query = :dict)` over 231 shapes x engines rendered the
+  #   same SQL, parameters and refusals as main's deep copy, twice on one handler (PR body).
+  @testset "update and delete run at concrete types in the full entry (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_mutation_copy)
+    if isdefined(QB, :_mutation_copy)
+      @test isempty(_dynamic_calls(QB._mutation_copy, (QB.SQLObjectQuery,)))
+      model = PormG.Models.Model("tsp_mutation_race", raceid = PormG.Models.IDField(), year = PormG.Models.IntegerField(),
+                                 name = PormG.Models.CharField())
+      q = QB.SQLObjectQuery(model = model)
+      QB._values!(q, ("name",))
+      QB._filter!(q, ("year" => 2009,))
+      QB._order_by!(q, ("-year",))
+      c = QB._mutation_copy(q)
+      @test isempty(c.values) && length(q.values) == 1
+      @test c.filter == q.filter && c.filter !== q.filter && c.order !== q.order
+      @test all(f -> getfield(c, f) === getfield(q, f),
+                (:model, :connect_key, :insert, :limit, :offset, :group, :having, :list_joins, :distinct, :for_update,
+                 :ctes, :custom_join, :alias_join, :projection_kinds))
+      @test c.parameters === nothing
+    end
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test !occursin("work = deepcopy(", ew_src) && count("_mutation_copy(real_obj)", ew_src) == 2
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

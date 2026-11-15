@@ -16,6 +16,7 @@
 # ============================================================
 
 using Test
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using PormG
 using Dates
 

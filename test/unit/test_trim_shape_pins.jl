@@ -2892,6 +2892,15 @@ end
     # in a `Core.Box` and called by run-time dispatch on the boxed value.
     @test findfirst("    plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
     @test findfirst("    run_plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
+    # A collected entry at the collector's element type, its two slots assigned: built from pairs it was a
+    # `Dict{Symbol,Any}` that `push!` converted value by value, and the typed `Pair` constructor's stores had no target.
+    @test isdefined(QB, :_collector_entry)
+    if isdefined(QB, :_collector_entry)
+      @test isempty(_dynamic_calls(QB._collector_entry, (String, QB.ObjectHandler)))
+      e = QB._collector_entry("raceid", QB.ObjectHandler(object = QB.SQLObjectQuery(model = PormG.Models.Model("tsp_entry", raceid = PormG.Models.IDField()))))
+      @test e isa Dict{Symbol, Union{String, PormG.SQLObjectHandler}} && Set(keys(e)) == Set([:key, :objct]) && e[:key] == "raceid"
+    end
+    @test !occursin(r"Dict\(:key => \w", del_src) && !occursin(r"SQLObjectHandler}}\(\s*:key => \w", del_src)   # code, not the comment
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

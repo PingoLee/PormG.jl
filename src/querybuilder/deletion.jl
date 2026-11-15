@@ -558,7 +558,7 @@ function _root_key_plan(connection::_SQLEngine, model::PormGModel, objct::SQLObj
   key = resolve_delete_key(model)
   root = _terminal_copy(objct)   # #1599 layer 7: shallow (#1624); `values` replaces the projection vector
   root.values(key)
-  entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => root)
+  entry = _collector_entry(key, root)
   where_sql, parameters, alias = _collector_predicate(connection, [entry])
   isempty(where_sql) && return nothing
   return (entry = entry, where_sql = where_sql, parameters = parameters, alias = alias)
@@ -738,7 +738,7 @@ function _read_self_children!(results::Vector, connection::_SQLEngine, model::Po
     chunk::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, conn)::Tuple{Vector{K}, Vector{K}} where {K}
   read = _keyed_root(model, fk, chunk, objct)
   read.values(key)
-  entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => read)
+  entry = _collector_entry(key, read)
   where_sql, parameters, alias = _collector_predicate(connection, [entry])
   locks = _locks_cascade_parents(connection)
   key_column = safe_column_identifier(Models.model_column(model, key), connection)
@@ -813,7 +813,18 @@ function prepare_related_query(keys::Dict{Symbol, Union{String, SQLObjectHandler
   # copy walks the query by run-time dispatch, and the trimmed full fixture entry's `delete` stopped in one.
   _query = _terminal_copy(keys[:objct])
   delete_key != DIRECT_DELETE_KEY_SENTINEL && _query.values(delete_key)
-  return Dict{Symbol, Union{String, SQLObjectHandler}}(:key => delete_key, :objct => _query)
+  return _collector_entry(delete_key, _query)
+end
+
+# One collected entry, `:key` (the column a child's `"<fk>__@in"` reads) and `:objct` (the query), at the collector's
+# element type (#1599 layer 7, #1694). Each slot is assigned, so each store is at its value's type: built from pairs,
+# `Dict(:key => …, :objct => …)` was a `Dict{Symbol,Any}` that `push!` converted value by value, and the typed
+# `Pair` constructor stored each one through a call a trimmed image had no code for either.
+function _collector_entry(key::String, objct::SQLObjectHandler)::Dict{Symbol, Union{String, SQLObjectHandler}}
+  entry = Dict{Symbol, Union{String, SQLObjectHandler}}()
+  entry[:key] = key
+  entry[:objct] = objct
+  return entry
 end
 
 function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjectHandler, model::PormGModel)
@@ -833,7 +844,7 @@ function add_objects_to_collector!(collector::DeletionCollector, model::PormGMod
     collector.objects[model] = []
   end
  
-  push!(collector.objects[model], Dict(:key => key, :objct => objct))
+  push!(collector.objects[model], _collector_entry(key, objct))
   
   # Add model to the list of models to process
   if !haskey(collector.dependencies, model)
@@ -982,10 +993,7 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
     order = get!(() -> Set{PormGModel}(), collector.delete_order, related_model)
     _orders_deletes(field) && push!(order, model)
 
-    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}(
-      :key => resolve_delete_key(related_model; fallback=string(field_name)),
-      :objct => _query
-    )
+    _keys = _collector_entry(resolve_delete_key(related_model; fallback=string(field_name)), _query)
 
     handle_on_delete!(collector, field_name, field, model, _keys, related_model)
 

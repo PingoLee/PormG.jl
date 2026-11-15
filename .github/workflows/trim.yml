@@ -207,6 +207,10 @@ jobs:
           mkdir -p build && cd build
           JULIA_CPU_TARGET=native juliac --project ../test/trim/$TRIM_VARIANT --output-exe main \
             --trim=unsafe-warn --experimental ../test/trim/$TRIM_VARIANT/main.jl 2>&1 | tee build.log
+      - name: Clear the server's authentication cache
+        # prep.jl and the JIT control logged in as f1, so caching_sha2_password would let the binary in by
+        # its fast path. Flushed, the binary takes the full authentication a fresh server asks for.
+        run: mysql -h 127.0.0.1 -uroot -ptrim-ci-root-throwaway -e 'FLUSH PRIVILEGES'
       - name: Run the trimmed binary against the server
         run: |
           # A task body the image never compiled dies silently, so a broken binary hangs rather than
@@ -285,7 +289,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U f1 -d pormg_trim"
+          --health-cmd "pg_isready -h 127.0.0.1 -U f1 -d pormg_trim"
           --health-interval 5s --health-timeout 5s --health-retries 30
     env:
       TRIM_VARIANT: postgres

@@ -6,22 +6,20 @@ built as a trimmed binary). It is #1616's first checkbox.
 What it does (`main.jl`): boot with the connection built in code (`register_connection` and
 `Models.set_models(models; key)`, #1606 — no `connection.yml` is read), two creates PormG refuses
 before any SQL (a date string that is not a calendar date, and a `Bool` for a text column; each prints
-the refusal's type and message), one `Race.objects.create` that leaves the two auto-filled fields
-(`updated_on`, `token`) to the write's default fill, and one
+the refusal's type and message), one `Race.objects.create` that leaves the three auto-filled fields
+(`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
 each checked by a typed read after it. Each step prints one line. The read-only entry, `read.jl`, runs
 the same boot and read without the writes; the steps both entries share are in `steps.jl`.
 
 Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary completes
-(#1694): it prints both refusals, fills the two automatic values, runs its `INSERT` and reads the row
+(#1694): it prints both refusals, fills the three automatic values, runs its `INSERT` and reads the row
 back on the SQLite worker, and its typed read then returns both rows, the one it wrote included; its
 `update` sets that row's `round` and its `delete` removes it, each shown by the read after it. It
-prints the JIT control's lines and exits 0. The fixture has no `DateTimeField(auto_now_add = true)`
-yet: the timestamp's text is validated through TimeZones.jl's string parser, which a trimmed image
-cannot run, so the binary would stop there, before its `INSERT`. The read-only entry's binary returns
-its row (#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only entry
-and its CI job" below).
+prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788), and
+the `Trim (juliac)` workflow checks that it still does (see "The read-only entry and its CI job"
+below).
 
 ## Drivers
 

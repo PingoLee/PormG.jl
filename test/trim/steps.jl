@@ -8,9 +8,9 @@
 # missed and the argument types; for a PormG refusal, its message.
 const M = TrimF1.M
 
-# Pasted from `M.Race.objects.list(show_query = :struct)` on SQLite (#1632), without the two columns the
-# write fills itself (`updated_on`, `token`): the typed read projects the struct's fields, so the read is
-# the one it was before they were added.
+# Pasted from `M.Race.objects.list(show_query = :struct)` on SQLite (#1632), without the three columns the
+# write fills itself (`created_at`, `updated_on`, `token`): the typed read projects the struct's fields, so
+# the read is the one it was before they were added.
 struct RaceRow
     raceid::Int64     # IDField
     year::Int64       # IntegerField

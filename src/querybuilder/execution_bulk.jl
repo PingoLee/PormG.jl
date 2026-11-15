@@ -1980,15 +1980,17 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
           source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, chunk_columns, casts), source_casts) :
                                    "VALUES " * join(rows, ", ")
           chunk_range = (index - count + 1):index
-          run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
+          # The collector is an argument, not a capture (#1599 layer 7): captured here and reassigned after each
+          # chunk, `parameters` was boxed, and every call on it was untyped in a trimmed image.
+          run_chunk(params) = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, params;
             on_conflict_sql = on_conflict_sql, returning_sql = returning_sql, overriding = overriding,
             resync_retry = allocate_pk === nothing,
             conflict = _on_conflict === nothing ? nothing : _on_conflict.action, rows = length(chunk_range))
           res = if _returning === nothing || show_query !== :execute
-            run_chunk()
+            run_chunk(parameters)
           elseif _insert_returns_rows(connection)
             # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
-            returned = _pg_bulk_returned(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
+            returned = _pg_bulk_returned(run_chunk(parameters), model, unique(vcat(returning_key, _returning)), connection)
             _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
               chunk_range, do_nothing)
             returned.row_count
@@ -2013,7 +2015,7 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
                 k === nothing || push!(existing, k)
               end
             end
-            written = run_chunk()   # counted before the read-back, which would overwrite changes()
+            written = run_chunk(parameters)   # counted before the read-back, which would overwrite changes()
             returned = _bulk_read_back(objct, model, returning_key, chunk_keys,
               unique(vcat(returning_key, _returning)); lock = !do_nothing && _locks_rows(connection))
             _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,

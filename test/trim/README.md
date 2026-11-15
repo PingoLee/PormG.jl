@@ -4,18 +4,23 @@ A minimal F1 application built with `juliac --trim`, the measuring stick for #15
 built as a trimmed binary). It is #1616's first checkbox.
 
 What it does (`main.jl`): boot with the connection built in code (`register_connection` and
-`Models.set_models(models; key)`, #1606 — no `connection.yml` is read), one `Race.objects.create`,
-and one `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the
-struct `list(show_query = :struct)` writes (#1632). Each step prints one line. The read-only entry,
-`read.jl`, runs the same boot and read without the write; the steps both entries share are in
-`steps.jl`.
+`Models.set_models(models; key)`, #1606 — no `connection.yml` is read), two creates PormG refuses
+before any SQL (a date string that is not a calendar date, and a `Bool` for a text column; each prints
+the refusal's type and message), one `Race.objects.create` that leaves the two auto-filled fields
+(`updated_on`, `token`) to the write's default fill, and one
+`Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
+`list(show_query = :struct)` writes (#1632). Each step prints one line. The read-only entry, `read.jl`,
+runs the same boot and read without the write; the steps both entries share are in `steps.jl`.
 
-Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary builds its
-`INSERT`, binds its values and runs it on the SQLite worker (#1694), and stops there: the extension
-materializes every statement's result with `Tables.rowtable`, which a trimmed image has no code for, so
-the write raises `StatementError` (the walls left are in #1599's tables). The read-only entry's binary
-returns its row (#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only
-entry and its CI job" below).
+Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary prints both
+refusals, fills the two automatic values, builds its `INSERT`, binds its values and runs it on the
+SQLite worker (#1694), and stops there: the extension materializes every statement's result with
+`Tables.rowtable`, which a trimmed image has no code for, so the write raises `StatementError` (the
+walls left are in #1599's tables). The fixture has no `DateTimeField(auto_now_add = true)` yet: the
+timestamp's text is validated through TimeZones.jl's string parser, which a trimmed image cannot run,
+so the binary would stop there, before its `INSERT`. The read-only entry's binary returns its row
+(#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only entry and its
+CI job" below).
 
 ## Drivers
 
@@ -39,7 +44,7 @@ the repository root:
 ```
 julia --project=test/trim -e 'using Pkg; Pkg.instantiate()'
 julia --project=test/trim test/trim/prep.jl run          # seeds run/f1.sqlite under the JIT
-julia --project=test/trim test/trim/main.jl run          # the JIT control: boot, write, 2 rows
+julia --project=test/trim test/trim/main.jl run          # the JIT control: 2 refusals, write, 2 rows
 
 mkdir -p build && cd build
 JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe main \
@@ -80,7 +85,8 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 ```
 
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
-fails with the same exit code (1 boot, 2 write, 3 read).
+fails with the same exit code (1 boot, 2 write, 3 read; `main.jl` exits 6 when a create it expects
+PormG to refuse is not refused with an `InvalidValueError`).
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows

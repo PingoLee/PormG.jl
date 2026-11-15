@@ -66,7 +66,7 @@ end
 # SELECT inside a write, even under a dry-run `show_query`, and the curried forms read the other way
 # round (`target |> bulk_insert(source_query)` is the handler-curried method, so it would insert the
 # TARGET's rows into the source's model). Asking for its rows is one explicit call.
-function _refuse_non_table(@nospecialize(src), op::AbstractString)
+function _refuse_non_table(src, op::AbstractString)
   src isa SQLObjectHandler && throw(QueryBuildError("Error in $(op), a query is not a table to write: " *
     "read its rows first, e.g. Tables.columntable(query), and pass those"))
   Tables.istable(src) && return true
@@ -79,9 +79,11 @@ function _refuse_non_table(@nospecialize(src), op::AbstractString)
 end
 _bulk_type_name(@nospecialize(T)) = T isa Union{DataType, UnionAll} ? string(nameof(T)) : "a union of types"
 
-# `@nospecialize`: the source type is read here, once, and nothing past the frame depends on it, so
-# one compiled pipeline (and the precompile workload's) serves every kind of table.
-function _bulk_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
+# The source type is read here, once, and nothing past the frame depends on it, so one compiled
+# pipeline (and the precompile workload's) serves every kind of table. This function and the refusal
+# above specialize on the source (#1599 layer 7): in a trimmed build an unspecialized source made every
+# Tables.jl call on it a call with no compiled target. Both are small, so the JIT pays little per type.
+function _bulk_frame(src, op::AbstractString)::_BulkFrame
   _refuse_non_table(src, op)
   Tables.schema(src) === nothing && Tables.rowaccess(src) && return _schemaless_row_frame(src, op)
   cols = Tables.columns(src)
@@ -1766,7 +1768,7 @@ Inserts multiple rows into the database in bulk from any Tables.jl table (#1344)
   df.id = r.rows.id
   ```
 """
-function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
+function bulk_insert(objct::SQLObjectHandler, src;
     columns = nothing,
     chunk_size::Integer = 1000,
     show_query::Symbol = :execute,
@@ -1775,6 +1777,10 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
   )
   model = objct.object.model
 
+  # #1599 layer 7: the source is read here, at its own type, so a trimmed build compiles the frame it
+  # builds (`@nospecialize(src)` made every Tables.jl call on it dynamic). Only these checks and the frame
+  # specialize on the table's type; the pipeline after them, `_bulk_insert_frame`, is compiled once for
+  # every kind of table, as the whole call was. The checks run in the order they did.
   # Resolve settings
   return _with_connection(objct) do settings, connection, conn_key
     ensure_transaction_scope(model, connection)
@@ -1786,7 +1792,16 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     _returning = _normalize_bulk_returning(returning, model)
 
     df = _bulk_frame(src, "bulk_insert")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+    return _bulk_insert_frame(objct, model, settings, connection, src, df, _returning,
+                              columns, chunk_size, show_query, on_conflict)
+  end
+end
 
+# `bulk_insert` after its frame (#1599 layer 7): the body it had, unchanged. `src` is read only to build an
+# empty or a `returning=` result of the caller's kind, so it stays unspecialized.
+function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection, @nospecialize(src),
+                            df::_BulkFrame, _returning, columns, chunk_size::Integer, show_query::Symbol,
+                            on_conflict)
     # If no rows then nothing to do
     if df.row_count == 0
       @warn("Warning in bulk_insert, the table is empty")
@@ -1996,8 +2011,6 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     _returning === nothing && return _bulk_result(sum(results; init = 0))
     # A table of the caller's kind (#1344 phase 4), one row per input row.
     return _bulk_result(sum(results; init = 0), _returning_table(src, _returning, returned_rows))
-
-  end
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
 bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))

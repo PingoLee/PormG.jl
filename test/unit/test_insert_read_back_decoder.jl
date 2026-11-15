@@ -133,3 +133,60 @@ end
   @test a[1] === :err && a[2:3] == b[2:3]
   foreach(p -> _RBD_CP.close_pool!(p), pools)
 end
+
+# What: `create()` end to end on an in-memory SQLite pool, its returned row against the old read-back (the same
+#   SELECT through `fetch` and `Tables.rowtable`, then `_row_to_field_keyed_dict`): a full row, a row of NULLs,
+#   one inside a caller's transaction, one with `connection =` another pool, and a stored decimal too wide for
+#   its field (an AFTER INSERT trigger widens it), whose parser refusal is raised on SQLite's worker.
+# Expected: the same row; the refusal reaches the caller as the parser raised it (a `StatementError` with the
+#   oracle's text, not the statement's wrapping), and the write rolls back; with `connection =` another pool the
+#   row is the model's pool's, which holds the INSERT (the read-back runs where the INSERT ran, in its transaction).
+# Why: the decoder runs on the worker and its error comes back through `fetch`; the read-back must stay on the
+#   pool the INSERT's transaction is pinned to (a review found a read-back on the caller's `connection` returning
+#   another database's row).
+@testset "create() returns the row the old read-back built, through the worker (SQLite, #1599 layer 7)" begin
+  Tables = _RBD_X.Tables
+  pool = _RBD_CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+  other = _RBD_CP.SQLiteConnectionPool(":memory:"; pool_size = 1)
+  key = "rbd_e2e"
+  PormG.config[key] = PormG.Configuration.Settings(connections = pool, change_data = true)
+  model = _rbd_model("rbd_e2e_race")
+  model.connect_key = key
+  ddl = "CREATE TABLE rbd_e2e_race (raceid INTEGER PRIMARY KEY, year INTEGER, name TEXT, points REAL, " *
+        "price NUMERIC(5,2), date TEXT, start_at TEXT, lap TEXT, lap_time TEXT, done INTEGER, uid TEXT, data TEXT, " *
+        "blob BLOB, label_col TEXT)"
+  _RBD_CP.fetch(pool, ddl)
+  _RBD_CP.fetch(other, ddl)
+  _RBD_CP.fetch(other, "INSERT INTO rbd_e2e_race (raceid, name) VALUES (99, 'other pool')")
+  _RBD_CP.fetch(pool, "CREATE TRIGGER rbd_wide AFTER INSERT ON rbd_e2e_race WHEN NEW.name = 'wide' BEGIN " *
+                      "UPDATE rbd_e2e_race SET price = 12345.67 WHERE rowid = NEW.rowid; END")
+  cols = _RBD_QB._returned_columns(model, pool, "\"rbd_e2e_race\"")
+  oracle(id) = _RBD_QB._row_to_field_keyed_dict(
+    Tables.rowtable(_RBD_CP.fetch(pool, "SELECT $(cols) FROM \"rbd_e2e_race\" WHERE raceid = $(id)"))[1], model, pool)
+  count() = only(Tables.rowtable(_RBD_CP.fetch(pool, "SELECT count(*) AS n FROM rbd_e2e_race"))).n
+  created(f) = getfield(f(), :_data)
+  full = ("year" => 2009, "name" => "Monaco", "points" => 25.5, "price" => "12.30", "date" => Dates.Date(2009, 5, 24),
+          "start_at" => Dates.DateTime(2009, 5, 24, 14), "lap" => Dates.Time(14), "lap_time" => Dates.Second(87),
+          "done" => true, "uid" => "550e8400-e29b-41d4-a716-446655440000", "data" => Dict("a" => 1),
+          "blob" => UInt8[1, 2], "label" => "M")
+  r = created(() -> model.objects.create(full...))
+  @test _rbd_same(_rbd_outcome(() -> r), _rbd_outcome(() -> oracle(r[:raceid])))
+  r = created(() -> model.objects.create("name" => nothing))
+  @test _rbd_same(_rbd_outcome(() -> r), _rbd_outcome(() -> oracle(r[:raceid])))
+  r = created(() -> _RBD_CP.run_in_transaction(() -> model.objects.create("name" => "in tx", "done" => false), pool))
+  @test _rbd_same(_rbd_outcome(() -> r), _rbd_outcome(() -> oracle(r[:raceid])))
+  r = created(() -> model.objects.create("name" => "Senna"; connection = other))
+  @test r[:name] == "Senna" && _rbd_same(_rbd_outcome(() -> r), _rbd_outcome(() -> oracle(r[:raceid])))
+  # The refusal: the oracle's text, from the parser, on the row the trigger stored.
+  n = count()
+  want = _rbd_outcome(() -> _RBD_QB._row_to_field_keyed_dict((raceid = 1, price = 12345.67), model, pool))
+  for f in (() -> model.objects.create("name" => "wide"),
+            () -> _RBD_CP.run_in_transaction(() -> model.objects.create("name" => "wide"), pool))
+    got = _rbd_outcome(f)
+    @test got[1] === :err && got[2] === PormG.StatementError && got[2:3] == want[2:3]
+    @test count() == n   # rolled back
+  end
+  delete!(PormG.config, key)
+  _RBD_CP.close_pool!(pool)
+  _RBD_CP.close_pool!(other)
+end

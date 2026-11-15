@@ -2710,18 +2710,20 @@ end
       D = QB._FieldRowDecoder
       @test isconcretetype(D) && all(isconcretetype, fieldtypes(D))
       @test isempty(_dynamic_calls(QB._FieldRowDecoder, (PormG.Models.ModelType, CP.SQLiteConnectionPool)))
-      @test isempty(_dynamic_calls(QB._read_back_rows, (CP.SQLiteConnectionPool, String, Nothing, D)))
-      @test only(Base.return_types(QB._read_back_rows, (CP.SQLiteConnectionPool, String, Nothing, D))) ==
-            Vector{Dict{Symbol, Any}}
+      for P in (Nothing, QB.SQLiteParameterizedQuery)
+        @test (P, _dynamic_calls(QB._read_back_rows, (PormG.Kernel.Settings, String, P, D))) == (P, String[])
+        @test only(Base.return_types(QB._read_back_rows, (PormG.Kernel.Settings, String, P, D))) ==
+              Vector{Dict{Symbol, Any}}
+      end
       @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, D)))
       for P in (Nothing, Vector{Any})
         @test (P, _dynamic_calls(X._sqlite_field_rows, (SQLite.DB, String, P, D))) == (P, String[])
       end
       @test isempty(_dynamic_calls(X._sqlite_field_rows_into, (SQLite.Query{false}, D)))
-      @test isempty(_dynamic_calls(X._sqlite_field_cell, (Ptr{Cvoid}, Int, PormG.ReadParser)))
+      @test isempty(_dynamic_calls(X._sqlite_field_cell, (Ptr{SQLite.C.sqlite3_stmt}, Int, PormG.ReadParser)))
     end
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
-    @test occursin("_read_back_rows(connection, read_back[1], read_back[2], decoder)", ew_src)
+    @test occursin("_read_back_rows(settings, read_back[1], read_back[2], decoder)", ew_src)
     @test !occursin("fetch(settings, read_back[1])", ew_src)
   end
 

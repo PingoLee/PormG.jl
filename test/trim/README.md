@@ -275,7 +275,9 @@ it starts for the run (#1614):
 
 Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` with the variant's
 `prep.jl`, runs the JIT control, builds the binary with the pinned Julia and JuliaC, and runs it under
-`timeout -k 10 300`. It fails unless the binary exits 0, prints the `row` line, and its `fail` step prints
+`timeout -k 10 300`. Before the MySQL run the job flushes the server's privileges, which empties
+`caching_sha2_password`'s cache: `prep.jl` and the JIT control logged in already, and without the flush the
+binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line, and its `fail` step prints
 `threw StatementError` with the server's own SQLSTATE (`42S02` on MySQL, `42P01` on PostgreSQL), the
 server's message and a cause that is not a `MethodError`. The rows are reported as in the SQLite job, in
 the job summary and the `trim-mysql` and `trim-postgres` artifacts, never checked. The passwords in the
@@ -283,7 +285,9 @@ workflow are throwaway values for those containers, which the run discards; they
 
 Besides the SQLite job's triggers, a pull request that changes `ext/PormGMySQLExt.jl` or
 `ext/PormGPostgresExt.jl` runs the workflow, since only these jobs compile them. A change under `src/` does
-not, as for the SQLite job.
+not, as for the SQLite job. Neither variant commits a `Manifest.toml`, so each run resolves the newest
+MySQL.jl or Postgres.jl that PormG's `[compat]` admits: as for SQLite, a red nightly with no PormG change
+may be a driver release, and the `Instantiate the fixture` step prints the versions.
 
 ## Reading the build log
 

@@ -305,7 +305,9 @@ function delete(objct::SQLObjectHandler;
     
       # Execute deletions in the sorted order
       for model_to_delete in collector.sorted_models
-        _array = get(collector.objects, model_to_delete, [])        
+        # The model at its type and a typed empty default (#1599 layer 7): `get(…, model, [])` on an abstract model
+        # with a `Vector{Any}` default was a run-time dispatch. An empty vector is skipped below either way.
+        _array = get(collector.objects, model_to_delete::Models.ModelType, Dict{Symbol, Union{String, SQLObjectHandler}}[])
         if !isempty(_array)
           res = delete_objects(connection, model_to_delete::Models.ModelType, _array, show_query, deleted_counter, conn)
           push!(results, res)

@@ -2973,6 +2973,8 @@ end
       @test c == Dict{String, Integer}("race" => 5, "result" => 0) && all(v -> v isa Int, values(c))
     end
     @test !occursin("deleted_counter[model.name] = get(deleted_counter, model.name, 0) +", del_src)
+    # The sorted deletes look each model up at its type, with a typed empty default.
+    @test occursin("get(collector.objects, model_to_delete::Models.ModelType, Dict{Symbol, Union{String, SQLObjectHandler}}[])", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

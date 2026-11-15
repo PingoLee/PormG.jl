@@ -2872,6 +2872,17 @@ end
     end
     @test !occursin(r"with_transaction\((settings|connection), [^)\n]*conn=conn", del_src)
     @test count("_with_transaction_with(", del_src) == 10
+    # The deletions run in the transaction's context: `with_tx_context(settings.connections, conn) do … end` took the
+    # pool at its union type and a closure capturing the untyped `conn`, so neither was concrete. The pool is walked
+    # (`_with_tx_context_on`, one dynamic call: its open arm), and `conn` goes in a typed box.
+    @test isdefined(CP, :_with_tx_context_on)
+    if isdefined(CP, :_with_tx_context_on)
+      g = () -> 1
+      @test length(_dynamic_calls(CP._with_tx_context_on, (typeof(g), S, Any))) == 1
+    end
+    @test occursin("conn_box = Base.RefValue{Any}(conn)", del_src) && occursin("_with_tx_context_on(settings, conn) do", del_src)
+    @test occursin("run_deletions = function(@nospecialize(conn),)", del_src)
+    @test !occursin("with_tx_context(settings.connections, conn) do", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

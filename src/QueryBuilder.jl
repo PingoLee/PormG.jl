@@ -77,7 +77,7 @@ import PormG: _emsg, _suggest_name  # shared helpers (Kernel)
 import PormG.ConnectionPool: fetch, fetch_copy, with_transaction, with_savepoint, with_sqlite_write_lock, current_task, finalize_transaction_connection!
 import PormG.ConnectionPool: _with_terminal_pool   # #1693: every terminal reaches its pool through `_with_connection`
 import PormG.ConnectionPool: _begin_write_sql, _after_begin_sql  # #1129 item 2: how a write transaction opens, per engine
-import PormG.ConnectionPool: _finalize_with, _with_transaction_with   # #1599 layer 7: `delete()`'s lifecycle, typed
+import PormG.ConnectionPool: _finalize_with, _with_transaction_with, _with_tx_context_on   # #1599 layer 7: `delete()`'s lifecycle, typed
 # #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,
 # which a bare `e isa InterruptException` test cannot (every driver error crosses `_as_database_error`).
 import PormG.ConnectionPool: _await_abandoned

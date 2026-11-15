@@ -249,7 +249,8 @@ function delete(objct::SQLObjectHandler;
 
     # Definition of run_deletions (backend agnostic)
     results = []
-    run_deletions = function(conn)
+    # `conn` unspecialized (#1599 layer 7): every caller holds it untyped (a pool slot, the transaction context).
+    run_deletions = function(@nospecialize(conn),)
       # Plan INSIDE the transaction (#452).
       #
       # `find_related_objects!` probes every cascade path with `_exists` and DROPS the ones that come
@@ -442,8 +443,11 @@ function delete(objct::SQLObjectHandler;
           for sql in _after_begin_sql(connection)
             _with_transaction_with(settings, sql, conn, false, nothing)
           end
-          with_tx_context(settings.connections, conn) do
-            run_deletions(conn)
+          # On the settings' pool at its type, with `conn` in a typed box so the closure is a concrete type (#1599
+          # layer 7): captured as itself, the closure's type was its run-time type, and the call had no target.
+          conn_box = Base.RefValue{Any}(conn)
+          _with_tx_context_on(settings, conn) do
+            run_deletions(conn_box[])
           end
           # Commit — release_conn=false: the finally owns the single release.
           _with_transaction_with(settings, "COMMIT;", conn, false, nothing)

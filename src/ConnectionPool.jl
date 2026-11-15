@@ -3038,6 +3038,18 @@ function _finalize_with(settings::Settings, @nospecialize(conn), @nospecialize(r
   return finalize_transaction_connection!(settings, conn; rollback_error = rollback_error, renew = renew,
                                           body_error = body_error, abandoned_await = abandoned_await)
 end
+# `with_tx_context(f, settings.connections, conn)` from a settings entry (#1599 layer 7, #1694): the slot is a
+# union, so the call dispatched at run time, and `delete()`'s hand-rolled lifecycle raised `MethodError` there in
+# a trimmed image. The pool is walked as `with_pool` walks it; `conn` stays unspecialized, as `with_tx_context`
+# takes it. A pool `with_pool` does not list takes the call it took.
+function _with_tx_context_on(f::F, settings::Settings, @nospecialize(conn)) where {F<:Function}
+  pool = settings.connections
+  pool isa SQLiteConnectionPool && return with_tx_context(f, pool, conn)
+  pool isa PostgresConnectionPool{:libpq} && return with_tx_context(f, pool, conn)
+  pool isa PostgresConnectionPool{:postgres} && return with_tx_context(f, pool, conn)
+  pool isa MySQLConnectionPool && return with_tx_context(f, pool, conn)
+  return with_tx_context(f, pool, conn)
+end
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never

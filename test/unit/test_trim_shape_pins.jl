@@ -2646,6 +2646,11 @@ end
       @test isempty(_dynamic_calls(QB._now_in, (String,)))
       @test only(Base.return_types(QB._now_in, (String,))) === M.ZonedDateTime
       @test QB._now_in("UTC").timezone === M.TimeZone("UTC") === M._DATETIME_UTC_TZ
+      # and the UTC branch is the constant in the code, not a parse: `now(TimeZone(zone))` gives the same zone
+      # and has no dynamic call under the JIT, so only the constant's presence tells the two apart.
+      holds_utc(x) = x === M._DATETIME_UTC_TZ || (x isa QuoteNode && x.value === M._DATETIME_UTC_TZ) ||
+                     (x isa GlobalRef && x.name === :_DATETIME_UTC_TZ) || (x isa Expr && any(holds_utc, x.args))
+      @test any(holds_utc, only(code_typed(QB._now_in, (String,); optimize = true))[1].code)
       # The zone, or the same refusal (a legacy name, an unknown one).
       for zone in ("America/Sao_Paulo", "Europe/Paris", "UTC+3", "Europe/Monaco", "Mars/Olympus")
         @test isequal(outcome(() -> QB._now_in(zone).timezone), outcome(() -> M.TimeZone(zone)))

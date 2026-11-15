@@ -3853,7 +3853,9 @@ end
 fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
 fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
 # #1605: `_decode` is forwarded only when set, so a `fetch` method that predates it (a test mock's, a
-# backend's own) is still called exactly as before for every untyped read.
+# backend's own) is still called exactly as before for every untyped read. Since #1599 layer 7 (#1694) three
+# more reads hand a decoder: `create`'s read-back on SQLite and MySQL, `exists()`, and SQLite's `update` row
+# count. A stand-in pool whose own `fetch` lacks the keyword gets a `MethodError` there, as from a typed read.
 _fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, ::Nothing) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 _fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, decode) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx, _decode=decode)
 fetch(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)

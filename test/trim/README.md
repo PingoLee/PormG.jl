@@ -262,6 +262,29 @@ Build `fail.jl` like `read.jl` (`--output-exe fail … ../test/trim/fail.jl`) an
 it needs no seeding. The server variants print the step against a server; at the port-1 default they stop
 at the read's connect first.
 
+## The server variants' CI jobs
+
+The `Trim (juliac)` workflow has two more jobs, one per server variant, each against a service container
+it starts for the run (#1614):
+
+- **`Trimmed read (MySQL 8.4)`** builds `mysql/main.jl` and runs it against `mysql:8.4`.
+- **`Trimmed read (PostgreSQL 18, Postgres.jl)`** builds `postgres/main.jl` and runs it against
+  `postgres:18`, whose default authentication over TCP is SCRAM-SHA-256: the job checks first that its
+  own connection authenticated that way (`system_user`) and that the role's password is stored as a
+  SCRAM verifier, so the Base64 roots in `postgres/main.jl` are exercised.
+
+Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` with the variant's
+`prep.jl`, runs the JIT control, builds the binary with the pinned Julia and JuliaC, and runs it under
+`timeout -k 10 300`. It fails unless the binary exits 0, prints the `row` line, and its `fail` step prints
+`threw StatementError` with the server's own SQLSTATE (`42S02` on MySQL, `42P01` on PostgreSQL), the
+server's message and a cause that is not a `MethodError`. The rows are reported as in the SQLite job, in
+the job summary and the `trim-mysql` and `trim-postgres` artifacts, never checked. The passwords in the
+workflow are throwaway values for those containers, which the run discards; they belong to no other server.
+
+Besides the SQLite job's triggers, a pull request that changes `ext/PormGMySQLExt.jl` or
+`ext/PormGPostgresExt.jl` runs the workflow, since only these jobs compile them. A change under `src/` does
+not, as for the SQLite job.
+
 ## Reading the build log
 
 Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only

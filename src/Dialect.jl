@@ -81,7 +81,7 @@ import PormG.Models: Migration, get_model_pk_field, format_model_name, field_db_
 # #564: the read side of the canonical timestamp text, now that its PARSER lives here beside the
 # mask it inverts. `normalize_sqlite_datetime_string` stays in `Models` because it is also on the
 # WRITE path (`validate_timezone`) — this module only consumes it.
-import PormG.Models: normalize_sqlite_datetime_string
+import PormG.Models: normalize_sqlite_datetime_string, parse_zoned_timestamp
 import PormG: Models   # #1130: the duration readers MySQL's BIGINT-of-microseconds formatter shares
 # #742: declared table CHECKs, and the ownership marker rendered beside each one.
 import PormG.Models: declared_check_constraints, CheckConstraint
@@ -341,7 +341,8 @@ function _parse_sqlite_timestamp(v::Any)
     normalized = normalize_sqlite_datetime_string(v)
     # Timezone-aware form first (e.g. "2026-04-07T18:30:23.741-03:00") — the canonical one.
     try
-      return ZonedDateTime(normalized, dateformat"yyyy-mm-ddTHH:MM:SS.ssszzzz")
+      # `parse_zoned_timestamp`: this format's text at concrete types, TimeZones' parse for any other (#1599 layer 7).
+      return parse_zoned_timestamp(normalized)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()
     end

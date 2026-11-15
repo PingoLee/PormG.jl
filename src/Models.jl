@@ -5067,6 +5067,58 @@ end
 const _DATETIME_DATEFORMAT = DateFormat(DATETIME_FORMAT)
 const _DATETIME_UTC_TZ = TimeZone("UTC")
 
+# A timestamp in the text PormG writes (`DATETIME_FORMAT`: `yyyy-mm-ddTHH:MM:SS.sss`, then `Z` or `±hh:mm`), parsed
+# at concrete types (#1599 layer 7, #1694). `ZonedDateTime(text, _DATETIME_DATEFORMAT)` is TimeZones.jl's parser,
+# whose `tryparsenext_internal` a trimmed image has no code for, and whose zone is a name parsed at run time
+# (`TimeZone("+00:00")`): the trimmed full fixture entry stopped there validating an auto-filled timestamp. This
+# reads exactly that text, digit by digit, and builds what TimeZones builds for it: the same `DateTime`, and the
+# same zone — `_DATETIME_UTC_TZ` (`tz"UTC"`) for a zero offset, `FixedTimeZone("Z", 0)` for `Z`, and
+# `FixedTimeZone("UTC±hh:mm", offset)` for any other offset, named as written. Anything else (another shape, a
+# year of more or fewer than four digits, a field out of range) goes to TimeZones' parse, the open arm, so its
+# value or its error is the one it was. `test/unit/test_timestamp_parser.jl` compares the two.
+function parse_zoned_timestamp(text::AbstractString)::ZonedDateTime
+  s = String(text)
+  zdt = _canonical_zoned(s)
+  zdt === nothing || return zdt
+  return _parse_zoned_other(s)
+end
+@noinline _parse_zoned_other(s::String)::ZonedDateTime = ZonedDateTime(s, _DATETIME_DATEFORMAT)
+
+_is_ascii_digit(c::UInt8)::Bool = 0x30 <= c <= 0x39
+function _ascii_number(cu, from::Int, n::Int)::Int
+  v = 0
+  for k in from:(from + n - 1)
+    v = 10 * v + Int(cu[k] - 0x30)
+  end
+  return v
+end
+
+# The canonical text's value, or `nothing` for any other text.
+function _canonical_zoned(s::String)::Union{Nothing, ZonedDateTime}
+  cu = codeunits(s)
+  n = length(cu)
+  (n == 24 || n == 29) || return nothing
+  for i in (1, 2, 3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 18, 19, 21, 22, 23)
+    _is_ascii_digit(cu[i]) || return nothing
+  end
+  (cu[5] == UInt8('-') && cu[8] == UInt8('-') && cu[11] == UInt8('T') && cu[14] == UInt8(':') &&
+   cu[17] == UInt8(':') && cu[20] == UInt8('.')) || return nothing
+  y, m, d = _ascii_number(cu, 1, 4), _ascii_number(cu, 6, 2), _ascii_number(cu, 9, 2)
+  H, M, S, ms = _ascii_number(cu, 12, 2), _ascii_number(cu, 15, 2), _ascii_number(cu, 18, 2), _ascii_number(cu, 21, 3)
+  Dates.validargs(DateTime, y, m, d, H, M, S, ms) === nothing || return nothing
+  tz = if n == 24
+    cu[24] == UInt8('Z') || return nothing
+    FixedTimeZone("Z", 0)
+  else
+    sign = cu[24]
+    ((sign == UInt8('+') || sign == UInt8('-')) && _is_ascii_digit(cu[25]) && _is_ascii_digit(cu[26]) &&
+     cu[27] == UInt8(':') && _is_ascii_digit(cu[28]) && _is_ascii_digit(cu[29])) || return nothing
+    offset = (_ascii_number(cu, 25, 2) * 3600 + _ascii_number(cu, 28, 2) * 60) * (sign == UInt8('-') ? -1 : 1)
+    offset == 0 ? _DATETIME_UTC_TZ : FixedTimeZone(string("UTC", SubString(s, 24, 29)), offset)
+  end
+  return ZonedDateTime(DateTime(y, m, d, H, M, S, ms), tz)
+end
+
 # Canonical UTC ISO-8601 form for DateTimeField values (issue #79): every equivalent
 # instant collapses to ONE string (`yyyy-mm-ddTHH:MM:SS.sss+00:00`, = DATETIME_FORMAT),
 # so SQLite's lexicographic TEXT comparison agrees with PostgreSQL's timestamptz instant
@@ -6233,7 +6285,7 @@ function validate_timezone(value::AbstractString, format::AbstractString)
     # Offset-bearing: pad sub-seconds to exactly 3 digits (normalize_sqlite_datetime_string),
     # then parse — the `zzzz` token consumes both `Z` and `±HH:MM`.
     try
-      zdt = ZonedDateTime(normalize_sqlite_datetime_string(s), _DATETIME_DATEFORMAT)
+      zdt = parse_zoned_timestamp(normalize_sqlite_datetime_string(s))   # #1599 layer 7: typed for PormG's text
       return _canonicalize_datetime_utc(zdt)
     catch
       # swallows the parse error into InvalidValueError, which names the expected format.

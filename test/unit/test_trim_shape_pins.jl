@@ -2985,6 +2985,31 @@ end
     end
   end
 
+  # What: the timestamp parser for the text PormG writes (`Models.parse_zoned_timestamp`), on the write path's
+  #   validation (`validate_timezone`) and the SQLite read parser (`Dialect._parse_sqlite_timestamp`).
+  # Expected: the canonical text is read without a dynamic call, and both sites call the parser; any other text
+  #   takes TimeZones' parse, in the open arm (test_timestamp_parser.jl holds the equivalence).
+  # Why: `ZonedDateTime(text, DateFormat)` is TimeZones' parser, which a trimmed image has no code for
+  #   (`tryparsenext_internal(ZonedDateTime, …)`, an unresolved invoke). Measured on #1694's update/delete head:
+  #   with an auto-filled `DateTimeField` in the fixture, the binary's create stopped there validating the
+  #   timestamp it had filled, before its INSERT.
+  @testset "a timestamp in PormG's text is parsed at concrete types (#1599 layer 7, #1694)" begin
+    M = PormG.Models
+    @test isdefined(M, :parse_zoned_timestamp) && isdefined(M, :_canonical_zoned)
+    if isdefined(M, :_canonical_zoned)
+      @test isempty(_dynamic_calls(M._canonical_zoned, (String,)))
+      for T in (String, SubString{String})
+        @test (T, _dynamic_calls(M.parse_zoned_timestamp, (T,))) == (T, String[])
+        @test only(Base.return_types(M.parse_zoned_timestamp, (T,))) === M.ZonedDateTime
+      end
+    end
+    m_src = read(joinpath(pkgdir(PormG), "src", "Models.jl"), String)
+    d_src = read(joinpath(pkgdir(PormG), "src", "Dialect.jl"), String)
+    @test occursin("zdt = parse_zoned_timestamp(normalize_sqlite_datetime_string(s))", m_src)
+    @test occursin("return parse_zoned_timestamp(normalized)", d_src)
+    @test !occursin("ZonedDateTime(normalized, dateformat", d_src)
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

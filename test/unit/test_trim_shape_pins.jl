@@ -2519,6 +2519,178 @@ end
     foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 
+  # What: the single-row write's error paths (#1599 layer 7, #1694): the formatter refusal every validator's
+  #   `catch` calls (`_formatter_refusal`), and the format step's located refusal (`with_location`).
+  # Expected: no validator calls `_formatter_refusal` dynamically (it takes the caught exception unspecialized),
+  #   and `with_location`'s keyword body makes no dynamic call at the types its callers pass; each raises the
+  #   same error type with the same text as the code it replaces.
+  # Why: each is a keyword call whose arguments have no concrete type (the caught exception; the located parts'
+  #   run-time types), a run-time dispatch that a trimmed image cannot make where nothing was compiled, so a
+  #   refused value raises `MethodError` in place of its refusal. Measured on #1797's head 4279d9785 with the full
+  #   fixture entry's refusal step: the create with a `Bool` for a text column raised `MethodError` at
+  #   `with_location`'s keyword call in the trimmed binary, and the verifier listed 28 rows at the validators'
+  #   calls (the date refusal printed: the image had compiled that call for an `InvalidValueError`).
+  @testset "the single-row write's refusals run at concrete types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    IVE = PormG.InvalidValueError
+    @test isdefined(QB, :_formatter_refusal_other)
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), e isa IVE ? (e.msg, e.kind, e.reason, e.op, e.model, e.field, e.field_type, e.row) :
+                                    sprint(showerror, e))
+    end
+    model = M.Model("tsp_refusal_race", raceid = M.IDField(), year = M.IntegerField(), name = M.CharField(),
+      price = M.DecimalField(max_digits = 5, decimal_places = 2), date = M.DateField(), lap = M.TimeField(),
+      start_at = M.DateTimeField(), uid = M.UUIDField(), data = M.JSONField(), lap_time = M.DurationField(),
+      ip = M.GenericIPAddressField(), tags = M.ArrayField(M.IntegerField()))
+
+    # The validators' catch arms: the keyword call on the caught exception is static.
+    @test only(methods(QB._formatter_refusal)).nospecialize != 0
+    refusal_call(c) = occursin("_formatter_refusal", c)
+    for v in (QB._validate_decimal_value, QB._validate_date_value, QB._validate_time_value, QB._validate_duration_value,
+              QB._validate_datetime_value, QB._validate_uuid_value, QB._validate_json_value),
+        T in (String, SubString{String})
+      @test !any(refusal_call, _dynamic_calls(v, (M.ModelType, String, T, String)))
+    end
+    for (v, F) in ((QB._validate_network_value, M.sGenericIPAddressField), (QB._validate_array_value, M.sArrayField))
+      @test !any(refusal_call, _dynamic_calls(v, (M.ModelType, String, F, String, String)))
+    end
+    @test isempty(_dynamic_calls_kw(QB._formatter_refusal, (Any, String, M.ModelType, String)))
+    # The refusal is the one the old body raised, for each kind of caught error; Ctrl-C and a stack overflow
+    # are rethrown as they were.
+    old_refusal(e, op, model, field; suggestion = nothing) = begin
+      (e isa InterruptException || e isa StackOverflowError) && rethrow(e)
+      e isa IVE || QB._validation_error(op, model, field, "the value could not be formatted ($(typeof(e)))";
+                                         suggestion = suggestion)
+      QB._validation_error(op, model, field, e.reason; suggestion = suggestion, kind = e.kind)
+    end
+    caught = Any[IVE("not a date", :format), IVE("too long", :range; op = "inner", field = "x"), ArgumentError("bad"),
+                 MethodError(+, ("a", 1)), InexactError(:Int64, Int64, 1.5), InterruptException(), StackOverflowError()]
+    for e in caught, s in (nothing, "pass a Date")
+      @test outcome(() -> QB._formatter_refusal(e, "insert", model, "date"; suggestion = s)) ==
+            outcome(() -> old_refusal(e, "insert", model, "date"; suggestion = s))
+    end
+    # And through the validators, end to end: a refused string on each field with a catch arm.
+    for (f, v) in (("price", "12,5"), ("price", "abc"), ("date", "2009-02-30"), ("date", "not a date"), ("lap", "25:61"),
+                   ("start_at", "yesterday"), ("uid", "not-a-uuid"), ("data", "{bad"), ("lap_time", "fast"),
+                   ("ip", "10.0.0.300"), ("tags", "{1,"))
+      r = outcome(() -> QB.validate_field_data(model, f, v, "insert"))
+      @test r[1] === :err && r[2] === IVE && r[3][6] == f
+    end
+
+    # The format step's located refusal: `with_location`'s keyword body, at the types its callers pass (the format
+    # step: op and field; a bulk cell: op, model, field and row; a filter: op, field and field type).
+    # Followed four calls down (`_dynamic_calls_deep`): the keyword sorter, the constructor and `_render_refusal`
+    # are each one call below the last, and a one-level scan saw the sorter's call into the keyword body resolved
+    # while the body it called was picked at run time (the second wall: `MethodError(var"#_#2#3", …)`).
+    wl_step(e, op::String, field::String) = PormG.with_location(e; op = op, field = field)
+    wl_cell(e, op::String, model::String, field::String, row::Int) =
+      PormG.with_location(e; op = op, model = model, field = field, row = row)
+    wl_filter(e, op::String, field::String, t::Union{Nothing, String}) =
+      PormG.with_location(e; op = op, field = field, field_type = t)
+    @test isempty(_dynamic_calls_deep(wl_step, (IVE, String, String); depth = 4))
+    @test isempty(_dynamic_calls_deep(wl_cell, (IVE, String, String, String, Int); depth = 4))   # static before: one open part
+    @test isempty(_dynamic_calls_deep(wl_filter, (IVE, String, String, Union{Nothing, String}); depth = 4))
+    # The same refusal as the keyword spelling it replaces: a part the error carries is kept, the others filled,
+    # each converted as the constructor converts it (a `Symbol`, a `SubString`, an `Int32` row).
+    old_wl(e; op = nothing, model = nothing, field = nothing, field_type = nothing, row = nothing) =
+      IVE(e.reason, e.kind; op = something(e.op, op, Some(nothing)), model = something(e.model, model, Some(nothing)),
+          field = something(e.field, field, Some(nothing)), field_type = something(e.field_type, field_type, Some(nothing)),
+          row = something(e.row, row, Some(nothing)))
+    errs = (IVE("bad", :format), IVE("bad", :range; op = "inner", field = "a"), IVE("bad", :type; row = 3),
+            IVE("plain message"))
+    parts = ((;), (; op = "insert", field = "date"), (; op = "bulk_insert", model = "Race", field = "date", row = 7),
+             (; op = :filter, field = SubString("date", 1, 4), field_type = "DATE"), (; row = Int32(2)), (; row = 2.0),
+             (; op = "update", row = typemax(UInt64)))
+    for e in errs, kw in parts
+      @test outcome(() -> PormG.with_location(e; kw...)) == outcome(() -> old_wl(e; kw...))
+    end
+
+  end
+
+  # What: the single-row write's default fill (#1599 layer 7, #1694): the value of an `auto_now`/`auto_now_add`/
+  #   `auto_add` field (`_fill_formatted!`, and `_now_in` for a timestamp's current time), and the SQLite id
+  #   reservation `create` reads inside a transaction (`_allocate_sqlite_ids`), both stored in
+  #   `SQLObjectQuery.insert::OrderedDict{String,Any}`.
+  # Expected: the fill makes no dynamic call (its open arm makes one) and stores what the slot call stored,
+  #   `_now_in` makes none and gives `now(TimeZone(zone))`'s zone, the insert's marshalling stores nothing and
+  #   calls no formatter dynamically, and the reservation infers `Vector{Int64}`.
+  # Why: the fill called the field's `Function` slot and stored its untyped result, parsed the connection's zone
+  #   name at run time, and the reservation's ids were `Any`: code a trimmed image cannot run. Measured on
+  #   #1797's head 4279d9785: 52 verifier rows at the three fills and the reservation in the full fixture entry,
+  #   and with the fixture's three auto-filled fields the binary's `create` raised
+  #   `MethodError(!=, (SubString, SubString))` in `TimeZone("UTC")`.
+  @testset "the single-row write's default fill runs at concrete types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    CP = PormG.ConnectionPool
+    has(n) = isdefined(QB, n)
+    for n in (:_fill_formatted!, :_fill_other!, :_now_in)
+      @test has(n)
+    end
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), sprint(showerror, e))
+    end
+    model = M.Model("tsp_fill_race", raceid = M.IDField(), year = M.IntegerField(),
+      created_at = M.DateTimeField(auto_now_add = true), updated_on = M.DateField(auto_now = true),
+      token = M.UUIDField(auto_add = true))
+
+    # The default fill: the formatter at its own type, the text stored at its type, one dynamic call in the open
+    # arm, and the same insert as the slot call.
+    OD = QB.OrderedCollections.OrderedDict{String, Any}
+    if has(:_fill_formatted!)
+      for (F, V) in ((typeof(M.format_timezone_sql), M.ZonedDateTime), (typeof(M.format_date_sql), Dates.Date),
+                     (typeof(M.format_uuid_sql), M.UUIDs.UUID), (Function, M.ZonedDateTime), (Function, Dates.Date),
+                     (Function, M.UUIDs.UUID))
+        @test isempty(_dynamic_calls(QB._fill_formatted!, (OD, String, F, V)))
+      end
+      @test length(_dynamic_calls(QB._fill_other!, (OD, String, Any))) == 1
+      fills = Any[("created_at", M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC"))), ("updated_on", Dates.Date(2009, 5, 24)),
+                  ("token", M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"))]
+      for (f, v) in fills, other in (identity, x -> missing, x -> error("refused"))
+        for g in (model.fields[f].formatter, other)
+          a = OD("year" => 2009); b = OD("year" => 2009)
+          ra = outcome(() -> QB._fill_formatted!(a, f, g, v))
+          rb = outcome(() -> (b[f] = g(v); nothing))
+          @test isequal(ra, rb) && isequal(collect(a), collect(b)) && all(k -> typeof(a[k]) === typeof(b[k]), keys(a))
+        end
+      end
+    end
+    # The current time: UTC is the constant `TimeZone("UTC")` returns, so no zone name is parsed; any other zone is
+    # `TimeZone(zone)`'s, as before.
+    if has(:_now_in)
+      @test isempty(_dynamic_calls(QB._now_in, (String,)))
+      @test only(Base.return_types(QB._now_in, (String,))) === M.ZonedDateTime
+      @test QB._now_in("UTC").timezone === M.TimeZone("UTC") === M._DATETIME_UTC_TZ
+      # and the UTC branch is the constant in the code, not a parse: `now(TimeZone(zone))` gives the same zone
+      # and has no dynamic call under the JIT, so only the constant's presence tells the two apart.
+      holds_utc(x) = x === M._DATETIME_UTC_TZ || (x isa QuoteNode && x.value === M._DATETIME_UTC_TZ) ||
+                     (x isa GlobalRef && x.name === :_DATETIME_UTC_TZ) || (x isa Expr && any(holds_utc, x.args))
+      @test any(holds_utc, only(code_typed(QB._now_in, (String,); optimize = true))[1].code)
+      # The zone, or the same refusal (a legacy name, an unknown one).
+      for zone in ("America/Sao_Paulo", "Europe/Paris", "UTC+3", "Europe/Monaco", "Mars/Olympus")
+        @test isequal(outcome(() -> QB._now_in(zone).timezone), outcome(() -> M.TimeZone(zone)))
+      end
+      t0 = M.now(M.TimeZone("UTC")); t = QB._now_in("UTC"); t1 = M.now(M.TimeZone("UTC"))
+      @test t0 <= t <= t1
+    end
+    # and the insert's fill takes it from there: the one zone parse left in the file is `update`'s fill.
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test count("now(TimeZone(settings.time_zone))", ew_src) == 1 && occursin("_now_in(settings.time_zone)", ew_src)
+    # The insert's marshalling stores nothing in the insert through a dynamic call, and calls no formatter slot.
+    insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
+                                                           CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
+    @test !any(c -> occursin("setindex!", c), insert_calls)
+    @test !any(c -> occursin(r"^\d+: \(%\d+\)\(", c), insert_calls)
+    # The SQLite id reservation infers its ids: `create` reads the first and stores it in the insert.
+    @test only(Base.return_types(QB._allocate_sqlite_ids, (M.ModelType, CP.SQLiteConnectionPool, String, Int,
+                                 PormG.Kernel.Settings))) == Vector{Int64}
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

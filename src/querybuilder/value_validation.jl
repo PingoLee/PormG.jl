@@ -20,12 +20,21 @@ end
 # A formatter's refusal, caught by a validator: keep its reason and kind, add the location. Any other
 # error is named by its type alone — a `MethodError`'s or a `Dates` parser's own text quotes the
 # value it was given.
-function _formatter_refusal(e, operation::String, model::PormGModel, field::String; suggestion::Union{Nothing, String}=nothing)
+#
+# #1599 layer 7: `e` is a caught exception, untyped, so the keyword call takes it unspecialized; with
+# one method, every validator's call into this is static. In a trimmed image that keyword call had no
+# compiled target, so a refused value raised a `MethodError` in place of its refusal. A formatter's
+# `InvalidValueError` is read at its type; any other error takes the open arm.
+function _formatter_refusal(@nospecialize(e), operation::String, model::PormGModel, field::String;
+                            suggestion::Union{Nothing, String}=nothing)
     (e isa InterruptException || e isa StackOverflowError) && rethrow(e)
-    e isa InvalidValueError ||
-        _validation_error(operation, model, field, "the value could not be formatted ($(typeof(e)))"; suggestion=suggestion)
-    _validation_error(operation, model, field, e.reason; suggestion=suggestion, kind=e.kind)
+    e isa InvalidValueError &&
+        _validation_error(operation, model, field, e.reason; suggestion=suggestion, kind=e.kind)
+    _formatter_refusal_other(e, operation, model, field, suggestion)
 end
+@noinline _formatter_refusal_other(@nospecialize(e), operation::String, model::PormGModel, field::String,
+                                   suggestion::Union{Nothing, String}) =
+    _validation_error(operation, model, field, "the value could not be formatted ($(typeof(e)))"; suggestion=suggestion)
 
 function _is_integer_field(f_meta)::Bool
     return getproperty(f_meta, :type) in ("INTEGER", "BIGINT")

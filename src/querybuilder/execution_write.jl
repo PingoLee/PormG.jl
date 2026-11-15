@@ -90,6 +90,30 @@ const _FOUND_ROW_HEAD = "SELECT *"
 end
 @noinline _bind_written_other!(parameters, @nospecialize(value)) = add_parameter!(parameters, value)
 
+# A field's automatic value (`auto_now`, `auto_now_add`, `auto_add`), formatted and stored in the insert
+# (#1599 layer 7, #1694). The formatter is called at its own type (`Models.apply_formatter`), not through
+# the field's `Function` slot, which a trimmed image cannot dispatch. The insert holds `Any`, and storing
+# an untyped value there is a dynamic call too (`setindex!` is compiled per value type), so the text each
+# of these formatters returns is stored at its type; anything else takes one dynamic call.
+@noinline function _fill_formatted!(insert::OrderedCollections.OrderedDict{String, Any}, field::String,
+                                    @nospecialize(formatter), value)
+  formatted = Models.apply_formatter(formatter, value)
+  formatted isa String && return (insert[field] = formatted; nothing)
+  return _fill_other!(insert, field, formatted)
+end
+@noinline _fill_other!(insert::OrderedCollections.OrderedDict{String, Any}, field::String, @nospecialize(formatted)) =
+  (insert[field] = formatted; nothing)
+
+# The current time in the connection's time zone, for an `auto_now`/`auto_now_add` timestamp (#1599 layer 7).
+# UTC, the default, is `Models._DATETIME_UTC_TZ`, the object `TimeZone("UTC")` returns, built when the
+# package loads: parsing the name at run time is TimeZones.jl code a trimmed image has no code for (the full
+# fixture entry's `create` raised `MethodError(!=, (SubString, SubString))` there). Any other zone is parsed
+# as before.
+function _now_in(zone::String)::ZonedDateTime
+  zone == "UTC" && return now(Models._DATETIME_UTC_TZ)
+  return now(TimeZone(zone))
+end
+
 # Shared row-level INSERT marshalling, extracted from insert() (#30) so insert() and
 # _update_or_create() build the identical VALUES body from one place. Fills each missing field
 # (default → auto_now/auto_now_add → UUID → skip-if-null-or-pk → else error), reserves a SQLite id
@@ -109,11 +133,11 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
       if model.fields[field].default !== nothing
         real_obj.insert[field] = model.fields[field].default
       elseif model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        real_obj.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
+        _fill_formatted!(real_obj.insert, field, model.fields[field].formatter, _now_in(settings.time_zone))
       elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now_add || model.fields[field].auto_now)
-        real_obj.insert[field] = model.fields[field].formatter(today())
+        _fill_formatted!(real_obj.insert, field, model.fields[field].formatter, today())
       elseif model.fields[field].type == "UUID" && model.fields[field].auto_add
-        real_obj.insert[field] = model.fields[field].formatter(UUIDs.uuid4())
+        _fill_formatted!(real_obj.insert, field, model.fields[field].formatter, UUIDs.uuid4())
       elseif model.fields[field].null || model.fields[field].primary_key
         continue
       else

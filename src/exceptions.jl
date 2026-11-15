@@ -175,6 +175,14 @@ struct UnsafeMutationError <: UsageError
   UnsafeMutationError(msg::AbstractString) = new(_emsg(msg))
 end
 
+# A refusal's location as one concrete type (#1599 layer 7): what `with_location` hands the constructor.
+# Spelled as keywords, the parts made a `NamedTuple` of each part's run-time type, and the keyword call
+# into the constructor's body was a run-time dispatch over up to 32 shapes, which a trimmed image cannot
+# make: a write's located refusal raised `MethodError` instead.
+const _Location = NamedTuple{(:op, :model, :field, :field_type, :row),
+                             Tuple{Union{Nothing, String}, Union{Nothing, String}, Union{Nothing, String},
+                                   Union{Nothing, String}, Union{Nothing, Int}}}
+
 """
     InvalidValueError(msg) <: UsageError <: PormGError
     InvalidValueError(reason, kind; op, model, field, field_type, row) <: UsageError <: PormGError
@@ -218,6 +226,12 @@ struct InvalidValueError <: UsageError
     n = row === nothing ? nothing : Int(row)
     new(_render_refusal(r, o, m, f, t, n), kind, r, o, m, f, t, n)
   end
+  # `with_location`'s: the parts converted as above already, so the call has one concrete signature.
+  function InvalidValueError(reason::AbstractString, kind::Symbol, at::_Location)
+    r = _emsg(reason)
+    new(_render_refusal(r, at.op, at.model, at.field, at.field_type, at.row), kind, r,
+        at.op, at.model, at.field, at.field_type, at.row)
+  end
 end
 
 _opt_string(x) = x === nothing ? nothing : String(string(x))
@@ -225,7 +239,12 @@ _opt_string(x) = x === nothing ? nothing : String(string(x))
 # The one place a refusal's text is assembled (#971). The refused value is not an input to it, so
 # no message built here can carry one:
 #   Error in <op>[, row <n>][ for model <M>][, field `<f>`][ (<type>)]: <reason>
-function _render_refusal(reason::String, op, model, field, field_type, row)
+# One compiled body for the parts' slot types (#1599 layer 7): the located constructor passes them as the
+# slots hold them, and a body compiled per run-time combination made that call a dispatch over 32, which a
+# trimmed image cannot make. Inside, each `=== nothing` test narrows its part, so every `print` is static.
+function _render_refusal(reason::String, @nospecialize(op::Union{Nothing, String}),
+                         @nospecialize(model::Union{Nothing, String}), @nospecialize(field::Union{Nothing, String}),
+                         @nospecialize(field_type::Union{Nothing, String}), @nospecialize(row::Union{Nothing, Int}))
   op === nothing && model === nothing && field === nothing && row === nothing && return reason
   io = IOBuffer()
   print(io, "Error in ", op === nothing ? "a value" : op)
@@ -244,14 +263,19 @@ end
 — the funnel nearest the value knows it best — so a refusal that passes through two funnels (a
 single-cell format inside a bulk writer) is located once, and the second adds only the row (#971).
 """
-with_location(e::InvalidValueError; op = nothing, model = nothing, field = nothing,
-              field_type = nothing, row = nothing) =
-  InvalidValueError(e.reason, e.kind;
-                    op = something(e.op, op, Some(nothing)),
-                    model = something(e.model, model, Some(nothing)),
-                    field = something(e.field, field, Some(nothing)),
-                    field_type = something(e.field_type, field_type, Some(nothing)),
-                    row = something(e.row, row, Some(nothing)))
+function with_location(e::InvalidValueError; op = nothing, model = nothing, field = nothing,
+                       field_type = nothing, row = nothing)
+  n = something(e.row, row, Some(nothing))
+  # The check the constructor's typed keyword made, with its text.
+  n isa Union{Nothing, Integer} || throw(TypeError(Symbol("keyword argument"), :row, Union{Nothing, Integer}, n))
+  # Each part converted as the keyword constructor converts it, so the refusal is the one it built.
+  location = _Location((_opt_string(something(e.op, op, Some(nothing))),
+                        _opt_string(something(e.model, model, Some(nothing))),
+                        _opt_string(something(e.field, field, Some(nothing))),
+                        _opt_string(something(e.field_type, field_type, Some(nothing))),
+                        n === nothing ? nothing : Int(n)))
+  return InvalidValueError(e.reason, e.kind, location)
+end
 
 """
     UnsupportedConnectionError(msg) <: PormGError

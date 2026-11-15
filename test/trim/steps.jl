@@ -1,13 +1,15 @@
-# The steps both SQLite entries of the fixture app run (#1599): `main.jl` (boot, write, read) and
-# `read.jl` (boot, read). Included by each entry after its `using` line, so the two binaries print
-# the same lines for the same step and exit with the same code when it fails.
+# The steps both SQLite entries of the fixture app run (#1599): `main.jl` (boot, two refused writes, a
+# write, read) and `read.jl` (boot, read). Included by each entry after its `using` line, so the two
+# binaries print the same lines for the same step and exit with the same code when it fails.
 #
 # Each step prints one line to `Core.stdout` (a trimmed binary's `Base.stdout` is stale and it prints
 # no `@error` records). A caught exception prints its type; for a `MethodError`, the function it
 # missed and the argument types; for a PormG refusal, its message.
 const M = TrimF1.M
 
-# Pasted unedited from `M.Race.objects.list(show_query = :struct)` on SQLite (#1632).
+# Pasted from `M.Race.objects.list(show_query = :struct)` on SQLite (#1632), without the two columns the
+# write fills itself (`updated_on`, `token`): the typed read projects the struct's fields, so the read is
+# the one it was before they were added.
 struct RaceRow
     raceid::Int64     # IDField
     year::Int64       # IntegerField
@@ -21,6 +23,7 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
 
 @noinline function failed(step::String, @nospecialize(e))
     say(step, string("threw ", nameof(typeof(e))))
+    e isa PormG.InvalidValueError && Core.println("  msg: ", (e::PormG.InvalidValueError).msg)
     e isa MethodError && Core.println("  missed: ", typeof(e.f))
     e isa MethodError && Core.println("  args: ", typeof(e.args))
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)
@@ -57,6 +60,39 @@ function boot_step(dir::String, idle_timeout::Int = 0)::Bool
     catch e
         failed("boot", e); return false
     end
+end
+
+# Two creates PormG refuses before any SQL (#1599 layer 7, #1694): a date the date validator refuses,
+# and a `Bool` for a text column, which passes validation and is refused by the format step. Each prints
+# the refusal's type and message, so the run shows the write's error paths work in a trimmed image: a
+# path that cannot run there raises a `MethodError` in place of the refusal. Exit code 6 when either
+# create is not refused with an `InvalidValueError`.
+function refused_step()::Bool
+    a = try
+        M.Race.objects.create("year" => 2009, "round" => 6, "circuitid" => 1,
+                              "name" => "Monaco Grand Prix", "date" => "2009-02-30")
+        say("refused", "the create with an invalid date was not refused"); false
+    catch e
+        refusal("refused", e)
+    end
+    b = try
+        M.Race.objects.create("year" => 2009, "round" => 6, "circuitid" => 1,
+                              "name" => true, "date" => Date(2009, 5, 24))
+        say("refused", "the create with a Bool name was not refused"); false
+    catch e
+        refusal("refused", e)
+    end
+    return a && b
+end
+
+# One refusal's line: its type and message for an `InvalidValueError`, `failed`'s lines for anything else.
+@noinline function refusal(step::String, @nospecialize(e))::Bool
+    if e isa PormG.InvalidValueError
+        say(step, string("InvalidValueError: ", (e::PormG.InvalidValueError).msg))
+        return true
+    end
+    failed(step, e)
+    return false
 end
 
 # The typed read into the struct `show_query = :struct` wrote, one line per row. Exit code 3 when it

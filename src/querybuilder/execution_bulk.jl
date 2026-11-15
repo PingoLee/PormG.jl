@@ -648,8 +648,10 @@ function _allocate_sqlite_ids(model::PormGModel, connection::PormGSQLite, pk_fie
     throw(QueryBuildError("allocate_primary_keys: the primary key $(pk_field) of model $(model.name) " *
       "holds a value that is not a 64-bit integer, so SQLite has no next id to allocate from. Supply the key " *
       "in the table, or declare it IDField(generated = false)."))
-  max_id = (ismissing(max_id) || isnothing(max_id)) ? Int64(0) : Int64(max_id)
-  reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field, connection)
+  # Asserted (#1599 layer 7): `Int64` of the untyped cell, and the overlay's untyped read of the `Int64`s it
+  # stores, made the ids `Any`, so `create`'s `[1]` and its store into the insert were dynamic calls.
+  max_id = ((ismissing(max_id) || isnothing(max_id)) ? Int64(0) : Int64(max_id))::Int64
+  reserved_max = get_sqlite_reserved_primary_key_max(model, pk_field, connection)::Union{Nothing, Int64}
   max_id = max(max_id, something(reserved_max, Int64(0)))
   new_max = max_id + n
 

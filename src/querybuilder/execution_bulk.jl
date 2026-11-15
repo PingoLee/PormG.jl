@@ -94,6 +94,37 @@ end
 end
 @noinline _fill_bulk_column_other(@nospecialize(value), n::Int)::AbstractVector = fill(value, n)
 
+# One cell of a frame column, read at the column's type (#1599 layer 7, #1694). The frame holds its columns as
+# `AbstractVector`, so `column[i]` dispatched at run time, and the trimmed full fixture entry's `bulk_insert`
+# raised `MethodError(getindex, (Vector{Int64}, Int64))` there. One arm per column type a table commonly hands
+# over (the element types `_validate_field_value_at` walks, with and without `missing`), each the same `getindex`;
+# any other column takes one dynamic call. The cell is the value `column[i]` returns.
+@noinline function _bulk_cell(@nospecialize(column::AbstractVector), i::Int)
+  column isa Vector{Int64} && return column[i]
+  column isa Vector{String} && return column[i]
+  column isa Vector{Float64} && return column[i]
+  column isa Vector{Bool} && return column[i]
+  column isa Vector{Dates.Date} && return column[i]
+  column isa Vector{Dates.DateTime} && return column[i]
+  column isa Vector{Dates.Time} && return column[i]
+  column isa Vector{TimeZones.ZonedDateTime} && return column[i]
+  column isa Vector{Decimals.Decimal} && return column[i]
+  column isa Vector{UUIDs.UUID} && return column[i]
+  column isa Vector{Int32} && return column[i]
+  column isa Vector{Nothing} && return column[i]
+  column isa Vector{Any} && return column[i]
+  column isa Vector{Union{Missing, Int64}} && return column[i]
+  column isa Vector{Union{Missing, String}} && return column[i]
+  column isa Vector{Union{Missing, Float64}} && return column[i]
+  column isa Vector{Union{Missing, Bool}} && return column[i]
+  column isa Vector{Union{Missing, Dates.Date}} && return column[i]
+  column isa Vector{Union{Missing, Dates.DateTime}} && return column[i]
+  column isa Vector{Union{Nothing, Int64}} && return column[i]
+  column isa Vector{Union{Nothing, String}} && return column[i]
+  return _bulk_cell_other(column, i)
+end
+@noinline _bulk_cell_other(@nospecialize(column::AbstractVector), i::Int) = column[i]
+
 # The one refusal for an argument that is not a table, shared by the writers and their curried forms.
 #
 # A PormG query is a Tables.jl source (#1344 phase 1), but not a bulk input: reading it would run its
@@ -1959,11 +1990,11 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
           # Validation checks consistent with single insert(), row by row, so the first row that
           # fails is the one reported, by its row and field (#875).
           for (j, field) in enumerate(fields_df)
-            _validate_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index)
+            _validate_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index)
           end
 
           # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-          cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
+          cells = [_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
           if pg_arrays
             foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
           else

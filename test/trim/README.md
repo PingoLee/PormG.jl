@@ -12,15 +12,14 @@ the refusal's type and message), one `Race.objects.create` that leaves the two a
 `list(show_query = :struct)` writes (#1632). Each step prints one line. The read-only entry, `read.jl`,
 runs the same boot and read without the write; the steps both entries share are in `steps.jl`.
 
-Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary prints both
-refusals, fills the two automatic values, builds its `INSERT`, binds its values and runs it on the
-SQLite worker (#1694), and stops there: the extension materializes every statement's result with
-`Tables.rowtable`, which a trimmed image has no code for, so the write raises `StatementError` (the
-walls left are in #1599's tables). The fixture has no `DateTimeField(auto_now_add = true)` yet: the
-timestamp's text is validated through TimeZones.jl's string parser, which a trimmed image cannot run,
-so the binary would stop there, before its `INSERT`. The read-only entry's binary returns its row
-(#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only entry and its
-CI job" below).
+Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary completes
+(#1694): it prints both refusals, fills the two automatic values, runs its `INSERT` and reads the row
+back on the SQLite worker, and its typed read then returns both rows, the one it wrote included. It
+prints the JIT control's lines and exits 0. The fixture has no `DateTimeField(auto_now_add = true)`
+yet: the timestamp's text is validated through TimeZones.jl's string parser, which a trimmed image
+cannot run, so the binary would stop there, before its `INSERT`. The read-only entry's binary returns
+its row (#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only entry
+and its CI job" below).
 
 ## Drivers
 

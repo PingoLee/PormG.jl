@@ -453,7 +453,9 @@ const _NO_ERROR_FIELDS = _error_record(nothing, nothing, nothing, nothing, nothi
 # calls, so it answers with its type name alone, and no phrase a classifier tests (a lost connection, a
 # lock, an inactive transaction) matches it (decided on #1799: a `MethodError` on the statement path is a
 # bug to report, never a connection to renew or a statement to retry). Anything else takes `string`, as
-# before, behind `@noinline`.
+# before, behind `@noinline`. The rule covers a `MethodError` handed over itself: every caller unwraps the
+# error first (`_unwrap_async_exception`, `_driver_cause`), and one inside a wrapper no caller opens would
+# still be read by `string`.
 @noinline function _unowned_string(@nospecialize(x))::String
   x isa String && return x
   x isa SubString{String} && return String(x)

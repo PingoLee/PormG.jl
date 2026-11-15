@@ -407,7 +407,7 @@ end
 # The rows, stepped as `_sqlite_rows_into` steps them; an error raised while building a row (a parser's
 # refusal) is recorded on the decoder and the walk stops, so `fetch` raises it as it was raised.
 function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._FieldRowDecoder)::Vector{Dict{Symbol,Any}}
-  handle = SQLite._get_stmt_handle(q.stmt)
+  handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
   names = q.names   # a `Vector{Symbol}` (see `_sqlite_rows_into`)
   fkeys = Symbol[QB._field_key(decode, n) for n in names]
   parsers = PormG.ReadParser[QB._field_parser(decode, k) for k in fkeys]

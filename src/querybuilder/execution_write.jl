@@ -108,10 +108,13 @@ function decoded_on_worker(d::_FieldRowDecoder, result)
 end
 
 # The read-back statement's rows: SQLite's has no parameter, MySQL's binds the key in its own collector.
-_read_back_rows(connection, sql::String, ::Nothing, decoder::_FieldRowDecoder) =
-  fetch(connection, sql; params = nothing, _decode = decoder)::Vector{Dict{Symbol,Any}}
-_read_back_rows(connection, sql::String, params::AbstractPormGParam, decoder::_FieldRowDecoder) =
-  fetch(connection, sql; params = params, _decode = decoder)::Vector{Dict{Symbol,Any}}
+# Through `settings`, as the INSERT before it: the transaction that pins the pair is opened on
+# `settings.connections` and found by that pool (#831), so a read-back on any other pool (a `connection =`
+# the caller passed) would miss it and read another connection's `last_insert_rowid()`.
+_read_back_rows(settings::PormGSettings, sql::String, ::Nothing, decoder::_FieldRowDecoder) =
+  fetch(settings, sql; params = nothing, _decode = decoder)::Vector{Dict{Symbol,Any}}
+_read_back_rows(settings::PormGSettings, sql::String, params::AbstractPormGParam, decoder::_FieldRowDecoder) =
+  fetch(settings, sql; params = params, _decode = decoder)::Vector{Dict{Symbol,Any}}
 
 # The columns a write hands its row back through (#1490): every declared field that owns a column, in
 # declaration order, quoted. `RETURNING` and the SQLite/MySQL read-backs name them rather than `*`, so
@@ -352,7 +355,7 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
       inserted = fetch(settings, sql, parameters)
       read_back = _inserted_row_query(connection, model, real_obj.insert, inserted, safe_table_name)
       rows = read_back === nothing ? Dict{Symbol, Any}[] :
-        _read_back_rows(connection, read_back[1], read_back[2], decoder)
+        _read_back_rows(settings, read_back[1], read_back[2], decoder)
       isempty(rows) ?
         Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
         rows[1]

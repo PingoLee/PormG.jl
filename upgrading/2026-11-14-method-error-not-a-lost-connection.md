@@ -17,11 +17,12 @@ For a `MethodError`, that text was `string(e)`, which prints the function and it
 `MethodError` whose arguments held such a phrase was treated as that condition. A `MethodError` is now
 classified by its type name alone, so no phrase matches it:
 
-| a `MethodError` on the statement path whose arguments print a phrase | before | now |
+| a `MethodError` whose arguments print a phrase | before | now |
 |---|---|---|
-| SQLite, `database is locked` | the statement was retried, up to the lock-retry limit | raised at once |
-| SQLite or LibPQ, a lost-connection phrase | the connection was renewed and the pool's idle connections retired | raised as a `StatementError`, the connection kept |
-| `no transaction is active` | treated as an already-closed transaction | raised |
+| SQLite, `database is locked`, raised by a statement | the statement was retried, up to the lock-retry limit | raised at once |
+| SQLite or LibPQ, a lost-connection phrase, raised by a statement outside a transaction | classified as a lost connection: the connection renewed, the pool's idle connections retired, and the error raised as an `OperationalError` | raised as a `StatementError`, the connection kept |
+| the same, raised inside a transaction | the abandoned statement's cleanup treated it as a lost connection | treated as any other error |
+| SQLite, `no transaction is active`, raised by a ROLLBACK | taken as a benign rollback: the connection released to the pool | taken as a failed rollback: the connection renewed or discarded, and `Failed to rollback…` logged |
 
 The change is what lets a `juliac --trim` binary report the `MethodError` itself: `string` on an untyped
 value has no compiled code there, so classifying the error raised a second `MethodError` in its place.
@@ -46,5 +47,6 @@ try
     M.Result.objects.filter("driverid__surname" => "Senna").list()
 catch e
     e isa PormG.StatementError && e.cause isa MethodError && rethrow()   # a bug to fix, not a condition to retry
+    rethrow()   # anything else: handle it as your app already does
 end
 ```

@@ -148,9 +148,13 @@ function bulk_step()::Bool
         rows = [(year = 2010, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
                 (year = 2011, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2011, 5, 29))]
         r = PormG.bulk_insert(M.Race.objects, rows)::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
-        back = M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)
+        # The read every binary of the fixture runs (`query_step`'s), with the new rows picked out here: a
+        # `year__@gte` filter takes the render's unnamed-temporal check, which a trimmed image cannot run yet
+        # (#1599 layer 5, not this step's subject).
+        monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
+        back = sort!([x.year for x in monaco if x.year >= 2010])
         say("bulk", string(r.count, " rows; ", length(back), " read back"))
-        return r.count == 2 && length(back) == 2 && back[1].year == 2010 && back[2].year == 2011
+        return r.count == 2 && back == [2010, 2011] && length(monaco) == 3
     catch e
         failed("bulk", e); return false
     end

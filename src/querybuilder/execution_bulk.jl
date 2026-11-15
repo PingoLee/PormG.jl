@@ -89,10 +89,16 @@ function _bulk_frame(src, op::AbstractString)::_BulkFrame
   cols = Tables.columns(src)
   names = String[]
   columns = Dict{String, AbstractVector}()
+  # Each column's length, measured here while the column is still at the type `Tables.getcolumn` gives
+  # it (#1599 layer 7): read back out of the `AbstractVector` store, `length` had no compiled target in
+  # a trimmed image. The same lengths, compared the same way.
+  lengths = Int[]
   for name in Tables.columnnames(cols)
     column = Tables.getcolumn(cols, name)
     push!(names, String(name))
-    columns[String(name)] = column isa AbstractVector ? column : collect(column)
+    stored = column isa AbstractVector ? column : collect(column)
+    columns[String(name)] = stored
+    push!(lengths, length(stored))
   end
   if isempty(names)
     # No columns: nothing to write, which is an empty table only when it also has no rows.
@@ -100,8 +106,8 @@ function _bulk_frame(src, op::AbstractString)::_BulkFrame
       throw(QueryBuildError("Error in $(op), the table has rows but no columns"))
     return _BulkFrame(names, columns, 0)
   end
-  row_count = length(columns[names[1]])
-  all(name -> length(columns[name]) == row_count, names) ||
+  row_count = lengths[1]
+  all(==(row_count), lengths) ||
     throw(QueryBuildError("Error in $(op), the table's columns have different lengths"))
   return _BulkFrame(names, columns, row_count)
 end

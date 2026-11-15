@@ -3997,7 +3997,7 @@ See also [`acquire_connection`](@ref), `with_transaction_async`, and the
 [Transactions and `run_in_transaction`](@ref) guide.
 """
 function with_transaction(pool::_SQLEngine, sql::String;
-  conn = nothing,
+  @nospecialize(conn = nothing),   # #1599 layer 7: a handle held untyped; compiled once (`_with_transaction_with`)
   release_conn::Bool = false,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
@@ -4056,6 +4056,26 @@ with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, relea
 with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_pool(_with_transaction_async_on, pool.connections, sql, conn, params)
 _with_transaction_on(pool::_SQLEngine, sql::AbstractString, conn, release_conn::Bool, params) = with_transaction(pool, sql; conn=conn, release_conn=release_conn, params=params)
 _with_transaction_async_on(pool::_SQLEngine, sql::String, conn, params) = with_transaction_async(pool, sql; conn=conn, params=params)
+
+# `with_transaction(pool, sql; conn, release_conn, params)` with a connection the caller holds, which it holds
+# untyped (#1599 layer 7, #1694): `delete()`'s hand-rolled lifecycle runs every statement this way. Spelled as
+# keywords, `conn`'s run-time type made the keyword `NamedTuple` abstract, and the call had no target in a
+# trimmed image (`MethodError(kwcall, (NamedTuple{(:conn,), Tuple{SQLite.DB}}, with_transaction, …))`). The
+# `NamedTuple` type is written out here, `conn` as `Any` and the parameters at their own type, so the keyword
+# call is static, on the public generic (a method added for a pool type is still the one called). On a
+# settings entry, the pool is walked as `with_pool` walks it, which is what `with_transaction(settings, …)`
+# does; a pool `with_pool` does not list takes that call.
+_with_transaction_with(pool::_SQLEngine, sql::String, @nospecialize(conn), release_conn::Bool, params::P) where {P} =
+  Core.kwcall(NamedTuple{(:conn, :release_conn, :params), Tuple{Any, Bool, P}}((conn, release_conn, params)),
+              with_transaction, pool, sql)
+function _with_transaction_with(settings::Settings, sql::String, @nospecialize(conn), release_conn::Bool, params::P) where {P}
+  pool = settings.connections
+  pool isa SQLiteConnectionPool && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  pool isa PostgresConnectionPool{:libpq} && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  pool isa PostgresConnectionPool{:postgres} && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  pool isa MySQLConnectionPool && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  return with_transaction(settings, sql; conn = conn, release_conn = release_conn, params = params)
+end
 
 """
     with_savepoint(f::Function, settings::PormGSettings, name::String) -> result

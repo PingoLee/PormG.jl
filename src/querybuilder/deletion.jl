@@ -440,20 +440,20 @@ function delete(objct::SQLObjectHandler;
           # finally entirely and strand this connection out of the pool holding an open
           # BEGIN IMMEDIATE — i.e. the database write lock. The #139/#71 class.
           for sql in _after_begin_sql(connection)
-            with_transaction(settings, sql, conn=conn)
+            _with_transaction_with(settings, sql, conn, false, nothing)
           end
           with_tx_context(settings.connections, conn) do
             run_deletions(conn)
           end
           # Commit — release_conn=false: the finally owns the single release.
-          with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
+          _with_transaction_with(settings, "COMMIT;", conn, false, nothing)
         catch e
           body_error = e
           # Roll back on the still-leased connection. A rollback failure must not mask the body's
           # error — capture it so the finally renews/discards the dirty connection instead of
           # releasing it (#71), then rethrow the original.
           try
-            with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=false)
+            _with_transaction_with(settings, "ROLLBACK;", conn, false, nothing)
           catch rollback_err
             rollback_error = rollback_err
             @error "Failed to rollback delete transaction" exception=rollback_err
@@ -575,7 +575,7 @@ function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::Por
     # On `connection`, the pool the statements render for — a `connection =` override included.
     return _key_vector(Tables.columntable(fetch(connection, select_sql, plan.parameters)))
   end
-  result, _ = with_transaction(connection, sql, conn=conn, params=plan.parameters)
+  result, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters)
   return _key_vector(Tables.columntable(result))
 end
 
@@ -744,7 +744,7 @@ function _read_self_children!(results::Vector, connection::_SQLEngine, model::Po
     _is_live_pool(connection) || return (K[], K[])
     columns = Tables.columntable(fetch(connection, select_sql, parameters))
   else
-    result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
+    result, _ = _with_transaction_with(connection, sql, conn, false, parameters)
     columns = Tables.columntable(result)
   end
   isempty(columns) && return (K[], K[])
@@ -1209,7 +1209,7 @@ _affected_row_count(connection::PormGPostgres, result, conn)::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
 function _affected_row_count(connection::PormGSQLite, result, conn)::Int
   _require_statement_conn(conn)
-  changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
+  changes, _ = _with_transaction_with(connection, "SELECT changes();", conn, false, nothing)
   return Int(first(Tables.rowtable(changes))[1])
 end
 # MySQL's OK packet counts the rows the statement matched (the pool connects with `found_rows`), so a
@@ -1353,7 +1353,7 @@ function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormG
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :lock, parameters=parameters)
   end
-  with_transaction(connection, sql, conn=conn, params=parameters)
+  _with_transaction_with(connection, sql, conn, false, parameters)
   return nothing
 end
 
@@ -1384,7 +1384,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
       return _show_query_result(show_query, sql, connection, model, :delete, parameters=nothing)
     end
 
-    result, _ = with_transaction(connection, sql, conn=conn, params=nothing)
+    result, _ = _with_transaction_with(connection, sql, conn, false, nothing)
     deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
     return deleted_counter
   end
@@ -1404,7 +1404,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
     return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)
   end
   @pormg_debug false
-  result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
+  result, _ = _with_transaction_with(connection, sql, conn, false, parameters)
   deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
   return deleted_counter  # Return count of deleted objects
 end
@@ -1443,5 +1443,5 @@ function update_field(connection::_SQLEngine, model::PormGModel, field::String, 
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end
   # LibPQ.execute(connection, sql)
-  with_transaction(connection, sql, conn=conn, params=parameters)
+  _with_transaction_with(connection, sql, conn, false, parameters)
 end

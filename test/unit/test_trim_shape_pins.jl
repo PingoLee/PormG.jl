@@ -2857,6 +2857,21 @@ end
     del_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "deletion.jl"), String)
     @test occursin("_finalize_with(settings, conn, rollback_error, false, body_error, false)", del_src)
     @test !occursin("finalize_transaction_connection!(settings, conn; rollback_error=rollback_error", del_src)
+    # Its statements on the transaction's connection: `with_transaction(…; conn = conn)` with `conn` untyped built an
+    # abstract keyword `NamedTuple` (`MethodError(kwcall, …with_transaction…)`); `_with_transaction_with` writes the
+    # type out, and `with_transaction`'s `conn` is unspecialized, so the sorter's call into its body is static too.
+    @test isdefined(CP, :_with_transaction_with)
+    if isdefined(CP, :_with_transaction_with)
+      for P in (Nothing, QB.SQLiteParameterizedQuery)
+        @test (P, _dynamic_calls(CP._with_transaction_with, (CP.SQLiteConnectionPool, String, Any, Bool, P))) == (P, String[])
+        @test length(_dynamic_calls(CP._with_transaction_with, (S, String, Any, Bool, P))) == 1   # the open arm
+        # The call, not the method a row names: each row is "<method signature>: <dynamic statement>".
+        @test !any(c -> occursin("#with_transaction#", last(split(c, ": "; limit = 2))),
+                   _dynamic_calls_deep(CP._with_transaction_with, (CP.SQLiteConnectionPool, String, Any, Bool, P); depth = 2))
+      end
+    end
+    @test !occursin(r"with_transaction\((settings|connection), [^)\n]*conn=conn", del_src)
+    @test count("_with_transaction_with(", del_src) == 10
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

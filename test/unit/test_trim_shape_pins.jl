@@ -3008,6 +3008,14 @@ end
     @test occursin("zdt = parse_zoned_timestamp(normalize_sqlite_datetime_string(s))", m_src)
     @test occursin("return parse_zoned_timestamp(normalized)", d_src)
     @test !occursin("ZonedDateTime(normalized, dateformat", d_src)
+    # and the text a timestamp is written as, by hand for years 0-9999: `Dates.format` padded a field through code a
+    # trimmed image had no code for (`repeat(::Char, ::Int)` from `rpad`), so a filled timestamp with a field that
+    # needed a leading zero raised `MissingCodeError`.
+    @test isdefined(M, :_canonicalize_datetime_other)
+    if isdefined(M, :_canonicalize_datetime_other)
+      @test isempty(_dynamic_calls(M._canonicalize_datetime_utc, (M.ZonedDateTime,)))
+      @test isempty(_dynamic_calls(M._print_zero_padded, (Base.IOBuffer, Int, Int)))
+    end
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

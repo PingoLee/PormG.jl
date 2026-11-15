@@ -102,3 +102,27 @@ end
   @test_throws PormG.InvalidValueError _TSP_M.format_timezone_sql("2009-13-45T25:61:00.000+00:00")
   @test_throws PormG.InvalidValueError _TSP_M.format_timezone_sql("2009-05-24T14:00:00.000+05:60")   # its range check, before any parse
 end
+
+# What: `_canonicalize_datetime_utc(zdt)`, the text a timestamp is written as, against the `Dates.format` it
+#   replaced, over a grid of years (0 through 9999, and outside it: 10000, 12009, -1, -5), months, days,
+#   milliseconds and zones, and a deterministic sweep of 20,000 instants.
+# Expected: the same text for every one.
+# Why: it is written by hand for years 0-9999 (`Dates.format` pads through code a trimmed image has no code for,
+#   #1599 layer 7); every other year keeps `Dates.format`, which writes a year's last four digits.
+@testset "a timestamp's canonical text is the one Dates.format wrote (#1599 layer 7)" begin
+  old(z) = Dates.format(astimezone(z, _TSP_M._DATETIME_UTC_TZ), _TSP_M._DATETIME_DATEFORMAT)
+  zones = [_TSP_M._DATETIME_UTC_TZ, _TSP_M.FixedTimeZone("UTC+05:30", 19800), _TSP_M.FixedTimeZone("UTC-03:00", -10800),
+           _TSP_M.FixedTimeZone("Z", 0), _TSP_M.FixedTimeZone("UTC+14:00", 50400)]
+  for y in (0, 1, 9, 10, 99, 100, 999, 1000, 1969, 1970, 2009, 9998, 9999, 10000, 12009, -1, -5), m in (1, 12),
+      d in (1, 28), ms in (0, 7, 45, 999), tz in zones
+    z = ZonedDateTime(DateTime(y, m, d, 1, 2, 3, ms), tz)
+    @test (z, _TSP_M._canonicalize_datetime_utc(z)) == (z, old(z))
+  end
+  mismatches = 0
+  for k in 0:19_999
+    dt = DateTime(k % 10_000, 1 + k % 12, 1 + k % 28, k % 24, (7k) % 60, (13k) % 60, (37k) % 1000)
+    z = ZonedDateTime(dt, zones[1 + k % length(zones)])
+    _TSP_M._canonicalize_datetime_utc(z) == old(z) || (mismatches += 1)
+  end
+  @test mismatches == 0
+end

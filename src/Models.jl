@@ -5123,8 +5123,36 @@ end
 # instant collapses to ONE string (`yyyy-mm-ddTHH:MM:SS.sss+00:00`, = DATETIME_FORMAT),
 # so SQLite's lexicographic TEXT comparison agrees with PostgreSQL's timestamptz instant
 # comparison. Mirrors Django USE_TZ / Rails / SQLAlchemy. Idempotent.
-_canonicalize_datetime_utc(value::ZonedDateTime)::String =
+#
+# Written by hand for a year from 0 to 9999 (#1599 layer 7, #1694): `Dates.format` pads a field through `rpad` and
+# `repeat(::Char, ::Int)` called from untyped code, which a trimmed image has no code for, so the full fixture
+# entry's auto-filled timestamp raised `MissingCodeError` whenever one of its fields needed a leading zero. The text
+# is the one `Dates.format` writes: each field zero-padded to its width (`yyyy`, `mm`, …, `sss`) and UTC's offset,
+# `+00:00`. Any other year takes `Dates.format` itself, in the open arm (it keeps a year's last four digits).
+function _canonicalize_datetime_utc(value::ZonedDateTime)::String
+  dt = value.utc_datetime
+  0 <= year(dt) <= 9999 || return _canonicalize_datetime_other(value)
+  io = IOBuffer()
+  _print_zero_padded(io, year(dt), 4); print(io, '-')
+  _print_zero_padded(io, month(dt), 2); print(io, '-')
+  _print_zero_padded(io, day(dt), 2); print(io, 'T')
+  _print_zero_padded(io, hour(dt), 2); print(io, ':')
+  _print_zero_padded(io, minute(dt), 2); print(io, ':')
+  _print_zero_padded(io, second(dt), 2); print(io, '.')
+  _print_zero_padded(io, millisecond(dt), 3)
+  print(io, "+00:00")
+  return String(take!(io))
+end
+@noinline _canonicalize_datetime_other(value::ZonedDateTime)::String =
   Dates.format(astimezone(value, _DATETIME_UTC_TZ), _DATETIME_DATEFORMAT)
+
+function _print_zero_padded(io::IOBuffer, v::Int, width::Int)
+  for _ in (ndigits(v) + 1):width
+    print(io, '0')
+  end
+  print(io, v)
+  return nothing
+end
 
 function format_timezone_sql(value::AbstractString; format::AbstractString=DATETIME_FORMAT)
   # `::AbstractString`, not `::String` (#598). `split` returns `SubString`, so

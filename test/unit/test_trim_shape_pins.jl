@@ -2786,6 +2786,22 @@ end
               (a isa Tuple && all(i -> (a[i] isa QB.SQLText ? a[i].field == b[i].field : isequal(a[i], b[i])), 1:length(a))))
       end
     end
+
+    # The SET clause's collector: the instruction holds it in a union slot, and `update`'s SET closure captured it
+    # there, so the closure was no concrete type and the `with_scope(instruction; set_reads) do … end` keyword call
+    # had no target in the trimmed binary. `_engine_collector` asserts it at the type `get_parameter` makes.
+    @test isdefined(QB, :_engine_collector)
+    if isdefined(QB, :_engine_collector)
+      slot = fieldtype(QB.InstructionObject, :parameters)
+      for (E, C) in ((PormG.PormGPostgres, QB.PgParameterizedQuery), (PormG.PormGSQLite, QB.SQLiteParameterizedQuery),
+                     (PormG.PormGMySQL, QB.MySQLParameterizedQuery))
+        @test only(Base.return_types(QB._engine_collector, (E, slot))) === C
+        @test typeof(QB.get_parameter(E === PormG.PormGPostgres ? PormG.ConnectionPool.PostgresConnectionPool("host=x dbname=y") :
+                                      E === PormG.PormGSQLite ? PormG.ConnectionPool.SQLiteConnectionPool(":memory:") :
+                                      PormG.ConnectionPool.MySQLConnectionPool("host='x'"))) === C
+      end
+    end
+    @test occursin("parameters = _engine_collector(connection, instruction.parameters)", ew_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

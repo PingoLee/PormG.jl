@@ -1699,7 +1699,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # Don't allow to update a field without filter
     instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
   
-    parameters = instruction.parameters
+    parameters = _engine_collector(connection, instruction.parameters)   # the build above made it (#1599 layer 7)
     fields = model.field_names
 
     # Check if the fields need to be updated automatically. Filled as `create` fills them (#1599 layer 7): the

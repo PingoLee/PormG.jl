@@ -40,6 +40,13 @@ end
 # (#1698), ahead of the slots that name them.
 get_parameter(connection::PormGSQLite) = SQLiteParameterizedQuery()
 get_parameter(connection::PormGMySQL) = MySQLParameterizedQuery()
+# The collector a build made with `get_parameter(connection)`, at that type (#1599 layer 7, #1694). An
+# instruction holds it in its union slot (`ParamCollector`), so a closure that captures it is not a concrete
+# type, and a keyword call taking that closure had no compiled target in a trimmed image (`update`'s SET
+# clause, `with_scope(instruction; set_reads) do … end`). Only for a build that was not handed a collector.
+_engine_collector(::PormGPostgres, p) = p::PgParameterizedQuery
+_engine_collector(::PormGSQLite, p) = p::SQLiteParameterizedQuery
+_engine_collector(::PormGMySQL, p) = p::MySQLParameterizedQuery
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bucket accessor helper – returns the vector for the current context

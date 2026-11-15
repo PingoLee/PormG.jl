@@ -315,7 +315,7 @@ function delete(objct::SQLObjectHandler;
       # FIRST, and the cascade is planned from those keys. See `_root_key_plan`.
       key_plan = _root_key_plan(connection, model, objct)
       if key_plan === nothing
-        run_plan(conn, plan(deepcopy(objct)), false)
+        run_plan(conn, plan(_terminal_copy(objct)), false)   # #1599 layer 7: shallow (#1624), as below
         return nothing
       end
       root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
@@ -552,7 +552,7 @@ function _root_key_plan(connection::_SQLEngine, model::PormGModel, objct::SQLObj
   # Only an EMPTY predicate keeps its SQL: an unfiltered delete takes every row, which no statement of
   # the cascade can change.
   key = resolve_delete_key(model)
-  root = deepcopy(objct)
+  root = _terminal_copy(objct)   # #1599 layer 7: shallow (#1624); `values` replaces the projection vector
   root.values(key)
   entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => root)
   where_sql, parameters, alias = _collector_predicate(connection, [entry])
@@ -805,7 +805,9 @@ end
 # copy of the parent query so all three on_delete branches (CASCADE, SET_NULL, SET_DEFAULT) stay in sync.
 function prepare_related_query(keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel, field_name::Union{String, Symbol})
   delete_key = resolve_delete_key(related_model; fallback=string(field_name))
-  _query = deepcopy(keys[:objct])
+  # #1599 layer 7: shallow (#1624), as a read terminal's copy; `values` replaces the projection vector. A deep
+  # copy walks the query by run-time dispatch, and the trimmed full fixture entry's `delete` stopped in one.
+  _query = _terminal_copy(keys[:objct])
   delete_key != DIRECT_DELETE_KEY_SENTINEL && _query.values(delete_key)
   return Dict{Symbol, Union{String, SQLObjectHandler}}(:key => delete_key, :objct => _query)
 end
@@ -1367,8 +1369,7 @@ stripped from a private copy: the entry's `:key` projection is what a child's `"
 but a row predicate has no projection (#765, the #668 move).
 """
 function _build_entry(connection::_SQLEngine, key::Dict{Symbol, Union{String, SQLObjectHandler}}, parameters)
-  work = deepcopy(key[:objct].object)
-  empty!(work.values)
+  work = _mutation_copy(key[:objct].object)   # #1599 layer 7: `update`'s copy, `values` emptied
   # #1002: a row predicate — `pk IN (…)` and an `EXISTS` fence — so a repeated row is invisible.
   return build(work, connection=connection, parameters=parameters, semi_join=true, mutation=true)
 end

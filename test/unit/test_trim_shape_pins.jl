@@ -2883,6 +2883,11 @@ end
     @test occursin("conn_box = Base.RefValue{Any}(conn)", del_src) && occursin("_with_tx_context_on(settings, conn) do", del_src)
     @test occursin("run_deletions = function(@nospecialize(conn),)", del_src)
     @test !occursin("with_tx_context(settings.connections, conn) do", del_src)
+    # The planner's copies of the query: four `deepcopy`s, each a walk of the query's object graph by run-time
+    # dispatch (the trimmed binary stopped in one). The build writes nothing into a query (#1624): three are a read
+    # terminal's shallow copy, whose `values` the planner replaces, and the entry predicate's is `update`'s copy.
+    @test !occursin("deepcopy(", del_src)
+    @test count("_terminal_copy(", del_src) == 3 && occursin("work = _mutation_copy(key[:objct].object)", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

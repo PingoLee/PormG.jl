@@ -434,7 +434,7 @@ end
 
 # #1599: the result this extension's statements deliver, so `ConnectionPool._decoded_typed` hands it to
 # the typed read's decoder at its concrete type (`backend_result_type`'s docstring).
-PormG.backend_result_type(::Type{_Pool}) = MySQLResult
+# SCRATCH (red-run demo for #1803, never merged): registration removed
 
 Tables.istable(::Type{MySQLResult}) = true
 Tables.columnaccess(::Type{MySQLResult}) = true

@@ -748,7 +748,7 @@ end
 PormG.backend_handle_type(::Type{_Pool}) = _Conn
 # #1599: the result this extension's statements deliver, so `ConnectionPool._decoded_typed` hands it to
 # the typed read's decoder at its concrete type (`backend_result_type`'s docstring).
-PormG.backend_result_type(::Type{_Pool}) = Postgres.Result
+# SCRATCH (red-run demo for #1803, never merged): registration removed
 
 # #1599: the typed read over this driver's result, cell by cell (`QueryBuilder._typed_rows_by_cell`).
 # Postgres.jl keeps each row's cells in a `Vector{Any}` (`ResultRow.data`, read with `getfield`: a

@@ -3,8 +3,12 @@
 # reported (job summary and artifact), never a failure condition: the track lowers them one layer at a
 # time, and a total rises whenever a wall opens. See test/trim/README.md.
 #
+# Two more jobs build the fixture's server variants (test/trim/mysql, test/trim/postgres, #1614) and run
+# them against a service container: MySQL 8.4, and PostgreSQL 18 through Postgres.jl with SCRAM-SHA-256.
+# Each fails unless its binary exits 0, prints the row, and its `fail` step prints the server's own error.
+#
 # Not on every PR: a trimmed build takes several minutes. It runs nightly, by hand, and on a PR that
-# touches the fixture or this file.
+# touches the fixture, this file or one of the two driver extensions the server variants build.
 name: Trim (juliac)
 
 on:
@@ -15,6 +19,8 @@ on:
     paths:
       - 'test/trim/**'
       - '.github/workflows/trim.yml'
+      - 'ext/PormGMySQLExt.jl'
+      - 'ext/PormGPostgresExt.jl'
 
 permissions:
   contents: read
@@ -144,4 +150,248 @@ jobs:
             build/layers.txt
             build/run.txt
             build/tasks.txt
+          if-no-files-found: warn
+
+  # ── The server variants (#1614) ──────────────────────────────────────────────────────────────────
+  # The two jobs below run the same steps; only their service, variant and SQLSTATE differ. The database
+  # credentials are throwaway values for the service container this job starts and discards, and belong to
+  # no other server. The fixture's prep.jl refuses a database whose name lacks "trim", hence pormg_trim.
+
+  mysql-read:
+    name: Trimmed read (MySQL 8.4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: trim-ci-root-throwaway
+          MYSQL_DATABASE: pormg_trim
+          MYSQL_USER: f1
+          MYSQL_PASSWORD: trim-ci-throwaway
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ptrim-ci-root-throwaway"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      TRIM_VARIANT: mysql
+      # The server's own error for the `fail` step's missing table (ER_NO_SUCH_TABLE).
+      TRIM_FAIL_SQLSTATE: 42S02
+      PORMG_TRIM_HOST: 127.0.0.1
+      PORMG_TRIM_PORT: '3306'
+      PORMG_TRIM_USER: f1
+      PORMG_TRIM_PASSWORD: trim-ci-throwaway
+      PORMG_TRIM_DATABASE: pormg_trim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.TRIM_JULIA }}
+      - uses: julia-actions/cache@v2
+      - name: Install JuliaC
+        run: |
+          julia -e 'using Pkg; Pkg.Apps.add(name = "JuliaC", version = ENV["TRIM_JULIAC"])'
+          echo "$(julia -e 'print(first(DEPOT_PATH))')/bin" >> "$GITHUB_PATH"
+      - name: Instantiate the fixture
+        run: julia --project=test/trim/$TRIM_VARIANT -e 'using Pkg; Pkg.instantiate(); Pkg.status()'
+      - name: Seed the database and run the JIT control
+        run: |
+          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/prep.jl
+          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/main.jl
+      - name: Build the trimmed binary
+        id: build
+        run: |
+          mkdir -p build && cd build
+          JULIA_CPU_TARGET=native juliac --project ../test/trim/$TRIM_VARIANT --output-exe main \
+            --trim=unsafe-warn --experimental ../test/trim/$TRIM_VARIANT/main.jl 2>&1 | tee build.log
+      - name: Clear the server's authentication cache
+        # prep.jl and the JIT control logged in as f1, so caching_sha2_password would let the binary in by
+        # its fast path. Flushed, the binary takes the full authentication a fresh server asks for.
+        run: mysql -h 127.0.0.1 -uroot -ptrim-ci-root-throwaway -e 'FLUSH PRIVILEGES'
+      - name: Run the trimmed binary against the server
+        run: |
+          # A task body the image never compiled dies silently, so a broken binary hangs rather than
+          # crashes: the timeout turns the hang into a failure.
+          set +e
+          timeout -k 10 300 build/main 2>&1 | tee build/run.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "exit status: $status"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 3 read, 6 the fail step did not raise the server's error, 124 timed out)"
+            exit 1
+          fi
+          if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
+            echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing the expected row"
+            exit 1
+          fi
+          # The `fail` step (test/trim/tools/failing.jl): the server's own error, its SQLSTATE and its
+          # message, with a cause that is the driver's error and not a MethodError from the error path.
+          if ! grep -qxF "$(printf 'step\tfail\tthrew StatementError')" build/run.txt ||
+             ! grep -qxF "  sqlstate: $TRIM_FAIL_SQLSTATE" build/run.txt ||
+             ! grep -q '^  message: .*pormg_trim_missing' build/run.txt ||
+             grep -qE '^  cause: MethodError$|^  cause missed:' build/run.txt; then
+            echo "::error::the trimmed $TRIM_VARIANT binary's fail step did not print the server's error (SQLSTATE $TRIM_FAIL_SQLSTATE)"
+            exit 1
+          fi
+      - name: Count the verifier's rows
+        if: always()
+        run: |
+          [ -f build/build.log ] || exit 0
+          python3 -I test/trim/tools/rows.py build/build.log > build/rows.txt 2>&1 || true
+          python3 -I test/trim/tools/classify.py build/build.log --layers > build/layers.txt 2>&1 || true
+          {
+            echo "## Trimmed $TRIM_VARIANT read (Julia $TRIM_JULIA, JuliaC $TRIM_JULIAC)"
+            echo
+            echo "The row count is reported, not checked. The pass condition is the run below."
+            echo
+            echo "### The binary's step lines"
+            echo '```'
+            cat build/run.txt 2>/dev/null || echo "(the binary did not run)"
+            echo '```'
+            echo "### Verifier rows (rows.py)"
+            echo '```'
+            cat build/rows.txt
+            echo '```'
+            echo "### Rows by layer (classify.py --layers)"
+            echo '```'
+            cat build/layers.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the build log and the row tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trim-${{ env.TRIM_VARIANT }}
+          path: |
+            build/build.log
+            build/rows.txt
+            build/layers.txt
+            build/run.txt
+          if-no-files-found: warn
+
+  postgres-read:
+    name: Trimmed read (PostgreSQL 18, Postgres.jl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        # No POSTGRES_HOST_AUTH_METHOD: the image's default for TCP connections is scram-sha-256, the
+        # authentication the fixture's Base64 roots exist for (test/trim/postgres/main.jl).
+        image: postgres:18
+        env:
+          POSTGRES_DB: pormg_trim
+          POSTGRES_USER: f1
+          POSTGRES_PASSWORD: trim-ci-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U f1 -d pormg_trim"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      TRIM_VARIANT: postgres
+      # The server's own error for the `fail` step's missing table (undefined_table).
+      TRIM_FAIL_SQLSTATE: 42P01
+      PORMG_TRIM_HOST: 127.0.0.1
+      PORMG_TRIM_PORT: '5432'
+      PORMG_TRIM_USER: f1
+      PORMG_TRIM_PASSWORD: trim-ci-throwaway
+      PORMG_TRIM_DATABASE: pormg_trim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check that the server authenticates with SCRAM-SHA-256
+        env:
+          PGPASSWORD: ${{ env.PORMG_TRIM_PASSWORD }}
+        run: |
+          # `system_user` names the method this very connection authenticated with (NULL under trust).
+          # The binary connects the same way: TCP to 127.0.0.1, as f1, with a password.
+          psql -h 127.0.0.1 -U f1 -d pormg_trim -XAt -c 'SELECT system_user' | tee /dev/stderr |
+            grep -qxF 'scram-sha-256:f1'
+          psql -h 127.0.0.1 -U f1 -d pormg_trim -XAt \
+            -c "SELECT left(rolpassword, 14) FROM pg_authid WHERE rolname = 'f1'" | grep -qxF 'SCRAM-SHA-256$'
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.TRIM_JULIA }}
+      - uses: julia-actions/cache@v2
+      - name: Install JuliaC
+        run: |
+          julia -e 'using Pkg; Pkg.Apps.add(name = "JuliaC", version = ENV["TRIM_JULIAC"])'
+          echo "$(julia -e 'print(first(DEPOT_PATH))')/bin" >> "$GITHUB_PATH"
+      - name: Instantiate the fixture
+        run: julia --project=test/trim/$TRIM_VARIANT -e 'using Pkg; Pkg.instantiate(); Pkg.status()'
+      - name: Seed the database and run the JIT control
+        run: |
+          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/prep.jl
+          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/main.jl
+      - name: Build the trimmed binary
+        id: build
+        run: |
+          mkdir -p build && cd build
+          JULIA_CPU_TARGET=native juliac --project ../test/trim/$TRIM_VARIANT --output-exe main \
+            --trim=unsafe-warn --experimental ../test/trim/$TRIM_VARIANT/main.jl 2>&1 | tee build.log
+      - name: Run the trimmed binary against the server
+        run: |
+          # A task body the image never compiled dies silently, so a broken binary hangs rather than
+          # crashes: the timeout turns the hang into a failure.
+          set +e
+          timeout -k 10 300 build/main 2>&1 | tee build/run.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "exit status: $status"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 3 read, 6 the fail step did not raise the server's error, 124 timed out)"
+            exit 1
+          fi
+          if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
+            echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing the expected row"
+            exit 1
+          fi
+          # The `fail` step (test/trim/tools/failing.jl): the server's own error, its SQLSTATE and its
+          # message, with a cause that is the driver's error and not a MethodError from the error path.
+          if ! grep -qxF "$(printf 'step\tfail\tthrew StatementError')" build/run.txt ||
+             ! grep -qxF "  sqlstate: $TRIM_FAIL_SQLSTATE" build/run.txt ||
+             ! grep -q '^  message: .*pormg_trim_missing' build/run.txt ||
+             grep -qE '^  cause: MethodError$|^  cause missed:' build/run.txt; then
+            echo "::error::the trimmed $TRIM_VARIANT binary's fail step did not print the server's error (SQLSTATE $TRIM_FAIL_SQLSTATE)"
+            exit 1
+          fi
+      - name: Count the verifier's rows
+        if: always()
+        run: |
+          [ -f build/build.log ] || exit 0
+          python3 -I test/trim/tools/rows.py build/build.log > build/rows.txt 2>&1 || true
+          python3 -I test/trim/tools/classify.py build/build.log --layers > build/layers.txt 2>&1 || true
+          {
+            echo "## Trimmed $TRIM_VARIANT read (Julia $TRIM_JULIA, JuliaC $TRIM_JULIAC)"
+            echo
+            echo "The row count is reported, not checked. The pass condition is the run below."
+            echo
+            echo "### The binary's step lines"
+            echo '```'
+            cat build/run.txt 2>/dev/null || echo "(the binary did not run)"
+            echo '```'
+            echo "### Verifier rows (rows.py)"
+            echo '```'
+            cat build/rows.txt
+            echo '```'
+            echo "### Rows by layer (classify.py --layers)"
+            echo '```'
+            cat build/layers.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the build log and the row tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trim-${{ env.TRIM_VARIANT }}
+          path: |
+            build/build.log
+            build/rows.txt
+            build/layers.txt
+            build/run.txt
           if-no-files-found: warn

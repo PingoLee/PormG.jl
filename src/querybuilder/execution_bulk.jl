@@ -2001,10 +2001,12 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
             foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
           else
             # A loop, not a comprehension (#1599 layer 7): the comprehension's closure captured `parameters`,
-            # which this loop reassigns after each chunk, so it was boxed. The same placeholders, in order.
+            # which this loop reassigns after each chunk, so it was boxed. The same placeholders, in order. Each
+            # cell is bound through `create`'s typed walk (`_bind_written_value!`): the cell is untyped, and
+            # `add_parameter!` on it had no compiled target in a trimmed image.
             placeholders = String[]
             for cell in cells
-              push!(placeholders, add_parameter!(parameters, cell))
+              push!(placeholders, _bind_written_value!(parameters, cell)::String)
             end
             push!(rows, "($(join(placeholders, ", ")))")
           end

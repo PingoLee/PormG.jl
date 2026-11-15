@@ -1908,11 +1908,14 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
       _bulk_returning_key(model, on_conflict, fields_df, connection)
     allocate_pk = show_query === :execute ? allocate_pk : nothing
     do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
-    returning_sql = nothing
-    if _returning !== nothing && _insert_returns_rows(connection)
+    # One assignment (#1599 layer 7): assigned twice and captured by the chunk's closure, it was boxed, and the
+    # chunk statement's keyword call took it untyped, a call with no compiled target in a trimmed image.
+    returning_sql = if _returning !== nothing && _insert_returns_rows(connection)
       returned_fields = unique(vcat(returning_key, _returning))
-      returning_sql = "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
+      "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
         for field in returned_fields], ", ")
+    else
+      nothing
     end
     # A pre-allocated id is written explicitly, which a `generated_always` identity rejects unless the
     # INSERT says OVERRIDING SYSTEM VALUE. Safe here: the ids came from that identity's own sequence.

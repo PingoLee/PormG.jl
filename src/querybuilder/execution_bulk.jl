@@ -58,8 +58,25 @@ _has_bulk_column(frame::_BulkFrame, name::AbstractString) = haskey(frame.columns
 # so a call specialized on its type had no compiled target in a trimmed image.
 function _add_bulk_column!(frame::_BulkFrame, name::String, @nospecialize(column::AbstractVector))
   push!(frame.names, name)
-  frame.columns[name] = column
+  _store_bulk_column!(frame.columns, name, column)
   return frame
+end
+
+# The store itself, at the column's type (#1599 layer 7, #1694): `setindex!` is compiled per value type, and an
+# untyped column (the `auto_add` UUIDs, a fill) had no compiled store in a trimmed image (`MissingCodeError` on
+# `setindex!(::Dict{String, AbstractVector}, ::Vector{UUID}, ::String)`). One arm per column type a fill or a
+# pre-allocated key makes, each the same store; anything else takes one dynamic call.
+@noinline function _store_bulk_column!(columns::Dict{String, AbstractVector}, name::String,
+                                       @nospecialize(column::AbstractVector))
+  column isa Vector{String} && return (columns[name] = column; nothing)
+  column isa Vector{UUIDs.UUID} && return (columns[name] = column; nothing)
+  column isa Vector{Dates.Date} && return (columns[name] = column; nothing)
+  column isa Vector{Int64} && return (columns[name] = column; nothing)
+  column isa Vector{Float64} && return (columns[name] = column; nothing)
+  column isa Vector{Bool} && return (columns[name] = column; nothing)
+  column isa Vector{Nothing} && return (columns[name] = column; nothing)
+  columns[name] = column
+  return nothing
 end
 
 # `fill(value, n)` for a fill column, at the value's type (#1599 layer 7, #1694). The value is untyped (a

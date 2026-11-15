@@ -2985,6 +2985,50 @@ end
     end
   end
 
+  # What: the timestamp parser for the text PormG writes (`Models.parse_zoned_timestamp`), on the write path's
+  #   validation (`validate_timezone`) and the SQLite read parser (`Dialect._parse_sqlite_timestamp`).
+  # Expected: the canonical text is read without a dynamic call, and both sites call the parser; any other text
+  #   takes TimeZones' parse, in the open arm (test_timestamp_parser.jl holds the equivalence).
+  # Why: `ZonedDateTime(text, DateFormat)` is TimeZones' parser, which a trimmed image has no code for
+  #   (`tryparsenext_internal(ZonedDateTime, …)`, an unresolved invoke). Measured on #1694's update/delete head:
+  #   with an auto-filled `DateTimeField` in the fixture, the binary's create stopped there validating the
+  #   timestamp it had filled, before its INSERT.
+  @testset "a timestamp in PormG's text is parsed at concrete types (#1599 layer 7, #1694)" begin
+    M = PormG.Models
+    @test isdefined(M, :parse_zoned_timestamp) && isdefined(M, :_canonical_zoned)
+    if isdefined(M, :_canonical_zoned)
+      @test isempty(_dynamic_calls(M._canonical_zoned, (String,)))
+      for T in (String, SubString{String})
+        @test (T, _dynamic_calls(M.parse_zoned_timestamp, (T,))) == (T, String[])
+        @test only(Base.return_types(M.parse_zoned_timestamp, (T,))) === M.ZonedDateTime
+      end
+    end
+    m_src = read(joinpath(pkgdir(PormG), "src", "Models.jl"), String)
+    d_src = read(joinpath(pkgdir(PormG), "src", "Dialect.jl"), String)
+    @test occursin("zdt = parse_zoned_timestamp(normalize_sqlite_datetime_string(s))", m_src)
+    @test occursin("return parse_zoned_timestamp(normalized)", d_src)
+    @test !occursin("ZonedDateTime(normalized, dateformat", d_src)
+    # and the text a timestamp is written as, by hand for years 0-9999: `Dates.format` padded a field through code a
+    # trimmed image had no code for (`repeat(::Char, ::Int)` from `rpad`), so a filled timestamp with a field that
+    # needed a leading zero raised `MissingCodeError`.
+    @test isdefined(M, :_canonicalize_datetime_other)
+    if isdefined(M, :_canonicalize_datetime_other)
+      @test isempty(_dynamic_calls(M._canonicalize_datetime_utc, (M.ZonedDateTime,)))
+      @test isempty(_dynamic_calls(M._print_zero_padded, (Base.IOBuffer, Int, Int)))
+    end
+    # The reflection above passes on `Dates.format` too (its wall shows only in a trimmed image), so the body is
+    # pinned by its text: the fields written by hand, `Dates.format` only in the open arm.
+    @test occursin("function _canonicalize_datetime_utc(value::ZonedDateTime)::String\n  dt = value.utc_datetime", m_src)
+    @test occursin("_print_zero_padded(io, millisecond(dt), 3)", m_src)
+    # and a non-UTC offset's zone name is built from bytes, without `print_to_string`. (Followed deeper, the
+    # parser reaches two calls inside `print_to_string`, from the error messages `Dates.validargs` and TimeZones'
+    # `FixedTimeZone` constructor build: upstream code, on their refusal branches.)
+    if isdefined(M, :_utc_offset_name)
+      @test isempty(_dynamic_calls(M._utc_offset_name, (Base.CodeUnits{UInt8, String},)))
+      @test M._utc_offset_name(codeunits("2009-05-24T14:00:00.000-03:30")) == "UTC-03:30"
+    end
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type

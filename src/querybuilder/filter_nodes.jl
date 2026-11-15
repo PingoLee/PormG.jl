@@ -1298,8 +1298,21 @@ _filter_value_node(x) = x
 function _oper_value_check_node(v::OperObject)
   node = _oper_value_node(v)
   node isa OperValueNode && return node
-  return _filter_value_node(_oper_literal(v))
+  return _literal_value_node(_oper_literal(v))
 end
+# The literal arrives untyped (`_oper_literal`), so `_filter_value_node` on it was a run-time dispatch over its
+# three methods, which a trimmed image has no target for (#1599 layer 7, #1694): the full fixture entry's
+# `update` stopped at `MethodError(_filter_value_node, (Int64,))` on its filter `"year" => 2009`. A string is
+# handed to its method at its type, a scalar of a literal type is its own node (`_filter_value_node(x) = x`),
+# and anything else (a vector, a tuple, another type) takes the call it took, in the open arm.
+@noinline function _literal_value_node(@nospecialize(x))
+  x isa String && return _filter_value_node(x)
+  x isa SubString{String} && return _filter_value_node(x)
+  x isa Union{Int64, Int32, Float64, Bool, Nothing, Missing, Dates.Date, Dates.DateTime, Dates.Time,
+              TimeZones.ZonedDateTime, Decimals.Decimal, UUIDs.UUID} && return x
+  return _literal_value_node_other(x)
+end
+@noinline _literal_value_node_other(@nospecialize(x)) = _filter_value_node(x)
 function _filter_column_node(col, instruc::SQLInstruction)
   alias = _alias_filter_key(col, instruc)
   return alias === nothing ? col : _projected_source(memo_key(:base, alias), instruc).field

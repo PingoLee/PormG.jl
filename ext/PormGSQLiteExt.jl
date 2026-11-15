@@ -443,6 +443,47 @@ end
 end
 @noinline _sqlite_field_blob(parser::PormG.ReadParser, @nospecialize(v)) = parser(v)
 
+# How many rows a statement returns (`exists()`, #1599 layer 7, #1694): the statement lifecycle, retry and lock
+# release of `backend_execute`, the rows stepped and counted. Each cell is read as `_sqlite_rowtable` reads it
+# (`_sqlite_value`), and discarded, so a cell whose read raised there raises here, inside the statement as there.
+function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::String, params,
+                                    ::PormG.QueryBuilder._RowCounter)
+  resolved = params isa PormGSQLiteParam ? params.parameters : params
+  try
+    return _sqlite_with_retry(() -> _sqlite_count_rows(conn, sql, resolved))::Int
+  catch
+    _release_leaked_db_lock!(conn)
+    rethrow()
+  end
+end
+
+function _sqlite_count_rows(conn::SQLite.DB, sql::String, params)::Int
+  stmt = SQLite.Stmt(conn, sql; register = false)
+  try
+    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
+    q isa SQLite.Query{false} && return _sqlite_count_rows_in(q)   # `_sqlite_decode_rows`'s reason
+    return _sqlite_count_rows_open(q)
+  finally
+    SQLite.DBInterface.close!(stmt)
+  end
+end
+@noinline _sqlite_count_rows_open(@nospecialize(q)) = length(Tables.rowtable(q))
+
+function _sqlite_count_rows_in(q::SQLite.Query{false})::Int
+  handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
+  ncols = length(q.names)
+  n = 0
+  next = iterate(q)
+  while next !== nothing
+    for j in 1:ncols
+      _sqlite_value(handle, j)
+    end
+    n += 1
+    next = iterate(q, next[2])
+  end
+  return n
+end
+
 # The result column of each field of `T`, by name: the typed projection names every field (and nothing
 # else), but a `values(...)` projection may list them in another order.
 function _sqlite_field_columns(::Type{T}, names::AbstractVector{Symbol}) where T

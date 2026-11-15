@@ -121,12 +121,12 @@ end
 #   - build_helpers.jl `get_settings` (1): the resolution itself;
 #   - build_helpers.jl `_with_m2m_connection` (2): the manager's transaction-scope check, then the pool
 #     it hands `_with_terminal_pool`;
-#   - deletion.jl `delete` (1): `with_tx_context(settings.connections, conn)` — the transaction context
-#     of the delete's own transaction, which opens on the settings' pool;
+#   - (deletion.jl `delete` read it for its own transaction's context until #1599 layer 7, #1694: that call
+#     is `ConnectionPool._with_tx_context_on(settings, conn)` now, which reads the settings' pool itself);
 #   - deletion.jl `should_check_related_existence` (1): whether the settings' pool is live;
 #   - types.jl `DeletionCollector` (1): the collector's `connection` slot, the settings' pool.
 #   A `getfield(…, :connections)` would bypass the dot form, so it is refused anywhere.
-# Why: the three `delete` reads take the settings' pool even when `connection =` overrides it, and
+# Why: `delete`'s reads take the settings' pool even when `connection =` overrides it, and
 #   changing that is a behavior change #1693 does not make; everything else reaches the pool through
 #   the helpers.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,6 @@ end
   reads = _tpb_sites(r"\.connections\b")
   reviewed = Dict(("build_helpers.jl", "get_settings") => 1,
                   ("build_helpers.jl", "_with_m2m_connection") => 2,
-                  ("deletion.jl", "delete") => 1,
                   ("deletion.jl", "should_check_related_existence") => 1,
                   ("types.jl", "DeletionCollector") => 1)
   @test reads == reviewed
@@ -156,7 +155,8 @@ end
 const _TPB_REVIEWED_BOXES = Dict(
   "build_query.jl" => 1,       # _check_mixed_grouping; #1599 layer 5 removed build_row_join_sql_text's (`keyed`)
   "build_select.jl" => 1,      # get_order_query; #1711 removed get_select_query's (`local kind` in its render closure)
-  "deletion.jl" => 4,          # delete's body (2); topological_sort; _collector_predicate
+  # #1599 layer 7 (#1694) removed `deletion.jl`'s four: `plan`/`run_plan` are defined before the closure that
+  # calls them, `topological_sort`'s visit is a function, `_collector_predicate`'s alias a `RefValue{String}`.
   "execution_bulk.jl" => 7,    # bulk_insert (4: keyword body, body, its insert loop); _bulk_update (3)
   "execution_read.jl" => 1,    # a closure in _filters_name_alias (`mkey`); #1698 removed the `hit` box (a RefValue now)
   "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number

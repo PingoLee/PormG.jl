@@ -201,7 +201,7 @@ _update_row_count(conn::PormGPostgres, settings, sql, parameters) =
 function _update_row_count(conn::PormGSQLite, settings, sql, parameters)
   count_changes = () -> begin
     fetch(settings, sql, parameters)
-    rows = fetch(settings, "SELECT changes()") |> Tables.rowtable
+    rows = fetch(settings, "SELECT changes()"; _decode = _changes_decoder())::Vector{_ChangesRow}   # #1599 layer 7
     Int(first(rows)[1])
   end
   return transaction_connection_for(settings) !== nothing ? count_changes() :

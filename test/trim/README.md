@@ -9,12 +9,14 @@ before any SQL (a date string that is not a calendar date, and a `Bool` for a te
 the refusal's type and message), one `Race.objects.create` that leaves the two auto-filled fields
 (`updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
-`list(show_query = :struct)` writes (#1632). Each step prints one line. The read-only entry, `read.jl`,
-runs the same boot and read without the write; the steps both entries share are in `steps.jl`.
+`list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
+each checked by a typed read after it. Each step prints one line. The read-only entry, `read.jl`, runs
+the same boot and read without the writes; the steps both entries share are in `steps.jl`.
 
 Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary completes
 (#1694): it prints both refusals, fills the two automatic values, runs its `INSERT` and reads the row
-back on the SQLite worker, and its typed read then returns both rows, the one it wrote included. It
+back on the SQLite worker, and its typed read then returns both rows, the one it wrote included; its
+`update` sets that row's `round` and its `delete` removes it, each shown by the read after it. It
 prints the JIT control's lines and exits 0. The fixture has no `DateTimeField(auto_now_add = true)`
 yet: the timestamp's text is validated through TimeZones.jl's string parser, which a trimmed image
 cannot run, so the binary would stop there, before its `INSERT`. The read-only entry's binary returns
@@ -43,7 +45,7 @@ the repository root:
 ```
 julia --project=test/trim -e 'using Pkg; Pkg.instantiate()'
 julia --project=test/trim test/trim/prep.jl run          # seeds run/f1.sqlite under the JIT
-julia --project=test/trim test/trim/main.jl run          # the JIT control: 2 refusals, write, 2 rows
+julia --project=test/trim test/trim/main.jl run          # the JIT control: refusals, write, read, update, delete
 
 mkdir -p build && cd build
 JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe main \
@@ -85,7 +87,8 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
 fails with the same exit code (1 boot, 2 write, 3 read; `main.jl` exits 6 when a create it expects
-PormG to refuse is not refused with an `InvalidValueError`).
+PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
+raises or the read after it does not show the change).
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows

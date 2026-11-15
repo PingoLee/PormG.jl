@@ -249,7 +249,75 @@ function delete(objct::SQLObjectHandler;
 
     # Definition of run_deletions (backend agnostic)
     results = []
-    run_deletions = function(conn)
+    # `plan` and `run_plan` are defined before `run_deletions`, which calls them (#1599 layer 7, #1694): a closure
+    # capturing a variable assigned after it was created holds it in a `Core.Box`, so each call was a run-time
+    # dispatch on the boxed value, and the trimmed full fixture entry's `delete` raised `MethodError` on `plan`.
+    # One plan over one root query: collect the cascade, probing each path.
+    plan = function(root_objct, skip_self_cascade::Bool = false)
+      collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
+      add_objects_to_collector!(collector, root_objct, model)
+      process_collector!(collector)
+      return collector
+    end
+
+    # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
+    # the key step (#1342), so the root is not locked a second time.
+    run_plan = function(@nospecialize(conn), collector::DeletionCollector, root_locked::Bool)   # `run_deletions`' reason
+      # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
+      # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
+      # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
+      #
+      # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
+      # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
+      # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
+      # The root is locked here anyway when the plan holds more entries of its own model than the key
+      # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
+      # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
+      if _locks_cascade_parents(connection)
+        for lock_model in _models_to_lock(collector)
+          root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
+          res = lock_objects(connection, lock_model::Models.ModelType, collector.objects[lock_model], show_query, conn)
+          push!(results, res)
+        end
+      end
+
+      # Process fast deletes first (objects that can be deleted directly).
+      # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
+      # (the collector is built here since #452), and two meanings for one name in one scope is a
+      # reading hazard even where Julia's loop scoping makes it harmless.
+      for (fast_model, fast_keys) in collector.fast_deletes
+        # Each model at its concrete type, as the planner reads them (#1599 layer 7): the collector keys them `PormGModel`.
+        res = delete_objects(connection, fast_model::Models.ModelType, fast_keys, show_query, deleted_counter, conn)
+        push!(results, res)
+        # Remove from objects to prevent double deletion
+        delete!(collector.objects, fast_model)
+      end
+
+      # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
+      # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
+      # statement count is still one per (field, value, model).
+      for ((field, value), affected_models) in collector.field_updates
+        for (affected_model, path_keys) in affected_models
+          res = update_field(connection, affected_model::Models.ModelType, field, value, path_keys, show_query, conn)
+          push!(results, res)
+        end
+      end
+    
+      # Execute deletions in the sorted order
+      for model_to_delete in collector.sorted_models
+        # The model at its type and a typed empty default (#1599 layer 7): `get(…, model, [])` on an abstract model
+        # with a `Vector{Any}` default was a run-time dispatch. An empty vector is skipped below either way.
+        _array = get(collector.objects, model_to_delete::Models.ModelType, Dict{Symbol, Union{String, SQLObjectHandler}}[])
+        if !isempty(_array)
+          res = delete_objects(connection, model_to_delete::Models.ModelType, _array, show_query, deleted_counter, conn)
+          push!(results, res)
+        end
+      end
+    end
+
+    # `conn` unspecialized (#1599 layer 7): every caller holds it untyped (a pool slot, the transaction context).
+    # The trailing comma is the parser's: without it a lone macro argument reads as a signature.
+    run_deletions = function(@nospecialize(conn),)
       # Plan INSIDE the transaction (#452).
       #
       # `find_related_objects!` probes every cascade path with `_exists` and DROPS the ones that come
@@ -314,7 +382,7 @@ function delete(objct::SQLObjectHandler;
       # FIRST, and the cascade is planned from those keys. See `_root_key_plan`.
       key_plan = _root_key_plan(connection, model, objct)
       if key_plan === nothing
-        run_plan(conn, plan(deepcopy(objct)), false)
+        run_plan(conn, plan(_terminal_copy(objct)), false)   # #1599 layer 7: shallow (#1624), as below
         return nothing
       end
       root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
@@ -334,7 +402,7 @@ function delete(objct::SQLObjectHandler;
                     for (i, level_keys) in enumerate(walk.sets)
                     for chunk in _root_key_chunks(connection, level_keys)]
       for (collector, is_loop, loop_rows) in collectors
-        before = get(deleted_counter, model.name, 0)
+        before = get(deleted_counter, model.name, 0)::Int   # every count stored is an `Int` (`_count_deleted!`)
         run_plan(conn, collector, true)
         # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
         # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
@@ -345,65 +413,6 @@ function delete(objct::SQLObjectHandler;
       return nothing
     end
 
-    # One plan over one root query: collect the cascade, probing each path.
-    plan = function(root_objct, skip_self_cascade::Bool = false)
-      collector = DeletionCollector(model, settings, show_query, skip_self_cascade)
-      add_objects_to_collector!(collector, root_objct, model)
-      process_collector!(collector)
-      return collector
-    end
-
-    # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
-    # the key step (#1342), so the root is not locked a second time.
-    run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
-      # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
-      # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
-      # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.
-      #
-      # A filtered root never reaches this loop as such: it was resolved to keys first (#1342, #1370),
-      # and the key step's `FOR UPDATE` is the root's lock. That replaced #771's
-      # `FOR SHARE` on each joined table, which existed only because every statement re-read the join.
-      # The root is locked here anyway when the plan holds more entries of its own model than the key
-      # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
-      # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
-      if _locks_cascade_parents(connection)
-        for lock_model in _models_to_lock(collector)
-          root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
-          res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
-          push!(results, res)
-        end
-      end
-
-      # Process fast deletes first (objects that can be deleted directly).
-      # Named `fast_model` rather than `model`: the enclosing `model` is now read inside this closure
-      # (the collector is built here since #452), and two meanings for one name in one scope is a
-      # reading hazard even where Julia's loop scoping makes it harmless.
-      for (fast_model, fast_keys) in collector.fast_deletes
-        res = delete_objects(connection, fast_model, fast_keys, show_query, deleted_counter, conn)
-        push!(results, res)
-        # Remove from objects to prevent double deletion
-        delete!(collector.objects, fast_model)
-      end
-
-      # Process field updates (for SET_NULL, SET_DEFAULT, etc.). `path_keys` is one entry per cascade
-      # path reaching this model (#459 (a)); `update_field` ORs them into a single UPDATE, so the
-      # statement count is still one per (field, value, model).
-      for ((field, value), affected_models) in collector.field_updates
-        for (affected_model, path_keys) in affected_models
-          res = update_field(connection, affected_model, field, value, path_keys, show_query, conn)
-          push!(results, res)
-        end
-      end
-    
-      # Execute deletions in the sorted order
-      for model_to_delete in collector.sorted_models
-        _array = get(collector.objects, model_to_delete, [])        
-        if !isempty(_array)
-          res = delete_objects(connection, model_to_delete, _array, show_query, deleted_counter, conn)
-          push!(results, res)
-        end
-      end
-    end
 
     tx_conn = transaction_connection_for(settings)
     if show_query !== :execute
@@ -440,27 +449,33 @@ function delete(objct::SQLObjectHandler;
           # finally entirely and strand this connection out of the pool holding an open
           # BEGIN IMMEDIATE — i.e. the database write lock. The #139/#71 class.
           for sql in _after_begin_sql(connection)
-            with_transaction(settings, sql, conn=conn)
+            _with_transaction_with(settings, sql, conn, false, nothing)
           end
-          with_tx_context(settings.connections, conn) do
-            run_deletions(conn)
+          # On the settings' pool at its type, with `conn` in a typed box so the closure is a concrete type (#1599
+          # layer 7): captured as itself, the closure's type was its run-time type, and the call had no target.
+          conn_box = Base.RefValue{Any}(conn)
+          _with_tx_context_on(settings, conn) do
+            run_deletions(conn_box[])
           end
           # Commit — release_conn=false: the finally owns the single release.
-          with_transaction(settings, "COMMIT;", conn=conn, release_conn=false)
+          _with_transaction_with(settings, "COMMIT;", conn, false, nothing)
         catch e
           body_error = e
           # Roll back on the still-leased connection. A rollback failure must not mask the body's
           # error — capture it so the finally renews/discards the dirty connection instead of
           # releasing it (#71), then rethrow the original.
           try
-            with_transaction(settings, "ROLLBACK;", conn=conn, release_conn=false)
+            _with_transaction_with(settings, "ROLLBACK;", conn, false, nothing)
           catch rollback_err
             rollback_error = rollback_err
             @error "Failed to rollback delete transaction" exception=rollback_err
           end
           rethrow(e)
         finally
-          finalize_transaction_connection!(settings, conn; rollback_error=rollback_error, body_error=body_error)
+          # `finalize_transaction_connection!(settings, conn; rollback_error, body_error)`, through `_finalize_with`
+          # (#1599 layer 7): the two errors are `Any`, so the keyword call had no target in a trimmed image,
+          # which then raised that `MethodError` in place of the delete's own error.
+          _finalize_with(settings, conn, rollback_error, false, body_error, false)
         end
       end
     end
@@ -469,7 +484,7 @@ function delete(objct::SQLObjectHandler;
       return length(results) == 1 ? results[1] : results
     end
 
-    total_deleted = sum(values(deleted_counter))
+    total_deleted = _deleted_total(deleted_counter)   # #1599 layer 7: an `Int`, as `sum` gave it at run time
     if total_deleted == 0
       @warn("Warning in delete, no objects were deleted")  
     end
@@ -545,9 +560,9 @@ function _root_key_plan(connection::_SQLEngine, model::PormGModel, objct::SQLObj
   # Only an EMPTY predicate keeps its SQL: an unfiltered delete takes every row, which no statement of
   # the cascade can change.
   key = resolve_delete_key(model)
-  root = deepcopy(objct)
+  root = _terminal_copy(objct)   # #1599 layer 7: shallow (#1624); `values` replaces the projection vector
   root.values(key)
-  entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => root)
+  entry = _collector_entry(key, root)
   where_sql, parameters, alias = _collector_predicate(connection, [entry])
   isempty(where_sql) && return nothing
   return (entry = entry, where_sql = where_sql, parameters = parameters, alias = alias)
@@ -572,7 +587,7 @@ function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::Por
     # On `connection`, the pool the statements render for — a `connection =` override included.
     return _key_vector(Tables.columntable(fetch(connection, select_sql, plan.parameters)))
   end
-  result, _ = with_transaction(connection, sql, conn=conn, params=plan.parameters)
+  result, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters)
   return _key_vector(Tables.columntable(result))
 end
 
@@ -727,7 +742,7 @@ function _read_self_children!(results::Vector, connection::_SQLEngine, model::Po
     chunk::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, conn)::Tuple{Vector{K}, Vector{K}} where {K}
   read = _keyed_root(model, fk, chunk, objct)
   read.values(key)
-  entry = Dict{Symbol, Union{String, SQLObjectHandler}}(:key => key, :objct => read)
+  entry = _collector_entry(key, read)
   where_sql, parameters, alias = _collector_predicate(connection, [entry])
   locks = _locks_cascade_parents(connection)
   key_column = safe_column_identifier(Models.model_column(model, key), connection)
@@ -741,7 +756,7 @@ function _read_self_children!(results::Vector, connection::_SQLEngine, model::Po
     _is_live_pool(connection) || return (K[], K[])
     columns = Tables.columntable(fetch(connection, select_sql, parameters))
   else
-    result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
+    result, _ = _with_transaction_with(connection, sql, conn, false, parameters)
     columns = Tables.columntable(result)
   end
   isempty(columns) && return (K[], K[])
@@ -798,9 +813,22 @@ end
 # copy of the parent query so all three on_delete branches (CASCADE, SET_NULL, SET_DEFAULT) stay in sync.
 function prepare_related_query(keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel, field_name::Union{String, Symbol})
   delete_key = resolve_delete_key(related_model; fallback=string(field_name))
-  _query = deepcopy(keys[:objct])
+  # #1599 layer 7: shallow (#1624), as a read terminal's copy; `values` replaces the projection vector. A deep
+  # copy walks the query by run-time dispatch, and the trimmed full fixture entry's `delete` stopped in one.
+  _query = _terminal_copy(keys[:objct])
   delete_key != DIRECT_DELETE_KEY_SENTINEL && _query.values(delete_key)
-  return Dict{Symbol, Union{String, SQLObjectHandler}}(:key => delete_key, :objct => _query)
+  return _collector_entry(delete_key, _query)
+end
+
+# One collected entry, `:key` (the column a child's `"<fk>__@in"` reads) and `:objct` (the query), at the collector's
+# element type (#1599 layer 7, #1694). Each slot is assigned, so each store is at its value's type: built from pairs,
+# `Dict(:key => …, :objct => …)` was a `Dict{Symbol,Any}` that `push!` converted value by value, and the typed
+# `Pair` constructor stored each one through a call a trimmed image had no code for either.
+function _collector_entry(key::String, objct::SQLObjectHandler)::Dict{Symbol, Union{String, SQLObjectHandler}}
+  entry = Dict{Symbol, Union{String, SQLObjectHandler}}()
+  entry[:key] = key
+  entry[:objct] = objct
+  return entry
 end
 
 function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjectHandler, model::PormGModel)
@@ -820,7 +848,7 @@ function add_objects_to_collector!(collector::DeletionCollector, model::PormGMod
     collector.objects[model] = []
   end
  
-  push!(collector.objects[model], Dict(:key => key, :objct => objct))
+  push!(collector.objects[model], _collector_entry(key, objct))
   
   # Add model to the list of models to process
   if !haskey(collector.dependencies, model)
@@ -856,7 +884,9 @@ function process_collector!(collector::DeletionCollector)
   for (model, keys) in seeds
     # `copy` because a self-referential CASCADE pushes into the very vector `find_related_objects!`
     # enumerates in its `Qor` branch. Shallow on purpose: the entry Dicts are read, never mutated.
-    find_related_objects!(collector, model, copy(keys))
+    # The model at its concrete type, the only `PormGModel` there is (#1615): read out of the collector's
+    # `Dict{PormGModel,…}` it is abstract, and the call dispatched at run time (#1599 layer 7).
+    find_related_objects!(collector, model::Models.ModelType, copy(keys))
   end
 
   # Identify objects that can be fast-deleted
@@ -969,10 +999,7 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
     order = get!(() -> Set{PormGModel}(), collector.delete_order, related_model)
     _orders_deletes(field) && push!(order, model)
 
-    _keys = Dict{Symbol, Union{String, SQLObjectHandler}}(
-      :key => resolve_delete_key(related_model; fallback=string(field_name)),
-      :objct => _query
-    )
+    _keys = _collector_entry(resolve_delete_key(related_model; fallback=string(field_name)), _query)
 
     handle_on_delete!(collector, field_name, field, model, _keys, related_model)
 
@@ -1112,32 +1139,39 @@ function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
   perm_mark = Set{PormGModel}()
   path = Vector{PormGModel}()   # the walk from the current start, for naming the cycle
 
-  function visit(node)
-    if node in temp_mark
-      cycle = PormGModel[path[findfirst(m -> m === node, path):end]..., node]
-      throw(QueryBuildError(_delete_cycle_message(cycle)))
-    end
-
-    if !(node in perm_mark)
-      push!(temp_mark, node)
-      push!(path, node)
-      for dep in get(dependencies, node, Set{PormGModel}())
-        visit(dep)
-      end
-      pop!(path)
-      delete!(temp_mark, node)
-      push!(perm_mark, node)
-      push!(result, node)
-    end
-  end
-  
   for node in keys(dependencies)
-    if !(node in perm_mark)
-      visit(node)
+    if !((node::Models.ModelType) in perm_mark)
+      _topological_visit!(node::Models.ModelType, dependencies, result, temp_mark, perm_mark, path)
     end
   end
   
   return reverse(result)
+end
+
+# `topological_sort`'s depth-first visit, a function of its own (#1599 layer 7, #1694): as an inner closure that
+# called itself it was held in a `Core.Box`, so each call was a run-time dispatch, and the models it took from the
+# sets, keyed `PormGModel`, were abstract too (`in(::ModelType, ::Set{PormGModel})` in a trimmed image). Each
+# model is taken at its concrete type, the only `PormGModel` there is (#1615); the walk and its order are the same.
+function _topological_visit!(node::Models.ModelType, dependencies::Dict{PormGModel, Set{PormGModel}},
+                             result::Vector{PormGModel}, temp_mark::Set{PormGModel}, perm_mark::Set{PormGModel},
+                             path::Vector{PormGModel})
+  if node in temp_mark
+    cycle = PormGModel[path[findfirst(m -> m === node, path):end]..., node]
+    throw(QueryBuildError(_delete_cycle_message(cycle)))
+  end
+
+  if !(node in perm_mark)
+    push!(temp_mark, node)
+    push!(path, node)
+    for dep in get(dependencies, node, Set{PormGModel}())
+      _topological_visit!(dep::Models.ModelType, dependencies, result, temp_mark, perm_mark, path)
+    end
+    pop!(path)
+    delete!(temp_mark, node)
+    push!(perm_mark, node)
+    push!(result, node)
+  end
+  return nothing
 end
 
 function collect_fast_deletes!(collector::DeletionCollector)
@@ -1147,10 +1181,12 @@ function collect_fast_deletes!(collector::DeletionCollector)
   models_with_dependents = Set{PormGModel}()  
   # A model is a dependent if it appears as a key in the dependencies dict
   # AND has a non-empty set of dependencies
+  # Each model at its concrete type (#1599 layer 7): read out of the collector's `Dict{PormGModel,…}` it is
+  # abstract, and every set operation on it dispatched at run time (`in(::ModelType, ::Set{PormGModel})`).
   for (model, dependencies) in collector.dependencies
     if !isempty(dependencies)
       # This model depends on something, so it's not a leaf node
-      push!(models_with_dependents, model)
+      push!(models_with_dependents, model::Models.ModelType)
       
       # Also add the models it depends on (they have dependents)
       union!(models_with_dependents, dependencies)
@@ -1161,9 +1197,9 @@ function collect_fast_deletes!(collector::DeletionCollector)
   # 1. Have objects to delete
   # 2. Don't appear in models_with_dependents
   for (model, keys) in collector.objects
-    if !(model in models_with_dependents)
+    if !((model::Models.ModelType) in models_with_dependents)
       @pormg_debug false
-      collector.fast_deletes[model] = keys
+      collector.fast_deletes[model::Models.ModelType] = keys
     end
   end
 end
@@ -1202,18 +1238,23 @@ end
 #     ever fired, the enclosing transaction would roll the statement back, which is the outcome we
 #     want; but do not read it as guarding the write.
 # ─────────────────────────────────────────────────────────────────────────────
-_affected_row_count(connection::PormGPostgres, result, conn)::Int =
+_affected_row_count(connection::PormGPostgres, @nospecialize(result), @nospecialize(conn))::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
-function _affected_row_count(connection::PormGSQLite, result, conn)::Int
+function _affected_row_count(connection::PormGSQLite, @nospecialize(result), @nospecialize(conn))::Int
   _require_statement_conn(conn)
-  changes, _ = with_transaction(connection, "SELECT changes();", conn=conn)
-  return Int(first(Tables.rowtable(changes))[1])
+  changes, _ = _with_transaction_with(connection, "SELECT changes();", conn, false, nothing)
+  # The materialized result of `SELECT changes();` is a vector of its one row type, read at that type (#1599 layer
+  # 7): through `Tables.rowtable`, on a result typed `Any`, the read was a run-time dispatch. Any other result (a
+  # stand-in pool's) takes that read, in the open arm.
+  changes isa Vector{_ChangesRow} && return Int(changes[1][1])
+  return _affected_rows_other(changes)
 end
+@noinline _affected_rows_other(@nospecialize(changes))::Int = Int(first(Tables.rowtable(changes))[1])
 # MySQL's OK packet counts the rows the statement matched (the pool connects with `found_rows`), so a
 # DELETE's count is its rows, and an UPDATE's includes a row whose value did not change (#1130).
-_affected_row_count(connection::PormGMySQL, result, conn)::Int =
+_affected_row_count(connection::PormGMySQL, @nospecialize(result), @nospecialize(conn))::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
-_require_statement_conn(conn) = conn === nothing &&
+_require_statement_conn(@nospecialize(conn)) = conn === nothing &&
   error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1257,11 +1298,14 @@ function _collector_predicate(connection::_SQLEngine,
   parameters = get_parameter(connection)
   set_context!(parameters, :where)
   arms = String[]
-  alias = ""
+  # A typed holder the closure writes (#1599 layer 7, #1694): reassigned inside `build_one`, `alias` was a
+  # `Core.Box`, so the tuple this returns was untyped, and the `DELETE` text built from it in a trimmed image
+  # raised `MissingCodeError` at `string(…)`.
+  alias = Base.RefValue{String}("")
   for key in keys
     build_one = () -> begin
       instruction = _build_entry(connection, key, parameters)
-      alias = quote_identifier(instruction.alias, connection)
+      alias[] = quote_identifier(instruction.alias, connection)
       instruction
     end
     push!(arms, _mutation_predicate(build_one, parameters))
@@ -1272,10 +1316,10 @@ function _collector_predicate(connection::_SQLEngine,
     # others would drop a WHERE whose other arms had already bound values — markers and values out of
     # step — and a filtered root that rendered no predicate would delete every row. Refuse both.
     (length(arms) == 1 && isempty(keys[1][:objct].object.filter)) || error(_emsg("PormG internal error in delete(): a path rendered no row predicate (one of $(length(arms)) collected) — this should not happen; please report it."))
-    return "", parameters, alias
+    return "", parameters, alias[]
   end
   where_sql = length(arms) == 1 ? arms[1] : join(("($(arm))" for arm in arms), " OR ")
-  return where_sql, parameters, alias
+  return where_sql, parameters, alias[]
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1341,7 +1385,7 @@ function _models_to_lock(collector::DeletionCollector)::Vector{PormGModel}
 end
 
 function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-    show_query::Symbol, conn)
+    show_query::Symbol, @nospecialize(conn))
   isempty(keys) && error(_emsg("PormG internal error in delete(): lock_objects was called with no keys for $(model.name) — this should not happen; please report it."))
   where_sql, parameters, alias = _collector_predicate(connection, keys)
   sql = "SELECT count(*) FROM (SELECT 1 FROM $(safe_table_identifier(Models.model_table_name(model), connection)) AS $(alias)" *
@@ -1350,7 +1394,7 @@ function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormG
   if show_query !== :execute
     return _show_query_result(show_query, sql, connection, model, :lock, parameters=parameters)
   end
-  with_transaction(connection, sql, conn=conn, params=parameters)
+  _with_transaction_with(connection, sql, conn, false, parameters)
   return nothing
 end
 
@@ -1360,14 +1404,32 @@ stripped from a private copy: the entry's `:key` projection is what a child's `"
 but a row predicate has no projection (#765, the #668 move).
 """
 function _build_entry(connection::_SQLEngine, key::Dict{Symbol, Union{String, SQLObjectHandler}}, parameters)
-  work = deepcopy(key[:objct].object)
-  empty!(work.values)
+  work = _mutation_copy(key[:objct].object)   # #1599 layer 7: `update`'s copy, `values` emptied
   # #1002: a row predicate — `pk IN (…)` and an `EXISTS` fence — so a repeated row is invisible.
   return build(work, connection=connection, parameters=parameters, semi_join=true, mutation=true)
 end
 
+# One model's deleted rows added to the count `delete()` returns (#1599 layer 7, #1694). The `Dict` holds `Integer`
+# (that type is in `delete()`'s return), so a sum read out of it was untyped and the store had no target in a trimmed
+# image. Every count stored is an `Int` (they start at `0` and add `Int` counts), so the old one is read as one.
+function _count_deleted!(counter::Dict{String, Integer}, name::String, n::Int)
+  counter[name] = (get(counter, name, 0)::Int) + n
+  return counter
+end
+
+# The total `delete()` returns: the sum of the counts, each an `Int` (`_count_deleted!`), and `0` for none, as
+# `sum(values(counter))` gives (#1599 layer 7). Summed out of the `Integer`-valued `Dict` it was untyped, and the
+# `== 0` test on it had no target in a trimmed image.
+function _deleted_total(counter::Dict{String, Integer})::Int
+  total = 0
+  for n in values(counter)
+    total += n::Int
+  end
+  return total
+end
+
 function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
-   show_query::Symbol, deleted_counter::Dict{String, Integer}, conn)
+   show_query::Symbol, deleted_counter::Dict{String, Integer}, @nospecialize(conn))   # held untyped (#1599 layer 7)
   @pormg_debug false
   isempty(keys) && error(_emsg("PormG internal error in delete(): delete_objects was called with no keys for $(model.name) — this should not happen; please report it."))
 
@@ -1381,8 +1443,8 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
       return _show_query_result(show_query, sql, connection, model, :delete, parameters=nothing)
     end
 
-    result, _ = with_transaction(connection, sql, conn=conn, params=nothing)
-    deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
+    result, _ = _with_transaction_with(connection, sql, conn, false, nothing)
+    _count_deleted!(deleted_counter, model.name, _affected_row_count(connection, result, conn))
     return deleted_counter
   end
 
@@ -1401,12 +1463,12 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
     return _show_query_result(show_query, sql, connection, model, :delete, parameters=parameters)
   end
   @pormg_debug false
-  result, _ = with_transaction(connection, sql, conn=conn, params=parameters)
-  deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
+  result, _ = _with_transaction_with(connection, sql, conn, false, parameters)
+  _count_deleted!(deleted_counter, model.name, _affected_row_count(connection, result, conn))
   return deleted_counter  # Return count of deleted objects
 end
 
-function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, conn)
+function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, @nospecialize(conn))
   # Update field values using query object like CASCADE
   @pormg_debug false
   isempty(keys) && error(_emsg("PormG internal error in delete(): update_field was called with no keys for $(model.name) — this should not happen; please report it."))
@@ -1440,5 +1502,5 @@ function update_field(connection::_SQLEngine, model::PormGModel, field::String, 
     return _show_query_result(show_query, sql, connection, model, :update, parameters=parameters)
   end
   # LibPQ.execute(connection, sql)
-  with_transaction(connection, sql, conn=conn, params=parameters)
+  _with_transaction_with(connection, sql, conn, false, parameters)
 end

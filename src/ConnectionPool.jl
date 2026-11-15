@@ -3020,6 +3020,36 @@ _finalize_with(pool::_SQLEngine, @nospecialize(conn), @nospecialize(rollback_err
                @nospecialize(body_error), abandoned_await::Bool) =
   Core.kwcall(_FinalizeKeywords((rollback_error, renew, body_error, abandoned_await)),
               finalize_transaction_connection!, pool, conn)
+# The same on a settings entry, the call `finalize_transaction_connection!(settings, …)` makes (#1599 layer 7,
+# #1694): `delete()`'s hand-rolled lifecycle finalizes through its settings. That method reaches the pool
+# through `with_pool`, which specializes on its arguments, so with errors from a `catch` (`Any`) it was a
+# dispatch at run time: the trimmed full fixture entry's `delete` raised `MethodError(kwcall, …)` there, in
+# place of its own error. The pool is walked here as `with_pool` walks it, each arm the static call above;
+# a pool `with_pool` does not list takes the call it took.
+function _finalize_with(settings::Settings, @nospecialize(conn), @nospecialize(rollback_error), renew::Bool,
+                        @nospecialize(body_error), abandoned_await::Bool)
+  pool = settings.connections
+  pool isa SQLiteConnectionPool && return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  pool isa PostgresConnectionPool{:libpq} &&
+    return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  pool isa PostgresConnectionPool{:postgres} &&
+    return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  pool isa MySQLConnectionPool && return _finalize_with(pool, conn, rollback_error, renew, body_error, abandoned_await)
+  return finalize_transaction_connection!(settings, conn; rollback_error = rollback_error, renew = renew,
+                                          body_error = body_error, abandoned_await = abandoned_await)
+end
+# `with_tx_context(f, settings.connections, conn)` from a settings entry (#1599 layer 7, #1694): the slot is a
+# union, so the call dispatched at run time, and `delete()`'s hand-rolled lifecycle raised `MethodError` there in
+# a trimmed image. The pool is walked as `with_pool` walks it; `conn` stays unspecialized, as `with_tx_context`
+# takes it. A pool `with_pool` does not list takes the call it took.
+function _with_tx_context_on(f::F, settings::Settings, @nospecialize(conn)) where {F<:Function}
+  pool = settings.connections
+  pool isa SQLiteConnectionPool && return with_tx_context(f, pool, conn)
+  pool isa PostgresConnectionPool{:libpq} && return with_tx_context(f, pool, conn)
+  pool isa PostgresConnectionPool{:postgres} && return with_tx_context(f, pool, conn)
+  pool isa MySQLConnectionPool && return with_tx_context(f, pool, conn)
+  return with_tx_context(f, pool, conn)
+end
 
 # A statement that ends the current transaction (plain ROLLBACK) — deliberately NOT
 # "ROLLBACK TO SAVEPOINT", which keeps the outer transaction alive and must never
@@ -3823,7 +3853,9 @@ end
 fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
 fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
 # #1605: `_decode` is forwarded only when set, so a `fetch` method that predates it (a test mock's, a
-# backend's own) is still called exactly as before for every untyped read.
+# backend's own) is still called exactly as before for every untyped read. Since #1599 layer 7 (#1694) three
+# more reads hand a decoder: `create`'s read-back on SQLite and MySQL, `exists()`, and SQLite's `update` row
+# count. A stand-in pool whose own `fetch` lacks the keyword gets a `MethodError` there, as from a typed read.
 _fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, ::Nothing) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 _fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, decode) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx, _decode=decode)
 fetch(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)
@@ -3979,7 +4011,7 @@ See also [`acquire_connection`](@ref), `with_transaction_async`, and the
 [Transactions and `run_in_transaction`](@ref) guide.
 """
 function with_transaction(pool::_SQLEngine, sql::String;
-  conn = nothing,
+  @nospecialize(conn = nothing),   # #1599 layer 7: a handle held untyped; compiled once (`_with_transaction_with`)
   release_conn::Bool = false,
   params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
 
@@ -4038,6 +4070,26 @@ with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, relea
 with_transaction_async(pool::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_pool(_with_transaction_async_on, pool.connections, sql, conn, params)
 _with_transaction_on(pool::_SQLEngine, sql::AbstractString, conn, release_conn::Bool, params) = with_transaction(pool, sql; conn=conn, release_conn=release_conn, params=params)
 _with_transaction_async_on(pool::_SQLEngine, sql::String, conn, params) = with_transaction_async(pool, sql; conn=conn, params=params)
+
+# `with_transaction(pool, sql; conn, release_conn, params)` with a connection the caller holds, which it holds
+# untyped (#1599 layer 7, #1694): `delete()`'s hand-rolled lifecycle runs every statement this way. Spelled as
+# keywords, `conn`'s run-time type made the keyword `NamedTuple` abstract, and the call had no target in a
+# trimmed image (`MethodError(kwcall, (NamedTuple{(:conn,), Tuple{SQLite.DB}}, with_transaction, …))`). The
+# `NamedTuple` type is written out here, `conn` as `Any` and the parameters at their own type, so the keyword
+# call is static, on the public generic (a method added for a pool type is still the one called). On a
+# settings entry, the pool is walked as `with_pool` walks it, which is what `with_transaction(settings, …)`
+# does; a pool `with_pool` does not list takes that call.
+_with_transaction_with(pool::_SQLEngine, sql::String, @nospecialize(conn), release_conn::Bool, params::P) where {P} =
+  Core.kwcall(NamedTuple{(:conn, :release_conn, :params), Tuple{Any, Bool, P}}((conn, release_conn, params)),
+              with_transaction, pool, sql)
+function _with_transaction_with(settings::Settings, sql::String, @nospecialize(conn), release_conn::Bool, params::P) where {P}
+  pool = settings.connections
+  pool isa SQLiteConnectionPool && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  pool isa PostgresConnectionPool{:libpq} && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  pool isa PostgresConnectionPool{:postgres} && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  pool isa MySQLConnectionPool && return _with_transaction_with(pool, sql, conn, release_conn, params)
+  return with_transaction(settings, sql; conn = conn, release_conn = release_conn, params = params)
+end
 
 """
     with_savepoint(f::Function, settings::PormGSettings, name::String) -> result

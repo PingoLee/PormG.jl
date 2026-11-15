@@ -1,6 +1,6 @@
 # The read-only juliac --trim entry of the fixture app (#1599): boot and one typed read, no write.
-# `main.jl` without its write steps (the refused creates and the write); this binary returns rows
-# (#1788), and the `Trim (juliac)` workflow builds and runs it (README.md).
+# `main.jl` without its write steps (the refused creates, the write, the update and the delete); this
+# binary returns rows (#1788), and the `Trim (juliac)` workflow builds and runs it (README.md).
 #   JIT:  julia --project=test/trim test/trim/read.jl <run dir>
 #   exe:  <build dir>/read <run dir>
 #   tasks: <build dir>/read <run dir> tasks  adds the pool's long-lived tasks: the reaper and the

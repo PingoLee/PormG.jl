@@ -171,6 +171,27 @@ const _FOUND_ROW_HEAD = "SELECT *"
 end
 @noinline _bind_written_other!(parameters, @nospecialize(value)) = add_parameter!(parameters, value)
 
+# The query an `update` builds from (#668): the caller's, with `values()` emptied, as a new struct whose
+# every other slot is shared with the caller's (#1599 layer 7, #1694). It was `deepcopy(real_obj)` and
+# `empty!` of the copy's `values`; a deep copy walks the query's object graph by run-time dispatch, and the
+# trimmed full fixture entry's `update` stopped in it (`MissingCodeError` at
+# `deepcopy_internal(::Vector{Int32}, ::IdDict)`). The build writes nothing into the query it renders
+# (#1624), so it needs no deep copy, as the read terminals' `_terminal_copy` does not; `filter` and `order`
+# are fresh containers, as there. `parameters` is not carried: the build never reads the slot.
+function _mutation_copy(q::SQLObjectQuery)::SQLObjectQuery
+  return SQLObjectQuery(model=q.model, connect_key=q.connect_key, values=ProjectionNode[], filter=copy(q.filter),
+    insert=q.insert, limit=q.limit, offset=q.offset, order=copy(_order_terms(q)), group=q.group, having=q.having,
+    list_joins=q.list_joins, distinct=q.distinct, for_update=q.for_update, ctes=q.ctes, custom_join=q.custom_join,
+    alias_join=q.alias_join, parameters=nothing, projection_kinds=q.projection_kinds)
+end
+
+# SQLite's `SELECT changes()`, the row count of an UPDATE (`_update_row_count`), read as a typed read: its one row
+# decoded on the worker into a row type named for its column (#1599 layer 7, #1694). Piped through
+# `Tables.rowtable`, the row's type was decided at run time, and the trimmed full fixture entry's `update` raised
+# `MethodError(|>, (Vector{NamedTuple{(:var"changes()",), Tuple{Int64}}}, typeof(Tables.rowtable)))` there.
+const _ChangesRow = NamedTuple{(Symbol("changes()"),), Tuple{Int64}}
+_changes_decoder() = _RowDecoder{_ChangesRow}((NO_READ_PARSER,), _TypedReadSite("SELECT changes()", "changes()"))
+
 # A field's automatic value (`auto_now`, `auto_now_add`, `auto_add`), formatted and stored in the insert
 # (#1599 layer 7, #1694). The formatter is called at its own type (`Models.apply_formatter`), not through
 # the field's `Function` slot, which a trimmed image cannot dispatch. The insert holds `Any`, and storing
@@ -1672,8 +1693,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # `F("points") * 2`) filed its operands into the `:select` bucket, which flattens ahead of SET and
     # WHERE: a positional misbind on SQLite (wrong value, wrong rows, no error), and bound-but-unused
     # `$N` on PostgreSQL. Aggregates and alias filters were refused above, so emptying drops nothing.
-    work = deepcopy(real_obj)
-    empty!(work.values)
+    work = _mutation_copy(real_obj)
     # `get_alias` is a counter: a second build on the SAME alias object would name its target "R1",
     # not "Tb". A joined update builds twice (#765 — selection, then fence), so the fence gets an
     # untouched copy of whatever the caller passed; `nothing` makes a fresh one either way.
@@ -1689,16 +1709,17 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
     # Don't allow to update a field without filter
     instruction._where |> isempty && throw(UnsafeMutationError("update() requires a filter — refusing to update every row. Add .filter(...) before .update(...)."))
   
-    parameters = instruction.parameters
+    parameters = _engine_collector(connection, instruction.parameters)   # the build above made it (#1599 layer 7)
     fields = model.field_names
 
-    # Check if the fields need to be updated automatically
+    # Check if the fields need to be updated automatically. Filled as `create` fills them (#1599 layer 7): the
+    # formatter at its type, the text stored at its type, UTC's current time without parsing the zone name.
     for field in fields
       if !haskey(objct.insert, field)
         if model.fields[field].type == "TIMESTAMPTZ" && (model.fields[field].auto_now)
-          objct.insert[field] = model.fields[field].formatter(now(TimeZone(settings.time_zone)))
+          _fill_formatted!(objct.insert, field, model.fields[field].formatter, _now_in(settings.time_zone))
         elseif model.fields[field].type == "DATE" && (model.fields[field].auto_now)
-          objct.insert[field] = model.fields[field].formatter(today())
+          _fill_formatted!(objct.insert, field, model.fields[field].formatter, today())
         end
       end
     end
@@ -1767,7 +1788,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(f_value)")
         else
           formatted_value = _format_single(model.fields[field], field, value, "update"; conn = connection)
-          placeholder = add_parameter!(parameters, formatted_value)
+          placeholder = _bind_written_value!(parameters, formatted_value)::String   # at its type, as `create`'s bind (#1599 layer 7)
           push!(set_fields, field); push!(set_clause_parts, "$(quoted_field) = $(placeholder)")
         end
       end
@@ -1812,8 +1833,7 @@ function update(objct::SQLObject; table_alias::Union{Nothing, SQLTableAlias} = n
           else
             # #1431: the key selection prints the joins verbatim, so their types are checked here.
             _require_outer_joins(instruction)
-            fence_work = deepcopy(real_obj)
-            empty!(fence_work.values)
+            fence_work = _mutation_copy(real_obj)
             mark = nested_parameter_mark(parameters)
             fence = build(fence_work, table_alias=fence_alias, connection=connection, parameters=parameters, semi_join=true,
                           mutation=true, defer_outer_join_check=true)

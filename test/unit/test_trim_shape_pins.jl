@@ -2678,9 +2678,11 @@ end
       t0 = M.now(M.TimeZone("UTC")); t = QB._now_in("UTC"); t1 = M.now(M.TimeZone("UTC"))
       @test t0 <= t <= t1
     end
-    # and the insert's fill takes it from there: the one zone parse left in the file is `update`'s fill.
+    # and both fills take it from there, the insert's and `update`'s (#1694's update step): no zone is parsed
+    # in the file.
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
-    @test count("now(TimeZone(settings.time_zone))", ew_src) == 1 && occursin("_now_in(settings.time_zone)", ew_src)
+    @test count("now(TimeZone(settings.time_zone))", ew_src) == 0 && count("_now_in(settings.time_zone)", ew_src) == 2
+    @test count("_fill_formatted!(objct.insert, field, model.fields[field].formatter", ew_src) == 2
     # The insert's marshalling stores nothing in the insert through a dynamic call, and calls no formatter slot.
     insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
                                                            CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
@@ -2725,6 +2727,262 @@ end
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
     @test occursin("_read_back_rows(settings, read_back[1], read_back[2], decoder)", ew_src)
     @test !occursin("fetch(settings, read_back[1])", ew_src)
+  end
+
+  # What: the full entry's `update` and `delete` (#1599 layer 7, #1694, after the write completed): the walls
+  #   each verb hits in a trimmed image, one per commit. `update`'s query copy (`_mutation_copy`).
+  # Expected: `update` builds from a shallow copy of the caller's query with `values` emptied and `filter` and
+  #   `order` fresh, every other slot shared, made without a dynamic call; no `deepcopy` of the query is left
+  #   in `update`.
+  # Why: `deepcopy(real_obj)` walks the query's object graph by run-time dispatch; the trimmed full entry's
+  #   `update` raised `MissingCodeError` at `deepcopy_internal(::Vector{Int32}, ::IdDict)`. The build writes
+  #   nothing into the query (#1624): `update(…; show_query = :dict)` over 231 shapes x engines rendered the
+  #   same SQL, parameters and refusals as main's deep copy, twice on one handler (PR body).
+  @testset "update and delete run at concrete types in the full entry (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_mutation_copy)
+    if isdefined(QB, :_mutation_copy)
+      @test isempty(_dynamic_calls(QB._mutation_copy, (QB.SQLObjectQuery,)))
+      model = PormG.Models.Model("tsp_mutation_race", raceid = PormG.Models.IDField(), year = PormG.Models.IntegerField(),
+                                 name = PormG.Models.CharField())
+      q = QB.SQLObjectQuery(model = model)
+      QB._values!(q, ("name",))
+      QB._filter!(q, ("year" => 2009,))
+      QB._order_by!(q, ("-year",))
+      c = QB._mutation_copy(q)
+      @test isempty(c.values) && length(q.values) == 1
+      @test c.filter == q.filter && c.filter !== q.filter && c.order !== q.order
+      @test all(f -> getfield(c, f) === getfield(q, f),
+                (:model, :connect_key, :insert, :limit, :offset, :group, :having, :list_joins, :distinct, :for_update,
+                 :ctes, :custom_join, :alias_join, :projection_kinds))
+      @test c.parameters === nothing
+    end
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test !occursin("work = deepcopy(", ew_src) && count("_mutation_copy(real_obj)", ew_src) == 2
+
+    # The filter literal's node (`_literal_value_node`): `update`'s temporal check took `_filter_value_node` on the
+    # untyped literal, a run-time dispatch (`MethodError(_filter_value_node, (Int64,))` in the trimmed binary).
+    # Each arm is the call or the value `_filter_value_node` gives at that type; anything else, the open arm.
+    @test isdefined(QB, :_literal_value_node)
+    if isdefined(QB, :_literal_value_node)
+      @test isempty(_dynamic_calls(QB._oper_value_check_node, (QB.OperObject,)))
+      @test isempty(_dynamic_calls(QB._literal_value_node, (Any,)))
+      @test length(_dynamic_calls(QB._literal_value_node_other, (Any,))) == 1
+      invoked(f, tt) = [string((s.args[1] isa Core.CodeInstance ? s.args[1].def : s.args[1]).def.name)
+                        for s in only(code_typed(f, tt; optimize = true))[1].code if s isa Expr && s.head === :invoke]
+      M = PormG.Models
+      for T in (String, SubString{String}, Int64, Int32, Float64, Bool, Nothing, Missing, Dates.Date, Dates.DateTime,
+                Dates.Time, M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID)
+        @test (T, "_literal_value_node_other" in invoked(QB._literal_value_node, (T,))) == (T, false)
+      end
+      lits = Any["Monaco", SubString("Monaco", 1, 3), 2009, Int32(6), 1.5, true, nothing, missing, Dates.Date(2009, 5, 24),
+                 Dates.DateTime(2009, 5, 24, 14), Dates.Time(14), M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")),
+                 M.Decimals.Decimal(0, 150, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), [1, 2], ["a", "b"],
+                 ("a", 1), Int16(3), :sym, 2:3]
+      for x in lits
+        a, b = QB._literal_value_node(x), QB._filter_value_node(x)
+        @test typeof(a) === typeof(b) && (a isa QB.SQLText ? a.field == b.field : isequal(a, b) ||
+              (a isa AbstractArray && all(i -> (a[i] isa QB.SQLText ? a[i].field == b[i].field : isequal(a[i], b[i])), eachindex(a))) ||
+              (a isa Tuple && all(i -> (a[i] isa QB.SQLText ? a[i].field == b[i].field : isequal(a[i], b[i])), 1:length(a))))
+      end
+    end
+
+    # The SET clause's collector: the instruction holds it in a union slot, and `update`'s SET closure captured it
+    # there, so the closure was no concrete type and the `with_scope(instruction; set_reads) do … end` keyword call
+    # had no target in the trimmed binary. `_engine_collector` asserts it at the type `get_parameter` makes.
+    @test isdefined(QB, :_engine_collector)
+    if isdefined(QB, :_engine_collector)
+      slot = fieldtype(QB.InstructionObject, :parameters)
+      for (E, C) in ((PormG.PormGPostgres, QB.PgParameterizedQuery), (PormG.PormGSQLite, QB.SQLiteParameterizedQuery),
+                     (PormG.PormGMySQL, QB.MySQLParameterizedQuery))
+        @test only(Base.return_types(QB._engine_collector, (E, slot))) === C
+        @test typeof(QB.get_parameter(E === PormG.PormGPostgres ? PormG.ConnectionPool.PostgresConnectionPool("host=x dbname=y") :
+                                      E === PormG.PormGSQLite ? PormG.ConnectionPool.SQLiteConnectionPool(":memory:") :
+                                      PormG.ConnectionPool.MySQLConnectionPool("host='x'"))) === C
+      end
+    end
+    @test occursin("parameters = _engine_collector(connection, instruction.parameters)", ew_src)
+    # The SET value's bind, through `create`'s typed walk (`_bind_written_value!`, pinned arm by arm above): it was
+    # `add_parameter!(parameters, formatted_value)` on the untyped formatted value.
+    @test occursin("placeholder = _bind_written_value!(parameters, formatted_value)::String", ew_src)
+    @test !occursin("add_parameter!(parameters, formatted_value)", ew_src)
+    # SQLite's row count, `SELECT changes()`, read as a typed read into a row type named for its column: piped
+    # through `Tables.rowtable` its row type was decided at run time (`MethodError(|>, …)` in the binary).
+    @test isdefined(QB, :_changes_decoder)
+    if isdefined(QB, :_changes_decoder)
+      @test QB._changes_decoder() isa QB._RowDecoder{QB._ChangesRow} && fieldnames(QB._ChangesRow) == (Symbol("changes()"),)
+      @test fieldtypes(QB._ChangesRow) == (Int64,)
+    end
+    ef_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "engine_facts.jl"), String)
+    @test !occursin("fetch(settings, \"SELECT changes()\") |> Tables.rowtable", ef_src)
+    @test occursin("fetch(settings, \"SELECT changes()\"; _decode = _changes_decoder())::Vector{_ChangesRow}", ef_src)
+
+    # `exists()`, which `delete` probes with, counts its rows where the result is concrete (`_RowCounter`): it was
+    # `fetch(…) |> Tables.rowtable` and `length` on a row type decided at run time (its projection is `1` or a kept
+    # projection). The SQLite extension steps and counts, reading each cell as its materialization does.
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    CP = PormG.ConnectionPool
+    @test isdefined(QB, :_RowCounter) && isdefined(X, :_sqlite_count_rows)
+    if isdefined(QB, :_RowCounter) && isdefined(X, :_sqlite_count_rows)
+      S = PormG.Kernel.Settings
+      for P in (Nothing, QB.SQLiteParameterizedQuery, QB.PgParameterizedQuery, QB.MySQLParameterizedQuery)
+        @test (P, _dynamic_calls(QB._fetch_row_count, (S, String, P))) == (P, String[])
+        @test only(Base.return_types(QB._fetch_row_count, (S, String, P))) === Int
+      end
+      @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, QB._RowCounter)))
+      @test isempty(_dynamic_calls(X._sqlite_count_rows, (SQLite.DB, String, Nothing)))
+      @test isempty(_dynamic_calls(X._sqlite_count_rows_in, (SQLite.Query{false},)))
+      # The same count as the rows the materialization built, or the same refusal.
+      db = SQLite.DB()
+      SQLite.execute(db, "CREATE TABLE t (a INTEGER, b TEXT, c BLOB)")
+      SQLite.execute(db, "INSERT INTO t VALUES (1, 'x', x'0102'), (2, NULL, NULL), (3, 'z', x'')")
+      count_of(f) = try; (:ok, f()); catch e; (:err, typeof(e), sprint(showerror, e)); end
+      for (sql, params) in (("SELECT 1 FROM t LIMIT 1", nothing), ("SELECT * FROM t", nothing), ("SELECT 1 FROM t WHERE a > 9", nothing),
+                            ("SELECT a, c FROM t WHERE a >= ?", Any[2]), ("SELECT DISTINCT b FROM t", nothing), ("SELECT nope FROM t", nothing))
+        @test count_of(() -> X._sqlite_count_rows(db, sql, params)) == count_of(() -> length(X._sqlite_execute_materialized(db, sql, params)))
+      end
+      close(db)
+    end
+    er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
+    @test occursin("n = _fetch_row_count(settings, sql, instruction.parameters)", er_src)
+
+    # `delete()`'s own transaction lifecycle. Its terminal finalize: the keyword call on the two caught errors (`Any`)
+    # had no target, and the trimmed binary raised that `MethodError` in place of the delete's own error.
+    # `_finalize_with` on the settings walks the pool as `with_pool` does; its one dynamic call is the open arm.
+    S = PormG.Kernel.Settings
+    @test hasmethod(CP._finalize_with, (S, Any, Any, Bool, Any, Bool))
+    if hasmethod(CP._finalize_with, (S, Any, Any, Bool, Any, Bool))
+      @test length(_dynamic_calls(CP._finalize_with, (S, Any, Any, Bool, Any, Bool))) == 1
+    end
+    del_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "deletion.jl"), String)
+    @test occursin("_finalize_with(settings, conn, rollback_error, false, body_error, false)", del_src)
+    @test !occursin("finalize_transaction_connection!(settings, conn; rollback_error=rollback_error", del_src)
+    # Its statements on the transaction's connection: `with_transaction(…; conn = conn)` with `conn` untyped built an
+    # abstract keyword `NamedTuple` (`MethodError(kwcall, …with_transaction…)`); `_with_transaction_with` writes the
+    # type out, and `with_transaction`'s `conn` is unspecialized, so the sorter's call into its body is static too.
+    @test isdefined(CP, :_with_transaction_with)
+    if isdefined(CP, :_with_transaction_with)
+      for P in (Nothing, QB.SQLiteParameterizedQuery)
+        @test (P, _dynamic_calls(CP._with_transaction_with, (CP.SQLiteConnectionPool, String, Any, Bool, P))) == (P, String[])
+        @test length(_dynamic_calls(CP._with_transaction_with, (S, String, Any, Bool, P))) == 1   # the open arm
+        # The call, not the method a row names: each row is "<method signature>: <dynamic statement>".
+        @test !any(c -> occursin("#with_transaction#", last(split(c, ": "; limit = 2))),
+                   _dynamic_calls_deep(CP._with_transaction_with, (CP.SQLiteConnectionPool, String, Any, Bool, P); depth = 2))
+      end
+    end
+    @test !occursin(r"with_transaction\((settings|connection), [^)\n]*conn=conn", del_src)
+    @test count("_with_transaction_with(", del_src) == 10
+    # The deletions run in the transaction's context: `with_tx_context(settings.connections, conn) do … end` took the
+    # pool at its union type and a closure capturing the untyped `conn`, so neither was concrete. The pool is walked
+    # (`_with_tx_context_on`, one dynamic call: its open arm), and `conn` goes in a typed box.
+    @test isdefined(CP, :_with_tx_context_on)
+    if isdefined(CP, :_with_tx_context_on)
+      g = () -> 1
+      @test length(_dynamic_calls(CP._with_tx_context_on, (typeof(g), S, Any))) == 1
+    end
+    @test occursin("conn_box = Base.RefValue{Any}(conn)", del_src) && occursin("_with_tx_context_on(settings, conn) do", del_src)
+    @test occursin("run_deletions = function(@nospecialize(conn),)", del_src)
+    @test !occursin("with_tx_context(settings.connections, conn) do", del_src)
+    # The planner's copies of the query: four `deepcopy`s, each a walk of the query's object graph by run-time
+    # dispatch (the trimmed binary stopped in one). The build writes nothing into a query (#1624): three are a read
+    # terminal's shallow copy, whose `values` the planner replaces, and the entry predicate's is `update`'s copy.
+    @test !occursin("deepcopy(", del_src)
+    @test count("_terminal_copy(", del_src) == 3 && occursin("work = _mutation_copy(key[:objct].object)", del_src)
+    # `plan` and `run_plan` are defined before `run_deletions`, which calls them: defined after, each was captured
+    # in a `Core.Box` and called by run-time dispatch on the boxed value.
+    @test findfirst("    plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
+    @test findfirst("    run_plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
+    # A collected entry at the collector's element type, its two slots assigned: built from pairs it was a
+    # `Dict{Symbol,Any}` that `push!` converted value by value, and the typed `Pair` constructor's stores had no target.
+    @test isdefined(QB, :_collector_entry)
+    if isdefined(QB, :_collector_entry)
+      @test isempty(_dynamic_calls(QB._collector_entry, (String, QB.ObjectHandler)))
+      e = QB._collector_entry("raceid", QB.ObjectHandler(object = QB.SQLObjectQuery(model = PormG.Models.Model("tsp_entry", raceid = PormG.Models.IDField()))))
+      @test e isa Dict{Symbol, Union{String, PormG.SQLObjectHandler}} && Set(keys(e)) == Set([:key, :objct]) && e[:key] == "raceid"
+    end
+    @test !occursin(r"Dict\(:key => \w", del_src) && !occursin(r"SQLObjectHandler}}\(\s*:key => \w", del_src)   # code, not the comment
+    # The seed model at its concrete type: read out of the collector's `Dict{PormGModel,…}` it is abstract.
+    @test occursin("find_related_objects!(collector, model::Models.ModelType, copy(keys))", del_src)
+    # The planner's sets queried at the model's concrete type: `collect_fast_deletes!` and `topological_sort`, whose
+    # self-recursive inner closure was also boxed, so `in(::ModelType, ::Set{PormGModel})` had no target. The visit
+    # is `_topological_visit!`; the sort keeps its abstract signature (test_alignment_sqlite.jl pins it).
+    G = PormG.PormGModel
+    MT = PormG.Models.ModelType
+    @test isdefined(QB, :_topological_visit!)
+    if isdefined(QB, :_topological_visit!)
+      @test isempty(_dynamic_calls(QB.topological_sort, (Dict{G, Set{G}},)))
+      @test isempty(_dynamic_calls(QB._topological_visit!, (MT, Dict{G, Set{G}}, Vector{G}, Set{G}, Set{G}, Vector{G})))
+      @test isempty(_dynamic_calls(QB.collect_fast_deletes!, (QB.DeletionCollector{Union{String, PormG.SQLObjectHandler}},)))
+      # The same order, or the same refusal, as the closure it replaces, over acyclic and cyclic graphs.
+      old_topo(dependencies) = begin
+        result = Vector{G}(); temp_mark = Set{G}(); perm_mark = Set{G}(); path = Vector{G}()
+        function visit(node)
+          if node in temp_mark
+            cycle = G[path[findfirst(m -> m === node, path):end]..., node]
+            throw(PormG.QueryBuildError(QB._delete_cycle_message(cycle)))
+          end
+          if !(node in perm_mark)
+            push!(temp_mark, node); push!(path, node)
+            for dep in get(dependencies, node, Set{G}()); visit(dep); end
+            pop!(path); delete!(temp_mark, node); push!(perm_mark, node); push!(result, node)
+          end
+        end
+        for node in keys(dependencies); node in perm_mark || visit(node); end
+        reverse(result)
+      end
+      mk(n) = PormG.Models.Model("tsp_topo_$(n)", id = PormG.Models.IDField())
+      A, B, C, D, E = mk("a"), mk("b"), mk("c"), mk("d"), mk("e")
+      graphs = [Dict{G, Set{G}}(), Dict{G, Set{G}}(A => Set{G}()), Dict{G, Set{G}}(A => Set{G}([B]), B => Set{G}([C])),
+                Dict{G, Set{G}}(A => Set{G}([B, C]), B => Set{G}([D]), C => Set{G}([D]), E => Set{G}([A])),
+                Dict{G, Set{G}}(A => Set{G}([B]), B => Set{G}([A])), Dict{G, Set{G}}(A => Set{G}([A])),
+                Dict{G, Set{G}}(A => Set{G}([B]), B => Set{G}([C]), C => Set{G}([A]), D => Set{G}([A]))]
+      topo_outcome(f) = try; (:ok, f()); catch e; (:err, typeof(e), sprint(showerror, e)); end
+      for g in graphs
+        @test topo_outcome(() -> QB.topological_sort(g)) == topo_outcome(() -> old_topo(g))
+      end
+    end
+    # `run_plan` takes its connection unspecialized, as `run_deletions` does: specialized, each call with the untyped
+    # connection dispatched at run time.
+    @test occursin("run_plan = function(@nospecialize(conn), collector::DeletionCollector, root_locked::Bool)", del_src)
+    # The statement functions take the connection unspecialized, and `run_plan` hands each its model at its type.
+    for f in (QB.delete_objects, QB.update_field, QB.lock_objects, QB._require_statement_conn)
+      @test (f, only(methods(f)).nospecialize != 0) == (f, true)
+    end
+    @test occursin("delete_objects(connection, fast_model::Models.ModelType,", del_src) &&
+          occursin("update_field(connection, affected_model::Models.ModelType,", del_src) &&
+          occursin("delete_objects(connection, model_to_delete::Models.ModelType,", del_src) &&
+          occursin("lock_objects(connection, lock_model::Models.ModelType,", del_src)
+    # The entry predicate's alias in a typed holder: reassigned in the closure it was a `Core.Box`, and the tuple
+    # `_collector_predicate` returns was untyped (the DELETE text built from it had no target).
+    @test only(Base.return_types(QB._collector_predicate, (CP.SQLiteConnectionPool, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}}))) ==
+          Tuple{String, QB.SQLiteParameterizedQuery, String}
+    # The affected-row count takes the statement's result unspecialized, and SQLite's `SELECT changes();` is read at
+    # its row type; any other result (a stand-in pool's) takes the old read, in the open arm.
+    @test all(m -> m.nospecialize != 0, methods(QB._affected_row_count)) && isdefined(QB, :_affected_rows_other)
+    if isdefined(QB, :_affected_rows_other)
+      @test isempty(_dynamic_calls(QB._affected_row_count, (CP.SQLiteConnectionPool, Any, Any)))
+      @test QB._affected_rows_other([(var"changes()" = 3,)]) == 3
+    end
+    # The count `delete()` returns, stored at its type (`_count_deleted!`): the sum read out of the `Integer`-valued
+    # `Dict` was untyped, and its store had no target.
+    @test isdefined(QB, :_count_deleted!)
+    if isdefined(QB, :_count_deleted!)
+      @test isempty(_dynamic_calls(QB._count_deleted!, (Dict{String, Integer}, String, Int)))
+      c = Dict{String, Integer}()
+      QB._count_deleted!(c, "race", 2); QB._count_deleted!(c, "race", 3); QB._count_deleted!(c, "result", 0)
+      @test c == Dict{String, Integer}("race" => 5, "result" => 0) && all(v -> v isa Int, values(c))
+    end
+    @test !occursin("deleted_counter[model.name] = get(deleted_counter, model.name, 0) +", del_src)
+    # The sorted deletes look each model up at its type, with a typed empty default.
+    @test occursin("get(collector.objects, model_to_delete::Models.ModelType, Dict{Symbol, Union{String, SQLObjectHandler}}[])", del_src)
+    # The total `delete()` returns, an `Int` as `sum` gave it, `0` for none.
+    @test isdefined(QB, :_deleted_total)
+    if isdefined(QB, :_deleted_total)
+      @test isempty(_dynamic_calls(QB._deleted_total, (Dict{String, Integer},)))
+      for d in (Dict{String, Integer}(), Dict{String, Integer}("race" => 1), Dict{String, Integer}("race" => 2, "result" => 5))
+        @test QB._deleted_total(d) === sum(values(d))
+      end
+    end
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

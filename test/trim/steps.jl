@@ -1,6 +1,7 @@
 # The steps both SQLite entries of the fixture app run (#1599): `main.jl` (boot, two refused writes, a
-# write, read) and `read.jl` (boot, read). Included by each entry after its `using` line, so the two
-# binaries print the same lines for the same step and exit with the same code when it fails.
+# write, read, update, delete) and `read.jl` (boot, read). Included by each entry after its `using`
+# line, so the two binaries print the same lines for the same step and exit with the same code when it
+# fails.
 #
 # Each step prints one line to `Core.stdout` (a trimmed binary's `Base.stdout` is stale and it prints
 # no `@error` records). A caught exception prints its type; for a `MethodError`, the function it
@@ -107,6 +108,33 @@ function query_step()::Bool
         return true
     catch e
         failed("query", e); return false
+    end
+end
+
+# The write's other two verbs (#1694), after the read: `update` the row the write made (2009's), read it
+# back typed and check the new `round`, then `delete` it and check that only the prepped row is left. Exit
+# codes 7 (update) and 8 (delete) when the call raises or the read after it does not show the change.
+# `update` returns the row count and `delete` the count and the rows per table, both asserted at the types
+# the JIT returns, so a step prints them without a call on an untyped value.
+function update_step()::Bool
+    try
+        n = M.Race.objects.filter("year" => 2009).update("round" => 7)::Int
+        rows = M.Race.objects.filter("year" => 2009).list(RaceRow)
+        say("update", string(n, " rows; round ", isempty(rows) ? "-" : string(rows[1].round)))
+        return n == 1 && length(rows) == 1 && rows[1].round == 7
+    catch e
+        failed("update", e); return false
+    end
+end
+
+function delete_step()::Bool
+    try
+        n = first(M.Race.objects.filter("year" => 2009).delete()::Tuple{Int, Dict{String, Integer}})
+        rows = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
+        say("delete", string(n, " rows; ", length(rows), " left"))
+        return n == 1 && length(rows) == 1 && rows[1].year == 2008
+    catch e
+        failed("delete", e); return false
     end
 end
 

@@ -95,6 +95,7 @@ _driver_hint(driver::Symbol)::String =
 #   backend_is_duplicate_key(pool, e)                  -> Bool: is the IntegrityError `e` a duplicate on a unique key (MySQL; #1267)
 #   backend_copy_in!(pool, conn, sql, data_itr)        -> Int rows copied: PostgreSQL COPY FROM STDIN (#670)
 #   backend_handle_type(P)                              -> the driver handle type a pool of type `P` holds (#1683; below, not in the loop)
+#   backend_result_type(P)                              -> the result type a statement on a pool of type `P` delivers (#1599; below, not in the loop)
 #   backend_sqlite_version(pool)                        -> Int SQLite library version number
 #   backend_mysql_version(pool)                         -> Int MySQL server version (`80411` for 8.4.11)
 #   backend_mysql_parameter_limit(pool)                 -> Int parameters one prepared statement binds (below, not in the loop)
@@ -226,6 +227,28 @@ Each extension adds one method, keyed on the pool type it serves (`_Pool`, its a
     PormG.backend_handle_type(::Type{_Pool}) = MySQL.Connection
 """
 backend_handle_type(@nospecialize(P::Type)) = Any
+
+"""
+    backend_result_type(P::Type) -> Type
+
+The type of the result a statement on a pool of type `P` hands back to `fetch`: `MySQLResult` (the MySQL
+extension's materialized result), `Postgres.Result`. `Any` until the extension that serves `P` says
+otherwise, as for `backend_handle_type`: a pool whose driver is not loaded, a unit test's
+stand-in, SQLite (whose worker has already decoded a typed read) and LibPQ are unaffected.
+
+`await_result` returns the result untyped, because a `FetchTask` holds any driver's. `fetch` hands it to
+the typed read's decoder (`ConnectionPool._decoded`), and with the result typed `Any` that call
+dispatched at run time: one dispatch per read under the JIT, and in a `juliac --trim` image a call
+nothing was compiled for, so a trimmed MySQL or Postgres.jl read ran its statement and then raised
+`MethodError` (#1599). `ConnectionPool._decoded_typed` tests the result against this type once and makes
+the call at the concrete type. Called with a constant `P`, it folds to a constant.
+
+Not in the missing-driver loop above: the answer for a pool with no driver is a type, not a refusal.
+Each extension adds one method, keyed on the pool type it serves, and names a CONCRETE type:
+
+    PormG.backend_result_type(::Type{_Pool}) = MySQLResult
+"""
+backend_result_type(@nospecialize(P::Type)) = Any
 
 """
     backend_classify_error(pool, e) -> Symbol

@@ -746,6 +746,56 @@ end
 # #1683: the handle type this extension's pool holds, so `ConnectionPool._with_handle` calls the
 # driver at its concrete type (`backend_handle_type`'s docstring).
 PormG.backend_handle_type(::Type{_Pool}) = _Conn
+# #1599: the result this extension's statements deliver, so `ConnectionPool._decoded_typed` hands it to
+# the typed read's decoder at its concrete type (`backend_result_type`'s docstring).
+PormG.backend_result_type(::Type{_Pool}) = Postgres.Result
+
+# #1599: the typed read over this driver's result, cell by cell (`QueryBuilder._typed_rows_by_cell`).
+# Postgres.jl keeps each row's cells in a `Vector{Any}` (`ResultRow.data`, read with `getfield`: a
+# `Tables.AbstractRow` answers `getproperty` with its columns), each at the type its OID's registry entry
+# parses to. The reader tests a cell against the few types the field's type takes
+# (`QueryBuilder._cell_fast`, over the types the registry gives the columns PormG reads: the driver's
+# defaults and `_register_types!`'s) and hands it to the parser and the cell rules at that type; any other
+# cell is parsed at its type by one walk over those types (`_pg_parsed`, the same for every field) and
+# handed to the cell rules untyped. Each call is static; a cell of a type no walk names (an array, an
+# interval, a range) is parsed through one `@noinline` arm. These are the values `Tables.columntable` put
+# in its columns: Postgres.jl widens a column's type to every cell's own (pinned in `test_postgres_ext.jl`),
+# so its copy converted nothing. Through it, the column table's type was decided at run time, and a
+# trimmed image had no code for the walk over it (`Tables.buildcolumns`).
+const _PG_CELL_TYPES = (Int64, String, Int32, Decimals.Decimal, Dates.Date, Dates.DateTime, TimeZones.ZonedDateTime,
+                        Float64, Bool, Int16, Float32, Dates.Time, Vector{UInt8}, UInt32, Char)
+
+struct _PgCells
+  result::Postgres.Result
+end
+
+PormG.QueryBuilder._typed_rows_decoded(::Type{T}, result::Postgres.Result, parsers::Tuple,
+                                       site::PormG.QueryBuilder._TypedReadSite) where T =
+  PormG.QueryBuilder._typed_rows_by_cell(T, result, _PgCells(result), length(result.rows), result.names,
+                                         parsers, site)
+
+@noinline _pg_cell_at(::Type{FT}, v, i::Int, parser, name::Symbol, site) where FT =
+  PormG.QueryBuilder._typed_value(FT, PormG.QueryBuilder._typed_parse(parser, v), name, i, site)
+
+@generated function (c::_PgCells)(::Type{FT}, j::Int, i::Int, parser, name::Symbol, site)::FT where FT
+  X = PormG.QueryBuilder._typed_held(FT)
+  arms = [:(v isa $R && return _pg_cell_at(FT, v::$R, i, parser, name, site))
+          for R in _PG_CELL_TYPES if PormG.QueryBuilder._cell_fast(X, R)]
+  return quote
+    v = getfield(c.result.rows[i], :data)[j]
+    v === missing && return _pg_cell_at(FT, missing, i, parser, name, site)
+    $(arms...)
+    return PormG.QueryBuilder._typed_cell_any(FT, _pg_parsed(v, parser), name, i, site)
+  end
+end
+
+# A cell parsed at its type, returned untyped: one walk for every field type.
+@eval @noinline function _pg_parsed(@nospecialize(v), parser)
+  $(Expr(:block, (:(v isa $R && return PormG.QueryBuilder._typed_parse(parser, v::$R)) for R in _PG_CELL_TYPES)...))
+  return _pg_parsed_open(v, parser)
+end
+@noinline _pg_parsed_open(@nospecialize(v), parser) = PormG.QueryBuilder._typed_parse(parser, v)
+
 
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 

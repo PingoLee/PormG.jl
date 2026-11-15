@@ -35,7 +35,7 @@ import PormG: backend_connect, backend_renew_connection, backend_is_alive, backe
               backend_execute_async, backend_is_connection_error, backend_is_permanent_connect_error,
               backend_cancel_query!, backend_drain_connection!,
               backend_copy_in!, backend_classify_error, backend_error_fields, backend_is_retry_safe,
-              backend_is_cancellation, backend_handle_type,
+              backend_is_cancellation, backend_handle_type, backend_result_type,
               _NO_ERROR_FIELDS, _ErrorFields, _field_text
 # Which PostgreSQL driver a pool uses (#785).
 import PormG: postgres_driver, _PG_DRIVER_PACKAGES
@@ -3814,11 +3814,11 @@ function fetch(connection::_SQLEngine, sql::String;
       retry_task = _decode === nothing ? fetch_async(connection, sql; params=params, ignore_tx=ignore_tx) :
                                          fetch_async(connection, sql; params=params, ignore_tx=ignore_tx, _decode=_decode)
       # In the `catch`: an error the decode raises here is not caught by this `try` either.
-      return _decoded(connection, await_result(retry_task), _decode)
+      return _decoded_typed(connection, await_result(retry_task), _decode)
     end
     throw(root)
   end
-  return _decoded(connection, raw, _decode)
+  return _decoded_typed(connection, raw, _decode)
 end
 fetch(settings::PormGSettings, sql::String; conn = nothing, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
 fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false, _decode = nothing) = with_pool(_fetch_on, settings.connections, sql, conn, params, ignore_tx, _decode)
@@ -3835,6 +3835,20 @@ _decoded(::PormGPostgres, result, ::Nothing) = result
 _decoded(::PormGPostgres, result, decode) = decode(result)
 _decoded(::PormGMySQL, result, ::Nothing) = result
 _decoded(::PormGMySQL, result, decode) = decode(result)
+
+# The result at its concrete type (#1599). `await_result` returns it untyped (a `FetchTask` holds any
+# driver's), so the `_decoded` call above dispatched at run time, and a `juliac --trim` image had no code
+# for it: a trimmed MySQL or Postgres.jl read ran its statement and raised `MethodError` here. The result
+# type the pool's extension registered (`backend_result_type`, a constant for a concrete pool type) is
+# tested once and the call is made at it, as `_with_handle` does for a handle. Any other result (SQLite's,
+# whose type the default `Any` leaves as it is; LibPQ's; a unit test's stand-in) takes the call it always
+# took, in the open arm.
+@inline function _decoded_typed(connection::P, @nospecialize(result), decode) where {P}
+  R = backend_result_type(P)
+  result isa R && return _decoded(connection, result::R, decode)
+  return _decoded_unlisted(connection, result, decode)
+end
+@noinline _decoded_unlisted(connection, @nospecialize(result), decode) = _decoded(connection, result, decode)
 
 """
     fetch_copy(connection::PormGPostgres, sql::String, data_itr)

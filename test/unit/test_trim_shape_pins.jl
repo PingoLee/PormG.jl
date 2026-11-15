@@ -4695,6 +4695,86 @@ end
     @test isdefined(pgx, :_parser_entry) && _dynamic_calls_deep(pgx._register_types!, (pgx._Conn,); depth = 4) == String[]
   end
 
+  # What: `fetch` handing a typed read's driver result to the read's decoder (`_decoded`), on a MySQL and
+  #   a Postgres.jl pool: the keyword body `fetch(pool, sql; _decode = decoder)` runs.
+  # Expected: each of the two extensions registers a concrete result type (`backend_result_type`), and
+  #   the body makes no dynamic call to `_decoded`: it reaches `_typed_rows_decoded` at that type. A
+  #   result of another type (a stand-in's) reaches `_decoded` unchanged through the open arm, and a
+  #   pool whose driver is not loaded keeps the default `Any`.
+  # Why: `await_result` returns the result untyped, so `_decoded(connection, raw, decode)` dispatched at
+  #   run time, and against a real server the trimmed MySQL and Postgres.jl reads ran their statement
+  #   and raised `MethodError: _decoded(::MySQLConnectionPool, ::MySQLResult, ::_RowDecoder{…})`
+  #   (#1599 layer 2, #1614; the hand-off of #1795 and #1796).
+  @testset "fetch hands a driver's result to the typed read at its concrete type (#1599 layer 2)" begin
+    CP = PormG.ConnectionPool
+    QB = PormG.QueryBuilder
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    T = @NamedTuple{raceid::Int64, name::String}
+    D = QB._RowDecoder{T, NTuple{2, PormG.ReadParser}}
+    # The dynamic calls naming `_decoded` in `fetch`'s keyword body, and how many bodies were read.
+    function decode_calls(P)
+      found, bodies = String[], 0
+      tt = Tuple{typeof(Core.kwcall), NamedTuple{(:_decode,), Tuple{D}}, typeof(CP.fetch), P, String}
+      for (ci, _) in Base.code_typed_by_type(tt; optimize = true), st in ci.code
+        (st isa Expr && st.head === :invoke) || continue
+        mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        startswith(string(mi.def.name), "#fetch#") || continue
+        bodies += 1
+        for (ci2, _) in Base.code_typed_by_type(mi.specTypes; optimize = true), (i, s2) in enumerate(ci2.code)
+          (s2 isa Expr && s2.head === :call && !(_tsp_callee_type(ci2, s2.args[1]) <: Core.Builtin)) || continue
+          occursin("_decoded", string(s2)) && push!(found, "$(i): $(s2)")
+        end
+      end
+      return found, bodies
+    end
+    for (P, R) in ((CP.MySQLConnectionPool, myx.MySQLResult), (CP.PostgresConnectionPool{:postgres}, Postgres.Result))
+      @test isdefined(PormG, :backend_result_type) && (P, PormG.backend_result_type(P)) == (P, R)
+      @test isconcretetype(R)
+      @test (P, decode_calls(P)) == (P, (String[], 1))
+    end
+    @test isdefined(PormG, :backend_result_type) && PormG.backend_result_type(_TspStandInPool) === Any
+    @test isdefined(PormG, :backend_result_type) && PormG.backend_result_type(CP.SQLiteConnectionPool) === Any
+    my = CP.MySQLConnectionPool("host='x'"; pool_size = 1)
+    result = myx.MySQLResult(Symbol[], AbstractVector[], 0, 0, UInt64(0), "")
+    boxed = Any[result, :stand_in_result]
+    @test isdefined(CP, :_decoded_typed) && CP._decoded_typed(my, boxed[1], nothing) === result
+    @test isdefined(CP, :_decoded_typed) && CP._decoded_typed(my, boxed[2], nothing) === :stand_in_result
+  end
+
+  # What: the typed read's decode of a MySQL result (`MySQLResult`) and a Postgres.jl one
+  #   (`Postgres.Result`): `_typed_rows_decoded`, the row walk over the cells (`_typed_rows_by_cell`) and
+  #   each driver's cell reader (`_MySQLCells`, `_PgCells`), followed four calls deep.
+  # Expected: no dynamic call in the walk and the readers, down to the parse walks (`_mysql_parsed`,
+  #   `_pg_parsed`). Not followed, so not claimed: the open arms (the column walk a result takes when its
+  #   names do not hold each field once, a column or cell of a type no walk names), and the cell rules a
+  #   reader hands a cell to (`_mysql_cell_at`, `_pg_cell_at`, `_typed_cell_any`), whose own rows (a
+  #   refusal's text, an untyped cell's rarer conversions) are the cell rules', not this walk's. The
+  #   parse walks are read one level: their parser calls are static, the parsers' bodies not claimed.
+  #   That the rows, and a refusal's cell, are the column walk's is pinned in `test_mysql_ext.jl` and
+  #   `test_postgres_ext.jl`.
+  # Why: the column walk read the result through `Tables.columntable`, whose `NamedTuple` type is decided
+  #   at run time, so the walk over it was dynamic: once the pool handed the result on typed, the trimmed
+  #   reads stopped at `Tables.rowcount` (MySQL) and `Tables.buildcolumns` (Postgres.jl) (#1599 layer 6,
+  #   #1614).
+  @testset "a MySQL or Postgres.jl result is decoded into the row type without a dynamic call (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    myx = Base.get_extension(PormG, :PormGMySQLExt)
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    T = @NamedTuple{raceid::Int64, year::Int64, name::String, date::Dates.Date, note::Union{Nothing, String}}
+    Ps = NTuple{5, PormG.ReadParser}
+    skip = Any[getfield(m, n) for (m, n) in ((QB, :_typed_rows_from_table_open), (QB, :_typed_cell_any),
+                                            (myx, :_mysql_cell_at), (myx, :_mysql_parsed),
+                                            (pgx, :_pg_cell_at), (pgx, :_pg_parsed))
+               if isdefined(m, n)]
+    for R in (myx.MySQLResult, Postgres.Result)
+      @test (R, _dynamic_calls_deep(QB._typed_rows_decoded, (Type{T}, R, Ps, QB._TypedReadSite);
+                                    depth = 4, skip = Tuple(skip))) == (R, String[])
+    end
+    # The parse walks themselves, one level: each arm's parser call is static; the open arm is an `invoke`.
+    @test isdefined(myx, :_mysql_parsed) && _dynamic_calls(myx._mysql_parsed, (AbstractVector, Int, PormG.ReadParser)) == String[]
+    @test isdefined(pgx, :_pg_parsed) && _dynamic_calls(pgx._pg_parsed, (Any, PormG.ReadParser)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -2941,6 +2941,9 @@ end
         @test topo_outcome(() -> QB.topological_sort(g)) == topo_outcome(() -> old_topo(g))
       end
     end
+    # `run_plan` takes its connection unspecialized, as `run_deletions` does: specialized, each call with the untyped
+    # connection dispatched at run time.
+    @test occursin("run_plan = function(@nospecialize(conn), collector::DeletionCollector, root_locked::Bool)", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

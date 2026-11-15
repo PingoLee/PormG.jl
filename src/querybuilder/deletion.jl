@@ -262,7 +262,7 @@ function delete(objct::SQLObjectHandler;
 
     # Run one plan: lock, then the statements. `root_locked` says the root's rows were already locked by
     # the key step (#1342), so the root is not locked a second time.
-    run_plan = function(conn, collector::DeletionCollector, root_locked::Bool)
+    run_plan = function(@nospecialize(conn), collector::DeletionCollector, root_locked::Bool)   # `run_deletions`' reason
       # #770: lock every parent, top-down, BEFORE any statement below reads it. See `lock_objects`.
       # PostgreSQL and MySQL: SQLite's writers are already serialized for the whole transaction (the
       # `BEGIN IMMEDIATE` + write-lock comment above), so no parent can change under the cascade there.

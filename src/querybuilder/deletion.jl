@@ -316,6 +316,7 @@ function delete(objct::SQLObjectHandler;
     end
 
     # `conn` unspecialized (#1599 layer 7): every caller holds it untyped (a pool slot, the transaction context).
+    # The trailing comma is the parser's: without it a lone macro argument reads as a signature.
     run_deletions = function(@nospecialize(conn),)
       # Plan INSIDE the transaction (#452).
       #

@@ -11,7 +11,7 @@
 # Each fails unless its binary exits 0, prints the row, and its `fail` step prints the server's own error.
 #
 # Not on every PR: a trimmed build takes several minutes. It runs nightly, by hand, and on a PR that
-# touches the fixture, this file or one of the two driver extensions the server variants build.
+# touches the fixture, this file or one of the three driver extensions the jobs build.
 name: Trim (juliac)
 
 on:
@@ -24,6 +24,7 @@ on:
       - '.github/workflows/trim.yml'
       - 'ext/PormGMySQLExt.jl'
       - 'ext/PormGPostgresExt.jl'
+      - 'ext/PormGSQLiteExt.jl'
 
 permissions:
   contents: read
@@ -200,7 +201,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused, 7 update, 8 delete, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl).

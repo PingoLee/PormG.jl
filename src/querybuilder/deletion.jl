@@ -484,7 +484,7 @@ function delete(objct::SQLObjectHandler;
       return length(results) == 1 ? results[1] : results
     end
 
-    total_deleted = _deleted_total(deleted_counter)   # #1599 layer 7: an `Int`, as `sum` gave it at run time
+    total_deleted = sum(values(deleted_counter))
     if total_deleted == 0
       @warn("Warning in delete, no objects were deleted")  
     end
@@ -1415,17 +1415,6 @@ end
 function _count_deleted!(counter::Dict{String, Integer}, name::String, n::Int)
   counter[name] = (get(counter, name, 0)::Int) + n
   return counter
-end
-
-# The total `delete()` returns: the sum of the counts, each an `Int` (`_count_deleted!`), and `0` for none, as
-# `sum(values(counter))` gives (#1599 layer 7). Summed out of the `Integer`-valued `Dict` it was untyped, and the
-# `== 0` test on it had no target in a trimmed image.
-function _deleted_total(counter::Dict{String, Integer})::Int
-  total = 0
-  for n in values(counter)
-    total += n::Int
-  end
-  return total
 end
 
 function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},

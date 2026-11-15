@@ -2975,14 +2975,6 @@ end
     @test !occursin("deleted_counter[model.name] = get(deleted_counter, model.name, 0) +", del_src)
     # The sorted deletes look each model up at its type, with a typed empty default.
     @test occursin("get(collector.objects, model_to_delete::Models.ModelType, Dict{Symbol, Union{String, SQLObjectHandler}}[])", del_src)
-    # The total `delete()` returns, an `Int` as `sum` gave it, `0` for none.
-    @test isdefined(QB, :_deleted_total)
-    if isdefined(QB, :_deleted_total)
-      @test isempty(_dynamic_calls(QB._deleted_total, (Dict{String, Integer},)))
-      for d in (Dict{String, Integer}(), Dict{String, Integer}("race" => 1), Dict{String, Integer}("race" => 2, "result" => 5))
-        @test QB._deleted_total(d) === sum(values(d))
-      end
-    end
   end
 
   # What: the timestamp parser for the text PormG writes (`Models.parse_zoned_timestamp`), on the write path's

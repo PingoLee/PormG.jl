@@ -1202,6 +1202,24 @@ function _aggregate(oq::SQLObjectHandler; pairs, show_query::Symbol = :execute)
   return NamedTuple{Tuple(aliases)}(Tuple(get(row, a, nothing) for a in aliases))
 end
 
+# How many rows a statement returns, counted where the driver's result is concrete (#1599 layer 7, #1694):
+# `exists()` asks only that. It was `fetch(…) |> Tables.rowtable` and `length`, on a row type decided at run
+# time (its projection is `1` or a kept projection), which a trimmed image has no code for: the full fixture
+# entry's `delete`, which probes with `exists()`, raised `MethodError(|>, (Vector{NamedTuple{(:var"1",), …}},
+# typeof(Tables.rowtable)))`. Handed to `fetch` as a decoder: SQLite's worker steps the statement and counts
+# its rows (the SQLite extension's `backend_execute_rows`), reading each cell as the materialization does, so a
+# cell that raised there raises the same way; a materialized result (PostgreSQL's, MySQL's, a stand-in pool's)
+# is counted as before. Nothing is recorded: the old read ran inside the statement, and so does this one.
+struct _RowCounter end
+(::_RowCounter)(result)::Int = length(Tables.rowtable(result))
+decoded_on_worker(::_RowCounter, result) = result::Int
+
+function _fetch_row_count(settings, sql::String, params::Union{Nothing,ParamCollector})::Int
+  params === nothing && return fetch(settings, sql; params = nothing, _decode = _RowCounter())::Int
+  return with_collector(_fetch_row_count_on, params, settings, sql)::Int
+end
+_fetch_row_count_on(params, settings, sql::String) = fetch(settings, sql; params = params, _decode = _RowCounter())::Int
+
 function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
   try
     # Resolve settings
@@ -1258,9 +1276,9 @@ function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias
                                   parameters=instruction.parameters)
         end
         @pormg_debug false
-        result = fetch(settings, sql, instruction.parameters) |> Tables.rowtable
+        n = _fetch_row_count(settings, sql, instruction.parameters)   # #1599 layer 7: counted where the result is concrete
         @pormg_debug false
-        return length(result) > 0
+        return n > 0
       end
     end
   catch e

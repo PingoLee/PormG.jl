@@ -2816,6 +2816,35 @@ end
     ef_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "engine_facts.jl"), String)
     @test !occursin("fetch(settings, \"SELECT changes()\") |> Tables.rowtable", ef_src)
     @test occursin("fetch(settings, \"SELECT changes()\"; _decode = _changes_decoder())::Vector{_ChangesRow}", ef_src)
+
+    # `exists()`, which `delete` probes with, counts its rows where the result is concrete (`_RowCounter`): it was
+    # `fetch(…) |> Tables.rowtable` and `length` on a row type decided at run time (its projection is `1` or a kept
+    # projection). The SQLite extension steps and counts, reading each cell as its materialization does.
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    CP = PormG.ConnectionPool
+    @test isdefined(QB, :_RowCounter) && isdefined(X, :_sqlite_count_rows)
+    if isdefined(QB, :_RowCounter) && isdefined(X, :_sqlite_count_rows)
+      S = PormG.Kernel.Settings
+      for P in (Nothing, QB.SQLiteParameterizedQuery, QB.PgParameterizedQuery, QB.MySQLParameterizedQuery)
+        @test (P, _dynamic_calls(QB._fetch_row_count, (S, String, P))) == (P, String[])
+        @test only(Base.return_types(QB._fetch_row_count, (S, String, P))) === Int
+      end
+      @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, QB._RowCounter)))
+      @test isempty(_dynamic_calls(X._sqlite_count_rows, (SQLite.DB, String, Nothing)))
+      @test isempty(_dynamic_calls(X._sqlite_count_rows_in, (SQLite.Query{false},)))
+      # The same count as the rows the materialization built, or the same refusal.
+      db = SQLite.DB()
+      SQLite.execute(db, "CREATE TABLE t (a INTEGER, b TEXT, c BLOB)")
+      SQLite.execute(db, "INSERT INTO t VALUES (1, 'x', x'0102'), (2, NULL, NULL), (3, 'z', x'')")
+      count_of(f) = try; (:ok, f()); catch e; (:err, typeof(e), sprint(showerror, e)); end
+      for (sql, params) in (("SELECT 1 FROM t LIMIT 1", nothing), ("SELECT * FROM t", nothing), ("SELECT 1 FROM t WHERE a > 9", nothing),
+                            ("SELECT a, c FROM t WHERE a >= ?", Any[2]), ("SELECT DISTINCT b FROM t", nothing), ("SELECT nope FROM t", nothing))
+        @test count_of(() -> X._sqlite_count_rows(db, sql, params)) == count_of(() -> length(X._sqlite_execute_materialized(db, sql, params)))
+      end
+      close(db)
+    end
+    er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
+    @test occursin("n = _fetch_row_count(settings, sql, instruction.parameters)", er_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

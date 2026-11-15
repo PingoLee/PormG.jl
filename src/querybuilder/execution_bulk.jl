@@ -1994,7 +1994,9 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
           end
 
           # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-          cells = [_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
+          # `Any[...]` (#1599 layer 7): the formatted cells are untyped, and an untyped comprehension's vector had a
+          # run-time element type, so iterating it below was a call with no compiled target in a trimmed image.
+          cells = Any[_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
           if pg_arrays
             foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
           else

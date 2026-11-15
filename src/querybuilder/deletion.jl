@@ -399,7 +399,7 @@ function delete(objct::SQLObjectHandler;
                     for (i, level_keys) in enumerate(walk.sets)
                     for chunk in _root_key_chunks(connection, level_keys)]
       for (collector, is_loop, loop_rows) in collectors
-        before = get(deleted_counter, model.name, 0)
+        before = get(deleted_counter, model.name, 0)::Int   # every count stored is an `Int` (`_count_deleted!`)
         run_plan(conn, collector, true)
         # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
         # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
@@ -1406,6 +1406,14 @@ function _build_entry(connection::_SQLEngine, key::Dict{Symbol, Union{String, SQ
   return build(work, connection=connection, parameters=parameters, semi_join=true, mutation=true)
 end
 
+# One model's deleted rows added to the count `delete()` returns (#1599 layer 7, #1694). The `Dict` holds `Integer`
+# (that type is in `delete()`'s return), so a sum read out of it was untyped and the store had no target in a trimmed
+# image. Every count stored is an `Int` (they start at `0` and add `Int` counts), so the old one is read as one.
+function _count_deleted!(counter::Dict{String, Integer}, name::String, n::Int)
+  counter[name] = (get(counter, name, 0)::Int) + n
+  return counter
+end
+
 function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},
    show_query::Symbol, deleted_counter::Dict{String, Integer}, @nospecialize(conn))   # held untyped (#1599 layer 7)
   @pormg_debug false
@@ -1422,7 +1430,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
     end
 
     result, _ = _with_transaction_with(connection, sql, conn, false, nothing)
-    deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
+    _count_deleted!(deleted_counter, model.name, _affected_row_count(connection, result, conn))
     return deleted_counter
   end
 
@@ -1442,7 +1450,7 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
   end
   @pormg_debug false
   result, _ = _with_transaction_with(connection, sql, conn, false, parameters)
-  deleted_counter[model.name] = get(deleted_counter, model.name, 0) + _affected_row_count(connection, result, conn)
+  _count_deleted!(deleted_counter, model.name, _affected_row_count(connection, result, conn))
   return deleted_counter  # Return count of deleted objects
 end
 

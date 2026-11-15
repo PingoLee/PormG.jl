@@ -2963,6 +2963,16 @@ end
       @test isempty(_dynamic_calls(QB._affected_row_count, (CP.SQLiteConnectionPool, Any, Any)))
       @test QB._affected_rows_other([(var"changes()" = 3,)]) == 3
     end
+    # The count `delete()` returns, stored at its type (`_count_deleted!`): the sum read out of the `Integer`-valued
+    # `Dict` was untyped, and its store had no target.
+    @test isdefined(QB, :_count_deleted!)
+    if isdefined(QB, :_count_deleted!)
+      @test isempty(_dynamic_calls(QB._count_deleted!, (Dict{String, Integer}, String, Int)))
+      c = Dict{String, Integer}()
+      QB._count_deleted!(c, "race", 2); QB._count_deleted!(c, "race", 3); QB._count_deleted!(c, "result", 0)
+      @test c == Dict{String, Integer}("race" => 5, "result" => 0) && all(v -> v isa Int, values(c))
+    end
+    @test !occursin("deleted_counter[model.name] = get(deleted_counter, model.name, 0) +", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

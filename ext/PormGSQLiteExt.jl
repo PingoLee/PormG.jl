@@ -229,7 +229,9 @@ function _sqlite_rowtable(q::SQLite.Query{false})
   names = q.names
   key = (names...,)
   isempty(q) && return _sqlite_typed_vector(Core.apply_type(NamedTuple, key, (Core.apply_type(Tuple, q.types...))), Any[])
-  handle = SQLite._get_stmt_handle(q.stmt)
+  # The handle at its type: SQLite.jl keeps it in a `Ref{Ptr{SQLite.C.sqlite3_stmt}}`, an abstract field at
+  # the 1.6.1 floor, where the read came back untyped and each cell read was a dynamic call.
+  handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}
   n = length(names)
   rows = Any[]
   eltype_ = Union{}
@@ -261,12 +263,13 @@ end
 
 # A `Vector{T}` holding `rows`, for a `T` known only at run time: allocated by the runtime
 # (`jl_alloc_array_1d`) and filled through `memoryrefset!`, which check each element against `T` as
-# `setindex!` would, with no method compiled per `T`.
+# `setindex!` would, with no method compiled per `T`. Each slot's reference is bounds-checked
+# (`memoryrefnew(…, true)`), as `setindex!` checks its index.
 function _sqlite_typed_vector(@nospecialize(T::Type), rows::Vector{Any})
   v = ccall(:jl_alloc_array_1d, Any, (Any, Csize_t), Core.apply_type(Vector, T), length(rows))
   ref = getfield(v, :ref)
   for i in eachindex(rows)
-    Core.memoryrefset!(Core.memoryrefnew(ref, i, false), rows[i], :not_atomic, false)
+    Core.memoryrefset!(Core.memoryrefnew(ref, i, true), rows[i], :not_atomic, false)
   end
   return v
 end

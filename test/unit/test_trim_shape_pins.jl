@@ -1042,15 +1042,9 @@ end
   #   the full fixture's write stopped at its INSERT (#1599 layer 2, #1797's hand-off).
   @testset "the SQLite extension materializes a result without a dynamic call (#1599 layer 2)" begin
     X = Base.get_extension(PormG, :PormGSQLiteExt)
-    # Where SQLite.jl infers the statement handle concretely (current releases, which a trimmed build
-    # resolves), no dynamic call; at the 1.6.1 floor `_get_stmt_handle` reads an abstract `Ref`, and the
-    # calls left are the ones on that handle (the cell reads), as in the pin above.
-    rowtable_calls = isdefined(X, :_sqlite_rowtable) ? _dynamic_calls(X._sqlite_rowtable, (SQLite.Query{false},)) : ["undefined"]
-    if isconcretetype(only(Base.return_types(SQLite._get_stmt_handle, (SQLite.Stmt,))))
-      @test rowtable_calls == String[]
-    else
-      @test !isempty(rowtable_calls) && all(c -> occursin(r"sqlite3_column|sqlitevalue", c), rowtable_calls)
-    end
+    # No dynamic call at any SQLite.jl the floor admits: the handle is read at its type, so the 1.6.1
+    # floor's abstract `Ref` does not leave the cell reads untyped (CI's floor-resolve job caught it).
+    @test isdefined(X, :_sqlite_rowtable) && _dynamic_calls(X._sqlite_rowtable, (SQLite.Query{false},)) == String[]
     @test isdefined(X, :_sqlite_typed_vector) && _dynamic_calls(X._sqlite_typed_vector, (Type, Vector{Any})) == String[]
     for P in (Nothing, Vector{Any})
       @test (P, _dynamic_calls(X._sqlite_execute_materialized, (SQLite.DB, String, P))) == (P, String[])

@@ -136,6 +136,9 @@ const PINNED_NAMES = _NamePin[
   (name = "SQLite.C.sqlite3_column_double",     status = :internal,   reader = "_sqlite_cell"),
   (name = "SQLite.sqlitevalue",                 status = :internal,   reader = "_sqlite_cell (TEXT and BLOB)"),
   (name = "SQLite._get_stmt_handle",            status = :internal,   reader = "_sqlite_rows_into, SQLite.bind!(::Stmt, ::_SQLiteBinds)"),
+  # #1599: the statement handle's type, asserted where it is read: SQLite.jl keeps it in a
+  # `Ref{Ptr{SQLite.C.sqlite3_stmt}}`, an abstract field at the 1.6.1 floor.
+  (name = "SQLite.C.sqlite3_stmt",              status = :internal,   reader = "_sqlite_rowtable"),
   # #1599 layer 2: the positional parameters are bound by this extension's `bind!` method on its own vector
   # type, the body of SQLite.jl's positional one (1.6.1 through 1.11 have the same), and the typed read's
   # cursor is narrowed to `Query{false}` before its rows are stepped.

@@ -2541,8 +2541,10 @@ function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, @
   end
 end
 
-function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer;
-                           conn = nothing)
+# `value` unspecialized, as `_format_single`'s is (#1599 layer 7, #1694): a cell is untyped, and the keyword call
+# specialized on it had no compiled target in a trimmed image.
+function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, @nospecialize(value), op::AbstractString,
+                           row_index::Integer; conn = nothing)
   try
     _format_single(f_meta, field, value, op; conn = conn)
   catch e

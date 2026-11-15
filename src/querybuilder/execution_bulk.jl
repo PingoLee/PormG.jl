@@ -53,8 +53,10 @@ end
 
 _bulk_column(frame::_BulkFrame, name::AbstractString) = frame.columns[name]
 _has_bulk_column(frame::_BulkFrame, name::AbstractString) = haskey(frame.columns, name)
-# Every caller names a column the frame does not have yet (`_bulk_private_column`).
-function _add_bulk_column!(frame::_BulkFrame, name::String, column::AbstractVector)
+# Every caller names a column the frame does not have yet (`_bulk_private_column`). `column` unspecialized
+# (#1599 layer 7): the frame stores it as an `AbstractVector` either way, and a fill column reaches here untyped,
+# so a call specialized on its type had no compiled target in a trimmed image.
+function _add_bulk_column!(frame::_BulkFrame, name::String, @nospecialize(column::AbstractVector))
   push!(frame.names, name)
   frame.columns[name] = column
   return frame
@@ -846,7 +848,7 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
     # only the UUID auto_add case) — otherwise broadcast the one value. the row count replaced a `ref_col`
     # pick that grabbed an arbitrary `mapping` key purely for its length and indexed the first column
     # when `mapping` was empty (a latent `BoundsError` on a column-less frame).
-    _add_bulk_column!(df, target, per_row ? fill_value : _fill_bulk_column(fill_value, df.row_count))
+    _add_bulk_column!(df, target, (per_row ? fill_value : _fill_bulk_column(fill_value, df.row_count))::AbstractVector)
     mapping[field] = target
     return true
   end

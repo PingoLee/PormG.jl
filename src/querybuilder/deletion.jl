@@ -1235,16 +1235,21 @@ end
 #     ever fired, the enclosing transaction would roll the statement back, which is the outcome we
 #     want; but do not read it as guarding the write.
 # ─────────────────────────────────────────────────────────────────────────────
-_affected_row_count(connection::PormGPostgres, result, @nospecialize(conn))::Int =
+_affected_row_count(connection::PormGPostgres, @nospecialize(result), @nospecialize(conn))::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
-function _affected_row_count(connection::PormGSQLite, result, @nospecialize(conn))::Int
+function _affected_row_count(connection::PormGSQLite, @nospecialize(result), @nospecialize(conn))::Int
   _require_statement_conn(conn)
   changes, _ = _with_transaction_with(connection, "SELECT changes();", conn, false, nothing)
-  return Int(first(Tables.rowtable(changes))[1])
+  # The materialized result of `SELECT changes();` is a vector of its one row type, read at that type (#1599 layer
+  # 7): through `Tables.rowtable`, on a result typed `Any`, the read was a run-time dispatch. Any other result (a
+  # stand-in pool's) takes that read, in the open arm.
+  changes isa Vector{_ChangesRow} && return Int(changes[1][1])
+  return _affected_rows_other(changes)
 end
+@noinline _affected_rows_other(@nospecialize(changes))::Int = Int(first(Tables.rowtable(changes))[1])
 # MySQL's OK packet counts the rows the statement matched (the pool connects with `found_rows`), so a
 # DELETE's count is its rows, and an UPDATE's includes a row whose value did not change (#1130).
-_affected_row_count(connection::PormGMySQL, result, @nospecialize(conn))::Int =
+_affected_row_count(connection::PormGMySQL, @nospecialize(result), @nospecialize(conn))::Int =
   (_require_statement_conn(conn); backend_num_affected_rows(connection, result))
 _require_statement_conn(@nospecialize(conn)) = conn === nothing &&
   error(_emsg("PormG internal error: _affected_row_count needs the statement's connection — this should not happen; please report it."))

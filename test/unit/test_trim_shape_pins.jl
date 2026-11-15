@@ -2956,6 +2956,13 @@ end
     # `_collector_predicate` returns was untyped (the DELETE text built from it had no target).
     @test only(Base.return_types(QB._collector_predicate, (CP.SQLiteConnectionPool, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}}))) ==
           Tuple{String, QB.SQLiteParameterizedQuery, String}
+    # The affected-row count takes the statement's result unspecialized, and SQLite's `SELECT changes();` is read at
+    # its row type; any other result (a stand-in pool's) takes the old read, in the open arm.
+    @test all(m -> m.nospecialize != 0, methods(QB._affected_row_count)) && isdefined(QB, :_affected_rows_other)
+    if isdefined(QB, :_affected_rows_other)
+      @test isempty(_dynamic_calls(QB._affected_row_count, (CP.SQLiteConnectionPool, Any, Any)))
+      @test QB._affected_rows_other([(var"changes()" = 3,)]) == 3
+    end
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

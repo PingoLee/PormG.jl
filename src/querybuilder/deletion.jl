@@ -1135,32 +1135,39 @@ function topological_sort(dependencies::Dict{PormGModel, Set{PormGModel}})
   perm_mark = Set{PormGModel}()
   path = Vector{PormGModel}()   # the walk from the current start, for naming the cycle
 
-  function visit(node)
-    if node in temp_mark
-      cycle = PormGModel[path[findfirst(m -> m === node, path):end]..., node]
-      throw(QueryBuildError(_delete_cycle_message(cycle)))
-    end
-
-    if !(node in perm_mark)
-      push!(temp_mark, node)
-      push!(path, node)
-      for dep in get(dependencies, node, Set{PormGModel}())
-        visit(dep)
-      end
-      pop!(path)
-      delete!(temp_mark, node)
-      push!(perm_mark, node)
-      push!(result, node)
-    end
-  end
-  
   for node in keys(dependencies)
-    if !(node in perm_mark)
-      visit(node)
+    if !((node::Models.ModelType) in perm_mark)
+      _topological_visit!(node::Models.ModelType, dependencies, result, temp_mark, perm_mark, path)
     end
   end
   
   return reverse(result)
+end
+
+# `topological_sort`'s depth-first visit, a function of its own (#1599 layer 7, #1694): as an inner closure that
+# called itself it was held in a `Core.Box`, so each call was a run-time dispatch, and the models it took from the
+# sets, keyed `PormGModel`, were abstract too (`in(::ModelType, ::Set{PormGModel})` in a trimmed image). Each
+# model is taken at its concrete type, the only `PormGModel` there is (#1615); the walk and its order are the same.
+function _topological_visit!(node::Models.ModelType, dependencies::Dict{PormGModel, Set{PormGModel}},
+                             result::Vector{PormGModel}, temp_mark::Set{PormGModel}, perm_mark::Set{PormGModel},
+                             path::Vector{PormGModel})
+  if node in temp_mark
+    cycle = PormGModel[path[findfirst(m -> m === node, path):end]..., node]
+    throw(QueryBuildError(_delete_cycle_message(cycle)))
+  end
+
+  if !(node in perm_mark)
+    push!(temp_mark, node)
+    push!(path, node)
+    for dep in get(dependencies, node, Set{PormGModel}())
+      _topological_visit!(dep::Models.ModelType, dependencies, result, temp_mark, perm_mark, path)
+    end
+    pop!(path)
+    delete!(temp_mark, node)
+    push!(perm_mark, node)
+    push!(result, node)
+  end
+  return nothing
 end
 
 function collect_fast_deletes!(collector::DeletionCollector)
@@ -1170,10 +1177,12 @@ function collect_fast_deletes!(collector::DeletionCollector)
   models_with_dependents = Set{PormGModel}()  
   # A model is a dependent if it appears as a key in the dependencies dict
   # AND has a non-empty set of dependencies
+  # Each model at its concrete type (#1599 layer 7): read out of the collector's `Dict{PormGModel,…}` it is
+  # abstract, and every set operation on it dispatched at run time (`in(::ModelType, ::Set{PormGModel})`).
   for (model, dependencies) in collector.dependencies
     if !isempty(dependencies)
       # This model depends on something, so it's not a leaf node
-      push!(models_with_dependents, model)
+      push!(models_with_dependents, model::Models.ModelType)
       
       # Also add the models it depends on (they have dependents)
       union!(models_with_dependents, dependencies)
@@ -1184,9 +1193,9 @@ function collect_fast_deletes!(collector::DeletionCollector)
   # 1. Have objects to delete
   # 2. Don't appear in models_with_dependents
   for (model, keys) in collector.objects
-    if !(model in models_with_dependents)
+    if !((model::Models.ModelType) in models_with_dependents)
       @pormg_debug false
-      collector.fast_deletes[model] = keys
+      collector.fast_deletes[model::Models.ModelType] = keys
     end
   end
 end

@@ -2903,6 +2903,44 @@ end
     @test !occursin(r"Dict\(:key => \w", del_src) && !occursin(r"SQLObjectHandler}}\(\s*:key => \w", del_src)   # code, not the comment
     # The seed model at its concrete type: read out of the collector's `Dict{PormGModel,…}` it is abstract.
     @test occursin("find_related_objects!(collector, model::Models.ModelType, copy(keys))", del_src)
+    # The planner's sets queried at the model's concrete type: `collect_fast_deletes!` and `topological_sort`, whose
+    # self-recursive inner closure was also boxed, so `in(::ModelType, ::Set{PormGModel})` had no target. The visit
+    # is `_topological_visit!`; the sort keeps its abstract signature (test_alignment_sqlite.jl pins it).
+    G = PormG.PormGModel
+    MT = PormG.Models.ModelType
+    @test isdefined(QB, :_topological_visit!)
+    if isdefined(QB, :_topological_visit!)
+      @test isempty(_dynamic_calls(QB.topological_sort, (Dict{G, Set{G}},)))
+      @test isempty(_dynamic_calls(QB._topological_visit!, (MT, Dict{G, Set{G}}, Vector{G}, Set{G}, Set{G}, Vector{G})))
+      @test isempty(_dynamic_calls(QB.collect_fast_deletes!, (QB.DeletionCollector{Union{String, PormG.SQLObjectHandler}},)))
+      # The same order, or the same refusal, as the closure it replaces, over acyclic and cyclic graphs.
+      old_topo(dependencies) = begin
+        result = Vector{G}(); temp_mark = Set{G}(); perm_mark = Set{G}(); path = Vector{G}()
+        function visit(node)
+          if node in temp_mark
+            cycle = G[path[findfirst(m -> m === node, path):end]..., node]
+            throw(PormG.QueryBuildError(QB._delete_cycle_message(cycle)))
+          end
+          if !(node in perm_mark)
+            push!(temp_mark, node); push!(path, node)
+            for dep in get(dependencies, node, Set{G}()); visit(dep); end
+            pop!(path); delete!(temp_mark, node); push!(perm_mark, node); push!(result, node)
+          end
+        end
+        for node in keys(dependencies); node in perm_mark || visit(node); end
+        reverse(result)
+      end
+      mk(n) = PormG.Models.Model("tsp_topo_$(n)", id = PormG.Models.IDField())
+      A, B, C, D, E = mk("a"), mk("b"), mk("c"), mk("d"), mk("e")
+      graphs = [Dict{G, Set{G}}(), Dict{G, Set{G}}(A => Set{G}()), Dict{G, Set{G}}(A => Set{G}([B]), B => Set{G}([C])),
+                Dict{G, Set{G}}(A => Set{G}([B, C]), B => Set{G}([D]), C => Set{G}([D]), E => Set{G}([A])),
+                Dict{G, Set{G}}(A => Set{G}([B]), B => Set{G}([A])), Dict{G, Set{G}}(A => Set{G}([A])),
+                Dict{G, Set{G}}(A => Set{G}([B]), B => Set{G}([C]), C => Set{G}([A]), D => Set{G}([A]))]
+      topo_outcome(f) = try; (:ok, f()); catch e; (:err, typeof(e), sprint(showerror, e)); end
+      for g in graphs
+        @test topo_outcome(() -> QB.topological_sort(g)) == topo_outcome(() -> old_topo(g))
+      end
+    end
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

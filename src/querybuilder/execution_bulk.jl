@@ -746,10 +746,10 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
       return true, f_meta.default, false
     elseif f_meta.type == "TIMESTAMPTZ"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
+        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(_now_in(settings.time_zone))
         return true, value, false
       elseif operation == :update && f_meta.auto_now
-        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
+        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(_now_in(settings.time_zone))
         return true, value, false
       end
     elseif f_meta.type == "DATE"

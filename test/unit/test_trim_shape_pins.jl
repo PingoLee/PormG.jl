@@ -2324,11 +2324,179 @@ end
     code(f) = join((replace(l, r"#.*$" => "") for l in split(qb_src(f), '\n')), '\n')
     @test count("Models.apply_formatter(", code("many_to_many.jl")) == 2
     @test count("Models.apply_formatter(", code("deletion.jl")) == 1
-    @test count("Models.apply_formatter(", code("value_validation.jl")) == 1
+    @test count("Models.apply_formatter(", code("value_validation.jl")) == 2   # + the write's format step (#1694)
     @test count("Models.apply_formatter(", code("expression_render.jl")) == 2
     @test !occursin(".formatter(", code("many_to_many.jl")) && !occursin(".formatter(", code("deletion.jl"))
     # And the WHERE path's three direct binds go through the walk, beside `_bind_predicate_value`'s.
     @test count("_bind_formatted_value(instruc,", code("filter_nodes.jl")) == 4
+  end
+
+  # What: the single-row write's run-time walls (#1599 layer 7, #1694), one per step of the full fixture
+  #   entry's `create`: the value checks (`validate_field_data` → `_validate_field_value_at`) and the format
+  #   step's keyword call (`_format_single` → `_format_single_at`), the formatter call (`Models.apply_formatter`),
+  #   the formatted value's collection and NUL checks (`_checked_formatted`), the bind (`_bind_written_value!`),
+  #   the statement's column and placeholder lists (`_prepare_row_insert!`).
+  # Expected: `validate_field_data` and `_format_single` take their value unspecialized, and neither their
+  #   keyword bodies nor the walks make a dynamic call (each open arm makes one, whatever the field's type);
+  #   each returns the same value, or raises the same error type with the same text, as the code it
+  #   replaces, over fields x values x operations (x connections for the format step).
+  # Why: a write's values come out of `SQLObjectQuery.insert::OrderedDict{String,Any}`, so each call on one is
+  #   a run-time dispatch, and a trimmed image raises `MethodError` when nothing was compiled for the type it
+  #   meets. Measured on main 4384550db: the full entry's binary stopped at the `validate_field_data` keyword
+  #   call with an `Int64`; the method is specialized and its keyword body calls `_validate_field_value`
+  #   dynamically.
+  @testset "the single-row write checks its values at their concrete types (#1599 layer 7, write walls)" begin
+    QB = PormG.QueryBuilder
+    M = PormG.Models
+    has(n) = isdefined(QB, n)
+    for n in (:_validate_field_value_at, :_validate_field_value_other)
+      @test has(n)
+    end
+    literal_types = (String, Int64, Float64, Bool, SubString{String}, Dates.Date, Dates.DateTime, Dates.Time,
+                     M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID, Int32, Nothing, Missing)
+
+    # The callee names a function's optimized code `:invoke`s. A walk that lost an arm still makes no dynamic
+    # call (its value goes to the `@noinline` open arm, an `:invoke` too), so each arm is pinned by what it
+    # does NOT invoke: at a type with an arm the open arm is dead code, and without the arm it is called.
+    # (The leaf is no pin: it is inlined at some types.)
+    invoked(f, tt) = [string((s.args[1] isa Core.CodeInstance ? s.args[1].def : s.args[1]).def.name)
+                      for s in only(code_typed(f, tt; optimize = true))[1].code if s isa Expr && s.head === :invoke]
+    not_open(f, tt, open) = !(open in invoked(f, tt))
+
+    # Wall 1, the value checks.
+    @test only(methods(QB.validate_field_data)).nospecialize != 0
+    @test isempty(_dynamic_calls_kw(QB.validate_field_data, (M.ModelType, String, Any, String)))
+    if has(:_validate_field_value_at)
+      @test isempty(_dynamic_calls(QB._validate_field_value_at, (M.ModelType, String, M.AnyField, Any, String)))
+      @test length(_dynamic_calls(QB._validate_field_value_other, (M.ModelType, String, M.AnyField, Any, String))) == 1
+      for T in literal_types
+        @test isempty(_dynamic_calls(QB._validate_field_value_at, (M.ModelType, String, M.sIntegerField, T, String)))
+        @test not_open(QB._validate_field_value_at, (M.ModelType, String, M.sIntegerField, T, String), "_validate_field_value_other")
+      end
+    end
+
+    # The same answer as the direct call: the value, or the error's type and text.
+    outcome(g) = try
+      r = g(); (:ok, typeof(r), r)
+    catch e
+      (:err, typeof(e), sprint(showerror, e))
+    end
+    # `PormGBytes` defines no `isequal`: two payloads are the same when their bytes are.
+    samevalue(x, y) = isequal(x, y) || (typeof(x) === typeof(y) && isstructtype(typeof(x)) && nfields(x) > 0 &&
+                                        all(i -> samevalue(getfield(x, i), getfield(y, i)), 1:nfields(x)))
+    same(a, b) = a[1] === b[1] && a[2] === b[2] && samevalue(a[3], b[3])
+    model = M.Model("tsp_write_race", raceid = M.IDField(), year = M.IntegerField(), name = M.CharField(max_length = 8),
+      notes = M.TextField(null = true), points = M.FloatField(), price = M.DecimalField(max_digits = 5, decimal_places = 2),
+      date = M.DateField(), start_at = M.DateTimeField(null = true), lap = M.TimeField(), uid = M.UUIDField(),
+      done = M.BooleanField(), data = M.JSONField(), blob = M.BinaryField(max_length = 4), lap_time = M.DurationField(),
+      ip = M.GenericIPAddressField(), tags = M.ArrayField(M.CharField(max_length = 3)))
+    values = Any["abc", "123456789", "12.5", "2009-05-24", "10:30", "1:27.452", "550e8400-e29b-41d4-a716-446655440000",
+                 "10.0.0.1", "{\"a\":1}", "{1,2}", SubString("2009-05-24", 1, 10), 7, Int32(7), 0, 123456, 2.5, NaN, true,
+                 Dates.Date(2009, 5, 24), Dates.DateTime(2009, 5, 24, 14), Dates.Time(10, 30),
+                 M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")), M.Decimals.Decimal(0, 150, -2),
+                 M.Decimals.Decimal(0, 123456, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), nothing, missing,
+                 Int16(3), :sym, Dict("a" => 1), ["ab", "c"], ["abcd"], UInt8[1, 2, 3, 4, 5], Dates.Minute(1), [1, 2]]
+    old(f, v, op) = QB._validate_field_value(model, f, QB._validate_field_name(model, f, op), v, op)
+    for f in model.field_names, v in values, op in ("insert", "update")
+      @test same(outcome(() -> QB.validate_field_data(model, f, v, op)), outcome(() -> old(f, v, op)))
+    end
+
+    # Wall 2, the format step's keyword call: the value unspecialized, the field's two facts read before the
+    # walk, so the body is compiled per value type only.
+    for n in (:_format_single_at, :_format_single_other, :_format_single_value)
+      @test has(n)
+    end
+    @test only(methods(QB._format_single)).nospecialize != 0
+    if has(:_format_single_at)
+      @test isempty(_dynamic_calls_kw(QB._format_single, (M.sIntegerField, String, Any, String)))
+      @test isempty(_dynamic_calls(QB._format_single_at, (Function, Bool, String, Any, String)))
+      @test length(_dynamic_calls(QB._format_single_other, (Function, Bool, String, Any, String))) == 1
+      @test only(methods(QB._format_single_value)).nospecialize != 0
+      for T in literal_types
+        @test not_open(QB._format_single_at, (Function, Bool, String, T, String), "_format_single_other")
+      end
+      # Wall 3, the formatter: called through `Models.apply_formatter`, never through the slot's `Function`.
+      for T in literal_types
+        @test isempty(_dynamic_calls(QB._format_single_value, (Function, Bool, String, T, String)))
+      end
+    end
+    # Walls 4 and 5, the formatted value's collection and NUL checks: walked to its type, one dynamic call in
+    # the open arm.
+    for n in (:_checked_formatted, :_checked_formatted_other, :_checked_formatted_value)
+      @test has(n)
+    end
+    if has(:_checked_formatted)
+      @test isempty(_dynamic_calls(QB._checked_formatted, (Any, String, String)))
+      @test length(_dynamic_calls(QB._checked_formatted_other, (Any, String, String))) == 1
+      for T in (literal_types..., PormG.PormGBytes, PormG.PormGArrayLiteral)
+        @test isempty(_dynamic_calls(QB._checked_formatted_value, (T, String, String)))
+        @test not_open(QB._checked_formatted, (T, String, String), "_checked_formatted_other")
+      end
+    end
+    # The same answer as the old body, which read the field inside it.
+    old_fs(f_meta, field, value, op, conn) = begin
+      QB._refuse_collection(f_meta, field, value, op)
+      formatted = try
+        QB._write_formatter(f_meta, conn)(value)
+      catch e
+        e isa PormG.InvalidValueError && throw(QB.with_location(e; op = op, field = field))
+        rethrow()
+      end
+      formatted = QB._single_value(formatted, field, op)
+      QB._contains_nul(formatted) && throw(PormG.InvalidValueError(
+        "The value contains a NUL character (\\0). " * QB.NUL_REFUSAL_REASON, :nul; op = op, field = field))
+      formatted
+    end
+    CP = PormG.ConnectionPool
+    conns = Any[nothing, CP.SQLiteConnectionPool(":memory:"; pool_size = 1), CP.MySQLConnectionPool("host='x'"; pool_size = 1)]
+    fs_values = vcat(values, Any["a\0b", Any["a", 1], (1, 2), Dates.Second(3), Int64[]])
+    for f in model.field_names, v in fs_values, c in conns
+      f_meta = model.fields[f]
+      @test same(outcome(() -> QB._format_single(f_meta, f, v, "insert"; conn = c)),
+                    outcome(() -> old_fs(f_meta, f, v, "insert", c)))
+    end
+
+    # Wall 6, the bind: the formatted value walked to its type on each engine's collector, one dynamic call in
+    # the open arm, and the same placeholder and the same collected parameter as the direct call.
+    for n in (:_bind_written_value!, :_bind_written_other!)
+      @test has(n)
+    end
+    collectors = (() -> QB.SQLiteParameterizedQuery(), () -> QB.PgParameterizedQuery("", Any[], 0),
+                  () -> QB.MySQLParameterizedQuery())
+    if has(:_bind_written_value!)
+      for mk in collectors
+        C = typeof(mk())
+        @test isempty(_dynamic_calls(QB._bind_written_value!, (C, Any)))
+        @test length(_dynamic_calls(QB._bind_written_other!, (C, Any))) == 1
+        for T in (literal_types..., PormG.PormGBytes, PormG.PormGArrayLiteral)
+          @test not_open(QB._bind_written_value!, (C, T), "_bind_written_other!")
+        end
+      end
+      bound = Any["abc", 7, Int32(7), 2.5, true, nothing, missing, Dates.Date(2009, 5, 24), M.Decimals.Decimal(0, 150, -2),
+                  M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), SubString("abc", 1, 2),
+                  PormG.PormGBytes(UInt8[1, 2]), PormG.PormGArrayLiteral("{1,2}"), Int16(3)]
+      for mk in collectors, v in bound
+        a, b = mk(), mk()
+        ra = outcome(() -> QB._bind_written_value!(a, v))
+        rb = outcome(() -> QB.add_parameter!(b, v))
+        @test same(ra, rb) && samevalue(a, b)
+      end
+    end
+    # The insert's row marshalling makes none of these calls dynamically any more.
+    insert_calls = _dynamic_calls(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
+                                                           CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))
+    @test !any(c -> occursin(r"validate_field_data|_format_single|add_parameter!|kwcall", c), insert_calls)
+    # Wall 7, the statement text: the column and placeholder lists are `String` vectors, so `join` prints each
+    # element statically (over a `Vector{Any}` the trimmed binary raised `MissingCodeError`).
+    @test only(Base.return_types(QB._prepare_row_insert!, (QB.SQLObjectQuery, M.ModelType, PormG.Kernel.Settings,
+                                 CP.SQLiteConnectionPool, QB.SQLiteParameterizedQuery))) ==
+          Tuple{Vector{String}, Vector{String}, Bool, Vector{String}}
+    # and a placeholder goes into its `String` vector asserted, not converted (a dynamic `convert` in the verifier).
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test occursin("push!(param_values, _bind_written_value!(parameters, formatted)::String)", ew_src)
+    # and the primary-key list is built typed: `pk_field::Vector{String} = []` converted a `Vector{Any}` (4 rows).
+    @test occursin("pk_field = String[]", ew_src) && !occursin("pk_field::Vector{String} = []", ew_src)
+    foreach(c -> c === nothing || CP.close_pool!(c), conns)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

@@ -481,14 +481,82 @@ _takes_collection(f_meta) = _is_json_field(f_meta) || _is_binary_field(f_meta) |
 # through there (`_write_formatter`). Without one it is the field's own, which every engine but MySQL
 # writes; the callers that pass none never reach MySQL (`bulk_copy`) or only compare the text (the
 # `returning` key match).
-function _format_single(f_meta, field::AbstractString, value, op::AbstractString; conn = nothing)
-  _refuse_collection(f_meta, field, value, op)
+#
+# #1599 layer 7: the value arrives untyped (`SQLObjectQuery.insert`'s `Any`, a bulk row's cell), so the
+# keyword call takes it unspecialized, and `_format_single_at` hands it to the body at its concrete type,
+# as `_validate_field_value_at` does for the value checks. The full fixture entry's `create` stopped at
+# this keyword call in a trimmed image. The two facts the body needs from the field, its write formatter
+# and whether it takes a collection, are read here, once per field type, so the body is compiled once
+# per value type rather than once per field and value type (a split on both compiled 406 bodies and
+# about 9,000 verifier rows). Reading them first changes nothing: neither can raise.
+function _format_single(f_meta, field::AbstractString, @nospecialize(value), op::AbstractString; conn = nothing)
+  return _format_single_at(_write_formatter(f_meta, conn), _takes_collection(f_meta), field, value, op)
+end
+
+@noinline function _format_single_at(@nospecialize(formatter), takes::Bool, field::AbstractString,
+                                     @nospecialize(value), op::AbstractString)
+  value isa String && return _format_single_value(formatter, takes, field, value, op)
+  value isa Int64 && return _format_single_value(formatter, takes, field, value, op)
+  value isa Float64 && return _format_single_value(formatter, takes, field, value, op)
+  value isa Bool && return _format_single_value(formatter, takes, field, value, op)
+  value isa SubString{String} && return _format_single_value(formatter, takes, field, value, op)
+  value isa Dates.Date && return _format_single_value(formatter, takes, field, value, op)
+  value isa Dates.DateTime && return _format_single_value(formatter, takes, field, value, op)
+  value isa Dates.Time && return _format_single_value(formatter, takes, field, value, op)
+  value isa TimeZones.ZonedDateTime && return _format_single_value(formatter, takes, field, value, op)
+  value isa Decimals.Decimal && return _format_single_value(formatter, takes, field, value, op)
+  value isa UUIDs.UUID && return _format_single_value(formatter, takes, field, value, op)
+  value isa Int32 && return _format_single_value(formatter, takes, field, value, op)
+  value isa Nothing && return _format_single_value(formatter, takes, field, value, op)
+  value isa Missing && return _format_single_value(formatter, takes, field, value, op)
+  return _format_single_other(formatter, takes, field, value, op)
+end
+# Any other value: one dynamic call, on the value.
+@noinline _format_single_other(@nospecialize(formatter), takes::Bool, field::AbstractString, @nospecialize(value),
+                               op::AbstractString) =
+  _format_single_value(formatter, takes, field, value, op)
+
+# The body. `takes` is `_takes_collection(f_meta)`: what `_refuse_collection` asks of the field.
+function _format_single_value(@nospecialize(formatter), takes::Bool, field::AbstractString, value, op::AbstractString)
+  value isa _CollectionValue && !takes && _single_value(value, field, op)
   formatted = try
-    _write_formatter(f_meta, conn)(value)
+    Models.apply_formatter(formatter, value)   # #1599 layer 7: at the formatter's type, not through the slot
   catch e
     e isa InvalidValueError && throw(with_location(e; op = op, field = field))
     rethrow()
   end
+  return _checked_formatted(formatted, field, op)
+end
+
+# The formatted value's checks at its concrete type (#1599 layer 7). `Models.apply_formatter` returns what
+# the formatter returns, untyped (its open arm calls any callable), so a check on it dispatched at run time,
+# and the trimmed full fixture entry stopped at `_single_value(::Int64, ::String, ::String)`, then at
+# `_contains_nul(::Int64)`. One arm per type a formatter returns for a written value (the value types
+# `_format_single_at` walks, a binary payload, an array literal); anything else takes one dynamic call.
+@noinline function _checked_formatted(@nospecialize(formatted), field::AbstractString, op::AbstractString)
+  formatted isa String && return _checked_formatted_value(formatted, field, op)
+  formatted isa Int64 && return _checked_formatted_value(formatted, field, op)
+  formatted isa Float64 && return _checked_formatted_value(formatted, field, op)
+  formatted isa Bool && return _checked_formatted_value(formatted, field, op)
+  formatted isa SubString{String} && return _checked_formatted_value(formatted, field, op)
+  formatted isa Dates.Date && return _checked_formatted_value(formatted, field, op)
+  formatted isa Dates.DateTime && return _checked_formatted_value(formatted, field, op)
+  formatted isa Dates.Time && return _checked_formatted_value(formatted, field, op)
+  formatted isa TimeZones.ZonedDateTime && return _checked_formatted_value(formatted, field, op)
+  formatted isa Decimals.Decimal && return _checked_formatted_value(formatted, field, op)
+  formatted isa UUIDs.UUID && return _checked_formatted_value(formatted, field, op)
+  formatted isa Int32 && return _checked_formatted_value(formatted, field, op)
+  formatted isa Nothing && return _checked_formatted_value(formatted, field, op)
+  formatted isa Missing && return _checked_formatted_value(formatted, field, op)
+  formatted isa PormGBytes && return _checked_formatted_value(formatted, field, op)
+  formatted isa PormGArrayLiteral && return _checked_formatted_value(formatted, field, op)
+  return _checked_formatted_other(formatted, field, op)
+end
+@noinline _checked_formatted_other(@nospecialize(formatted), field::AbstractString, op::AbstractString) =
+  _checked_formatted_value(formatted, field, op)
+
+# A single value (#712), with no NUL in it (#951), in that order.
+function _checked_formatted_value(formatted, field::AbstractString, op::AbstractString)
   formatted = _single_value(formatted, field, op)
   _contains_nul(formatted) && throw(InvalidValueError(
     "The value contains a NUL character (\\0). " * NUL_REFUSAL_REASON, :nul; op = op, field = field))
@@ -553,12 +621,45 @@ An SQL expression (an `F` expression, a SQL function, a `Joined` or `CTE` column
 the value checks under `update`, which writes it into the statement as SQL (#1320); under any other
 operation it is refused as an `InvalidValueError` of kind `:type` (#1283).
 """
-function validate_field_data(model::PormGModel, field::String, value::Any, operation::String; allow_primary_key::Bool = true,
+function validate_field_data(model::PormGModel, field::String, @nospecialize(value), operation::String; allow_primary_key::Bool = true,
                              allow_generated::Bool = false)
     f_meta = _validate_field_name(model, field, operation; allow_primary_key = allow_primary_key,
                                   allow_generated = allow_generated)
-    return _validate_field_value(model, field, f_meta, value, operation)
+    return _validate_field_value_at(model, field, f_meta, value, operation)
 end
+
+# The value checks at the value's concrete type (#1599 layer 7, #1694). A write's values come out of
+# `SQLObjectQuery.insert::OrderedDict{String,Any}`, so every call into `validate_field_data` offers an
+# untyped value: under the JIT that was one dynamic dispatch per value, and in a `juliac --trim` image
+# a `MethodError` on the keyword call, since nothing was compiled for the value type it met (the full
+# fixture entry's `create` stopped there). `validate_field_data` takes the value unspecialized, so its
+# keyword call resolves to one compiled method, and this walk hands the value on at its type: one arm
+# per type a written value commonly is (the set `_format_literal_value` walks for a filter's value),
+# each the same call. Any other value takes one dynamic call behind `@noinline`, so nothing is refused.
+# `f_meta` is #1604's `AnyField`, and `_validate_field_value` has one method, so the call splits on it.
+@noinline function _validate_field_value_at(model::PormGModel, field::String, f_meta, @nospecialize(value),
+                                            operation::String)
+  value isa String && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Int64 && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Float64 && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Bool && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa SubString{String} && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Dates.Date && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Dates.DateTime && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Dates.Time && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa TimeZones.ZonedDateTime && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Decimals.Decimal && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa UUIDs.UUID && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Int32 && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Nothing && return _validate_field_value(model, field, f_meta, value, operation)
+  value isa Missing && return _validate_field_value(model, field, f_meta, value, operation)
+  return _validate_field_value_other(model, field, f_meta, value, operation)
+end
+# `f_meta` unspecialized too: the call dispatches at run time on the value either way, and a field split
+# here compiled one dynamic call per `AnyField` member (58 verifier rows on the full fixture entry).
+@noinline _validate_field_value_other(model::PormGModel, field::String, @nospecialize(f_meta), @nospecialize(value),
+                                      operation::String) =
+  _validate_field_value(model, field, f_meta, value, operation)
 
 """
     validate_value(model, field::AbstractString, value) -> the value as PormG formats it for binding

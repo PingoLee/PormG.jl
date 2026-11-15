@@ -10,10 +10,12 @@ struct `list(show_query = :struct)` writes (#1632). Each step prints one line. T
 `read.jl`, runs the same boot and read without the write; the steps both entries share are in
 `steps.jl`.
 
-Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary stops at
-the write (layer 7, the walls left are in #1599's tables); the read-only entry's binary returns its
-row (#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only entry and
-its CI job" below).
+Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary builds its
+`INSERT`, binds its values and runs it on the SQLite worker (#1694), and stops there: the extension
+materializes every statement's result with `Tables.rowtable`, which a trimmed image has no code for, so
+the write raises `StatementError` (the walls left are in #1599's tables). The read-only entry's binary
+returns its row (#1788), and the `Trim (juliac)` workflow checks that it still does (see "The read-only
+entry and its CI job" below).
 
 ## Drivers
 

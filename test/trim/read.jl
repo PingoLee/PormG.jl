@@ -1,5 +1,5 @@
 # The read-only juliac --trim entry of the fixture app (#1599): boot and one typed read, no write.
-# `main.jl` without its write step, which still stops at layer 7; this binary returns rows (#1788),
+# `main.jl` without its write step, which does not complete yet (README.md); this binary returns rows (#1788),
 # and the `Trim (juliac)` workflow builds and runs it (README.md).
 #   JIT:  julia --project=test/trim test/trim/read.jl <run dir>
 #   exe:  <build dir>/read <run dir>

@@ -64,6 +64,32 @@ end
 # write that reverted #1490 (`test/unit/test_write_returning_columns.jl` scans for it).
 const _FOUND_ROW_HEAD = "SELECT *"
 
+# A written value's bind, at the value's concrete type (#1599 layer 7, #1694). `_format_single` returns
+# the formatted value untyped, so `add_parameter!(parameters, formatted)` dispatched at run time, and the
+# trimmed full fixture entry's `create` stopped at `add_parameter!(::SQLiteParameterizedQuery, ::Int64)`.
+# One arm per type a formatted value is (`_checked_formatted`'s), each the same call on the collector;
+# anything else takes one dynamic call. A collection never gets here: `_format_single` refused it.
+@noinline function _bind_written_value!(parameters, @nospecialize(value))
+  value isa String && return add_parameter!(parameters, value)
+  value isa Int64 && return add_parameter!(parameters, value)
+  value isa Float64 && return add_parameter!(parameters, value)
+  value isa Bool && return add_parameter!(parameters, value)
+  value isa SubString{String} && return add_parameter!(parameters, value)
+  value isa Dates.Date && return add_parameter!(parameters, value)
+  value isa Dates.DateTime && return add_parameter!(parameters, value)
+  value isa Dates.Time && return add_parameter!(parameters, value)
+  value isa TimeZones.ZonedDateTime && return add_parameter!(parameters, value)
+  value isa Decimals.Decimal && return add_parameter!(parameters, value)
+  value isa UUIDs.UUID && return add_parameter!(parameters, value)
+  value isa Int32 && return add_parameter!(parameters, value)
+  value isa Nothing && return add_parameter!(parameters, value)
+  value isa Missing && return add_parameter!(parameters, value)
+  value isa PormGBytes && return add_parameter!(parameters, value)
+  value isa PormGArrayLiteral && return add_parameter!(parameters, value)
+  return _bind_written_other!(parameters, value)
+end
+@noinline _bind_written_other!(parameters, @nospecialize(value)) = add_parameter!(parameters, value)
+
 # Shared row-level INSERT marshalling, extracted from insert() (#30) so insert() and
 # _update_or_create() build the identical VALUES body from one place. Fills each missing field
 # (default → auto_now/auto_now_add → UUID → skip-if-null-or-pk → else error), reserves a SQLite id
@@ -110,10 +136,14 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
     end
   end
 
-  quoted_field_columns = []
-  param_values = []
+  # Typed (#1599 layer 7): the statement `join`s both, and over a `Vector{Any}` each element is printed
+  # through a dynamic call, which stopped the trimmed full fixture entry's `create` (`MissingCodeError`).
+  # Every element is a `String`: a quoted identifier, and a placeholder from a scalar bind (`_format_single`
+  # refuses a collection).
+  quoted_field_columns = String[]
+  param_values = String[]
   pk_exist::Bool = false
-  pk_field::Vector{String} = []
+  pk_field = String[]   # not `::Vector{String} = []`: that converted a `Vector{Any}` through a dynamic call
   for field in keys(real_obj.insert)
     # Validation checks
     validate_field_data(model, field, real_obj.insert[field], "insert"; allow_primary_key = true)
@@ -127,7 +157,7 @@ function _prepare_row_insert!(real_obj, model::PormGModel, settings, connection,
 
     # Format and add value to parameters — one value, never a collection (#712)
     formatted = _format_single(model.fields[field], field, real_obj.insert[field], "insert"; conn = connection)
-    push!(param_values, add_parameter!(parameters, formatted))
+    push!(param_values, _bind_written_value!(parameters, formatted)::String)   # every arm returns one
 
   end
 

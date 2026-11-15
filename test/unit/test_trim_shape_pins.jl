@@ -2806,6 +2806,16 @@ end
     # `add_parameter!(parameters, formatted_value)` on the untyped formatted value.
     @test occursin("placeholder = _bind_written_value!(parameters, formatted_value)::String", ew_src)
     @test !occursin("add_parameter!(parameters, formatted_value)", ew_src)
+    # SQLite's row count, `SELECT changes()`, read as a typed read into a row type named for its column: piped
+    # through `Tables.rowtable` its row type was decided at run time (`MethodError(|>, …)` in the binary).
+    @test isdefined(QB, :_changes_decoder)
+    if isdefined(QB, :_changes_decoder)
+      @test QB._changes_decoder() isa QB._RowDecoder{QB._ChangesRow} && fieldnames(QB._ChangesRow) == (Symbol("changes()"),)
+      @test fieldtypes(QB._ChangesRow) == (Int64,)
+    end
+    ef_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "engine_facts.jl"), String)
+    @test !occursin("fetch(settings, \"SELECT changes()\") |> Tables.rowtable", ef_src)
+    @test occursin("fetch(settings, \"SELECT changes()\"; _decode = _changes_decoder())::Vector{_ChangesRow}", ef_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

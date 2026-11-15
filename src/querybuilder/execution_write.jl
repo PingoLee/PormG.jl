@@ -182,6 +182,13 @@ function _mutation_copy(q::SQLObjectQuery)::SQLObjectQuery
     alias_join=q.alias_join, parameters=nothing, projection_kinds=q.projection_kinds)
 end
 
+# SQLite's `SELECT changes()`, the row count of an UPDATE (`_update_row_count`), read as a typed read: its one row
+# decoded on the worker into a row type named for its column (#1599 layer 7, #1694). Piped through
+# `Tables.rowtable`, the row's type was decided at run time, and the trimmed full fixture entry's `update` raised
+# `MethodError(|>, (Vector{NamedTuple{(:var"changes()",), Tuple{Int64}}}, typeof(Tables.rowtable)))` there.
+const _ChangesRow = NamedTuple{(Symbol("changes()"),), Tuple{Int64}}
+_changes_decoder() = _RowDecoder{_ChangesRow}((NO_READ_PARSER,), _TypedReadSite("SELECT changes()", "changes()"))
+
 # A field's automatic value (`auto_now`, `auto_now_add`, `auto_add`), formatted and stored in the insert
 # (#1599 layer 7, #1694). The formatter is called at its own type (`Models.apply_formatter`), not through
 # the field's `Function` slot, which a trimmed image cannot dispatch. The insert holds `Any`, and storing

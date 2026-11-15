@@ -1008,6 +1008,48 @@ end
 precompile(_materialize, (MySQL.Cursor{true, true}, Vector{Bool}))
 precompile(_materialize, (MySQL.Cursor{false, true}, Nothing))
 
+# The typed read's cell readers (#1614). A first `list(T)` compiled them at run time: the parse walk
+# (`_mysql_parsed`, every stored cell type through `ReadParser`, one instance for every field) and, per
+# field type, the reader `_MySQLCells` generates, with its typed arms (`_mysql_cell_at`) and the cell
+# rules on an untyped cell (`_typed_cell_any`). None of them depends on the row type `T`, so they are
+# compiled here, after MySQL.jl has loaded, and land in this extension's image; what stays per `T` is the
+# row walk (`QueryBuilder._typed_rows_from_cells`). The result is built in memory: no server, connection,
+# configuration or model. A read's parser is a `ReadParser` whatever its code, so one value compiles the
+# code every parser runs. The field types are those slot 4 (`julia_type`) says a MySQL read delivers,
+# bare and as `Union{Nothing, X}`, each over a cell of a type its read stores: one call per field type
+# compiles that reader with every arm. A throwing call blocks this extension from loading;
+# `test/unit/test_precompile_hints.jl` asserts that it loaded and that a first read compiles none of this.
+const _WORKLOAD_FIELDS = (
+  (Int64, Int64(1)), (Int32, Int32(1)), (Int16, Int16(1)), (Float64, 1.5), (String, "Monaco"),
+  (Dates.Date, Dates.Date(2008, 5, 25)), (Dates.Time, Dates.Time(14, 0)),
+  (Dates.DateTime, Dates.DateTime(2008, 5, 25, 14)), (Decimals.Decimal, Decimals.Decimal(0, 25, 0)),
+  (Bool, Int8(1)))   # a BooleanField's TINYINT(1) arrives as `Int8`, and its parser makes the `Bool`
+
+function _typed_read_workload()::Nothing
+  site = PormG.QueryBuilder._TypedReadSite("list", "precompile")
+  _typed_read_cells(_WORKLOAD_FIELDS, PormG.NO_READ_PARSER, PormG.ReadParser(PormG._RP_SQLITE_BOOL), site)
+  return nothing
+end
+
+_typed_read_cells(::Tuple{}, ::PormG.ReadParser, ::PormG.ReadParser, ::PormG.QueryBuilder._TypedReadSite) = nothing
+function _typed_read_cells(fields::Tuple, plain::PormG.ReadParser, bool::PormG.ReadParser,
+                           site::PormG.QueryBuilder._TypedReadSite)
+  X, v = first(fields)
+  parser = X === Bool ? bool : plain
+  cells = _MySQLCells(MySQLResult([:a], AbstractVector[[v]], 1, 0, UInt64(0), ""))
+  cells(X, 1, 1, parser, :a, site)::X
+  cells(Union{Nothing, X}, 1, 1, parser, :a, site)::X
+  return _typed_read_cells(Base.tail(fields), plain, bool, site)
+end
+
+using PrecompileTools: PrecompileTools, @setup_workload, @compile_workload
+
+@setup_workload begin
+  @compile_workload begin
+    _typed_read_workload()
+  end
+end
+
 # ── Driver floor (#1719) ─────────────────────────────────────────────────────
 #
 # `[compat]` holds `MySQL = "2.2.2"` (#1648), but Julia does not check a weak dependency's compat when it

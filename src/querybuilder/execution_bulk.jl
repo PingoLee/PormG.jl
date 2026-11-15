@@ -812,7 +812,11 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
   # Whole-column ADDITION only, never a write into an existing slot — the #132 zero-copy invariant
   # (see `_BulkFrame`). The uniquified name (`_bulk_private_column`) is what keeps it an addition: a
   # caller column already named like the prefix would otherwise be clobbered, which is #335 over again.
-  function inject_fill_column!(field::String, f_meta, fill_value, per_row::Bool)
+  #
+  # `fill_value` unspecialized (#1599 layer 7): it is whatever `resolve_absent_column_fill` returns (a default,
+  # a formatted timestamp, a date, a vector of UUIDs), untyped, so a specialized call had no compiled target in a
+  # trimmed image. Unspecialized, the call is one compiled method.
+  function inject_fill_column!(field::String, f_meta, @nospecialize(fill_value), per_row::Bool)
     # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
     # synthesized: that would overwrite live rows merely because the table lacks the column.
     # Temporal auto_now/auto_now_add injections are always allowed — an intentional ORM

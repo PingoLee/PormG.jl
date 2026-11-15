@@ -880,7 +880,9 @@ function process_collector!(collector::DeletionCollector)
   for (model, keys) in seeds
     # `copy` because a self-referential CASCADE pushes into the very vector `find_related_objects!`
     # enumerates in its `Qor` branch. Shallow on purpose: the entry Dicts are read, never mutated.
-    find_related_objects!(collector, model, copy(keys))
+    # The model at its concrete type, the only `PormGModel` there is (#1615): read out of the collector's
+    # `Dict{PormGModel,…}` it is abstract, and the call dispatched at run time (#1599 layer 7).
+    find_related_objects!(collector, model::Models.ModelType, copy(keys))
   end
 
   # Identify objects that can be fast-deleted

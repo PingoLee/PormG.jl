@@ -2901,6 +2901,8 @@ end
       @test e isa Dict{Symbol, Union{String, PormG.SQLObjectHandler}} && Set(keys(e)) == Set([:key, :objct]) && e[:key] == "raceid"
     end
     @test !occursin(r"Dict\(:key => \w", del_src) && !occursin(r"SQLObjectHandler}}\(\s*:key => \w", del_src)   # code, not the comment
+    # The seed model at its concrete type: read out of the collector's `Dict{PormGModel,…}` it is abstract.
+    @test occursin("find_related_objects!(collector, model::Models.ModelType, copy(keys))", del_src)
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

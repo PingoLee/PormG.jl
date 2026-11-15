@@ -60,6 +60,21 @@ function _add_bulk_column!(frame::_BulkFrame, name::String, column::AbstractVect
   return frame
 end
 
+# `fill(value, n)` for a fill column, at the value's type (#1599 layer 7, #1694). The value is untyped (a
+# default, a formatted timestamp, a date), so `fill` dispatched at run time, and the trimmed full fixture entry's
+# `bulk_insert` raised `MethodError(fill, (String, Int64))` there. One arm per type a fill value commonly is, each
+# the same call, so the column is the `Vector` `fill` builds; anything else takes one dynamic call.
+@noinline function _fill_bulk_column(@nospecialize(value), n::Int)::AbstractVector
+  value isa String && return fill(value, n)
+  value isa Dates.Date && return fill(value, n)
+  value isa Int64 && return fill(value, n)
+  value isa Float64 && return fill(value, n)
+  value isa Bool && return fill(value, n)
+  value isa Nothing && return fill(value, n)
+  return _fill_bulk_column_other(value, n)
+end
+@noinline _fill_bulk_column_other(@nospecialize(value), n::Int)::AbstractVector = fill(value, n)
+
 # The one refusal for an argument that is not a table, shared by the writers and their curried forms.
 #
 # A PormG query is a Tables.jl source (#1344 phase 1), but not a bulk input: reading it would run its
@@ -831,7 +846,7 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
     # only the UUID auto_add case) — otherwise broadcast the one value. the row count replaced a `ref_col`
     # pick that grabbed an arbitrary `mapping` key purely for its length and indexed the first column
     # when `mapping` was empty (a latent `BoundsError` on a column-less frame).
-    _add_bulk_column!(df, target, per_row ? fill_value : fill(fill_value, df.row_count))
+    _add_bulk_column!(df, target, per_row ? fill_value : _fill_bulk_column(fill_value, df.row_count))
     mapping[field] = target
     return true
   end

@@ -1907,7 +1907,7 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
       key_sources = [sources[j] for j in key_positions]
 
       rows = String[]
-      columns = new_columns()
+      chunk_columns = new_columns()
       count::Integer = 0
       total::Integer = df.row_count
       # Security: Create parameterized query
@@ -1925,7 +1925,7 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
           # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
           cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
           if pg_arrays
-            foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+            foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
           else
             push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
           end
@@ -1937,7 +1937,7 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
         end
         count += 1
         if count == effective_chunk || index == total
-          source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, columns, casts), source_casts) :
+          source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, chunk_columns, casts), source_casts) :
                                    "VALUES " * join(rows, ", ")
           chunk_range = (index - count + 1):index
           run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
@@ -1983,7 +1983,7 @@ function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection
           push!(results, res)
           count = 0
           rows = String[]
-          columns = new_columns()
+          chunk_columns = new_columns()
           parameters = get_parameter(connection)
           set_context!(parameters, :select)
         end

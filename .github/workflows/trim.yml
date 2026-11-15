@@ -3,6 +3,9 @@
 # reported (job summary and artifact), never a failure condition: the track lowers them one layer at a
 # time, and a total rises whenever a wall opens. See test/trim/README.md.
 #
+# A second SQLite job builds the full entry (test/trim/main.jl, #1694): the single-row write. It fails
+# unless that binary exits 0 and prints its write, read, update and delete lines and both refusals.
+#
 # Two more jobs build the fixture's server variants (test/trim/mysql, test/trim/postgres, #1614) and run
 # them against a service container: MySQL 8.4, and PostgreSQL 18 through Postgres.jl with SCRAM-SHA-256.
 # Each fails unless its binary exits 0, prints the row, and its `fail` step prints the server's own error.
@@ -150,6 +153,112 @@ jobs:
             build/layers.txt
             build/run.txt
             build/tasks.txt
+          if-no-files-found: warn
+
+  # ── The full SQLite entry: the write (#1694) ─────────────────────────────────────────────────────
+  # test/trim/main.jl: boot, two creates PormG refuses before any SQL, a create that leaves three fields to
+  # the write's own fill (a DateTimeField among them), the typed read of both rows, an update and a delete,
+  # each checked by a typed read. The job fails unless the binary exits 0 and prints each of those lines.
+
+  full-write:
+    name: Trimmed write (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ env.TRIM_JULIA }}
+      - uses: julia-actions/cache@v2
+      - name: Install JuliaC
+        run: |
+          julia -e 'using Pkg; Pkg.Apps.add(name = "JuliaC", version = ENV["TRIM_JULIAC"])'
+          echo "$(julia -e 'print(first(DEPOT_PATH))')/bin" >> "$GITHUB_PATH"
+      - name: Instantiate the fixture
+        run: |
+          julia --project=test/trim -e 'using Pkg; Pkg.instantiate(); Pkg.status()'
+      - name: JIT control
+        run: |
+          julia --project=test/trim test/trim/prep.jl run-jit
+          julia --project=test/trim test/trim/main.jl run-jit
+      - name: Build the trimmed binary
+        id: build
+        run: |
+          mkdir -p build && cd build
+          JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe main \
+            --trim=unsafe-warn --experimental ../test/trim/main.jl 2>&1 | tee build.log
+      - name: Run the trimmed binary
+        run: |
+          julia --project=test/trim test/trim/prep.jl run
+          # A task body the image never compiled dies silently, so a broken binary hangs rather
+          # than crashes: the timeout turns the hang into a failure.
+          set +e
+          timeout -k 10 300 build/main run 2>&1 | tee build/run.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "exit status: $status"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused, 7 update, 8 delete, 124 timed out)"
+            exit 1
+          fi
+          # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl).
+          expected=(
+            'step\twrite\tok'
+            'step\tquery\t2 rows'
+            'step\trow\t1 2008 Monaco Grand Prix 2008-05-25'
+            'step\trow\t2 2009 Monaco Grand Prix 2009-05-24'
+            'step\tupdate\t1 rows; round 7'
+            'step\tdelete\t1 rows; 1 left'
+          )
+          missing=0
+          for line in "${expected[@]}"; do
+            if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
+              echo "::error::the trimmed write binary exited 0 without printing: $line"
+              missing=1
+            fi
+          done
+          refused=$(grep -c "$(printf '^step\trefused\tInvalidValueError: ')" build/run.txt || true)
+          if [ "$refused" -ne 2 ]; then
+            echo "::error::the trimmed write binary printed $refused refusal lines, expected 2"
+            missing=1
+          fi
+          exit $missing
+      - name: Count the verifier's rows
+        if: always()
+        run: |
+          [ -f build/build.log ] || exit 0
+          python3 -I test/trim/tools/rows.py build/build.log > build/rows.txt 2>&1 || true
+          python3 -I test/trim/tools/classify.py build/build.log --layers > build/layers.txt 2>&1 || true
+          {
+            echo "## Trimmed full entry, the write (Julia $TRIM_JULIA, JuliaC $TRIM_JULIAC)"
+            echo
+            echo "The row count is reported, not checked. The pass condition is the run below."
+            echo
+            echo "### The binary's step lines"
+            echo '```'
+            cat build/run.txt 2>/dev/null || echo "(the binary did not run)"
+            echo '```'
+            echo "### Verifier rows (rows.py)"
+            echo '```'
+            cat build/rows.txt
+            echo '```'
+            echo "### Rows by layer (classify.py --layers)"
+            echo '```'
+            cat build/layers.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the build log and the row tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trim-full
+          path: |
+            build/build.log
+            build/rows.txt
+            build/layers.txt
+            build/run.txt
           if-no-files-found: warn
 
   # ── The server variants (#1614) ──────────────────────────────────────────────────────────────────

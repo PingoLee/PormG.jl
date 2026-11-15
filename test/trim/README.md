@@ -17,9 +17,9 @@ Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's
 (#1694): it prints both refusals, fills the three automatic values, runs its `INSERT` and reads the row
 back on the SQLite worker, and its typed read then returns both rows, the one it wrote included; its
 `update` sets that row's `round` and its `delete` removes it, each shown by the read after it. It
-prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788), and
-the `Trim (juliac)` workflow checks that it still does (see "The read-only entry and its CI job"
-below).
+prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788). The
+`Trim (juliac)` workflow checks that both binaries still do (see "The read-only entry and its CI job"
+and "The full entry's CI job" below).
 
 ## Drivers
 
@@ -123,6 +123,28 @@ break the trimmed read is checked by running it by hand on the branch, or by the
 The fixture's `Manifest.toml` is not committed, so each run resolves the latest SQLite.jl and its
 dependencies: a red nightly with no PormG change between it and the last green one may be an upstream
 release, and the job's `Instantiate the fixture` step prints the versions it resolved.
+
+## The full entry's CI job
+
+The workflow's `Trimmed write (SQLite)` job builds `main.jl` the same way, seeds a fresh run directory
+with `prep.jl`, and runs the binary under the same 300 s timeout. It fails unless the binary exits 0
+and prints each of these lines, as its JIT control prints them:
+
+```
+step	refused	InvalidValueError: …        (twice: the invalid date, then the Bool name)
+step	write	ok
+step	query	2 rows
+step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	row	2 2009 Monaco Grand Prix 2009-05-24
+step	update	1 rows; round 7
+step	delete	1 rows; 1 left
+```
+
+On a non-zero exit, the job's error names what each exit code means (2 write, 3 read, 6 a create was
+not refused, 7 update, 8 delete, 124 timed out). The rows are reported as in the read-only job, in the
+job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
+builds run side by side. Its triggers are the workflow's: a change under `src/` that could break the
+trimmed write is checked by running the workflow by hand on the branch, or by the next nightly run.
 
 ## The MySQL variant
 

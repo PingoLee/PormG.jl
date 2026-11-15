@@ -100,11 +100,11 @@ jobs:
 
       - uses: julia-actions/julia-runtest@v1
         env:
-          # Disables exactly one Aqua check, `stale_deps` — see the comment at the Aqua
-          # testset in test/runtests.jl. Short version: the step above rewrote
-          # Project.toml, promoting the `[targets].test` packages into `[deps]` (listed in
-          # that comment; CSV and DataFrames among them since #1344), which `src/` never
-          # imports, so stale_deps here judges a project layout that exists nowhere else.
+          # Disables exactly two Aqua checks, `stale_deps` and `persistent_tasks` — see the
+          # comment at the Aqua testset in test/runtests.jl. Short version: the step above
+          # rewrote Project.toml, promoting the `[targets].test` packages into `[deps]` (listed
+          # in that comment; CSV and DataFrames among them since #1344), which `src/` never
+          # imports, so both checks here judge a project layout that exists nowhere else.
           PORMG_FLOOR_RESOLVE: "1"
         with:
           # Both of these guard against the same silent failure — a green job that tested

@@ -490,8 +490,10 @@ end
 # a reviewed change to this file rather than a quiet edit to a workflow.
 #
 # Mutation gates: putting the `floor-resolve` job back in CI.yml fails the first assertion; adding
-# `pull_request:` (or a branch push) to floor-resolve.yml's `on:` fails the third; dropping the tag
-# trigger or `workflow_dispatch` fails the fourth or fifth.
+# `pull_request:` to floor-resolve.yml's `on:`, or dropping `workflow_dispatch` or the push, fails the
+# trigger-set assertion; dropping the tag filter fails the `tags:` and `'v*'` ones; a `branches:` or
+# `paths:` filter under the push (a `paths:` filter applies to tag pushes too, and would stop them
+# silently) fails the last two.
 #
 # Deterministic, DB-free, no network: a text scan of two workflow files.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -519,5 +521,6 @@ end
     @test any(l -> occursin(r"^\s+tags:\s*$", l), on_block)
     @test any(l -> occursin(r"^\s+-\s*'v\*'\s*$", l), on_block)
     @test !any(l -> occursin(r"^\s+branches:", l), on_block)
+    @test !any(l -> occursin(r"^\s+paths(-ignore)?:", l), on_block)
   end
 end

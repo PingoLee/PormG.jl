@@ -24,7 +24,8 @@ end
 delete!(ENV, "PORMG_POSTGRES_DRIVER")
 
 # Set only by the `floor-resolve` job (#574; floor-resolve.yml, run when a release is cut), which
-# runs this suite against a machine-rewritten Project.toml. It gates exactly one Aqua check — see the comment at the Aqua testset below.
+# runs this suite against a machine-rewritten Project.toml. It gates exactly two Aqua checks,
+# `stale_deps` and `persistent_tasks` — see the comment at the Aqua testset below.
 const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
 
 @testset "PormG Unit Tests" begin

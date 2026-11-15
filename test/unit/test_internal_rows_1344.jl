@@ -74,7 +74,7 @@ end
 
   # Expected: neither package in `[deps]`. Why it matters: every app that loads PormG would load both
   # again, 43% of `using PormG`'s import time when #1344 measured it.
-  # Not on CI's `floor-resolve` job: its `julia-downgrade-compat` step rewrites `Project.toml` and
+  # Not on the `floor-resolve` job (floor-resolve.yml, run when a release is cut): its `julia-downgrade-compat` step rewrites `Project.toml` and
   # promotes every `[targets].test` name, CSV and DataFrames included, into `[deps]` (the reason Aqua's
   # `stale_deps` is off there too; see `test/runtests.jl`). The subprocess check below still runs there.
   # `ENV` is read here, not `runtests.jl`'s constant, because this file also runs on its own.

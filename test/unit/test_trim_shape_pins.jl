@@ -2757,6 +2757,33 @@ end
     end
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
     @test !occursin("work = deepcopy(", ew_src) && count("_mutation_copy(real_obj)", ew_src) == 2
+
+    # The filter literal's node (`_literal_value_node`): `update`'s temporal check took `_filter_value_node` on the
+    # untyped literal, a run-time dispatch (`MethodError(_filter_value_node, (Int64,))` in the trimmed binary).
+    # Each arm is the call or the value `_filter_value_node` gives at that type; anything else, the open arm.
+    @test isdefined(QB, :_literal_value_node)
+    if isdefined(QB, :_literal_value_node)
+      @test isempty(_dynamic_calls(QB._oper_value_check_node, (QB.OperObject,)))
+      @test isempty(_dynamic_calls(QB._literal_value_node, (Any,)))
+      @test length(_dynamic_calls(QB._literal_value_node_other, (Any,))) == 1
+      invoked(f, tt) = [string((s.args[1] isa Core.CodeInstance ? s.args[1].def : s.args[1]).def.name)
+                        for s in only(code_typed(f, tt; optimize = true))[1].code if s isa Expr && s.head === :invoke]
+      M = PormG.Models
+      for T in (String, SubString{String}, Int64, Int32, Float64, Bool, Nothing, Missing, Dates.Date, Dates.DateTime,
+                Dates.Time, M.ZonedDateTime, M.Decimals.Decimal, M.UUIDs.UUID)
+        @test (T, "_literal_value_node_other" in invoked(QB._literal_value_node, (T,))) == (T, false)
+      end
+      lits = Any["Monaco", SubString("Monaco", 1, 3), 2009, Int32(6), 1.5, true, nothing, missing, Dates.Date(2009, 5, 24),
+                 Dates.DateTime(2009, 5, 24, 14), Dates.Time(14), M.ZonedDateTime(2009, 5, 24, 14, M.TimeZone("UTC")),
+                 M.Decimals.Decimal(0, 150, -2), M.UUIDs.UUID("550e8400-e29b-41d4-a716-446655440000"), [1, 2], ["a", "b"],
+                 ("a", 1), Int16(3), :sym, 2:3]
+      for x in lits
+        a, b = QB._literal_value_node(x), QB._filter_value_node(x)
+        @test typeof(a) === typeof(b) && (a isa QB.SQLText ? a.field == b.field : isequal(a, b) ||
+              (a isa AbstractArray && all(i -> (a[i] isa QB.SQLText ? a[i].field == b[i].field : isequal(a[i], b[i])), eachindex(a))) ||
+              (a isa Tuple && all(i -> (a[i] isa QB.SQLText ? a[i].field == b[i].field : isequal(a[i], b[i])), 1:length(a))))
+      end
+    end
   end
 
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):

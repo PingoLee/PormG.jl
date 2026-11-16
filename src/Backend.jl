@@ -509,7 +509,11 @@ const _KNOWN_EXCEPTIONS = (
   # Base's, none with a `cause` or an `err`
   MethodError, ErrorException, ArgumentError, BoundsError, KeyError, InterruptException, EOFError,
   Base.IOError, TypeError, UndefVarError, AssertionError, InexactError, OverflowError, DomainError,
-  FieldError, InvalidStateException, TaskFailedException, CompositeException, CapturedException)
+  FieldError, InvalidStateException, TaskFailedException, CompositeException, CapturedException,
+  # What a trimmed image raises for a call it has no code for (#1599, #1614): never under the JIT. Unlisted, the walk's
+  # open arm called `hasproperty` on it, which a trimmed image has no code for either, and that `MethodError` replaced
+  # the one being reported (a Postgres.jl `create`'s read-back parser failure surfaced as `hasproperty`).
+  Core.MissingCodeError)
 
 @inline _known_field(e::T, field::Symbol) where {T} = hasfield(T, field) ? getfield(e, field) : nothing
 

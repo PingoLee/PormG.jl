@@ -5756,6 +5756,17 @@ end
     @test _dynamic_calls(pgx._ms, (SubString{String},)) == String[]
   end
 
+  # What: the cause walk (`_unowned_field`) on a `Core.MissingCodeError`, what a trimmed image raises for a call it has
+  #   no code for.
+  # Expected: it is one of the walk's known exceptions, so its field is read statically, never through the open arm's
+  #   `hasproperty`.
+  # Why: through the open arm, `hasproperty` had no compiled target either, and that `MethodError` replaced the error
+  #   being reported: the trimmed Postgres.jl `create` above surfaced as `cause missed: hasproperty` (#1599, #1614).
+  @testset "the cause walk reads a MissingCodeError statically (#1599, #1614)" begin
+    @test Core.MissingCodeError in PormG._KNOWN_EXCEPTIONS
+    @test _dynamic_calls(PormG._unowned_field, (Any, Symbol)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

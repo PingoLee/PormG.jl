@@ -68,3 +68,16 @@ end
     @test (typeof(c), typeof(new), new) == (typeof(c), typeof(old), old)
   end
 end
+
+# What: the cause walk's field read on a `Core.MissingCodeError`, what a trimmed image raises for a call it has no code
+#   for, against `hasproperty`/`getproperty`.
+# Expected: the same answer for its field and for a field it does not have.
+# Why: unlisted, the walk's open arm called `hasproperty` on it, which a trimmed image has no code for, so that
+#   `MethodError` replaced the error being reported; listed, the read is the same.
+@testset "the cause walk reads a MissingCodeError as hasproperty does (#1599, #1614)" begin
+  mi = first(mi for mi in Base.specializations(which(+, (Int, Int))) if mi isa Core.MethodInstance)
+  e = Core.MissingCodeError(mi)
+  @test PormG._unowned_field(e, :mi) === getproperty(e, :mi)
+  @test PormG._unowned_field(e, :cause) === nothing && !hasproperty(e, :cause)
+  @test Core.MissingCodeError in PormG._KNOWN_EXCEPTIONS
+end

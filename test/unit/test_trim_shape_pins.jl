@@ -3144,6 +3144,46 @@ end
     @test count("_bulk_result(_bulk_count_total(results)", bi_src) == 2 && !occursin("sum(results", bi_src)
   end
 
+  # What: the single-row write's path on MySQL and on PostgreSQL through Postgres.jl (#1599 layer 7, #1614), one group
+  #   per wall the server entries' trimmed binaries stopped at: the read-back query takes the INSERT's result
+  #   unspecialized, the MySQL read-back binds its key through `create`'s walk, PostgreSQL's RETURNING row and both
+  #   drivers' read-backs are decoded at each cell's type, both drivers' results are counted at their type, and
+  #   delete's lock planning reads its models at their type.
+  # Expected: the `nospecialize` bit on every engine's `_inserted_row_query`; the typed forms in the source and none of
+  #   the old ones; no dynamic call in the extensions' decode and count methods or in `_models_to_lock`.
+  # Why: each was a call with no compiled target in a trimmed image, and the server binaries stopped there (the
+  #   PR's table). Red on the base (#1814's head): the methods are missing, the source has the old forms, and
+  #   `_models_to_lock` calls its comprehension's filter on an abstract model.
+  @testset "the single-row write runs at concrete types on MySQL and Postgres.jl (#1599 layer 7, #1614)" begin
+    QB = PormG.QueryBuilder
+    for m in methods(QB._inserted_row_query)
+      @test (m.sig, (m.nospecialize >> 3) & 1) == (m.sig, 1)   # `result`, the fourth argument
+    end
+    ef_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "engine_facts.jl"), String)
+    @test occursin("marker = _bind_written_value!(params, value)::String", ef_src)
+    @test !occursin("marker = add_parameter!(params, value)", ef_src)
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test occursin("returned = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}", ew_src)
+    @test !occursin("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src)
+
+    PG = Base.get_extension(PormG, :PormGPostgresExt)
+    MY = Base.get_extension(PormG, :PormGMySQLExt)
+    model = PormG.Models.Model("tsp_srv_race", raceid = PormG.Models.IDField(), year = PormG.Models.IntegerField())
+    for (label, pool, R) in (("Postgres.jl", PormG.ConnectionPool.PostgresConnectionPool("host=x dbname=y"; driver = :postgres),
+                              PG === nothing ? Nothing : PG.Postgres.Result),
+                             ("MySQL", PormG.ConnectionPool.MySQLConnectionPool("host='x'"), MY === nothing ? Nothing : MY.MySQLResult))
+      @test (label, R !== Nothing) == (label, true)
+      R === Nothing && continue
+      dec = QB._FieldRowDecoder(model, pool)
+      # The extension's own method, not the generic call through `Tables.rowtable`.
+      @test (label, which(dec, (R,)).module) == (label, label == "MySQL" ? MY : PG)
+      @test (label, _dynamic_calls(dec, (R,))) == (label, String[])
+      @test (label, which(QB._RowCounter(), (R,)).module) == (label, label == "MySQL" ? MY : PG)
+      @test (label, _dynamic_calls(QB._RowCounter(), (R,))) == (label, String[])
+    end
+    @test isempty(_dynamic_calls(QB._models_to_lock, (QB.DeletionCollector{Union{String, PormG.SQLObjectHandler}},)))
+  end
+
   # What: the render sites that read `SQLField.field` at its `FieldPart` union (#1599 layer 5, #1780's group 6):
   #   the walk with an open arm (`_with_field_part_open`), its `string` (`_field_part_text`), the transform
   #   formatter reader (`_part_formatter`), and the readers that now ask their question at the member's type
@@ -4046,8 +4086,10 @@ end
     end
     # The exact count records the set: a method added, removed or renamed in it changes it.
     @test checked == 192
+    # Their engine argument, the first, stays specialized. `_inserted_row_query`'s `result` (its fourth) is
+    # unspecialized since #1614, so the check reads the engine argument's bit, not the whole mask.
     for name in write_facts, m in methods(getglobal(QB, name))
-      @test m.nospecialize == 0
+      @test (name, m.nospecialize & 1) == (name, 0)
     end
 
     # A call over the engine union resolves. The closures name the functions through the module (a

@@ -610,6 +610,10 @@ function (d::PormG.QueryBuilder._FieldRowDecoder)(result::MySQLResult)::Vector{D
   return out
 end
 
+# How many rows a result holds (`exists()`, which `delete` probes with; #1599 layer 7, #1614). The generic count
+# was `length(Tables.rowtable(result))`, which a trimmed image has no code for. `nrows` is that length.
+(::PormG.QueryBuilder._RowCounter)(result::MySQLResult)::Int = result.nrows
+
 # The open arm: `identity.`, as before, whose result type is known only at run time.
 @noinline function _store_other!(columns::Vector{AbstractVector}, j::Int, col::Vector{Any})::Nothing
   columns[j] = identity.(col)

@@ -3164,7 +3164,11 @@ end
     @test !occursin("marker = add_parameter!(params, value)", ef_src)
     ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
     @test occursin("returned = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}", ew_src)
-    @test !occursin("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src)
+    # The old read stays for a pool that is not PormG's own (a test double), behind the type check, and nowhere else.
+    @test occursin("if settings.connections isa PostgresConnectionPool", ew_src)
+    @test count("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src) == 1
+    @test findfirst("if settings.connections isa PostgresConnectionPool", ew_src) <
+          findfirst("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src)
 
     PG = Base.get_extension(PormG, :PormGPostgresExt)
     MY = Base.get_extension(PormG, :PormGMySQLExt)
@@ -4086,10 +4090,10 @@ end
     end
     # The exact count records the set: a method added, removed or renamed in it changes it.
     @test checked == 192
-    # Their engine argument, the first, stays specialized. `_inserted_row_query`'s `result` (its fourth) is
-    # unspecialized since #1614, so the check reads the engine argument's bit, not the whole mask.
+    # Their engine argument, the first, stays specialized. `_inserted_row_query`'s `result` (its fourth, bit 3) is
+    # unspecialized since #1614; nothing else is, on any of the three.
     for name in write_facts, m in methods(getglobal(QB, name))
-      @test (name, m.nospecialize & 1) == (name, 0)
+      @test (name, m.nospecialize) == (name, name === :_inserted_row_query ? 8 : 0)
     end
 
     # A call over the engine union resolves. The closures name the functions through the module (a

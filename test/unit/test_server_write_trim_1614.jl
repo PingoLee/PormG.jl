@@ -69,10 +69,11 @@ _swt_rows_pg() = [
       _SWT_TZ.ZonedDateTime(DateTime(2010, 5, 16, 14), _SWT_TZ.TimeZone("UTC")), Date(2026, 11, 15),
       "650e8400-e29b-41d4-a716-446655440000", missing, missing],
 ]
-# MySQL's cells as MySQL.jl delivers them: the timestamp as a `DateTime`, the decimal as its text.
+# MySQL's cells as the extension delivers them: the timestamp as a `DateTime`, the decimal as a `Decimal`
+# (`_read_value` turns MySQL.jl's decimal result into one).
 _swt_rows_my() = [
   Any[Int64(1), Int32(2009), Int32(6), Int64(1), "Monaco Grand Prix", Date(2009, 5, 24), DateTime(2009, 5, 24, 14),
-      Date(2026, 11, 15), "550e8400-e29b-41d4-a716-446655440000", "25.5", "x"],
+      Date(2026, 11, 15), "550e8400-e29b-41d4-a716-446655440000", _SWT_M.Decimals.Decimal(0, 255, -1), "x"],
   Any[Int64(2), Int32(2010), missing, Int64(1), "Monaco Grand Prix", Date(2010, 5, 16), DateTime(2010, 5, 16, 14),
       Date(2026, 11, 15), "650e8400-e29b-41d4-a716-446655440000", missing, missing],
 ]
@@ -102,10 +103,32 @@ _swt_rows_my() = [
     end
     # A decimal wider than the field (5, 1): the parser refuses it, the same way through both reads.
     wide = deepcopy(rows[1:1])
-    wide[1][10] = label == "MySQL" ? "123456.5" : _SWT_M.Decimals.Decimal(0, 1234565, -1)
+    wide[1][10] = _SWT_M.Decimals.Decimal(0, 1234565, -1)
     res = mk(wide)
     a, b = norm(_swt_outcome(() -> dec(res))), norm(_swt_outcome(() -> old(res)))
     @test (label, isequal(a, b)) == (label, true)
+  end
+end
+
+# A PostgreSQL pool that is not PormG's own: an application's test double, whose `fetch` takes no `_decode`.
+struct _SWTStandInPg <: PormG.PormGPostgres end
+PormG.ConnectionPool.fetch(::_SWTStandInPg, sql::String; conn = nothing, params = nothing, ignore_tx::Bool = false) =
+  [(raceid = 1, year = 2009)]
+
+# What: `create` on a stand-in PostgreSQL pool whose `fetch` takes no `_decode` keyword.
+# Expected: the row its `fetch` returned, keyed by field, as before #1614; no `MethodError` on the keyword.
+# Why: the RETURNING arm hands PormG's own pool a decoder (so a trimmed image can read the row); a test double
+#   that predates the keyword must keep reading its row the old way.
+@testset "a stand-in PostgreSQL pool's create reads its row as before (#1614)" begin
+  key = "swt_standin"
+  PormG.config[key] = PormG.Configuration.Settings(connections = _SWTStandInPg(), change_data = true)
+  try
+    model = _SWT_M.Model("swt_standin_race", raceid = _SWT_M.IDField(), year = _SWT_M.IntegerField())
+    model.connect_key = key
+    row = model.objects.create("year" => 2009)
+    @test row.raceid == 1 && row.year == 2009
+  finally
+    delete!(PormG.config, key)
   end
 end
 

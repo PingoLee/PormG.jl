@@ -3856,6 +3856,8 @@ fetch(settings::PormGSettings, sql::String, params::Union{AbstractPormGParam, Ma
 # backend's own) is still called exactly as before for every untyped read. Since #1599 layer 7 (#1694) three
 # more reads hand a decoder: `create`'s read-back on SQLite and MySQL, `exists()`, and SQLite's `update` row
 # count. A stand-in pool whose own `fetch` lacks the keyword gets a `MethodError` there, as from a typed read.
+# `create`'s `RETURNING` row on PostgreSQL hands one too (#1614), on PormG's own pool only, so a stand-in
+# PostgreSQL pool's `create` reads as before.
 _fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, ::Nothing) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx)
 _fetch_on(pool::_SQLEngine, sql::String, conn, params, ignore_tx::Bool, decode) = fetch(pool, sql; conn=conn, params=params, ignore_tx=ignore_tx, _decode=decode)
 fetch(settings::_SQLEngine, sql::String, params::Union{AbstractPormGParam, ManualParams}; conn = nothing, ignore_tx::Bool = false) = fetch(settings, sql; conn=conn, params=params, ignore_tx=ignore_tx)

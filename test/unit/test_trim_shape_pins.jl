@@ -3059,6 +3059,9 @@ end
     if isdefined(QB, :_bulk_insert_frame)
       m = only(methods(QB._bulk_insert_frame))
       @test nospec(m, 5) && count(i -> nospec(m, i), 1:(m.nargs - 1)) == 1   # `src`, the fifth argument, alone
+      # Inference shares the body across table types too: without it, each new table type re-inferred the body
+      # once per pool type (the PR's JIT measurement).
+      @test m.nospecializeinfer
     end
     # The fixture's row type, and one with more column types than inference splits (six): neither makes a dynamic
     # Tables.jl call, a dynamic `length` or a dynamic store.
@@ -3094,7 +3097,9 @@ end
         @test (name, _dynamic_calls(f, tt)) == (name, String[])
         o = getglobal(QB, other)
         ott = other === :_bulk_count_total_other ? (Vector{Any}, Int, Int) : tt
-        @test length(_dynamic_calls(o, ott)) == 1   # the open arm: the one call the walk leaves dynamic
+        # The open arm: the one call the walk leaves dynamic (and, for `_bulk_length_other`, the conversion its
+        # `::Int` return type adds to that call's result).
+        @test length(filter(s -> !occursin("convert(", s), _dynamic_calls(o, ott))) == 1
       end
     end
     if isdefined(QB, :_bulk_cell)

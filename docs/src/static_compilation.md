@@ -48,9 +48,10 @@ else is untested in a trimmed binary, even where it compiles.
 - **`bulk_insert` on SQLite** (#1694), from a `Vector` of `NamedTuple`s whose element type is concrete
   (`[(year = 2010, round = 6, …), …]`), with the fields the write fills itself left out (the same
   `auto_now_add`, `auto_now` and `auto_add` fields as above) and no `columns=`, `on_conflict` or
-  `returning`. It returns `(count = 2, rows = nothing)` and a typed read sees the rows. No trimmed
-  binary has run any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword
-  options, nor a row that fails validation (see below). Two of them are known not to work yet:
+  `returning`. It returns `(count = 2, rows = nothing)` and a typed read sees the rows. A row that
+  fails validation is refused as under the JIT: an `InvalidValueError` naming its row and field (a
+  date that is not a calendar date has run), with no row written (#1694). No trimmed binary has run
+  any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword options. Two of them are known not to work yet:
   `returning=` and a primary-key column in the table still take calls a trimmed binary cannot make.
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
   with the server's SQLSTATE (MySQL and PostgreSQL; SQLite has none), its message, and the driver's
@@ -72,9 +73,6 @@ against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is 
   them, or a separate process:
   - `bulk_insert` on MySQL or through Postgres.jl;
   - `bulk_update`, `bulk_copy` and the other bulk writers, and `bulk_insert` beyond the input above;
-  - a `bulk_insert` row that fails validation or formatting: the pass that names the failing cell
-    reads the column and calls the field's formatter untyped, which a trimmed binary cannot run, so
-    the caller gets that pass's `MethodError` rather than the refusal;
   - a delete that cascades or sets a foreign key to NULL;
   - the other write terminals (`get_or_create`, `update_or_create`, an upsert, deleting one row
     through `delete(row)`).

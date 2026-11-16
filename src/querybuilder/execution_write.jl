@@ -336,10 +336,13 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
     # .save(). `_row_to_field_keyed_dict` still builds the Dict; we wrap it. The RETURNING list and the
     # read-back name every declared column (incl. the pk), so the row is .save()-able; `_dirty` starts unset (#1591).
     if _insert_returns_rows(connection)
-      result = fetch(settings, exec_sql, parameters)
       # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
       # write supplied an explicit primary key.
-      return _owned_row(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
+      # The returned row decoded as it is read (`_FieldRowDecoder`, #1599 layer 7, #1614), as the SQLite and
+      # MySQL read-backs below are: `Tables.rowtable(result) |> first` decided the row's type at run time, which
+      # a trimmed image has no code for. `rows[1]` is the row `_row_to_field_keyed_dict` built from it.
+      rows = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}
+      return _owned_row(rows[1], model)
     end
     # SQLite and MySQL: a plain INSERT, then the inserted row read back with a SELECT on the SAME
     # connection (`_inserted_row_query`). MySQL has no `RETURNING` (#1266). SQLite deliberately avoids

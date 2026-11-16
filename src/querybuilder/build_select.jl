@@ -385,6 +385,29 @@ function _order_term_sql(expr, orientation::AbstractString, placement::Symbol, @
   return string(expr, " ", orientation, " ", placement === :first ? "NULLS FIRST" : "NULLS LAST")
 end
 
+# `_render_order_terms`' call of `_order_term_sql`, at concrete types (#1599 layer 5). The term is held in the
+# `SQLField.field` slot, typed as a union of the node types, and the keyword call built a `NamedTuple` whose
+# type was a `UnionAll` (`null_flag` is `nothing` or a `String`), so both calls dispatched at run time, and
+# a trimmed image had no code for them (an `order_by` stopped at `_order_term_sql(::String, ::String,
+# ::Symbol, ::PostgresConnectionPool)`). By the time it is ordered the term is its rendered text, a
+# `String`; the connection is the instruction's slot, a union every member of which `_order_term_sql`'s two
+# methods take unspecialized. A `null_flag` of `nothing` is the keyword's default, so the call without it is
+# the same call. Each argument that varies is taken unspecialized, so the one compiled body is what every
+# call reaches. Anything else takes the same calls through one dynamic arm.
+@noinline function _order_term_at(@nospecialize(expr), orientation::String, placement::Symbol,
+                                  @nospecialize(conn::Union{Nothing,_SQLEngine}),
+                                  @nospecialize(null_flag::Union{Nothing,String}))
+  if expr isa String
+    null_flag === nothing && return _order_term_sql(expr, orientation, placement, conn)
+    return _order_term_sql(expr, orientation, placement, conn; null_flag = null_flag)
+  end
+  return _order_term_other(expr, orientation, placement, conn, null_flag)
+end
+@noinline _order_term_other(@nospecialize(expr), orientation::String, placement::Symbol, @nospecialize(conn),
+                            null_flag::Union{Nothing,String}) =
+  null_flag === nothing ? _order_term_sql(expr, orientation, placement, conn) :
+                          _order_term_sql(expr, orientation, placement, conn; null_flag = null_flag)
+
 # #587: the output name under which the expression with memo key `key` is projected, or `nothing`.
 # The scan is the one `get_order_query` runs for the same-name case, keyed on the full `memo_key`
 # — namespace AND name, never the bare `_as` string: a `Joined("raceid", "year")` projection and a
@@ -755,8 +778,8 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
     _refuse_uncast_json_key(_JSONKeyOrdering("order_by", :quoted, true),
                             order_source isa SQLTypeField ? order_source : v.field, instruc)
     push!(instruc.order, order_expr === nothing ?
-      _order_term_sql(v_field_copy.field, orientation, placement, instruc.connection) :
-      _order_term_sql(order_expr, orientation, placement, instruc.connection; null_flag = null_flag))
+      _order_term_at(v_field_copy.field, orientation, placement, instruc.connection, nothing) :
+      _order_term_at(order_expr, orientation, placement, instruc.connection, null_flag))
     # Cache the resolved selector, but NEVER overwrite one that is already there (#404). The
     # `found_in_select` branch above deliberately degrades `field` to the bare SELECT alias — legal
     # in ORDER BY, invalid anywhere else — and since #404 moved this call ahead of

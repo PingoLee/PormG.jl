@@ -4075,7 +4075,9 @@ end
                :_computes, :_interval_ms_as_text, :_duration_values_units, :_unnamed_temporal_remedy,
                :_interval_error,
                # the engine's timestamp remedy, read by the refusals at the engine's type (#1599 layer 5)
-               :_timestamp_remedy)
+               :_timestamp_remedy,
+               # an ORDER BY term's render at concrete types, and its open arm (#1599 layer 5)
+               :_order_term_at, :_order_term_other)
     checked = 0
     for name in union(Set(callees), setdiff(facts, write_facts))
       f = getglobal(QB, name)
@@ -4091,7 +4093,7 @@ end
       end
     end
     # The exact count records the set: a method added, removed or renamed in it changes it.
-    @test checked == 193
+    @test checked == 195
     # Their engine argument, the first, stays specialized. `_inserted_row_query`'s `result` (its fourth, bit 3) is
     # unspecialized since #1614; nothing else is, on any of the three.
     for name in write_facts, m in methods(getglobal(QB, name))
@@ -5606,6 +5608,26 @@ end
     @test occursin("pending = _PendingTemporal()", body) && !occursin("Any[]", body)
     refuse = src[findfirst("function _refuse_unnamed_temporal", src).start:findfirst("function _time_arithmetic_side", src).start]
     @test occursin("(hit[1], hit[2], op, false)", refuse) && !occursin("hit...", refuse)
+  end
+
+  # What: an ORDER BY term's render call (`_order_term_at`, which `_render_order_terms` calls for every term).
+  # Expected: both calls from `_render_order_terms` (with and without a NULL flag) and the helper's calls of
+  #   `_order_term_sql` resolve statically; the helper takes the term, the connection and the flag
+  #   unspecialized (bits 0, 3 and 4), and its one open arm, for a term that is not text, is an `invoke`.
+  # Why: the term is held in a slot typed as a union of node types, and the keyword call built a `NamedTuple`
+  #   whose type was a `UnionAll`, so both calls dispatched at run time: the trimmed Postgres.jl read's
+  #   `order_by` raised `MethodError` on `_order_term_sql(::String, ::String, ::Symbol, ::PostgresConnectionPool)`
+  #   (#1599 layer 5).
+  @testset "an order_by term is rendered at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    CT = fieldtype(QB.InstructionObject, :connection)
+    @test _dynamic_calls_deep(QB._order_term_at, (Any, String, Symbol, CT, Union{Nothing,String});
+                              depth = 1, skip = (QB._order_term_other,)) == String[]
+    @test only(methods(QB._order_term_at)).nospecialize == 1 | 8 | 16
+    for V in (QB.OrderTermView, Vector{K.SQLTypeOrder})
+      calls = _dynamic_calls(QB._render_order_terms, (V, QB.SQLObjectQuery, QB.InstructionObject))
+      @test (V, filter(c -> occursin("_order_term", c), calls)) == (V, String[])
+    end
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

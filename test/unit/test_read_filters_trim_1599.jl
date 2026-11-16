@@ -191,3 +191,20 @@ end
     @test _RFT_QB._temporal_beside(kind) == _old_temporal_beside(kind)
   end
 end
+
+# What: `_order_term_at` against the two `_order_term_sql` calls `_render_order_terms` made, the plain one and
+#   the one with a NULL flag, on every engine, for a term with and without a bound value, each orientation and
+#   placement, and a term that is not text (the open arm).
+# Expected: the same outcome: the same text, or the same error (MySQL refuses a bound term with no flag).
+# Why: a NULL flag of `nothing` is the keyword's default, so the helper calls without it; that must be the
+#   same call, and the open arm must take the old calls for anything that is not a `String`.
+@testset "an order_by term renders as the calls it replaces rendered (#1599 layer 5)" begin
+  for conn in (RftMockSQLite(), RftMockSQLiteOld(), RftMockMySQL(), RftMockPostgres(), nothing),
+      expr in Any["\"Tb\".\"date\"", "(\"Tb\".\"year\" + ?)", SubString("\"Tb\".\"date\"", 1), _RFT_QB.SQLText("x")],
+      orientation in ("ASC", "DESC"), placement in (:first, :last),
+      (null_flag, flagged) in ((nothing, false), (nothing, true), ("\"Tb\".\"date\" * 1", true))
+    tag = (conn === nothing ? :nothing : nameof(typeof(conn)), typeof(expr), orientation, placement, null_flag, flagged)
+    @test (tag, _rft_outcome(() -> _RFT_QB._order_term_at(expr, orientation, placement, conn, null_flag))) ==
+          (tag, _rft_outcome(() -> _old_order_term(expr, orientation, placement, conn, null_flag, flagged)))
+  end
+end

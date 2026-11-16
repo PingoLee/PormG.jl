@@ -5680,8 +5680,12 @@ end
   @testset "an order_by term is rendered at concrete types (#1599 layer 5)" begin
     QB = PormG.QueryBuilder; K = PormG.Kernel
     CT = fieldtype(QB.InstructionObject, :connection)
+    # Skipped: the open arm, and the capability barriers MySQL's refusal reaches (`Dialect._supports_at`,
+    # `_capability_error_at`), whose one dynamic call each is reviewed in their own pin. With inlining off (CI's coverage
+    # run) the walk reaches them; inlined, it does not.
+    D = PormG.Dialect
     @test _dynamic_calls_deep(QB._order_term_at, (Any, String, Symbol, CT, Union{Nothing,String});
-                              depth = 1, skip = (QB._order_term_other,)) == String[]
+                              depth = 1, skip = (QB._order_term_other, D._supports_at, D._capability_error_at)) == String[]
     @test only(methods(QB._order_term_at)).nospecialize == 1 | 8 | 16
     for V in (QB.OrderTermView, Vector{K.SQLTypeOrder})
       calls = _dynamic_calls(QB._render_order_terms, (V, QB.SQLObjectQuery, QB.InstructionObject))

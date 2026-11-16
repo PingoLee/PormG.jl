@@ -590,6 +590,26 @@ end
 end
 @noinline _mysql_parsed_open(@nospecialize(col), i::Int, parser) = PormG.QueryBuilder._typed_parse(parser, col[i])
 
+# The field-keyed rows of a write's read-back (`create`, #1599 layer 7, #1614): each cell read at its column's type,
+# as the typed read reads it (`_mysql_parsed`), through its field's read parser, under its field's key. The decoder's
+# generic call read the result through `Tables.rowtable`, whose row type is decided at run time, and a trimmed image
+# had no code for it (the MySQL entry's `create` stopped at `Tables.rowcount`). The same keys and values: the
+# columns hold the cells `Tables.rowtable` read. A parser's refusal raises here, as it did there.
+function (d::PormG.QueryBuilder._FieldRowDecoder)(result::MySQLResult)::Vector{Dict{Symbol,Any}}
+  QB = PormG.QueryBuilder
+  fkeys = Symbol[QB._field_key(d, Symbol(n)) for n in result.names]
+  parsers = PormG.ReadParser[QB._field_parser(d, k) for k in fkeys]
+  out = Dict{Symbol,Any}[]
+  for i in 1:result.nrows
+    dict = Dict{Symbol,Any}()
+    for j in eachindex(fkeys)
+      dict[fkeys[j]] = _mysql_parsed(result.columns[j], i, parsers[j])
+    end
+    push!(out, dict)
+  end
+  return out
+end
+
 # The open arm: `identity.`, as before, whose result type is known only at run time.
 @noinline function _store_other!(columns::Vector{AbstractVector}, j::Int, col::Vector{Any})::Nothing
   columns[j] = identity.(col)

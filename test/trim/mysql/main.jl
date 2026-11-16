@@ -1,6 +1,7 @@
 # The juliac --trim entry of the fixture's MySQL variant (#1599, #1614): `../main.jl`'s app with MySQL.jl
-# in place of SQLite — boot, one typed read, the single-row write (`../tools/writes.jl`: create, read back, update, delete) and
-# one statement the server refuses (`../tools/failing.jl`).
+# in place of SQLite — boot, one typed read, the single-row
+# write (`../tools/writes.jl`: create, read back, update, delete) and one statement the server refuses
+# (`../tools/failing.jl`).
 #   JIT:  julia --project=test/trim/mysql test/trim/mysql/main.jl
 #   exe:  <build dir>/main                   (see ../README.md, "The MySQL variant")
 #

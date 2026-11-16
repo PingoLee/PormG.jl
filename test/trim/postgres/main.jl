@@ -1,6 +1,7 @@
 # The juliac --trim entry of the fixture's Postgres.jl variant (#1599, #1614): `../main.jl`'s app with
-# Postgres.jl in place of SQLite — boot, one typed read, the single-row write (`../tools/writes.jl`: create, read back, update, delete) and
-# one statement the server refuses (`../tools/failing.jl`).
+# Postgres.jl in place of SQLite — boot, one typed read, the single-row
+# write (`../tools/writes.jl`: create, read back, update, delete) and one statement the server refuses
+# (`../tools/failing.jl`).
 #   JIT:  julia --project=test/trim/postgres test/trim/postgres/main.jl
 #   exe:  <build dir>/main                   (see ../README.md, "The Postgres.jl variant")
 #

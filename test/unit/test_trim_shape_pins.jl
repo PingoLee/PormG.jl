@@ -5610,6 +5610,20 @@ end
     @test occursin("(hit[1], hit[2], op, false)", refuse) && !occursin("hit...", refuse)
   end
 
+  # What: a bound literal's kind (`_infer_kind(::SQLText, …)`), which the check asks of a filter's value side.
+  # Expected: no dynamic call: the null test and the literal's kind go through walks over the slot (`_null_literal_any`,
+  #   `_literal_kind_any`), whose open arms are `invoke`s.
+  # Why: called on the `Any` slot, `_is_null_literal` dispatched at run time to a body a trimmed image never compiled
+  #   (it is always inlined): the trimmed SQLite and MySQL `date__@gte` reads raised `MethodError` on
+  #   `_is_null_literal(::String)` once the queue was typed (#1599 layer 5).
+  @testset "a bound literal's kind is read without a dynamic call (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    for P in (QB._AllKinds, QB._MeaningKinds)
+      @test (P, _dynamic_calls(QB._infer_kind, (QB.SQLText, QB.InstructionObject, P))) == (P, String[])
+      @test (P, _dynamic_calls(QB._literal_kind_any, (Any, P))) == (P, String[])
+    end
+  end
+
   # What: an ORDER BY term's render call (`_order_term_at`, which `_render_order_terms` calls for every term).
   # Expected: both calls from `_render_order_terms` (with and without a NULL flag) and the helper's calls of
   #   `_order_term_sql` resolve statically; the helper takes the term, the connection and the flag

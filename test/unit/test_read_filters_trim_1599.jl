@@ -175,6 +175,27 @@ const _RFT_CONNS = (RftMockSQLite(), RftMockMySQL(), RftMockPostgres())
   end
 end
 
+# What: a literal's kind and a bound literal's (`SQLText`) kind, through the walks, against the calls they replace,
+#   under both kind policies.
+# Expected: the same kind, or `nothing`, for every literal the walk names and for ones that take its open arm.
+# Why: `_infer_kind(::SQLText)` now asks `_null_literal_any` and `_literal_kind_any` instead of calling
+#   `_is_null_literal` and `_literal_kind` on its untyped slot; a literal read as another kind would change which
+#   comparisons are refused and how an expression is typed.
+@testset "a literal's kind reads as it did (#1599 layer 5)" begin
+  instruc = _rft_instruc(RftMockSQLite())
+  lits = Any["2008-06-01", SubString("Monaco", 1, 3), "NULL", SubString("NULL", 1), 5, Int32(3), Int16(2), true, 2.5,
+             Float32(1.5), PormG.Models.Decimals.Decimal(0, 150, -2), Date(2008, 6, 1), DateTime(2008, 6, 1, 14),
+             PormG.Models.ZonedDateTime(2008, 6, 1, 14, PormG.Models.TimeZone("UTC")), Time(6), Day(1),
+             Month(1) + Day(2), nothing, missing, :symbol, [1, 2]]
+  for policy in (_RFT_QB._AllKinds(), _RFT_QB._MeaningKinds()), x in lits
+    tag = (typeof(policy), typeof(x))
+    x === nothing || x === missing ||
+      @test (tag, _rft_outcome(() -> _RFT_QB._literal_kind_any(x, policy))) == (tag, _rft_outcome(() -> _RFT_QB._literal_kind(x, policy)))
+    @test (tag, _rft_outcome(() -> _RFT_QB._infer_kind(_RFT_QB.SQLText(x), instruc, policy))) ==
+          (tag, _rft_outcome(() -> _RFT_QB._is_null_literal(x) ? nothing : _RFT_QB._literal_kind(x, policy)))
+  end
+end
+
 # What: the two refusals the check raises, new builders against old, on the two engines that refuse.
 # Expected: the same error type and the same text, for every temporal kind, operator and label.
 # Why: the builders now take the kind unspecialized and read the timestamp remedy in the refusal, at the

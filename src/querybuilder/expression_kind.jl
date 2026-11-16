@@ -78,8 +78,11 @@ _infer_kind(p::FExpression, instruc::SQLInstruction, policy::_EveryKind) =
   p.operation === nothing ? _infer_kind_any(_fexpr_left(p), instruc, policy) :
   _memo_kind(() -> _operation_kind(p, instruc, policy), p, instruc, policy)
 _infer_kind(p::SQLField, instruc::SQLInstruction, policy::_EveryKind) = _with_field_part_open(_infer_kind, p.field, instruc, policy)
+# A literal's slot is `Any`, so both questions on it go through walks (#1599 layer 5): called on the slot directly,
+# each dispatched at run time, and `_is_null_literal`, always inlined, had no compiled body for the call to reach
+# (a trimmed `date__@gte` filter raised `MethodError(_is_null_literal, ("2008-06-01",))` here).
 _infer_kind(p::SQLText, ::SQLInstruction, policy::_EveryKind) =
-  _is_null_literal(p.field) ? nothing : _literal_kind(p.field, policy)
+  _null_literal_any(p.field) ? nothing : _literal_kind_any(p.field, policy)
 _infer_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind) =
   _memo_kind(() -> _infer_function_kind(p, instruc, policy), p, instruc, policy)
 
@@ -568,6 +571,23 @@ _literal_kind(::AbstractString, ::_EveryKind) = CText()
 # `default`), as the same duration in F arithmetic does (`_side_kind(::_DurationOperand)`).
 _literal_kind(d::_DurationOperand, ::_EveryKind) = CInterval(_has_calendar_part(d))
 _literal_kind(x, ::_EveryKind) = literal_canonical_kind(x)
+# `_literal_kind` of an untyped literal (#1599 layer 5): the literals a value binds, each at its type, and
+# anything else through one dynamic call.
+@noinline function _literal_kind_any(@nospecialize(x), policy::_EveryKind)
+  x isa String && return _literal_kind(x, policy)
+  x isa Int64 && return _literal_kind(x, policy)
+  x isa Bool && return _literal_kind(x, policy)
+  x isa Float64 && return _literal_kind(x, policy)
+  x isa Int32 && return _literal_kind(x, policy)
+  x isa SubString{String} && return _literal_kind(x, policy)
+  x isa Decimals.Decimal && return _literal_kind(x, policy)
+  x isa Dates.Date && return _literal_kind(x, policy)
+  x isa Dates.DateTime && return _literal_kind(x, policy)
+  x isa TimeZones.ZonedDateTime && return _literal_kind(x, policy)
+  x isa Dates.Time && return _literal_kind(x, policy)
+  return _literal_kind_other(x, policy)
+end
+@noinline _literal_kind_other(@nospecialize(x), policy::_EveryKind) = _literal_kind(x, policy)
 
 # ── Functions, by their `_result_rule` ───────────────────────────────────────────────────────────────
 # Every kind: a declared cast is the type (#852, and `Case`'s `output_field`), then the rule.

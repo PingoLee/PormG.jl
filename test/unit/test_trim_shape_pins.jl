@@ -5700,6 +5700,11 @@ end
     body = src[findfirst("function _depuration_values_bulk_insert", src).start:findfirst("function _normalize_on_conflict", src).start]
     @test occursin("_bulk_cell(_bulk_column(df, col_name), Int(index))", body)
     @test !occursin("_bulk_column(df, col_name)[index]", body)
+    # The field's formatter is called through the value walk (wall 2), never through its `Function` slot on the
+    # untyped cell; the walk makes no dynamic call (its open arm is an `invoke`).
+    QB = PormG.QueryBuilder
+    @test occursin("_depuration_format_at(model.fields[field].formatter, value)", body) && !occursin(".formatter(value)", body)
+    @test _dynamic_calls(QB._depuration_format_at, (Any, Any)) == String[]
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

@@ -2,7 +2,7 @@
 
 !!! warning "Experimental"
     Building a PormG application into a standalone executable with `juliac --trim` is **experimental**.
-    One kind of read is known to work, on three drivers, and on SQLite the single-row write and
+    One kind of read and the single-row write are known to work, on three drivers, and on SQLite
     `bulk_insert`. Other writes have not run in a trimmed binary yet, and what this page describes may change between
     releases without an upgrade note. Work in progress is tracked in
     [#1599](https://github.com/PingoLee/PormG.jl/issues/1599) (the trimmed application) and
@@ -28,15 +28,18 @@ else is untested in a trimmed binary, even where it compiles.
   The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
   nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)
   are built to run trimmed, but no trimmed binary has run them yet.
-- **The single-row write on SQLite**, through SQLite.jl (#1694):
+- **The single-row write**, on SQLite through SQLite.jl, on MySQL 8.4 through MySQL.jl and on
+  PostgreSQL 18 through Postgres.jl (#1694, #1614):
   - `create` with name–value pairs (`M.Race.objects.create("year" => 2009, …)`), including the fields
     the write fills itself: a `DateTimeField(auto_now_add = true)`, a `DateField(auto_now = true)` and a
     `UUIDField(auto_add = true)`. The timestamp is written in PormG's own text and read back from it;
   - `update` of the rows a filter matches (`filter(…).update("round" => 7)`), which returns the row count;
   - `delete` of the rows a filter matches (`filter(…).delete()`), which returns the count and the rows
-    per table. The delete that has run removes rows nothing else references: no cascade, no `SET NULL`;
+    per table. The delete that has run removes rows nothing else references: no cascade, no `SET NULL`.
+    On MySQL and PostgreSQL it takes their row lock (`SELECT … FOR UPDATE`) first, as under the JIT;
   - the refusals PormG raises before any SQL: an `InvalidValueError` for a date string that is not a
-    calendar date, and for a `Bool` given to a text column.
+    calendar date, and for a `Bool` given to a text column (run on SQLite; the check is the same on every
+    driver).
 - **`bulk_insert` on SQLite** (#1694), from a `Vector` of `NamedTuple`s whose element type is concrete
   (`[(year = 2010, round = 6, …), …]`), with the fields the write fills itself left out (the same
   `auto_now_add`, `auto_now` and `auto_add` fields as above) and no `columns=`, `on_conflict` or
@@ -53,14 +56,15 @@ else is untested in a trimmed binary, even where it compiles.
 
 PormG checks these with a fixture application, `test/trim/` in the repository. Its `Trim (juliac)`
 workflow builds and runs it every night: the SQLite read and the pool's tasks, the SQLite write
-(refusals, create, read, update, delete, `bulk_insert`), and the MySQL and Postgres.jl reads and refused statements,
+(refusals, create, read, update, delete, `bulk_insert`), and the MySQL and Postgres.jl reads, single-row
+writes and refused statements,
 against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is checked by hand.
 
 ## What does not work yet
 
-- **Writes beyond the single-row write on SQLite** (#1694) have not run in a trimmed binary. Use the
-  JIT for them, or a separate process:
-  - any write on MySQL or through Postgres.jl;
+- **Writes beyond the single-row write** (#1694) have not run in a trimmed binary. Use the JIT for
+  them, or a separate process:
+  - `bulk_insert` on MySQL or through Postgres.jl;
   - `bulk_update`, `bulk_copy` and the other bulk writers, and `bulk_insert` beyond the input above;
   - a `bulk_insert` row that fails validation or formatting: the pass that names the failing cell
     reads the column and calls the field's formatter untyped, which a trimmed binary cannot run, so

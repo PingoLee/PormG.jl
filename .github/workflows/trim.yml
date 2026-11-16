@@ -9,7 +9,8 @@
 #
 # Two more jobs build the fixture's server variants (test/trim/mysql, test/trim/postgres, #1614) and run
 # them against a service container: MySQL 8.4, and PostgreSQL 18 through Postgres.jl with SCRAM-SHA-256.
-# Each fails unless its binary exits 0, prints the row, and its `fail` step prints the server's own error.
+# Each fails unless its binary exits 0, prints the row, runs the single-row write (create, read back, update,
+# delete), and its `fail` step prints the server's own error.
 #
 # Not on every PR: a trimmed build takes several minutes. It runs nightly, by hand, and on a PR that
 # touches the fixture, this file or one of the three driver extensions the jobs build.
@@ -334,13 +335,21 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 3 read, 6 the fail step did not raise the server's error, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
             echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing the expected row"
             exit 1
           fi
+          # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
+          # back (2 rows), update and delete. The written row's id is not checked: the JIT control used one.
+          for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left'; do
+            if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
+              echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing: $line"
+              exit 1
+            fi
+          done
           # The `fail` step (test/trim/tools/failing.jl): the server's own error, its SQLSTATE and its
           # message, with a cause that is the driver's error and not a MethodError from the error path.
           if ! grep -qxF "$(printf 'step\tfail\tthrew StatementError')" build/run.txt ||
@@ -457,13 +466,21 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 3 read, 6 the fail step did not raise the server's error, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
             echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing the expected row"
             exit 1
           fi
+          # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
+          # back (2 rows), update and delete. The written row's id is not checked: the JIT control used one.
+          for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left'; do
+            if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
+              echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing: $line"
+              exit 1
+            fi
+          done
           # The `fail` step (test/trim/tools/failing.jl): the server's own error, its SQLSTATE and its
           # message, with a cause that is the driver's error and not a MethodError from the error path.
           if ! grep -qxF "$(printf 'step\tfail\tthrew StatementError')" build/run.txt ||

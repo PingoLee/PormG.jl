@@ -796,6 +796,33 @@ end
 end
 @noinline _pg_parsed_open(@nospecialize(v), parser) = PormG.QueryBuilder._typed_parse(parser, v)
 
+# The field-keyed rows of a write's result (`create`'s `RETURNING`, #1599 layer 7, #1614): each cell read at its type,
+# as the typed read reads it (`_PgCells`), through its field's read parser (`_pg_parsed`), under its field's key.
+# The decoder's generic call read the result through `Tables.rowtable`, whose row type is decided at run time,
+# and a trimmed image had no code for it (the Postgres.jl entry's `create` stopped there). The same keys and
+# values: Postgres.jl's rows hold the cells `Tables.rowtable` read. A parser's refusal raises here, as it did there.
+function (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result)::Vector{Dict{Symbol,Any}}
+  QB = PormG.QueryBuilder
+  names = result.names
+  fkeys = Symbol[QB._field_key(d, Symbol(n)) for n in names]
+  parsers = PormG.ReadParser[QB._field_parser(d, k) for k in fkeys]
+  out = Dict{Symbol,Any}[]
+  for row in result.rows
+    data = getfield(row, :data)
+    dict = Dict{Symbol,Any}()
+    for j in eachindex(fkeys)
+      dict[fkeys[j]] = _pg_parsed(data[j], parsers[j])
+    end
+    push!(out, dict)
+  end
+  return out
+end
+
+# How many rows a result holds (`exists()`, which `delete` probes with; #1599 layer 7, #1614). The generic count
+# was `length(Tables.rowtable(result))`, a row type decided at run time, which a trimmed image has no code for. One
+# row per `ResultRow`, as `Tables.rowtable` made; Postgres.jl has parsed the cells already, so nothing raises.
+(::PormG.QueryBuilder._RowCounter)(result::Postgres.Result)::Int = length(result.rows)
+
 
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 

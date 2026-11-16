@@ -81,6 +81,7 @@ import PormG.ConnectionPool: _finalize_with, _with_transaction_with, _with_tx_co
 # #344: "was this failure a cancellation?" — sees through the DatabaseError wrapper the pool applies,
 # which a bare `e isa InterruptException` test cannot (every driver error crosses `_as_database_error`).
 import PormG.ConnectionPool: _await_abandoned
+import PormG.ConnectionPool: PostgresConnectionPool   # #1614: `create`'s RETURNING decodes on PormG's own pool only
 # #951: one NUL predicate and one reason for the write path and the execution funnels alike.
 import PormG.ConnectionPool: _contains_nul, NUL_REFUSAL_REASON
 import PormG.Configuration: with_tx_context, ensure_transaction_scope, transaction_connection_for,

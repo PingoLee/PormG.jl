@@ -157,11 +157,11 @@ by running the workflow by hand on the branch, or by the next nightly run.
 `mysql/` builds the same app with MySQL.jl in place of SQLite, to measure the MySQL extension
 (`ext/PormGMySQLExt.jl`), which no SQLite build compiles. Its entry, `mysql/main.jl`, boots through
 `register_connection("f1", "mysql://…"; adapter = "MySQL")` (#1769), so no YAML is read, and then
-runs the typed read only, with no write. The server comes from environment variables (`tools/server.jl`),
-read at run time. With none of them set it is `127.0.0.1:1`, where nothing listens, so no database is
-needed: under the JIT the read raises `PoolConnectError`, and the binary stops wherever the trimmed
-read stops first. The write is left out for two reasons: it would fail at the same connect, and the
-binary's write stops at layer 7 before it reaches any driver code.
+runs the typed read, then the single-row write of `tools/writes.jl` (#1614): Monaco's id by a typed
+read, a create, the read back (2 rows), an update and a delete, each step the line the SQLite entry
+prints. The server comes from environment variables (`tools/server.jl`), read at run time. With none of
+them set it is `127.0.0.1:1`, where nothing listens, so no database is needed: under the JIT the read
+raises `PoolConnectError`, and the binary stops there too.
 
 The boot is in the entry, not in a package, because `juliac` builds a package from a copy of its own
 directory, where `../db/models.jl` is not found. From the repository root:
@@ -197,12 +197,12 @@ the repository root:
 
 ```
 julia --project=test/trim/mysql test/trim/mysql/prep.jl  # PormG's DDL, two circuits, one Monaco race
-julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, 1 row
+julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, the row, the write
 build-mysql/main
 ```
 
 Against a server the trimmed binary connects, binds the parameters, runs the statement and returns the
-row its JIT control prints (#1599):
+row its JIT control prints (#1599), then runs the write (#1614):
 
 ```
 step	main	entered
@@ -211,7 +211,18 @@ step	server	127.0.0.1:3306/pormg_trim
 step	boot	ok
 step	query	1 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	write	ok
+step	query	2 rows
+step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	row	2 2009 Monaco Grand Prix 2009-05-24
+step	update	1 rows; round 7
+step	delete	1 rows; 1 left
 ```
+
+The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables
+without resetting the server's sequence, and the JIT control's own write uses an id, so a binary run after the
+JIT control (as the CI jobs run it) or a later run prints higher ones; the write reads Monaco's id first for the
+same reason.
 
 The pool hands the result to the typed read at the type the extension registers
 (`backend_result_type`), and the read decodes it cell by cell over the cell types MySQL.jl delivers. With
@@ -222,7 +233,7 @@ no variables set it stops at the connect, as the JIT does.
 `postgres/` is the MySQL variant's app on PostgreSQL through Postgres.jl, to measure the Postgres.jl
 extension (`ext/PormGPostgresExt.jl`). Its entry, `postgres/main.jl`, boots through
 `register_connection("f1", "postgresql://…"; adapter = "PostgreSQL", postgres_driver = "Postgres")`
-and runs the typed read only. It reads the same `PORMG_TRIM_*` variables as the MySQL variant (the
+and runs the typed read and the same single-row write. It reads the same `PORMG_TRIM_*` variables as the MySQL variant (the
 table above), with the same port-1 default, where the read raises `PoolConnectError`. Its
 `postgres/prep.jl` seeds the same way and refuses the same databases. From the repository root:
 
@@ -240,7 +251,7 @@ Against a server, with the variables exported, from the repository root:
 
 ```
 julia --project=test/trim/postgres test/trim/postgres/prep.jl
-julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, 1 row
+julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, the row, the write
 build-postgres/main
 ```
 
@@ -267,7 +278,7 @@ path itself used to fail first: a cause walk's `hasproperty` or a lock check's `
 exception has no compiled code there, and the `MethodError` it raised replaced the server's error (#1599).
 `tools/failing.jl` runs `SELECT raceid FROM pormg_trim_missing`, against a table no fixture creates, and
 prints what the caller catches: the error's type, and for a `DatabaseError` its SQLSTATE, message and
-cause type. The server variants run it after their read and its timing, as the `fail` step (exit code 6
+cause type. The server variants run it after their read, their write and the timing, as the `fail` step (exit code 6
 unless it raises the server's error: a `DatabaseError` whose cause is not a `MethodError`); on SQLite it is an entry of its own, `fail.jl`, so the read-only binary the workflow
 checks is unchanged. Each binary prints what its JIT control prints:
 
@@ -305,7 +316,9 @@ Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` 
 `prep.jl`, runs the JIT control, builds the binary with the pinned Julia and JuliaC, and runs it under
 `timeout -k 10 300`. Before the MySQL run the job flushes the server's privileges, which empties
 `caching_sha2_password`'s cache: `prep.jl` and the JIT control logged in already, and without the flush the
-binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line, and its `fail` step prints
+binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line, prints the write's
+`write ok`, `query 2 rows`, `update 1 rows; round 7` and `delete 1 rows; 1 left` lines (the written row's id is
+not checked: the JIT control used one), and its `fail` step prints
 `threw StatementError` with the server's own SQLSTATE (`42S02` on MySQL, `42P01` on PostgreSQL), the
 server's message and a cause that is not a `MethodError`. The rows are reported as in the SQLite job, in
 the job summary and the `trim-mysql` and `trim-postgres` artifacts, never checked. The passwords in the

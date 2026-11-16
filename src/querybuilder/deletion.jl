@@ -1378,10 +1378,19 @@ function _models_to_lock(collector::DeletionCollector)::Vector{PormGModel}
   end
   parents = Set{PormGModel}()
   for child in emitters
-    union!(parents, get(collector.dependencies, child, Set{PormGModel}()))
+    # The model at its type (#1599 layer 7, #1614): `ModelType` is the only `PormGModel` (#1615), and the lookup on
+    # the abstract element of the set was a run-time dispatch, the Postgres.jl entry's `delete` stopped there.
+    union!(parents, get(collector.dependencies, child::Models.ModelType, Set{PormGModel}()))
   end
-  # `sorted_models` is children-first (`topological_sort`), so its reverse is the top-down order.
-  return [m for m in reverse(collector.sorted_models) if m in parents && haskey(collector.objects, m)]
+  # `sorted_models` is children-first (`topological_sort`), so its reverse is the top-down order. A loop with each
+  # model at its type (#1599 layer 7, #1614): the comprehension's filter closure was called on the abstract element,
+  # a call with no compiled target in a trimmed image. The same models in the same order.
+  out = PormGModel[]
+  for m in reverse(collector.sorted_models)
+    model = m::Models.ModelType
+    (model in parents && haskey(collector.objects, model)) && push!(out, model)
+  end
+  return out
 end
 
 function lock_objects(connection::Union{PormGPostgres, PormGMySQL}, model::PormGModel, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}},

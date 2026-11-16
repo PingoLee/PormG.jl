@@ -192,6 +192,10 @@ const _OKR_REVIEWED = Dict(
   ("src/ConnectionPool.jl", "isa") => 20,
   # `_is_live_pool`: the type check, then `!_is_offline_pool(pool)` (#1453).
   ("src/querybuilder/deletion.jl", "isa") => 3,
+  # `insert`'s RETURNING arm (#1614): PormG's own PostgreSQL pool decodes the row as it is read, any other
+  # (a test double) reads it as before. It decides how a result is read, not whether a statement runs: an
+  # offline pool takes the first arm, and its `fetch` is refused in `ensure_before_connect!` as it always was.
+  ("src/querybuilder/execution_write.jl", "isa") => 1,
   # `{:postgres}` (Postgres.jl). An offline pool is `{:libpq}`, so no method under it matches one.
   ("ext/PormGPostgresExt.jl", "_Pool") => 1,
   # MySQL. `register_offline` accepts `:postgres` and `:sqlite` only.
@@ -221,6 +225,8 @@ const _OKR_MENTIONS = Dict(
   "src/Kernel.jl" => 3,                  # the backend markers' docstring
   "src/Migrations.jl" => 1,              # the import behind `introspection.jl`'s scratch-pool constructor call
   "src/querybuilder/deletion.jl" => 3,   # `_is_live_pool` (reviewed)
+  "src/QueryBuilder.jl" => 1,            # the import behind `insert`'s RETURNING arm (#1614)
+  "src/querybuilder/execution_write.jl" => 1,   # `insert`'s RETURNING arm (#1614, reviewed)
   "ext/PormGMySQLExt.jl" => 1,           # `_Pool` (reviewed)
   "ext/PormGPostgresExt.jl" => 1,        # `_Pool` (reviewed)
   "ext/PormGSQLiteExt.jl" => 2,          # `backend_handle_type` (#1683), `backend_error_fields` (#1696), reviewed

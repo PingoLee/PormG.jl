@@ -271,6 +271,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "The Insert's Read-Back Decodes as It Reads (#1599)" include("unit/test_insert_read_back_decoder.jl")
     @testset "A Timestamp in PormG's Text Is Parsed at Concrete Types (#1599)" include("unit/test_timestamp_parser.jl")
     @testset "bulk_insert's Typed Walks Return What They Replace (#1599)" include("unit/test_bulk_insert_trim_1694.jl")
+    @testset "A Server Result Decodes as create Read It (#1599)" include("unit/test_server_write_trim_1614.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

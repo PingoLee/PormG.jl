@@ -124,6 +124,8 @@ end
 #   - (deletion.jl `delete` read it for its own transaction's context until #1599 layer 7, #1694: that call
 #     is `ConnectionPool._with_tx_context_on(settings, conn)` now, which reads the settings' pool itself);
 #   - deletion.jl `should_check_related_existence` (1): whether the settings' pool is live;
+#   - execution_write.jl `insert` (1): whether the pool its RETURNING `fetch` goes through is PormG's own
+#     PostgreSQL pool, which decodes the row as it is read, or a test double, which reads it as before (#1614);
 #   - types.jl `DeletionCollector` (1): the collector's `connection` slot, the settings' pool.
 #   A `getfield(…, :connections)` would bypass the dot form, so it is refused anywhere.
 # Why: `delete`'s reads take the settings' pool even when `connection =` overrides it, and
@@ -135,6 +137,7 @@ end
   reviewed = Dict(("build_helpers.jl", "get_settings") => 1,
                   ("build_helpers.jl", "_with_m2m_connection") => 2,
                   ("deletion.jl", "should_check_related_existence") => 1,
+                  ("execution_write.jl", "insert") => 1,
                   ("types.jl", "DeletionCollector") => 1)
   @test reads == reviewed
   reads == reviewed || @info ".connections reads (reviewed → now)" reviewed reads

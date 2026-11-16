@@ -818,6 +818,11 @@ function (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result)::Vect
   return out
 end
 
+# How many rows a result holds (`exists()`, which `delete` probes with; #1599 layer 7, #1614). The generic count
+# was `length(Tables.rowtable(result))`, a row type decided at run time, which a trimmed image has no code for. One
+# row per `ResultRow`, as `Tables.rowtable` made; Postgres.jl has parsed the cells already, so nothing raises.
+(::PormG.QueryBuilder._RowCounter)(result::Postgres.Result)::Int = length(result.rows)
+
 
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)
 

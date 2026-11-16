@@ -212,7 +212,7 @@ jobs:
             'step\twrite\tok'
             'step\tquery\t2 rows'
             'step\trow\t1 2008 Monaco Grand Prix 2008-05-25'
-            'step\trow\t2 2009 Monaco Grand Prix 2009-05-24'
+            'step\trow\t3 2009 Monaco Grand Prix 2009-05-24'
             'step\tupdate\t1 rows; round 7'
             'step\tdelete\t1 rows; 1 left'
             'step\tbulk\t2 rows; 2 read back'

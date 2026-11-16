@@ -115,6 +115,10 @@ end
 # the server variants (#1614), so every binary prints the same lines.
 include(joinpath(@__DIR__, "tools", "writes.jl"))
 
+# The read steps after the first typed read (`compare_step`, `order_step`) are in `tools/reads.jl`, shared with the
+# server variants, so every binary prints the same lines (#1599 layer 5).
+include(joinpath(@__DIR__, "tools", "reads.jl"))
+
 # `bulk_insert` (#1694), after the delete: two Monaco races from a `Vector` of `NamedTuple`s, the input a
 # trimmed program holds at a concrete type, leaving the three auto-filled fields to the write's own fill.
 # A typed read then sees both. Exit code 9 when the call raises, its count is not 2, or the read does not

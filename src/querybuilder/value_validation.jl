@@ -461,7 +461,9 @@ _written_text(f_meta, value) = nothing
 # parameter (stored as `{"a","b"}` text), and SQLite expands it into extra `?` placeholders.
 const _CollectionValue = Union{AbstractArray, Tuple, AbstractDict, NamedTuple}
 _single_value(value, ::AbstractString, ::AbstractString) = value
-function _single_value(value::_CollectionValue, field::AbstractString, op::AbstractString)
+# The collection method named and unspecialized (#1599 layer 7): `_refuse_collection` narrows an untyped cell to
+# `_CollectionValue`, a union of abstract types, which no specialized signature compiles for.
+function _single_value(@nospecialize(value::_CollectionValue), field::AbstractString, op::AbstractString)
   throw(InvalidValueError("The value is a $(typeof(value)): a column holds a single value, not a collection.",
                           :type; op = op, field = field))
 end
@@ -585,16 +587,21 @@ _write_formatter(f_meta, ::Nothing) = f_meta.formatter
 # `update` writes `x` (`update()` unwraps it before validating).
 const _SetExpression = Union{SQLTypeF,SQLTypeFunction,SQLTypeJoined,SQLTypeCTE,SubqueryObject}
 
-_expression_noun(::Union{SQLTypeF,SQLTypeFunction}) = "an F expression or a SQL function"
-_expression_noun(::SQLTypeJoined) = "a joined column"
-_expression_noun(::SQLTypeCTE) = "a CTE column"
-_expression_noun(::SubqueryObject) = "a subquery"
+# Named and unspecialized (#1599 layer 7): the bulk error pass hands an untyped cell, which `_refuse_expression_value`
+# narrows to the abstract families below; a method specialized on one of them is no compileable signature, so the call
+# dispatched at run time, with no compiled target in a trimmed image.
+_expression_noun(@nospecialize(x::Union{SQLTypeF,SQLTypeFunction})) = "an F expression or a SQL function"
+_expression_noun(@nospecialize(x::SQLTypeJoined)) = "a joined column"
+_expression_noun(@nospecialize(x::SQLTypeCTE)) = "a CTE column"
+_expression_noun(@nospecialize(x::SubqueryObject)) = "a subquery"
 
 # #1283 — the refusal of an SQL expression where a value is written: every writer but `update`, which
 # writes one into its SET clause as SQL. One text for `_validate_field_value` (step 4) and the bulk
 # writers' depuration pass, which runs the bare formatter first and would otherwise report its
-# `MethodError` instead. Names the expression's type, never the expression.
-function _refuse_expression_value(model::PormGModel, field::AbstractString, value, operation::AbstractString)
+# `MethodError` instead. Names the expression's type, never the expression. `value` unspecialized (#1599 layer 7,
+# #1694): the bulk error pass hands an untyped cell, and the call specialized on it had no compiled target in a
+# trimmed image (a failing row raised `MethodError(_refuse_expression_value, …)` in place of its refusal).
+function _refuse_expression_value(model::PormGModel, field::AbstractString, @nospecialize(value), operation::AbstractString)
   value isa _SetExpression || return nothing
   expr_type = nameof(typeof(value))
   _validation_error(String(operation), model, String(field),
@@ -605,7 +612,8 @@ end
 
 # The raw-value half on its own, for a caller that runs the bare formatter to find the failing cell
 # (the bulk writers' `_depuration_values_bulk_insert`), so it raises this refusal rather than its own.
-function _refuse_collection(f_meta, field::AbstractString, value, op::AbstractString)
+# `value` unspecialized, as `_refuse_expression_value`'s is (#1599 layer 7): the bulk error pass hands an untyped cell.
+function _refuse_collection(f_meta, field::AbstractString, @nospecialize(value), op::AbstractString)
   value isa _CollectionValue && !_takes_collection(f_meta) && _single_value(value, field, op)
   return nothing
 end

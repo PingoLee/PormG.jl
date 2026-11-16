@@ -5705,6 +5705,15 @@ end
     QB = PormG.QueryBuilder
     @test occursin("_depuration_format_at(model.fields[field].formatter, value)", body) && !occursin(".formatter(value)", body)
     @test _dynamic_calls(QB._depuration_format_at, (Any, Any)) == String[]
+    # The refusals it raises take the cell unspecialized (wall 3), and the whole pass, its keyword body included,
+    # makes no dynamic call: the collection check and the expression check included.
+    @test (only(methods(QB._refuse_expression_value)).nospecialize, only(methods(QB._refuse_collection)).nospecialize) == (4, 4)
+    for m in methods(QB._expression_noun)
+      @test (m.sig, m.nospecialize) == (m.sig, 1)
+    end
+    @test _dynamic_calls_deep(QB._refuse_expression_value, (PormG.Models.ModelType, String, Any, String); depth = 2) == String[]
+    @test _dynamic_calls_kw(QB._depuration_values_bulk_insert,
+                            (Vector{String}, Dict{String,String}, PormG.Models.ModelType, QB._BulkFrame, Int)) == String[]
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

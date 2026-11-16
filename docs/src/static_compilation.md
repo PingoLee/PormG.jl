@@ -2,8 +2,9 @@
 
 !!! warning "Experimental"
     Building a PormG application into a standalone executable with `juliac --trim` is **experimental**.
-    One kind of read is known to work, on three drivers. Writes do not work yet, and what this page
-    describes may change between releases without an upgrade note. Work in progress is tracked in
+    One kind of read is known to work, on three drivers, and the single-row write on SQLite. Other
+    writes have not run in a trimmed binary yet, and what this page describes may change between
+    releases without an upgrade note. Work in progress is tracked in
     [#1599](https://github.com/PingoLee/PormG.jl/issues/1599) (the trimmed application) and
     [#1614](https://github.com/PingoLee/PormG.jl/issues/1614) (the drivers).
 
@@ -27,6 +28,15 @@ else is untested in a trimmed binary, even where it compiles.
   The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
   nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)
   are built to run trimmed, but no trimmed binary has run them yet.
+- **The single-row write on SQLite**, through SQLite.jl (#1694):
+  - `create` with name–value pairs (`M.Race.objects.create("year" => 2009, …)`), including the fields
+    the write fills itself: a `DateTimeField(auto_now_add = true)`, a `DateField(auto_now = true)` and a
+    `UUIDField(auto_add = true)`. The timestamp is written in PormG's own text and read back from it;
+  - `update` of the rows a filter matches (`filter(…).update("round" => 7)`), which returns the row count;
+  - `delete` of the rows a filter matches (`filter(…).delete()`), which returns the count and the rows
+    per table. The delete that has run removes rows nothing else references: no cascade, no `SET NULL`;
+  - the refusals PormG raises before any SQL: an `InvalidValueError` for a date string that is not a
+    calendar date, and for a `Bool` given to a text column.
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
   with the server's SQLSTATE (MySQL and PostgreSQL; SQLite has none), its message, and the driver's
   error as the cause ([Error Handling](errors.md)). `IntegrityError` and `OperationalError` take the
@@ -35,14 +45,26 @@ else is untested in a trimmed binary, even where it compiles.
   statement is still running on.
 
 PormG checks these with a fixture application, `test/trim/` in the repository. Its `Trim (juliac)`
-workflow builds and runs it every night: the SQLite read and the pool's tasks, and the MySQL and
-Postgres.jl reads and refused statements, against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite
-refused statement is checked by hand.
+workflow builds and runs it every night: the SQLite read and the pool's tasks, the SQLite write
+(refusals, create, read, update, delete), and the MySQL and Postgres.jl reads and refused statements,
+against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is checked by hand.
 
 ## What does not work yet
 
-- **Writes.** `create`, `update`, `delete`, `bulk_insert` and the other write terminals do not complete
-  in a trimmed binary yet (#1694). Use the JIT for writes, or a separate process.
+- **Writes beyond the single-row write on SQLite** (#1694) have not run in a trimmed binary. Use the
+  JIT for them, or a separate process:
+  - any write on MySQL or through Postgres.jl;
+  - `bulk_insert`, `bulk_update`, `bulk_copy` and the other bulk writers;
+  - a delete that cascades or sets a foreign key to NULL;
+  - the other write terminals (`get_or_create`, `update_or_create`, an upsert, deleting one row
+    through `delete(row)`).
+- **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
+  by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three
+  digits: PormG's own text, `2009-05-24T14:00:00.000+00:00`, is that shape, and it has run trimmed on
+  SQLite. Text with no offset goes through Dates' `DateTime` parser instead; on SQLite's read path,
+  text with any other offset spelling (`+hhmm`, a zone name) goes through TimeZones.jl's parser, which
+  a trimmed binary cannot run. Neither has run trimmed, and neither has a non-UTC offset, though the
+  hand parser reads it.
 - **LibPQ.** A binary built with LibPQ aborts before `main` runs, with
   `InitError(:Infinity, MethodError(...))`. LibPQ depends on Infinity.jl, whose `__init__` uses
   Requires' `@require`, which a trimmed binary cannot run. The cause is upstream. Use Postgres.jl

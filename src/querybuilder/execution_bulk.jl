@@ -1910,8 +1910,10 @@ function bulk_insert(objct::SQLObjectHandler, src;
 end
 
 # `bulk_insert` after its frame (#1599 layer 7): the body it had, unchanged. `src` is read only to build an
-# empty or a `returning=` result of the caller's kind, so it stays unspecialized.
-function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection, @nospecialize(src),
+# empty or a `returning=` result of the caller's kind, so it stays unspecialized, and `@nospecializeinfer` keeps
+# inference from specializing on it too: `@nospecialize` alone only shares the native code, so each new table
+# type re-inferred this whole body once per pool type, about 4 s on a first `bulk_insert` call (measured).
+Base.@nospecializeinfer function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection, @nospecialize(src),
                             df::_BulkFrame, _returning, columns, chunk_size::Integer, show_query::Symbol,
                             on_conflict)
     # If no rows then nothing to do

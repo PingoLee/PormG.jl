@@ -89,10 +89,12 @@ _insert_returns_rows(@nospecialize(conn::PormGMySQL)) = false   # MySQL has no `
 # INSERT's OK packet reports (`backend_last_insert_id`), which is the generated id or the one the
 # caller supplied; any other by the value the INSERT bound. Not `LAST_INSERT_ID()`: it changes only
 # when the server generates the value, so after a supplied id it names an older row (measured, #1266).
-_inserted_row_query(::PormGPostgres, model, insert, result, table) = nothing
-_inserted_row_query(conn::PormGSQLite, model, insert, result, table) =
+# `result` is the INSERT's own result, which the pool hands back untyped: unspecialized (#1599 layer 7, #1614), so
+# the call is one compiled method in a trimmed image (the MySQL entry's create stopped at it).
+_inserted_row_query(::PormGPostgres, model, insert, @nospecialize(result), table) = nothing
+_inserted_row_query(conn::PormGSQLite, model, insert, @nospecialize(result), table) =
   ("SELECT $(_returned_columns(model, conn, table)) FROM $(table) WHERE rowid = last_insert_rowid();", nothing)
-function _inserted_row_query(conn::PormGMySQL, model, insert, result, table)
+function _inserted_row_query(conn::PormGMySQL, model, insert, @nospecialize(result), table)
   pk = get_model_pk_field(model)
   pk === nothing && return nothing
   name = String(pk)

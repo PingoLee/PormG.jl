@@ -5624,6 +5624,28 @@ end
     end
   end
 
+  # What: the projected-path walk over an ORDER BY term (`_collect_projected_paths!` on an `SQLOrder`), which
+  #   MySQL's ordering reads for its NULL sort key (`_from_column_names`).
+  # Expected: no dynamic call, and no call into the field-part walk's open arm (`_with_field_part_other`): the
+  #   term's slot, an `SQLField`, is walked at its type.
+  # Why: the term went through `_with_field_part_open`, which has no arm for an `SQLField`, so it reached the open
+  #   arm, whose dynamic call had no compiled target: the trimmed MySQL `order_by` raised `MissingCodeError` on
+  #   `_collect_part_paths!(::SQLField, …)` (#1599 layer 5). The open arm's call is behind an `invoke`, so a
+  #   one-level scan alone passes on the old code; the pin reads the invoked methods too.
+  @testset "an order_by term's paths are walked at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    tt = (Vector{String}, QB.SQLOrder, Int)
+    @test _dynamic_calls(QB._collect_projected_paths!, tt) == String[]
+    ci, _ = only(code_typed(QB._collect_projected_paths!, tt; optimize = true))
+    invoked = Symbol[]
+    for st in ci.code
+      (st isa Expr && st.head === :invoke) || continue
+      mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      mi isa Core.MethodInstance && mi.def isa Method && push!(invoked, mi.def.name)
+    end
+    @test !(:_with_field_part_other in invoked) && !(:_with_field_part_open in invoked)
+  end
+
   # What: an ORDER BY term's render call (`_order_term_at`, which `_render_order_terms` calls for every term).
   # Expected: both calls from `_render_order_terms` (with and without a NULL flag) and the helper's calls of
   #   `_order_term_sql` resolve statically; the helper takes the term, the connection and the flag

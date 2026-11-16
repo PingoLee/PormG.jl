@@ -467,7 +467,12 @@ function _collect_projected_paths!(out::Vector{String}, x, depth::Int)
     occursin("__", x) && push!(out, String(x))
   elseif x isa Pair
     _collect_projected_paths!(out, x.second, depth + 1)
-  elseif x isa Union{SQLField,SQLOrder}
+  elseif x isa SQLOrder
+    # #1599 layer 5: an ORDER BY term's slot is an `SQLField`, which `_with_field_part_open` has no arm for, so
+    # it took the open arm's dynamic call, with no compiled target in a trimmed image (a MySQL `order_by`
+    # stopped here, reading the projected paths for its NULL sort key). The same call, at the slot's type.
+    _collect_part_paths!(x.field, out, depth + 1)
+  elseif x isa SQLField
     _with_field_part_open(_collect_part_paths!, x.field, out, depth + 1)   # #1599: at the member's type
   elseif x isa WindowFunction
     _collect_projected_paths!(out, x.column, depth + 1)

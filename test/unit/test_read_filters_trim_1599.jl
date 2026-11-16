@@ -196,6 +196,71 @@ end
   end
 end
 
+# The old projected-path walk, verbatim (#1002), as the oracle for the ORDER BY term's own branch.
+function _old_collect_projected_paths!(out::Vector{String}, x, depth::Int)
+  QB = _RFT_QB
+  depth > 32 && return nothing
+  if x isa AbstractString
+    occursin("__", x) && push!(out, String(x))
+  elseif x isa Pair
+    _old_collect_projected_paths!(out, x.second, depth + 1)
+  elseif x isa Union{QB.SQLField,QB.SQLOrder}
+    QB._with_field_part_open((part, o, d) -> _old_collect_projected_paths!(o, part, d), x.field, out, depth + 1)
+  elseif x isa QB.WindowFunction
+    _old_collect_projected_paths!(out, x.column, depth + 1)
+    _old_collect_projected_paths!(out, x.over.partition_by, depth + 1)
+    _old_collect_projected_paths!(out, x.over.order_by, depth + 1)
+  elseif x isa QB.OperObject
+    _old_collect_projected_paths!(out, QB._oper_column(x), depth + 1)
+    rhs = QB._oper_value_node(x)
+    rhs isa Union{QB.FExpression,QB.FObject,QB.SubqueryObject,QB.ObjectHandler} && _old_collect_projected_paths!(out, rhs, depth + 1)
+  elseif x isa Union{QB.QObject,QB.QorObject}
+    _old_collect_projected_paths!(out, QB._q_nodes(x), depth + 1)
+  elseif x isa QB.FObject
+    _old_collect_projected_paths!(out, x.column, depth + 1)
+    for v in values(x.kwargs)
+      v isa Union{PormG.Kernel.SQLTypeFunction,QB.FExpression} && _old_collect_projected_paths!(out, v, depth + 1)
+    end
+  elseif x isa QB.FExpression
+    _old_collect_projected_paths!(out, x.field_name, depth + 1)
+    _old_collect_projected_paths!(out, x.column, depth + 1)
+    _old_collect_projected_paths!(out, x.operand, depth + 1)
+  elseif x isa AbstractVector && !(x isa AbstractVector{UInt8})
+    for v in x; _old_collect_projected_paths!(out, v, depth + 1); end
+  end
+  return nothing
+end
+
+# What: the paths an `order_by` names (`_projected_paths` over the query's ORDER BY terms), which MySQL and an old
+#   SQLite read for their NULL sort key, against the old walk.
+# Expected: the same paths, in the same order, for plain, descending, related, transformed, expression and
+#   function terms, and for nested projections.
+# Why: an `SQLOrder` term now takes its own branch (its slot is an `SQLField`, which the field-part walk has no
+#   arm for); the recursion and its depth must be the old one.
+@testset "the paths an order_by names are the ones it named (#1599 layer 5)" begin
+  QB = _RFT_QB
+  queries = Any[
+    () -> _RFT_RACE.objects.order_by("date"), () -> _RFT_RACE.objects.order_by("-date", "year"),
+    () -> _RFT_RACE.objects.order_by("meta__round"), () -> _RFT_RACE.objects.order_by("-date__@year"),
+    () -> _RFT_RACE.objects.order_by(F("year") + 1), () -> _RFT_RACE.objects.order_by(Max("date")),
+    () -> (q = _RFT_RACE.objects; q.values("y" => F("year") * 2, "d__x" => "date"); q.order_by("-y", "date"); q),
+  ]
+  for (i, mk) in enumerate(queries)
+    q = try mk() catch e; (:raised, typeof(e)) end
+    q isa Tuple && (@test (i, q) == (i, q); continue)
+    terms = QB._order_terms(q.object)
+    new = String[]; old = String[]
+    QB._collect_projected_paths!(new, terms, 0)
+    _old_collect_projected_paths!(old, terms, 0)
+    @test (i, new) == (i, old)
+    for t in terms
+      n2 = String[]; o2 = String[]
+      QB._collect_projected_paths!(n2, t, 31); _old_collect_projected_paths!(o2, t, 31)   # the depth cut-off
+      @test (i, n2) == (i, o2)
+    end
+  end
+end
+
 # What: the two refusals the check raises, new builders against old, on the two engines that refuse.
 # Expected: the same error type and the same text, for every temporal kind, operator and label.
 # Why: the builders now take the kind unspecialized and read the timestamp remedy in the refusal, at the

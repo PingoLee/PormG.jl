@@ -133,7 +133,7 @@ function (@main)(args::Vector{String})::Cint
     update_step() || return Cint(7)
     delete_step() || return Cint(8)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
-    # A statement the server refuses reaches the caller as its own error, after the read's timing (#1599, ../tools/failing.jl).
+    # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
     fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.PostgresConnectionPool{:postgres}) || return Cint(6)
     return Cint(0)
 end

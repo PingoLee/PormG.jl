@@ -197,7 +197,7 @@ the repository root:
 
 ```
 julia --project=test/trim/mysql test/trim/mysql/prep.jl  # PormG's DDL, two circuits, one Monaco race
-julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, 1 row
+julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, the row, the write
 build-mysql/main
 ```
 
@@ -219,8 +219,10 @@ step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 ```
 
-The ids are a fresh database's: `prep.jl` empties the tables without resetting the server's sequence, so a
-later run prints higher ones (and the write reads Monaco's id first for the same reason).
+The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables
+without resetting the server's sequence, and the JIT control's own write uses an id, so a binary run after the
+JIT control (as the CI jobs run it) or a later run prints higher ones; the write reads Monaco's id first for the
+same reason.
 
 The pool hands the result to the typed read at the type the extension registers
 (`backend_result_type`), and the read decodes it cell by cell over the cell types MySQL.jl delivers. With
@@ -249,7 +251,7 @@ Against a server, with the variables exported, from the repository root:
 
 ```
 julia --project=test/trim/postgres test/trim/postgres/prep.jl
-julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, 1 row
+julia --project=test/trim/postgres test/trim/postgres/main.jl  # boot ok, the row, the write
 build-postgres/main
 ```
 
@@ -276,7 +278,7 @@ path itself used to fail first: a cause walk's `hasproperty` or a lock check's `
 exception has no compiled code there, and the `MethodError` it raised replaced the server's error (#1599).
 `tools/failing.jl` runs `SELECT raceid FROM pormg_trim_missing`, against a table no fixture creates, and
 prints what the caller catches: the error's type, and for a `DatabaseError` its SQLSTATE, message and
-cause type. The server variants run it after their read and its timing, as the `fail` step (exit code 6
+cause type. The server variants run it after their read, their write and the timing, as the `fail` step (exit code 6
 unless it raises the server's error: a `DatabaseError` whose cause is not a `MethodError`); on SQLite it is an entry of its own, `fail.jl`, so the read-only binary the workflow
 checks is unchanged. Each binary prints what its JIT control prints:
 

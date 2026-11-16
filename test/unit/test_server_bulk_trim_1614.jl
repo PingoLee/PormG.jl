@@ -81,3 +81,27 @@ end
   @test PormG._unowned_field(e, :cause) === nothing && !hasproperty(e, :cause)
   @test Core.MissingCodeError in PormG._KNOWN_EXCEPTIONS
 end
+
+# What: PostgreSQL's bulk column arrays: each formatted cell through `_pg_array_element_at` against `_pg_array_element`,
+#   over the types a field formatter returns and ones that take the open arm, and the loop that fills the columns
+#   against the `foreach` it replaces, columns of equal and unequal length.
+# Expected: the same element at the same type, and the same columns, in the same order.
+# Why: the `foreach` closure was called with each cell's run-time type, which a trimmed image had no instance for, so a
+#   trimmed Postgres.jl `bulk_insert` raised `MethodError` on it; the array PostgreSQL binds must not change.
+@testset "PostgreSQL's bulk column arrays are filled as before (#1599 layer 7, #1614)" begin
+  cells = Any["Monaco", 2010, missing, nothing, true, SubString("Monaco GP", 1, 6), Int32(6), 2.5,
+              PormG.PormGBytes(UInt8[0x01, 0x02]), PormG.PormGArrayLiteral("{1,2}"),
+              PormG.Models.Decimals.Decimal(0, 150, -2), Date(2010, 5, 16), :sym, Int16(3)]
+  for c in cells
+    new = _SBT_QB._pg_array_element_at(c)
+    old = _SBT_QB._pg_array_element(c)
+    @test (typeof(c), typeof(new), isequal(new, old)) == (typeof(c), typeof(old), true)
+  end
+  for (ncols, ncells) in ((3, 3), (3, 2), (2, 3))
+    row = cells[1:ncells]
+    old_cols = [Any[] for _ in 1:ncols]; new_cols = [Any[] for _ in 1:ncols]
+    foreach((column, cell) -> push!(column, _SBT_QB._pg_array_element(cell)), old_cols, row)
+    for j in 1:min(length(new_cols), length(row)); push!(new_cols[j], _SBT_QB._pg_array_element_at(row[j])); end
+    @test isequal(new_cols, old_cols)
+  end
+end

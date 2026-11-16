@@ -5738,6 +5738,11 @@ end
     @test _dynamic_calls(QB._bulk_result_at, (Any, Nothing)) == String[]
     src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
     @test !occursin("_bulk_result(_bulk_count_total(results)", src) && occursin("_bulk_result_at(_bulk_count_total(results), nothing)", src)
+    # PostgreSQL's column arrays (wall 2 on Postgres.jl): filled by a loop through `_pg_array_element_at`, never by a
+    # `foreach` closure called with each cell's run-time type; the walk makes no dynamic call.
+    @test !occursin("foreach((column, cell) -> push!(column, _pg_array_element(cell))", src)
+    @test occursin("push!(chunk_columns[j], _pg_array_element_at(cells[j]))", src)
+    @test _dynamic_calls(QB._pg_array_element_at, (Any,)) == String[]
   end
 
   # What: the Postgres.jl extension's read of a timestamp's milliseconds (`_ms`), under every `timestamp`/`timestamptz`

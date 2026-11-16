@@ -146,3 +146,34 @@ end
     end
   end
 end
+
+# What: the type text and name the two refusals print (`_type_text`, `_type_name`), against interpolating the type and
+#   `nameof`, over the collection and expression types a cell can hold and types that take the open arm; and the two
+#   refusals' messages against the text they built before (#716's `_single_value`, #1283's `_refuse_expression_value`).
+# Expected: the same text, character for character.
+# Why: both now read the cell's type through a barrier, so the call is static in a trimmed image; the message is what a
+#   caller reads, and the equivalence above calls these same helpers on both sides, so it cannot see a change here.
+@testset "the bulk refusals print the value's type as they did (#1599 layer 7, #1694)" begin
+  F = _BRT_QB.F
+  values = Any[[1, 2], ["A", "B"], [Date(2009, 5, 24)], (1, "a"), Dict("r" => 1), (a = 1, b = "x"), Set([1]), 1:3,
+               view([1, 2, 3], 2:3), F("raceid") + 1, _BRT_QB.Max("raceid"), _BRT_QB.OuterRef("raceid")]
+  for v in values
+    @test (typeof(v), _BRT_QB._type_text(typeof(v))) == (typeof(v), "$(typeof(v))")
+    @test (typeof(v), _BRT_QB._type_name(typeof(v))) == (typeof(v), nameof(typeof(v)))
+  end
+  for T in (Vector, AbstractVector{<:Integer}, Union{Int, String})   # open arm: not a `DataType`
+    @test _BRT_QB._type_text(T) == string(T)
+  end
+  @test _BRT_QB._type_name(Vector) == nameof(Vector)
+  for v in values[1:9]
+    v isa _BRT_QB._CollectionValue || continue   # a `Set` is not one: `_single_value` returns it
+    err = try _BRT_QB._single_value(v, "date", "bulk_insert"); nothing catch e; e end
+    @test (typeof(v), err isa PormG.InvalidValueError ? err.reason : err) ==
+          (typeof(v), "The value is a $(typeof(v)): a column holds a single value, not a collection.")
+  end
+  for v in values[10:12]
+    err = try _BRT_QB._refuse_expression_value(_BRT_RACE, "year", v, "bulk_insert"); nothing catch e; e end
+    @test err isa PormG.InvalidValueError
+    @test occursin("($(nameof(typeof(v)))) is not a value", err.msg)
+  end
+end

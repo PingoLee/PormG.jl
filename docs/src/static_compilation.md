@@ -73,6 +73,10 @@ against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is 
   them, or a separate process:
   - `bulk_insert` on MySQL or through Postgres.jl;
   - `bulk_update`, `bulk_copy` and the other bulk writers, and `bulk_insert` beyond the input above;
+  - a `bulk_insert` row refused for any reason other than the one that has run (below): a collection
+    in a column, an SQL expression for a value, a formatter that raises something other than an
+    `InvalidValueError`, or a value PormG fills itself. The pass that names the cell is built to run
+    trimmed in each case, but no trimmed binary has refused one;
   - a delete that cascades or sets a foreign key to NULL;
   - the other write terminals (`get_or_create`, `update_or_create`, an upsert, deleting one row
     through `delete(row)`).

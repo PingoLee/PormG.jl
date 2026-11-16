@@ -5705,13 +5705,22 @@ end
     QB = PormG.QueryBuilder
     @test occursin("_depuration_format_at(model.fields[field].formatter, value)", body) && !occursin(".formatter(value)", body)
     @test _dynamic_calls(QB._depuration_format_at, (Any, Any)) == String[]
-    # The refusals it raises take the cell unspecialized (wall 3), and the whole pass, its keyword body included,
-    # makes no dynamic call: the collection check and the expression check included.
+    # The refusals it raises take the cell unspecialized (wall 3). The pass's keyword body makes no dynamic call, and
+    # neither do the two checks it hands a failing cell to, followed down: the expression refusal (its type name and
+    # message included) and the collection refusal (into `_single_value`'s collection method).
     @test (only(methods(QB._refuse_expression_value)).nospecialize, only(methods(QB._refuse_collection)).nospecialize) == (4, 4)
     for m in methods(QB._expression_noun)
       @test (m.sig, m.nospecialize) == (m.sig, 1)
     end
-    @test _dynamic_calls_deep(QB._refuse_expression_value, (PormG.Models.ModelType, String, Any, String); depth = 2) == String[]
+    # The type's name and text go through `_type_name`/`_type_text` (their open arms, for a `Type` that is not a
+    # `DataType`, are the dynamic calls they replace, and are skipped); Base's printing inside `string` is not claimed.
+    open_arms = (QB._type_name_other, QB._type_text_other)
+    @test _dynamic_calls_deep(QB._refuse_expression_value, (PormG.Models.ModelType, String, Any, String);
+                              depth = 2, skip = open_arms) == String[]
+    for F in (PormG.Models.sDateField, PormG.Models.sCharField, PormG.Models.sJSONField)
+      @test (F, _dynamic_calls_deep(QB._refuse_collection, (F, String, Any, String); depth = 2, skip = open_arms)) == (F, String[])
+    end
+    @test (_dynamic_calls(QB._type_name, (Any,)), _dynamic_calls(QB._type_text, (Any,))) == (String[], String[])
     @test _dynamic_calls_kw(QB._depuration_values_bulk_insert,
                             (Vector{String}, Dict{String,String}, PormG.Models.ModelType, QB._BulkFrame, Int)) == String[]
   end

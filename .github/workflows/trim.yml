@@ -176,7 +176,7 @@ jobs:
   # test/trim/main.jl: boot, two creates PormG refuses before any SQL, the read steps (TRIM_READ_LINES), a create that leaves three fields to
   # the write's own fill (a DateTimeField among them), the typed read of both rows, an update and a delete,
   # each checked by a typed read, then a bulk_insert of two rows that the typed read sees, and one whose second row
-# validation refuses (its refusal's text, and no row written). The job fails
+  # validation refuses (its refusal's text, and no row written). The job fails
   # unless the binary exits 0 and prints each of those lines.
 
   full-write:

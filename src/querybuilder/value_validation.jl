@@ -461,10 +461,20 @@ _written_text(f_meta, value) = nothing
 # parameter (stored as `{"a","b"}` text), and SQLite expands it into extra `?` placeholders.
 const _CollectionValue = Union{AbstractArray, Tuple, AbstractDict, NamedTuple}
 _single_value(value, ::AbstractString, ::AbstractString) = value
+# A type's text and name through a static call (#1599 layer 7). `typeof` of a value narrowed to a union of abstract
+# types is inferred as a union of `Type{<:…}`, which `string` and `nameof` dispatch on at run time, with no compiled
+# target in a trimmed image. A value's type is always a `DataType`, so each is called at that type; the open arm keeps
+# any other `Type` as before. The text is what interpolating the type printed. What Base's printing of a parametric
+# type does inside `string` is Base's, not claimed here.
+@noinline _type_text(@nospecialize(T))::String = T isa DataType ? string(T) : _type_text_other(T)
+@noinline _type_text_other(@nospecialize(T))::String = string(T)
+@noinline _type_name(@nospecialize(T))::Symbol = T isa DataType ? nameof(T) : _type_name_other(T)
+@noinline _type_name_other(@nospecialize(T))::Symbol = nameof(T)
+
 # The collection method named and unspecialized (#1599 layer 7): `_refuse_collection` narrows an untyped cell to
 # `_CollectionValue`, a union of abstract types, which no specialized signature compiles for.
 function _single_value(@nospecialize(value::_CollectionValue), field::AbstractString, op::AbstractString)
-  throw(InvalidValueError("The value is a $(typeof(value)): a column holds a single value, not a collection.",
+  throw(InvalidValueError("The value is a $(_type_text(typeof(value))): a column holds a single value, not a collection.",
                           :type; op = op, field = field))
 end
 
@@ -603,7 +613,7 @@ _expression_noun(@nospecialize(x::SubqueryObject)) = "a subquery"
 # trimmed image (a failing row raised `MethodError(_refuse_expression_value, …)` in place of its refusal).
 function _refuse_expression_value(model::PormGModel, field::AbstractString, @nospecialize(value), operation::AbstractString)
   value isa _SetExpression || return nothing
-  expr_type = nameof(typeof(value))
+  expr_type = _type_name(typeof(value))
   _validation_error(String(operation), model, String(field),
     "$(_expression_noun(value)) ($(expr_type)) is not a value: `update` writes one into the column as SQL, and $(operation) takes values only";
     suggestion = "write the value itself, or write the row and then set the column with filter(…).update(\"$(field)\" => expression)",

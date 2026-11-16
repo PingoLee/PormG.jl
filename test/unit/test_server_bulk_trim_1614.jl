@@ -26,6 +26,37 @@ const _SBT_QB = PormG.QueryBuilder
 
 _sbt_old_ms(fraction) = fraction === nothing ? 0 : parse(Int, rpad(fraction, 3, '0')[1:3])
 
+# What: the Postgres.jl extension's millisecond read against the old `rpad` form, over every fraction of 1 to 3 digits,
+#   a sample of 4 to 6 digits, each as a `SubString` of a timestamp (what the pattern's capture is) and as a `String`, and
+#   `nothing`; then the two timestamp parsers over values whose fraction PostgreSQL printed without its trailing zeros.
+# Expected: the same `Int` for every fraction, and the same `DateTime`/`ZonedDateTime` for every value.
+# Why: `rpad` had no compiled target in a trimmed image when it had to pad, and PostgreSQL drops a fraction's trailing
+#   zeros, so a trimmed Postgres.jl `create` whose timestamp's milliseconds ended in 0 failed; the new read must give the
+#   same milliseconds for every fraction.
+@testset "the Postgres.jl millisecond read gives the old value for every fraction (#1599 layer 2, #1614)" begin
+  fractions = String[]
+  for n in 1:3, k in 0:(10^n - 1)
+    push!(fractions, lpad(string(k), n, '0'))
+  end
+  append!(fractions, ["1234", "0005", "99999", "000001", "123456", "500000", "100000", "999999"])
+  for f in fractions
+    sub = SubString("2009-05-24 14:00:00.$(f)+00", 21, 20 + ncodeunits(f))
+    @test sub == f
+    @test (f, _SBT_PGX._ms(sub), _SBT_PGX._ms(f)) == (f, _sbt_old_ms(sub), _sbt_old_ms(f))
+    @test _SBT_PGX._ms(sub) isa Int
+  end
+  @test _SBT_PGX._ms(nothing) === 0 === _sbt_old_ms(nothing)
+  for s in ("2009-05-24 14:00:00.12+00", "2009-05-24 14:00:00.5+00", "2009-05-24 14:00:00.1+05:30", "2009-05-24 14:00:00.07-03",
+            "2009-05-24 14:00:00.123456+02:30:15", "2009-05-24 14:00:00+00", "infinity", "-infinity")
+    zoned = _SBT_PGX._pg_timestamptz(s)
+    @test zoned isa PormG.Models.ZonedDateTime
+  end
+  @test _SBT_PGX._pg_timestamptz("2009-05-24 14:00:00.12+00") ==
+        PormG.Models.ZonedDateTime(DateTime(2009, 5, 24, 14, 0, 0, 120), PormG.Models.TimeZone("UTC"))
+  @test _SBT_PGX._pg_timestamp("2009-05-24 14:00:00.5") == DateTime(2009, 5, 24, 14, 0, 0, 500)
+  @test _SBT_PGX._pg_timestamp("2009-05-24 14:00:00.000001") == DateTime(2009, 5, 24, 14, 0, 0, 0)
+end
+
 # What: the bulk writers' total through `_bulk_result_at` against `_bulk_result`, over the count types a total can be
 #   (`Int`, and the open arm's `Int32`, `Int8`, `BigInt`) and a result's `rows` (`nothing`, a table).
 # Expected: the same value, and for the same arguments the same concrete type.

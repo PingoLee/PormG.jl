@@ -5740,6 +5740,22 @@ end
     @test !occursin("_bulk_result(_bulk_count_total(results)", src) && occursin("_bulk_result_at(_bulk_count_total(results), nothing)", src)
   end
 
+  # What: the Postgres.jl extension's read of a timestamp's milliseconds (`_ms`), under every `timestamp`/`timestamptz`
+  #   value a Postgres.jl result returns, the `RETURNING` row of a `create` included.
+  # Expected: no `rpad` in it (a source pin: under the JIT the call inside `rpad` resolves, so a reflection pin passes on
+  #   the old body too), and no dynamic call in its own body.
+  # Why: `rpad` pads with a `Char` its signature types abstractly, and its `repeat` call had no compiled target in a
+  #   trimmed image. PostgreSQL drops a fraction's trailing zeros, so a timestamp whose milliseconds ended in 0 needed the
+  #   pad: the trimmed Postgres.jl `create` failed on about one write in ten, and `bulk_insert`'s step on the next
+  #   (#1599 layer 2, #1614).
+  @testset "the Postgres.jl timestamp read pads its milliseconds without rpad (#1599 layer 2, #1614)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    src = read(joinpath(pkgdir(PormG), "ext", "PormGPostgresExt.jl"), String)
+    body = src[findfirst("function _ms(fraction)", src).start:findfirst("_datetime(m) =", src).start]
+    @test !occursin("rpad(", body) && occursin("10^(3 - k)", body)
+    @test _dynamic_calls(pgx._ms, (SubString{String},)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -624,7 +624,16 @@ end
 const _TIMESTAMP_TEXT = r"^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?$"
 const _TIMESTAMPTZ_TEXT = r"^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?([+-])(\d\d)(?::(\d\d))?(?::(\d\d))?$"
 
-_ms(fraction) = fraction === nothing ? 0 : parse(Int, rpad(fraction, 3, '0')[1:3])
+# The milliseconds of a fraction of 1 to 6 digits (the patterns above): its first three digits, padded with zeros on
+# the right. Not through `rpad`, which pads with a `Char` its signature types abstractly, so its `repeat` call had no
+# compiled target in a trimmed image (#1599 layer 2, #1614). PostgreSQL drops a fraction's trailing zeros, so a value
+# whose milliseconds end in 0 has fewer than three digits, and a trimmed Postgres.jl `create` failed on about one
+# write in ten. The same value: "5" is 500, "12" is 120, "123456" is 123.
+function _ms(fraction)::Int
+  fraction === nothing && return 0
+  k = min(3, ncodeunits(fraction))
+  return parse(Int, SubString(fraction, 1, k)) * 10^(3 - k)
+end
 
 _datetime(m) = DateTime(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]),
                         parse(Int, m[4]), parse(Int, m[5]), parse(Int, m[6]), _ms(m[7]))

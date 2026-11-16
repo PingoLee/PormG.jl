@@ -1577,8 +1577,8 @@ end
 #
 # At the declared `[compat] JSON = "1"` FLOOR it is not lossy but fatal: measured, JSON 1.0.0 raises
 # `MethodError: no method matching +(::Nothing, ::Int64)` on any `Decimal`, so `list(:json)` over a
-# PostgreSQL `DecimalField` cannot run at all there; 1.1.0 onward emits the lossy number. CI's
-# `floor-resolve` job resolves that floor, and this arm is what makes it honest: every path a real
+# PostgreSQL `DecimalField` cannot run at all there; 1.1.0 onward emits the lossy number. The
+# `floor-resolve` job (floor-resolve.yml, run when a release is cut) resolves that floor, and this arm is what makes it honest: every path a real
 # value can take now hands `JSON` a `JSONText` or a `String`, both of which render at 1.0.0. Only the
 # degenerate paths below — the formatter returning a non-string, or throwing — still pass the `Decimal`
 # through, and neither is reachable from a driver. That distinction is not academic: the first version

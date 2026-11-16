@@ -5729,6 +5729,17 @@ end
                             (Vector{String}, Dict{String,String}, PormG.Models.ModelType, QB._BulkFrame, Int)) == String[]
   end
 
+  # What: the bulk writers' total (`_bulk_result_at`, what `bulk_insert` returns its count through).
+  # Expected: no dynamic call; `bulk_insert`'s body calls it, never `_bulk_result` on the untyped total.
+  # Why: `_bulk_count_total`'s open arm makes its result untyped, so `_bulk_result` on it was a dynamic call: the trimmed
+  #   MySQL `bulk_insert` raised `MethodError(_bulk_result, (Int64,))` (#1599 layer 7, #1614).
+  @testset "bulk_insert on the servers runs at concrete types (#1599 layer 7, #1614)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._bulk_result_at, (Any, Nothing)) == String[]
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+    @test !occursin("_bulk_result(_bulk_count_total(results)", src) && occursin("_bulk_result_at(_bulk_count_total(results), nothing)", src)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

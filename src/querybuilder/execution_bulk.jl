@@ -1485,6 +1485,12 @@ end
 # chunks, in Ecto's `{count, rows}` shape. `rows` is `nothing` unless `bulk_insert` was given
 # `returning=` (#671), which fills the slot without changing the return type a second time.
 _bulk_result(count::Integer, rows = nothing) = (count = Int(count), rows = rows)
+# `_bulk_result` of a total held untyped: at `Int`, what every driver's count adds up to, and anything else through one
+# dynamic call (#1599 layer 7, #1614). `rows = nothing` is the default, so the call with it is the same call; `rows`
+# stays specialized, so the result is the same concrete `NamedTuple` type the direct call returned.
+@noinline _bulk_result_at(@nospecialize(count), rows) =
+  count isa Int ? _bulk_result(count, rows) : _bulk_result_other(count, rows)
+@noinline _bulk_result_other(@nospecialize(count), rows) = _bulk_result(count, rows)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # bulk_insert(…; returning=) (#671)
@@ -2139,10 +2145,12 @@ Base.@nospecializeinfer function _bulk_insert_frame(objct::SQLObjectHandler, mod
       return length(results) == 1 ? results[1] : results
     end
 
-    # Executed, each chunk contributed its inserted-row count (#670).
-    _returning === nothing && return _bulk_result(_bulk_count_total(results))
+    # Executed, each chunk contributed its inserted-row count (#670). The total through `_bulk_result_at` (#1599 layer 7,
+    # #1614): `_bulk_count_total`'s open arm makes its result untyped, so `_bulk_result` on it was a dynamic call, which a
+    # trimmed MySQL binary had no target for (`MethodError(_bulk_result, (Int64,))`).
+    _returning === nothing && return _bulk_result_at(_bulk_count_total(results), nothing)
     # A table of the caller's kind (#1344 phase 4), one row per input row.
-    return _bulk_result(_bulk_count_total(results), _returning_table(src, _returning, returned_rows))
+    return _bulk_result_at(_bulk_count_total(results), _returning_table(src, _returning, returned_rows))
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
 bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))

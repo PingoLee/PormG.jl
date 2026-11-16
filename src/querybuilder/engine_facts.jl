@@ -108,7 +108,7 @@ function _inserted_row_query(conn::PormGMySQL, model, insert, @nospecialize(resu
   value === nothing && return nothing
   params = get_parameter(conn)
   set_context!(params, :where)
-  marker = add_parameter!(params, value)
+  marker = _bind_written_value!(params, value)::String   # at the value's type (#1599 layer 7, #1614): `value` is untyped
   column = safe_column_identifier(Models.model_column(model, name), conn)
   return ("SELECT $(_returned_columns(model, conn, table)) FROM $(table) WHERE $(column) = $(marker)", params)
 end

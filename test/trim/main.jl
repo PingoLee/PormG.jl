@@ -18,7 +18,7 @@ function (@main)(args::Vector{String})::Cint
     query_step() || return Cint(3)
     update_step() || return Cint(7)
     delete_step() || return Cint(8)
-    bulk_step() || return Cint(9)
+    bulk_step(1) || return Cint(9)   # the Monaco circuit `prep.jl` seeds first
     bulk_refused_step() || return Cint(12)
     elapsed_step(t0)
     return Cint(0)

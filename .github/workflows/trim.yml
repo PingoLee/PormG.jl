@@ -3,8 +3,9 @@
 # reported (job summary and artifact), never a failure condition: the track lowers them one layer at a
 # time, and a total rises whenever a wall opens. See test/trim/README.md.
 #
-# A second SQLite job builds the full entry (test/trim/main.jl, #1694): the single-row write. It fails
-# unless that binary exits 0 and prints its write, read, update and delete lines and both refusals.
+# A second SQLite job builds the full entry (test/trim/main.jl, #1694): the single-row write and a
+# bulk_insert. It fails unless that binary exits 0 and prints its write, read, update, delete and bulk
+# lines and both refusals.
 #
 # Two more jobs build the fixture's server variants (test/trim/mysql, test/trim/postgres, #1614) and run
 # them against a service container: MySQL 8.4, and PostgreSQL 18 through Postgres.jl with SCRAM-SHA-256.
@@ -159,7 +160,8 @@ jobs:
   # ── The full SQLite entry: the write (#1694) ─────────────────────────────────────────────────────
   # test/trim/main.jl: boot, two creates PormG refuses before any SQL, a create that leaves three fields to
   # the write's own fill (a DateTimeField among them), the typed read of both rows, an update and a delete,
-  # each checked by a typed read. The job fails unless the binary exits 0 and prints each of those lines.
+  # each checked by a typed read, then a bulk_insert of two rows that the typed read sees. The job fails
+  # unless the binary exits 0 and prints each of those lines.
 
   full-write:
     name: Trimmed write (SQLite)
@@ -201,7 +203,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl).
@@ -212,6 +214,7 @@ jobs:
             'step\trow\t2 2009 Monaco Grand Prix 2009-05-24'
             'step\tupdate\t1 rows; round 7'
             'step\tdelete\t1 rows; 1 left'
+            'step\tbulk\t2 rows; 2 read back'
           )
           missing=0
           for line in "${expected[@]}"; do

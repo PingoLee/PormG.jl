@@ -53,11 +53,104 @@ end
 
 _bulk_column(frame::_BulkFrame, name::AbstractString) = frame.columns[name]
 _has_bulk_column(frame::_BulkFrame, name::AbstractString) = haskey(frame.columns, name)
-# Every caller names a column the frame does not have yet (`_bulk_private_column`).
-function _add_bulk_column!(frame::_BulkFrame, name::String, column::AbstractVector)
+# Every caller names a column the frame does not have yet (`_bulk_private_column`). `column` unspecialized
+# (#1599 layer 7): the frame stores it as an `AbstractVector` either way, and a fill column reaches here untyped,
+# so a call specialized on its type had no compiled target in a trimmed image.
+function _add_bulk_column!(frame::_BulkFrame, name::String, @nospecialize(column::AbstractVector))
   push!(frame.names, name)
-  frame.columns[name] = column
+  _store_bulk_column!(frame.columns, name, column)
   return frame
+end
+
+# The store itself, at the column's type (#1599 layer 7, #1694): `setindex!` is compiled per value type, and an
+# untyped column (the `auto_add` UUIDs, a fill) had no compiled store in a trimmed image (`MissingCodeError` on
+# `setindex!(::Dict{String, AbstractVector}, ::Vector{UUID}, ::String)`). One arm per column type a fill or a
+# pre-allocated key makes, each the same store; anything else takes one dynamic call.
+@noinline function _store_bulk_column!(columns::Dict{String, AbstractVector}, name::String,
+                                       @nospecialize(column::AbstractVector))
+  column isa Vector{String} && return (columns[name] = column; nothing)
+  column isa Vector{UUIDs.UUID} && return (columns[name] = column; nothing)
+  column isa Vector{Dates.Date} && return (columns[name] = column; nothing)
+  column isa Vector{Int64} && return (columns[name] = column; nothing)
+  column isa Vector{Float64} && return (columns[name] = column; nothing)
+  column isa Vector{Bool} && return (columns[name] = column; nothing)
+  column isa Vector{Nothing} && return (columns[name] = column; nothing)
+  columns[name] = column
+  return nothing
+end
+
+# `fill(value, n)` for a fill column, at the value's type (#1599 layer 7, #1694). The value is untyped (a
+# default, a formatted timestamp, a date), so `fill` dispatched at run time, and the trimmed full fixture entry's
+# `bulk_insert` raised `MethodError(fill, (String, Int64))` there. One arm per type a fill value commonly is, each
+# the same call, so the column is the `Vector` `fill` builds; anything else takes one dynamic call.
+@noinline function _fill_bulk_column(@nospecialize(value), n::Int)::AbstractVector
+  value isa String && return fill(value, n)
+  value isa Dates.Date && return fill(value, n)
+  value isa Int64 && return fill(value, n)
+  value isa Float64 && return fill(value, n)
+  value isa Bool && return fill(value, n)
+  value isa Nothing && return fill(value, n)
+  return _fill_bulk_column_other(value, n)
+end
+@noinline _fill_bulk_column_other(@nospecialize(value), n::Int)::AbstractVector = fill(value, n)
+
+# One cell of a frame column, read at the column's type (#1599 layer 7, #1694). The frame holds its columns as
+# `AbstractVector`, so `column[i]` dispatched at run time, and the trimmed full fixture entry's `bulk_insert`
+# raised `MethodError(getindex, (Vector{Int64}, Int64))` there. One arm per column type a table commonly hands
+# over (the element types `_validate_field_value_at` walks, with and without `missing`), each the same `getindex`;
+# any other column takes one dynamic call. The cell is the value `column[i]` returns.
+@noinline function _bulk_cell(@nospecialize(column::AbstractVector), i::Int)
+  column isa Vector{Int64} && return column[i]
+  column isa Vector{String} && return column[i]
+  column isa Vector{Float64} && return column[i]
+  column isa Vector{Bool} && return column[i]
+  column isa Vector{Dates.Date} && return column[i]
+  column isa Vector{Dates.DateTime} && return column[i]
+  column isa Vector{Dates.Time} && return column[i]
+  column isa Vector{TimeZones.ZonedDateTime} && return column[i]
+  column isa Vector{Decimals.Decimal} && return column[i]
+  column isa Vector{UUIDs.UUID} && return column[i]
+  column isa Vector{Int32} && return column[i]
+  column isa Vector{Nothing} && return column[i]
+  column isa Vector{Any} && return column[i]
+  column isa Vector{Union{Missing, Int64}} && return column[i]
+  column isa Vector{Union{Missing, String}} && return column[i]
+  column isa Vector{Union{Missing, Float64}} && return column[i]
+  column isa Vector{Union{Missing, Bool}} && return column[i]
+  column isa Vector{Union{Missing, Dates.Date}} && return column[i]
+  column isa Vector{Union{Missing, Dates.DateTime}} && return column[i]
+  column isa Vector{Union{Nothing, Int64}} && return column[i]
+  column isa Vector{Union{Nothing, String}} && return column[i]
+  return _bulk_cell_other(column, i)
+end
+@noinline _bulk_cell_other(@nospecialize(column::AbstractVector), i::Int) = column[i]
+
+# A frame column's length (#1599 layer 7): `length` of any `Vector` is a field read, whatever its element type;
+# any other column takes one dynamic call.
+@noinline _bulk_length(@nospecialize(column::AbstractVector))::Int =
+  column isa Vector ? length(column) : _bulk_length_other(column)
+@noinline _bulk_length_other(@nospecialize(column::AbstractVector))::Int = length(column)
+
+# The rows a bulk write's chunks counted, summed (#1599 layer 7, #1694). `sum(results; init = 0)` over the untyped
+# results dispatched `add_sum` at run time, which a trimmed image cannot run. Each chunk counts an `Int`
+# (`_affected_row_count`'s type), added at that type, so the loop stays an `Int`; the first count of any other type
+# hands the rest to `_bulk_count_total_other`, which adds them as `total + r`, what `add_sum` computes from
+# `init = 0`. The same total.
+function _bulk_count_total(results::Vector{Any})
+  total = 0
+  for k in eachindex(results)
+    r = results[k]
+    r isa Int || return _bulk_count_total_other(results, total, k)
+    total += r
+  end
+  return total
+end
+@noinline function _bulk_count_total_other(results::Vector{Any}, total::Int, from::Int)
+  t = total
+  for k in from:lastindex(results)
+    t = t + results[k]
+  end
+  return t
 end
 
 # The one refusal for an argument that is not a table, shared by the writers and their curried forms.
@@ -66,7 +159,7 @@ end
 # SELECT inside a write, even under a dry-run `show_query`, and the curried forms read the other way
 # round (`target |> bulk_insert(source_query)` is the handler-curried method, so it would insert the
 # TARGET's rows into the source's model). Asking for its rows is one explicit call.
-function _refuse_non_table(@nospecialize(src), op::AbstractString)
+function _refuse_non_table(src, op::AbstractString)
   src isa SQLObjectHandler && throw(QueryBuildError("Error in $(op), a query is not a table to write: " *
     "read its rows first, e.g. Tables.columntable(query), and pass those"))
   Tables.istable(src) && return true
@@ -79,18 +172,33 @@ function _refuse_non_table(@nospecialize(src), op::AbstractString)
 end
 _bulk_type_name(@nospecialize(T)) = T isa Union{DataType, UnionAll} ? string(nameof(T)) : "a union of types"
 
-# `@nospecialize`: the source type is read here, once, and nothing past the frame depends on it, so
-# one compiled pipeline (and the precompile workload's) serves every kind of table.
-function _bulk_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
+# The source type is read here, once, and nothing past the frame depends on it, so one compiled
+# pipeline (and the precompile workload's) serves every kind of table. This function and the refusal
+# above specialize on the source (#1599 layer 7): in a trimmed build an unspecialized source made every
+# Tables.jl call on it a call with no compiled target. Both are small, so the JIT pays little per type.
+function _bulk_frame(src, op::AbstractString)::_BulkFrame
   _refuse_non_table(src, op)
   Tables.schema(src) === nothing && Tables.rowaccess(src) && return _schemaless_row_frame(src, op)
   cols = Tables.columns(src)
   names = String[]
   columns = Dict{String, AbstractVector}()
+  # Each column stored and measured at its own type (#1599 layer 7): read back out of the `AbstractVector` store,
+  # `length` had no compiled target in a trimmed image, and a row type with more column types than inference
+  # splits made the store itself a dynamic `setindex!`. The lengths are keyed by name, as the store is, so a
+  # name a table repeats keeps its last column's length, as the old read-back did.
+  lengths = Dict{String, Int}()
   for name in Tables.columnnames(cols)
     column = Tables.getcolumn(cols, name)
-    push!(names, String(name))
-    columns[String(name)] = column isa AbstractVector ? column : collect(column)
+    key = String(name)
+    push!(names, key)
+    if column isa AbstractVector
+      _store_bulk_column!(columns, key, column)
+      lengths[key] = _bulk_length(column)
+    else
+      stored = collect(column)
+      columns[key] = stored
+      lengths[key] = length(stored)
+    end
   end
   if isempty(names)
     # No columns: nothing to write, which is an empty table only when it also has no rows.
@@ -98,8 +206,8 @@ function _bulk_frame(@nospecialize(src), op::AbstractString)::_BulkFrame
       throw(QueryBuildError("Error in $(op), the table has rows but no columns"))
     return _BulkFrame(names, columns, 0)
   end
-  row_count = length(columns[names[1]])
-  all(name -> length(columns[name]) == row_count, names) ||
+  row_count = lengths[names[1]]
+  all(name -> lengths[name] == row_count, names) ||
     throw(QueryBuildError("Error in $(op), the table's columns have different lengths"))
   return _BulkFrame(names, columns, row_count)
 end
@@ -738,10 +846,12 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
       return true, f_meta.default, false
     elseif f_meta.type == "TIMESTAMPTZ"
       if operation in [:insert, :copy] && (f_meta.auto_now_add || f_meta.auto_now)
-        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
+        value = settings === nothing ? now(TimeZone("UTC")) :
+          Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))
         return true, value, false
       elseif operation == :update && f_meta.auto_now
-        value = settings === nothing ? now(TimeZone("UTC")) : f_meta.formatter(now(TimeZone(settings.time_zone)))
+        value = settings === nothing ? now(TimeZone("UTC")) :
+          Models.apply_formatter(f_meta.formatter, _now_in(settings.time_zone))
         return true, value, false
       end
     elseif f_meta.type == "DATE"
@@ -804,7 +914,11 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
   # Whole-column ADDITION only, never a write into an existing slot — the #132 zero-copy invariant
   # (see `_BulkFrame`). The uniquified name (`_bulk_private_column`) is what keeps it an addition: a
   # caller column already named like the prefix would otherwise be clobbered, which is #335 over again.
-  function inject_fill_column!(field::String, f_meta, fill_value, per_row::Bool)
+  #
+  # `fill_value` unspecialized (#1599 layer 7): it is whatever `resolve_absent_column_fill` returns (a default,
+  # a formatted timestamp, a date, a vector of UUIDs), untyped, so a specialized call had no compiled target in a
+  # trimmed image. Unspecialized, the call is one compiled method.
+  function inject_fill_column!(field::String, f_meta, @nospecialize(fill_value), per_row::Bool)
     # For an explicit-scope UPDATE (columns= was provided), a static `default` must NOT be
     # synthesized: that would overwrite live rows merely because the table lacks the column.
     # Temporal auto_now/auto_now_add injections are always allowed — an intentional ORM
@@ -819,7 +933,7 @@ function _prepare_bulk_df!(df::_BulkFrame, model::PormGModel,
     # only the UUID auto_add case) — otherwise broadcast the one value. the row count replaced a `ref_col`
     # pick that grabbed an arbitrary `mapping` key purely for its length and indexed the first column
     # when `mapping` was empty (a latent `BoundsError` on a column-less frame).
-    _add_bulk_column!(df, target, per_row ? fill_value : fill(fill_value, df.row_count))
+    _add_bulk_column!(df, target, (per_row ? fill_value : _fill_bulk_column(fill_value, df.row_count))::AbstractVector)
     mapping[field] = target
     return true
   end
@@ -1766,7 +1880,7 @@ Inserts multiple rows into the database in bulk from any Tables.jl table (#1344)
   df.id = r.rows.id
   ```
 """
-function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
+function bulk_insert(objct::SQLObjectHandler, src;
     columns = nothing,
     chunk_size::Integer = 1000,
     show_query::Symbol = :execute,
@@ -1775,6 +1889,10 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
   )
   model = objct.object.model
 
+  # #1599 layer 7: the source is read here, at its own type, so a trimmed build compiles the frame it
+  # builds (`@nospecialize(src)` made every Tables.jl call on it dynamic). Only these checks and the frame
+  # specialize on the table's type; the pipeline after them, `_bulk_insert_frame`, is compiled once for
+  # every kind of table, as the whole call was. The checks run in the order they did.
   # Resolve settings
   return _with_connection(objct) do settings, connection, conn_key
     ensure_transaction_scope(model, connection)
@@ -1786,7 +1904,18 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     _returning = _normalize_bulk_returning(returning, model)
 
     df = _bulk_frame(src, "bulk_insert")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
+    return _bulk_insert_frame(objct, model, settings, connection, src, df, _returning,
+                              columns, chunk_size, show_query, on_conflict)
+  end
+end
 
+# `bulk_insert` after its frame (#1599 layer 7): the body it had, unchanged. `src` is read only to build an
+# empty or a `returning=` result of the caller's kind, so it stays unspecialized, and `@nospecializeinfer` keeps
+# inference from specializing on it too: `@nospecialize` alone only shares the native code, so each new table
+# type re-inferred this whole body once per pool type, about 4 s on a first `bulk_insert` call (measured).
+Base.@nospecializeinfer function _bulk_insert_frame(objct::SQLObjectHandler, model, settings, connection, @nospecialize(src),
+                            df::_BulkFrame, _returning, columns, chunk_size::Integer, show_query::Symbol,
+                            on_conflict)
     # If no rows then nothing to do
     if df.row_count == 0
       @warn("Warning in bulk_insert, the table is empty")
@@ -1818,11 +1947,14 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
       _bulk_returning_key(model, on_conflict, fields_df, connection)
     allocate_pk = show_query === :execute ? allocate_pk : nothing
     do_nothing = _on_conflict !== nothing && _on_conflict.action === :nothing
-    returning_sql = nothing
-    if _returning !== nothing && _insert_returns_rows(connection)
+    # One assignment (#1599 layer 7): assigned twice and captured by the chunk's closure, it was boxed, and the
+    # chunk statement's keyword call took it untyped, a call with no compiled target in a trimmed image.
+    returning_sql = if _returning !== nothing && _insert_returns_rows(connection)
       returned_fields = unique(vcat(returning_key, _returning))
-      returning_sql = "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
+      "RETURNING " * join([safe_column_identifier(Models.model_column(model, field), connection)
         for field in returned_fields], ", ")
+    else
+      nothing
     end
     # A pre-allocated id is written explicitly, which a `generated_always` identity rejects unless the
     # INSERT says OVERRIDING SYSTEM VALUE. Safe here: the ids came from that identity's own sequence.
@@ -1864,8 +1996,11 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     # cell as `row[mapping[field]]` looked the column up by NAME every time, which was over a third of
     # a 100k-row insert's client-side time. `metas[j]` and `sources[j]` stay in `fields_df` order —
     # the order the INSERT column list and the row source are built in.
-    metas = [_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
-    sources = [_bulk_column(df, mapping[field]) for field in fields_df]
+    # Typed by the field union and the frame's column type (#1599 layer 7): an untyped comprehension widens its
+    # element type as it goes, through code a trimmed image does not have (`MissingCodeError` in
+    # `collect_to_with_first!`).
+    metas = Models.AnyField[_validate_field_name(model, field, "bulk_insert"; allow_primary_key = true) for field in fields_df]
+    sources = AbstractVector[_bulk_column(df, mapping[field]) for field in fields_df]
 
     results = []
     total_rows = df.row_count
@@ -1886,7 +2021,7 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
       key_sources = [sources[j] for j in key_positions]
 
       rows = String[]
-      columns = new_columns()
+      chunk_columns = new_columns()
       count::Integer = 0
       total::Integer = df.row_count
       # Security: Create parameterized query
@@ -1898,15 +2033,25 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
           # Validation checks consistent with single insert(), row by row, so the first row that
           # fails is the one reported, by its row and field (#875).
           for (j, field) in enumerate(fields_df)
-            _validate_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index)
+            _validate_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index)
           end
 
           # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-          cells = [_format_bulk_cell(model, field, metas[j], sources[j][index], "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
+          # `Any[...]` (#1599 layer 7): the formatted cells are untyped, and an untyped comprehension's vector had a
+          # run-time element type, so iterating it below was a call with no compiled target in a trimmed image.
+          cells = Any[_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
           if pg_arrays
-            foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+            foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
           else
-            push!(rows, "($(join([add_parameter!(parameters, cell) for cell in cells], ", ")))")
+            # A loop, not a comprehension (#1599 layer 7): the comprehension's closure captured `parameters`,
+            # which this loop reassigns after each chunk, so it was boxed. The same placeholders, in order. Each
+            # cell is bound through `create`'s typed walk (`_bind_written_value!`): the cell is untyped, and
+            # `add_parameter!` on it had no compiled target in a trimmed image.
+            placeholders = String[]
+            for cell in cells
+              push!(placeholders, _bind_written_value!(parameters, cell)::String)
+            end
+            push!(rows, "($(join(placeholders, ", ")))")
           end
         catch e
           _depuration_values_bulk_insert(fields_df, mapping, model, df, index)
@@ -1916,18 +2061,20 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
         end
         count += 1
         if count == effective_chunk || index == total
-          source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, columns, casts), source_casts) :
+          source_sql = pg_arrays ? _pg_unnest_select(_pg_unnest_source!(parameters, chunk_columns, casts), source_casts) :
                                    "VALUES " * join(rows, ", ")
           chunk_range = (index - count + 1):index
-          run_chunk() = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, parameters;
+          # The collector is an argument, not a capture (#1599 layer 7): captured here and reassigned after each
+          # chunk, `parameters` was boxed, and every call on it was untyped in a trimmed image.
+          run_chunk(params) = _bulk_insert(model, connection, fields_df, source_sql, pk_field, settings, show_query, params;
             on_conflict_sql = on_conflict_sql, returning_sql = returning_sql, overriding = overriding,
             resync_retry = allocate_pk === nothing,
             conflict = _on_conflict === nothing ? nothing : _on_conflict.action, rows = length(chunk_range))
           res = if _returning === nothing || show_query !== :execute
-            run_chunk()
+            run_chunk(parameters)
           elseif _insert_returns_rows(connection)
             # `RETURNING` reports what the chunk wrote, named by db column; renamed to fields here.
-            returned = _pg_bulk_returned(run_chunk(), model, unique(vcat(returning_key, _returning)), connection)
+            returned = _pg_bulk_returned(run_chunk(parameters), model, unique(vcat(returning_key, _returning)), connection)
             _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
               chunk_range, do_nothing)
             returned.row_count
@@ -1952,7 +2099,7 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
                 k === nothing || push!(existing, k)
               end
             end
-            written = run_chunk()   # counted before the read-back, which would overwrite changes()
+            written = run_chunk(parameters)   # counted before the read-back, which would overwrite changes()
             returned = _bulk_read_back(objct, model, returning_key, chunk_keys,
               unique(vcat(returning_key, _returning)); lock = !do_nothing && _locks_rows(connection))
             _bulk_returning_fill!(returned_rows, _returning, returned, returning_key, key_metas, key_sources,
@@ -1962,7 +2109,7 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
           push!(results, res)
           count = 0
           rows = String[]
-          columns = new_columns()
+          chunk_columns = new_columns()
           parameters = get_parameter(connection)
           set_context!(parameters, :select)
         end
@@ -1993,11 +2140,9 @@ function bulk_insert(objct::SQLObjectHandler, @nospecialize(src);
     end
 
     # Executed, each chunk contributed its inserted-row count (#670).
-    _returning === nothing && return _bulk_result(sum(results; init = 0))
+    _returning === nothing && return _bulk_result(_bulk_count_total(results))
     # A table of the caller's kind (#1344 phase 4), one row per input row.
-    return _bulk_result(sum(results; init = 0), _returning_table(src, _returning, returned_rows))
-
-  end
+    return _bulk_result(_bulk_count_total(results), _returning_table(src, _returning, returned_rows))
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
 bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))
@@ -2425,17 +2570,24 @@ _bulk_cell_error(e::InvalidValueError, op::AbstractString, model::PormGModel, fi
 # wrapped for the collection refusal (`_single_value`): the depuration pass's formatter maps a list
 # of text without throwing, so it finds nothing there and the caller rethrows this error as it is.
 # A formatter's own refusal is still reported by the depuration pass, which runs first in the catch.
-function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer)
+# `value` unspecialized and the checks through `create`'s typed walk (#1599 layer 7, #1694): a cell is read out of an
+# `AbstractVector` column untyped, so a call specialized on it had no compiled target in a trimmed image, and the row
+# loop's `catch` then reported whatever its own depuration pass raised. `_validate_field_value_at` runs the same
+# `_validate_field_value` at the value's concrete type.
+function _validate_bulk_cell(model::PormGModel, field::AbstractString, f_meta, @nospecialize(value), op::AbstractString,
+                             row_index::Integer)
   try
-    _validate_field_value(model, field, f_meta, value, op)
+    _validate_field_value_at(model, String(field), f_meta, value, String(op))
   catch e
     e isa InvalidValueError && throw(_bulk_cell_error(e, op, model, field, row_index))
     rethrow()
   end
 end
 
-function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, value, op::AbstractString, row_index::Integer;
-                           conn = nothing)
+# `value` unspecialized, as `_format_single`'s is (#1599 layer 7, #1694): a cell is untyped, and the keyword call
+# specialized on it had no compiled target in a trimmed image.
+function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, @nospecialize(value), op::AbstractString,
+                           row_index::Integer; conn = nothing)
   try
     _format_single(f_meta, field, value, op; conn = conn)
   catch e

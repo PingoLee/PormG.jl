@@ -10,13 +10,15 @@ the refusal's type and message), one `Race.objects.create` that leaves the three
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
-each checked by a typed read after it. Each step prints one line. The read-only entry, `read.jl`, runs
+each checked by a typed read after it, and last a `bulk_insert` of two races from a `Vector` of
+`NamedTuple`s, read back typed. Each step prints one line. The read-only entry, `read.jl`, runs
 the same boot and read without the writes; the steps both entries share are in `steps.jl`.
 
 Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary completes
 (#1694): it prints both refusals, fills the three automatic values, runs its `INSERT` and reads the row
 back on the SQLite worker, and its typed read then returns both rows, the one it wrote included; its
-`update` sets that row's `round` and its `delete` removes it, each shown by the read after it. It
+`update` sets that row's `round` and its `delete` removes it, each shown by the read after it; its
+`bulk_insert` writes two rows, the three auto-filled fields included, and the typed read sees both. It
 prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788). The
 `Trim (juliac)` workflow checks that both binaries still do (see "The read-only entry and its CI job"
 and "The full entry's CI job" below).
@@ -86,7 +88,8 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
 fails with the same exit code (1 boot, 2 write, 3 read; `main.jl` exits 6 when a create it expects
 PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
-raises or the read after it does not show the change).
+raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
+than 2 rows, or the read after it does not return them).
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -138,10 +141,12 @@ step	row	1 2008 Monaco Grand Prix 2008-05-25
 step	row	2 2009 Monaco Grand Prix 2009-05-24
 step	update	1 rows; round 7
 step	delete	1 rows; 1 left
+step	bulk	2 rows; 2 read back
 ```
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
-create was not refused with an `InvalidValueError`, 7 update, 8 delete, 124 timed out). The rows are reported as in the read-only job, in the
+create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 124 timed
+out). The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
 extension both SQLite jobs build. A change under `src/` that could break the trimmed write is checked

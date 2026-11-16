@@ -169,7 +169,7 @@ _model_table_at(@nospecialize(model))::String =
 # joining it. A column path's last segment is its column, never a join, even when it is a ForeignKey
 # (`order_by("raceid__circuitid")` joins the race only); a `cjoin`/`on()` key is a join path, all hops.
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
-  tables = Set{String}([Models.model_table_name(object.model)])
+  tables = Set{String}([_model_table_at(object.model)])
   for rj in instruc.row_join
     hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
   end

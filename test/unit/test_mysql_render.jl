@@ -500,9 +500,11 @@ end
   # PostgreSQL keeps the native clause; the MySQL method is only MySQL's.
   @test _MR_QB._order_term_sql("\"Tb\".\"grid\"", "ASC", :last, MrMockPostgres()) == "\"Tb\".\"grid\" ASC NULLS LAST"
   # The clause renderer (`build_select.jl`, which this method does not live in) still calls the shared
-  # function, so a rename there cannot route MySQL past the refusal.
+  # function, so a rename there cannot route MySQL past the refusal. It calls it through `_order_term_at`,
+  # which makes the call at concrete types for a trimmed build (#1599 layer 5): both hops are checked.
   build_select = read(joinpath(@__DIR__, "..", "..", "src", "querybuilder", "build_select.jl"), String)
-  @test occursin("_order_term_sql(order_expr, orientation, placement, instruc.connection", build_select)
+  @test occursin("_order_term_at(order_expr, orientation, placement, instruc.connection, null_flag)", build_select)
+  @test occursin("return _order_term_sql(expr, orientation, placement, conn; null_flag = null_flag)", build_select)
   @test occursin("ORDER BY (`Tb`.`position` IS NULL) DESC, `position` DESC",
                  _mr_inspect(_MR_MY.Result.objects.values("position").order_by("-position"))[:sql_text])
 end

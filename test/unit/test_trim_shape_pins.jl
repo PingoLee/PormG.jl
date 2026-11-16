@@ -4072,7 +4072,9 @@ end
                :_bitwise_not_sql, :_xor_sql, :_untyped_date_refusal, :_day_count_shift_sql,
                :_duration_operand_units, :_duration_value_sql, :_json_document_marker, :_meaning_refusal,
                # the callees the ones above hand the connection to
-               :_computes, :_interval_ms_as_text, :_duration_values_units, :_unnamed_temporal_remedy,
+               :_computes, :_interval_ms_as_text, :_duration_values_units,
+               # (`_unnamed_temporal_remedy` was listed here until #1599 layer 5: it no longer takes the
+               # connection, so the refusals read `_timestamp_remedy` instead, listed below)
                :_interval_error,
                # the engine's timestamp remedy, read by the refusals at the engine's type (#1599 layer 5)
                :_timestamp_remedy,

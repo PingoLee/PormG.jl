@@ -5689,6 +5689,19 @@ end
     end
   end
 
+  # What: the bulk writers' error pass (`_depuration_values_bulk_insert`), which runs in the row loop's `catch` when a row
+  #   fails and names the cell that cannot be formatted.
+  # Expected: it reads its cell through the frame's column walk (`_bulk_cell`), never by indexing the untyped column.
+  # Why: indexed directly, the column was read untyped, and a trimmed image had no code for the call: the full
+  #   fixture entry's failing row raised `MethodError(getindex, (Vector{Int64}, Int64))` in place of its refusal
+  #   (#1599 layer 7, #1814's residue).
+  @testset "the bulk error pass runs at concrete types (#1599 layer 7, #1694)" begin
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+    body = src[findfirst("function _depuration_values_bulk_insert", src).start:findfirst("function _normalize_on_conflict", src).start]
+    @test occursin("_bulk_cell(_bulk_column(df, col_name), Int(index))", body)
+    @test !occursin("_bulk_column(df, col_name)[index]", body)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -273,6 +273,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "bulk_insert's Typed Walks Return What They Replace (#1599)" include("unit/test_bulk_insert_trim_1694.jl")
     @testset "A Server Result Decodes as create Read It (#1599)" include("unit/test_server_write_trim_1614.jl")
     @testset "A Comparison Filter and an order_by Render as Before (#1599)" include("unit/test_read_filters_trim_1599.jl")
+    @testset "The Bulk Error Pass Names the Same Cell (#1599)" include("unit/test_bulk_refusal_trim_1694.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

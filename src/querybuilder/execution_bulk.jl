@@ -2603,7 +2603,10 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     if !(_has_bulk_column(df, col_name))
       continue
     end
-    value = _bulk_column(df, col_name)[index]
+    # #1599 layer 7: the cell through the frame's column walk (`_bulk_cell`), as the row loop reads it. Indexed
+    # directly, the column was read untyped, and a trimmed image had no code for it: a failing row's refusal was
+    # replaced by `MethodError(getindex, (Vector{Int64}, Int64))`.
+    value = _bulk_cell(_bulk_column(df, col_name), Int(index))
     try
       model.fields[field].formatter(value)
     catch e

@@ -46,6 +46,14 @@ env:
   TRIM_JULIAC: '0.3.12'
   # The row the read-only entry prints, as its JIT control does (test/trim/prep.jl seeds it).
   TRIM_EXPECTED_ROW: "step\trow\t1 2008 Monaco Grand Prix 2008-05-25"
+  # The read steps every entry runs after its first read (test/trim/tools/reads.jl, #1599 layer 5): a comparison
+  # filter on a date and on an integer, and an order_by each way, over the two races every prep.jl seeds. One
+  # line per row; each job checks that its binary prints all four.
+  TRIM_READ_LINES: |-
+    step\tcompare\tdate__@gte 1 rows: Brazilian Grand Prix
+    step\tcompare\tround__@lt 1 rows: Monaco Grand Prix
+    step\torder\tdate: Monaco Grand Prix, Brazilian Grand Prix
+    step\torder\t-date: Brazilian Grand Prix, Monaco Grand Prix
 
 jobs:
   read-only:
@@ -90,13 +98,19 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed read-only binary exited with status $status (124 = timed out)"
+            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 124 = timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
             echo "::error::the trimmed read-only binary exited 0 without printing the expected row"
             exit 1
           fi
+          while IFS= read -r line; do
+            if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
+              echo "::error::the trimmed read-only binary exited 0 without printing: $line"
+              exit 1
+            fi
+          done <<< "$TRIM_READ_LINES"
       - name: Run the pool's long-lived tasks in the trimmed binary
         # The reaper and the deferred close (#1599 layer 2): the `tasks` run adds two steps, about 20 s,
         # that fail with exit 4 or 5 when the task never ran. Runs even when the read above failed.
@@ -159,7 +173,7 @@ jobs:
           if-no-files-found: warn
 
   # ── The full SQLite entry: the write (#1694) ─────────────────────────────────────────────────────
-  # test/trim/main.jl: boot, two creates PormG refuses before any SQL, a create that leaves three fields to
+  # test/trim/main.jl: boot, two creates PormG refuses before any SQL, the read steps (TRIM_READ_LINES), a create that leaves three fields to
   # the write's own fill (a DateTimeField among them), the typed read of both rows, an update and a delete,
   # each checked by a typed read, then a bulk_insert of two rows that the typed read sees. The job fails
   # unless the binary exits 0 and prints each of those lines.
@@ -204,11 +218,13 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 124 timed out)"
             exit 1
           fi
-          # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl).
-          expected=(
+          # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
+          # write's.
+          mapfile -t expected <<< "$TRIM_READ_LINES"
+          expected+=(
             'step\twrite\tok'
             'step\tquery\t2 rows'
             'step\trow\t1 2008 Monaco Grand Prix 2008-05-25'
@@ -335,13 +351,20 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 10 comparison filter, 11 order_by, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
             echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing the expected row"
             exit 1
           fi
+          # The read steps (test/trim/tools/reads.jl, #1599 layer 5), before the write.
+          while IFS= read -r line; do
+            if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
+              echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing: $line"
+              exit 1
+            fi
+          done <<< "$TRIM_READ_LINES"
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete. The written row's id is not checked: the JIT control used one.
           for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left'; do
@@ -466,13 +489,20 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 10 comparison filter, 11 order_by, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
             echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing the expected row"
             exit 1
           fi
+          # The read steps (test/trim/tools/reads.jl, #1599 layer 5), before the write.
+          while IFS= read -r line; do
+            if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
+              echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing: $line"
+              exit 1
+            fi
+          done <<< "$TRIM_READ_LINES"
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete. The written row's id is not checked: the JIT control used one.
           for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left'; do

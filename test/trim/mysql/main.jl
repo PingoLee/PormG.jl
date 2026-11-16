@@ -1,5 +1,6 @@
 # The juliac --trim entry of the fixture's MySQL variant (#1599, #1614): `../main.jl`'s app with MySQL.jl
-# in place of SQLite — boot, one typed read and one statement the server refuses (`../tools/failing.jl`), no write.
+# in place of SQLite — boot, one typed read, the single-row write (`../tools/writes.jl`: create, read back, update, delete) and
+# one statement the server refuses (`../tools/failing.jl`).
 #   JIT:  julia --project=test/trim/mysql test/trim/mysql/main.jl
 #   exe:  <build dir>/main                   (see ../README.md, "The MySQL variant")
 #
@@ -78,6 +79,22 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
     return nothing
 end
 
+# The typed read, one line per row (`../steps.jl`'s `query_step`). Exit code 3 when it fails.
+function query_step()::Bool
+    try
+        rows = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
+        say("query", string(length(rows), " rows"))
+        for r in rows
+            say("row", string(r.raceid, " ", r.year, " ", r.name, " ", r.date))
+        end
+        return true
+    catch e
+        failed("query", e); return false
+    end
+end
+
+include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
+
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
     say("main", "entered")
@@ -90,15 +107,15 @@ function (@main)(args::Vector{String})::Cint
     catch e
         failed("boot", e); return Cint(1)
     end
-    try
-        rows = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
-        say("query", string(length(rows), " rows"))
-        for r in rows
-            say("row", string(r.raceid, " ", r.year, " ", r.name, " ", r.date))
-        end
-    catch e
-        failed("query", e); return Cint(3)
-    end
+    query_step() || return Cint(3)
+    # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
+    # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
+    circuitid = monaco_circuitid_step()
+    circuitid === nothing && return Cint(2)
+    write_step(circuitid) || return Cint(2)
+    query_step() || return Cint(3)
+    update_step() || return Cint(7)
+    delete_step() || return Cint(8)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read's timing (#1599, ../tools/failing.jl).
     fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)

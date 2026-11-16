@@ -11,13 +11,7 @@ function (@main)(args::Vector{String})::Cint
     dir = start_step(args)
     boot_step(dir) || return Cint(1)
     refused_step() || return Cint(6)
-    try
-        M.Race.objects.create("year" => 2009, "round" => 6, "circuitid" => 1,
-                              "name" => "Monaco Grand Prix", "date" => Date(2009, 5, 24))
-        say("write", "ok")
-    catch e
-        failed("write", e); return Cint(2)
-    end
+    write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)
     delete_step() || return Cint(8)

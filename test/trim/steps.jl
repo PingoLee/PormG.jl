@@ -111,32 +111,9 @@ function query_step()::Bool
     end
 end
 
-# The write's other two verbs (#1694), after the read: `update` the row the write made (2009's), read it
-# back typed and check the new `round`, then `delete` it and check that only the prepped row is left. Exit
-# codes 7 (update) and 8 (delete) when the call raises or the read after it does not show the change.
-# `update` returns the row count and `delete` the count and the rows per table, both asserted at the types
-# the JIT returns, so a step prints them without a call on an untyped value.
-function update_step()::Bool
-    try
-        n = M.Race.objects.filter("year" => 2009).update("round" => 7)::Int
-        rows = M.Race.objects.filter("year" => 2009).list(RaceRow)
-        say("update", string(n, " rows; round ", isempty(rows) ? "-" : string(rows[1].round)))
-        return n == 1 && length(rows) == 1 && rows[1].round == 7
-    catch e
-        failed("update", e); return false
-    end
-end
-
-function delete_step()::Bool
-    try
-        n = first(M.Race.objects.filter("year" => 2009).delete()::Tuple{Int, Dict{String, Integer}})
-        rows = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
-        say("delete", string(n, " rows; ", length(rows), " left"))
-        return n == 1 && length(rows) == 1 && rows[1].year == 2008
-    catch e
-        failed("delete", e); return false
-    end
-end
+# The single-row write's steps (`write_step`, `update_step`, `delete_step`) are in `tools/writes.jl`, shared with
+# the server variants (#1614), so every binary prints the same lines.
+include(joinpath(@__DIR__, "tools", "writes.jl"))
 
 # `bulk_insert` (#1694), after the delete: two Monaco races from a `Vector` of `NamedTuple`s, the input a
 # trimmed program holds at a concrete type, leaving the three auto-filled fields to the write's own fill.

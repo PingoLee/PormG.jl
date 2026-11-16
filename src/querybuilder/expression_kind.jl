@@ -382,14 +382,50 @@ _side_walk_kind(x::OuterRefObject, instruc::SQLInstruction) =
   instruc.outer === nothing ? nothing : _side_walk_kind(x.field_name, instruc.outer)
 _side_walk_kind(x, instruc::SQLInstruction) = _expression_kind(x, instruc)
 
+# The sides below reach these questions untyped (#1599 layer 5): the render queues each comparison's two
+# sides in one vector for every node shape (`_queue_unnamed_temporal!`), so a side is read back as `Any`,
+# and a call specialized on it had no compiled target in a trimmed image (a `date__@gte` filter stopped
+# there, #1814 wall 21). Each walk calls the function it names at the side's concrete type, one arm per
+# shape a side takes (the query nodes, a path, the literals), and hands anything else to one dynamic call,
+# so the JIT answers as before for every value.
+@noinline function _side_walk_kind_any(@nospecialize(x), instruc::SQLInstruction)
+  x isa SQLField && return _side_walk_kind(x, instruc)
+  x isa SQLText && return _side_walk_kind(x, instruc)
+  x isa FExpression && return _side_walk_kind(x, instruc)
+  x isa FObject && return _side_walk_kind(x, instruc)
+  x isa WindowFunction && return _side_walk_kind(x, instruc)
+  x isa JoinedReference && return _side_walk_kind(x, instruc)
+  x isa CTEReference && return _side_walk_kind(x, instruc)
+  x isa SubqueryObject && return _side_walk_kind(x, instruc)
+  x isa OuterRefObject && return _side_walk_kind(x, instruc)
+  x isa String && return _side_walk_kind(x, instruc)
+  x isa Bool && return _side_walk_kind(x, instruc)
+  x isa Int64 && return _side_walk_kind(x, instruc)
+  x isa Float64 && return _side_walk_kind(x, instruc)
+  x isa Dates.Date && return _side_walk_kind(x, instruc)
+  x isa Dates.DateTime && return _side_walk_kind(x, instruc)
+  return _side_walk_kind_other(x, instruc)
+end
+@noinline _side_walk_kind_other(@nospecialize(x), instruc::SQLInstruction) = _side_walk_kind(x, instruc)
+
+# `_is_null_literal` of a side, through an `SQLText` to its literal.
+_null_side(@nospecialize(x))::Bool = _null_literal_any(x isa SQLText ? x.field : x)
+@noinline function _null_literal_any(@nospecialize(x))::Bool
+  x isa String && return _is_null_literal(x)
+  (x isa Missing || x === nothing) && return true
+  x isa AbstractString && return _null_literal_other(x)
+  return false
+end
+@noinline _null_literal_other(@nospecialize(x))::Bool = _is_null_literal(x)
+
 # A JSON value counts as unnamed: a key lookup (`"payload__n"`) is the scalar at the key, whose type is
 # the data's (`CJSONValue`, #1458), and a whole document is no date, interval or number either.
-_unnamed_side(x, instruc::SQLInstruction) =
-  !_is_null_literal(x isa SQLText ? x.field : x) &&
-  (k = _side_walk_kind(x, instruc); k === nothing || k isa Union{CJSON,CJSONValue})
+_unnamed_side(@nospecialize(x), instruc::SQLInstruction) =
+  !_null_side(x) &&
+  (k = _side_walk_kind_any(x, instruc); k === nothing || k isa Union{CJSON,CJSONValue})
 # #1323: a time of day too. SQLite holds it as its `HH:MM:SS` text and MySQL reads its digits as a
 # number, so an unnamed value beside one, or holding one, is the same question as beside a date.
-_is_temporal_kind(k) = k isa Union{CDate,CDateTime,CTime,CInterval}
+_is_temporal_kind(@nospecialize(k)) = k isa Union{CDate,CDateTime,CTime,CInterval}
 
 """
     _unnamed_temporal_side(left, right, instruc) -> Union{Nothing, Tuple{Any, CanonicalType}}
@@ -401,12 +437,13 @@ A side that only holds a temporal value under a function that names its own resu
 `Count`, a declared `Cast`) is not one: its value is that result. Read after both sides render, inside
 one walk question (`_memo_kind`), so a node is walked once however many comparisons ask about it.
 """
-function _unnamed_temporal_side(left, right, instruc::SQLInstruction)
+function _unnamed_temporal_side(@nospecialize(left), @nospecialize(right),
+                                instruc::SQLInstruction)::Union{Nothing,Tuple{Any,Any}}
   for (side, other) in ((left, right), (right, left))
     _unnamed_side(side, instruc) || continue
-    k = _side_walk_kind(other, instruc)
+    k = _side_walk_kind_any(other, instruc)
     _is_temporal_kind(k) && return (side, k)
-    held = _temporal_inside(side, instruc)
+    held = _temporal_inside_any(side, instruc)
     held === nothing || return (side, held)
   end
   return nothing
@@ -417,10 +454,10 @@ end
 # `:one_of`, `:promoting`, a `Lag`/`Lead` and its `default`), and of an undeclared `Case`'s branches. A
 # declared type is the value's type, so it is not looked through. Memoized per node: a chain of
 # arithmetic asks about each of its sub-expressions once per level.
-function _held_temporal(x, instruc::SQLInstruction)
-  _is_null_literal(x isa SQLText ? x.field : x) && return nothing
-  k = _side_walk_kind(x, instruc)
-  return _is_temporal_kind(k) ? k : _temporal_inside(x, instruc)
+function _held_temporal(@nospecialize(x), instruc::SQLInstruction)
+  _null_side(x) && return nothing
+  k = _side_walk_kind_any(x, instruc)
+  return _is_temporal_kind(k) ? k : _temporal_inside_any(x, instruc)
 end
 _first_held(values, instruc::SQLInstruction) =
   (for v in values; k = _held_temporal(v, instruc); k === nothing || return k; end; nothing)
@@ -430,6 +467,13 @@ _temporal_inside(p::FExpression, instruc::SQLInstruction) =
 _temporal_inside(p::Union{FObject,WindowFunction}, instruc::SQLInstruction) =
   _memo_kind(() -> _function_held_temporal(p, instruc), p, instruc, :held_temporal)
 _temporal_inside(::Any, ::SQLInstruction) = nothing
+# `_temporal_inside` of an untyped side (#1599 layer 5): its three methods, each at its type.
+@noinline function _temporal_inside_any(@nospecialize(x), instruc::SQLInstruction)
+  x isa FExpression && return _temporal_inside(x, instruc)
+  x isa FObject && return _temporal_inside(x, instruc)
+  x isa WindowFunction && return _temporal_inside(x, instruc)
+  return nothing
+end
 function _function_held_temporal(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)

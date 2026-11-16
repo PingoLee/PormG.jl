@@ -4073,7 +4073,9 @@ end
                :_duration_operand_units, :_duration_value_sql, :_json_document_marker, :_meaning_refusal,
                # the callees the ones above hand the connection to
                :_computes, :_interval_ms_as_text, :_duration_values_units, :_unnamed_temporal_remedy,
-               :_interval_error)
+               :_interval_error,
+               # the engine's timestamp remedy, read by the refusals at the engine's type (#1599 layer 5)
+               :_timestamp_remedy)
     checked = 0
     for name in union(Set(callees), setdiff(facts, write_facts))
       f = getglobal(QB, name)
@@ -4089,7 +4091,7 @@ end
       end
     end
     # The exact count records the set: a method added, removed or renamed in it changes it.
-    @test checked == 192
+    @test checked == 193
     # Their engine argument, the first, stays specialized. `_inserted_row_query`'s `result` (its fourth, bit 3) is
     # unspecialized since #1614; nothing else is, on any of the three.
     for name in write_facts, m in methods(getglobal(QB, name))
@@ -5561,6 +5563,49 @@ end
     me = MethodError(identity, ("database is closed", "disk i/o error"))
     @test PormG._unowned_string(me) == "MethodError"
     @test PormG._unowned_error_text(me) == "methoderror"
+  end
+
+  # What: the unnamed-temporal check (#1310) a comparison filter runs on SQLite and MySQL
+  #   (`_refuse_unnamed_temporal` over the queue `_checking_unnamed_temporal` fills), its side walks, and the
+  #   refusals it raises.
+  # Expected: the queue is a `Vector{Tuple{Any,Any,String}}`, and the check over it makes no dynamic call down to
+  #   the functions its walks name at a side's concrete type (`_side_walk_kind`, `_temporal_inside`,
+  #   `_unnamed_side_label`, `_is_null_literal`), whose own bodies are not claimed here; each walk's one open arm
+  #   is an `invoke`. The two side questions and the refusal builders take their untyped arguments
+  #   unspecialized, and the remedy reads `_timestamp_remedy` at the engine's type, in the refusal.
+  # Why: the queue was an `Any[]`, so each queued comparison was read back untyped and destructured through
+  #   `indexed_iterate`, which a trimmed image had no code for: a `date__@gte` filter raised
+  #   `MissingCodeError` in the trimmed SQLite and MySQL reads (#1599 layer 5, #1814 wall 21).
+  @testset "a comparison filter's unnamed-temporal check runs at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    @test isdefined(QB, :_PendingTemporal) && QB._PendingTemporal === Vector{Tuple{Any,Any,String}}
+    skip = (QB._side_walk_kind_other, QB._null_literal_other, QB._unnamed_side_label_other,
+            QB._side_walk_kind, QB._temporal_inside, QB._unnamed_side_label, QB._is_null_literal)
+    @test _dynamic_calls_deep(QB._refuse_unnamed_temporal, (QB._PendingTemporal, QB.InstructionObject);
+                              depth = 4, skip = skip) == String[]
+    I = QB.InstructionObject
+    for (f, tt) in ((QB._side_walk_kind_any, (Any, I)), (QB._null_literal_any, (Any,)), (QB._null_side, (Any,)),
+                    (QB._unnamed_side, (Any, I)), (QB._temporal_inside_any, (Any, I)), (QB._held_temporal, (Any, I)),
+                    (QB._unnamed_side_label_any, (Any,)), (QB._unnamed_temporal_side, (Any, Any, I)),
+                    (QB._time_arithmetic_side, (Any, Any, String, I)), (QB._is_temporal_kind, (Any,)),
+                    (QB._unnamed_temporal_remedy, (Any, String)), (QB._temporal_beside, (Any,)))
+      @test (nameof(f), _dynamic_calls(f, tt)) == (nameof(f), String[])
+    end
+    @test (only(methods(QB._unnamed_temporal_side)).nospecialize, only(methods(QB._time_arithmetic_side)).nospecialize) == (3, 3)
+    for name in (:_unnamed_temporal_refusal, :_time_arithmetic_refusal, :_timestamp_remedy), m in methods(getglobal(QB, name))
+      # The connection (bit 0) everywhere, and the kind (bit 3) where there is one.
+      @test (name, m.nospecialize) == (name, name === :_unnamed_temporal_refusal ? 9 : 1)
+    end
+    for C in (K.PormGSQLite, K.PormGMySQL)
+      @test _dynamic_calls_deep(QB._unnamed_temporal_refusal, (C, String, String, Any); depth = 3) == String[]
+      @test _dynamic_calls_deep(QB._time_arithmetic_refusal, (C, String, String); depth = 3) == String[]
+    end
+    # The queue's one writer stores the concrete vector, and the found answer is built without a splat.
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_render.jl"), String)
+    body = src[findfirst("function _checking_unnamed_temporal", src).start:findfirst("function _queue_unnamed_temporal!", src).start]
+    @test occursin("pending = _PendingTemporal()", body) && !occursin("Any[]", body)
+    refuse = src[findfirst("function _refuse_unnamed_temporal", src).start:findfirst("function _time_arithmetic_side", src).start]
+    @test occursin("(hit[1], hit[2], op, false)", refuse) && !occursin("hit...", refuse)
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

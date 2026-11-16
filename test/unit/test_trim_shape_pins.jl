@@ -5646,6 +5646,27 @@ end
     @test !(:_with_field_part_other in invoked) && !(:_with_field_part_open in invoked)
   end
 
+  # What: the FROM tables' columns a MySQL `order_by` reads for its NULL sort key (`_from_column_names`): the table of
+  #   a model held untyped (`_model_table_at`), a relation path's hops (`_add_hop_tables!`) and one candidate model's
+  #   columns and relations (`_add_from_model!`, at `ModelType`).
+  # Expected: no dynamic call in any of them; `_from_column_names` reads a candidate through the split, never through
+  #   `model_table_name` on the abstract `PormGModel`.
+  # Why: `model_table_name` on an abstract model dispatched at run time to a body a trimmed image never compiled (it is
+  #   inlined everywhere): the trimmed MySQL `order_by` raised `MethodError` on `model_table_name(::ModelType)`
+  #   (#1599 layer 5).
+  @testset "the FROM columns of a MySQL order_by are read at ModelType (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    @test _dynamic_calls(QB._model_table_at, (Any,)) == String[]
+    @test _dynamic_calls_deep(QB._add_from_model!, (Set{String}, Vector{K.PormGModel}, PormG.Models.ModelType, Set{String});
+                              depth = 3) == String[]
+    for V in (Vector{SubString{String}}, Vector{String})
+      @test (V, _dynamic_calls(QB._add_hop_tables!, (Set{String}, QB.SQLObjectQuery, V))) == (V, String[])
+    end
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "select_nodes.jl"), String)
+    body = src[findfirst("function _from_column_names", src).start:findfirst("function _add_from_model!", src).start]
+    @test !occursin("Models.model_table_name(", body) && occursin("_add_from_model!(cols, candidates, m, tables)", body)
+  end
+
   # What: an ORDER BY term's render call (`_order_term_at`, which `_render_order_terms` calls for every term).
   # Expected: both calls from `_render_order_terms` (with and without a NULL flag) and the helper's calls of
   #   `_order_term_sql` resolve statically; the helper takes the term, the connection and the flag

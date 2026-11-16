@@ -43,8 +43,14 @@ PormG.config["rft_mock"] = PormG.Configuration.Settings(connections = RftMockSQL
 module RftModels
 import PormG
 import PormG.Models
-Rft_race = Models.Model("rft_race",
+Rft_circuit::Models.ModelType = Models.Model("rft_circuit",
+  circuitid = Models.IDField(),
+  name      = Models.CharField(max_length = 50),
+  country   = Models.CharField(max_length = 50, db_column = "country_name"),
+)
+Rft_race::Models.ModelType = Models.Model("rft_race",
   raceid         = Models.IDField(),
+  circuitid      = Models.ForeignKey("Rft_circuit"),
   year           = Models.IntegerField(),
   date           = Models.DateField(null = true),
   start_at       = Models.DateTimeField(null = true),
@@ -52,7 +58,7 @@ Rft_race = Models.Model("rft_race",
   time           = Models.TimeField(null = true),
   meta           = Models.JSONField(null = true),
 )
-Models.@models Rft_race
+Models.@models Rft_circuit Rft_race
 PormG.Models.set_models(@__MODULE__, "rft_mock")
 end
 const _RFT_RACE = RftModels.Rft_race
@@ -258,6 +264,65 @@ end
       QB._collect_projected_paths!(n2, t, 31); _old_collect_projected_paths!(o2, t, 31)   # the depth cut-off
       @test (i, n2) == (i, o2)
     end
+  end
+end
+
+# The old FROM-column walk's per-model loop, verbatim, as the oracle for `_add_from_model!` (`_from_column_names`).
+function _old_from_model_columns(start::Vector{PormG.PormGModel}, tables::Set{String})
+  cols = Set{String}(); candidates = copy(start); seen = Base.IdSet{PormG.PormGModel}(); order = String[]
+  while !isempty(candidates)
+    m = pop!(candidates)
+    m in seen && continue
+    push!(seen, m); push!(order, m.name)
+    in_from = PormG.Models.model_table_name(m) in tables
+    for (k, fld) in m.fields
+      in_from && push!(cols, PormG.Models.field_db_column(fld, k))
+      to = hasproperty(fld, :to) ? getproperty(fld, :to) : nothing
+      to isa PormG.PormGModel && push!(candidates, to)
+    end
+    for rel in values(m.related_objects)
+      for name in propertynames(rel)
+        target = getproperty(rel, name)
+        target isa PormG.PormGModel && push!(candidates, target)
+      end
+    end
+  end
+  return cols, order
+end
+function _new_from_model_columns(start::Vector{PormG.PormGModel}, tables::Set{String})
+  cols = Set{String}(); candidates = copy(start); seen = Base.IdSet{PormG.PormGModel}(); order = String[]
+  while !isempty(candidates)
+    m = pop!(candidates)
+    m in seen && continue
+    push!(seen, m); push!(order, m.name)
+    m isa PormG.Models.ModelType ? _RFT_QB._add_from_model!(cols, candidates, m, tables) :
+                                   _RFT_QB._add_from_model_other!(cols, candidates, m, tables)
+  end
+  return cols, order
+end
+
+# What: the FROM tables' columns a MySQL `order_by` reads for its NULL sort key (`_from_column_names`), and the
+#   per-model step it now calls, against the old loop: from the race, from the circuit, from both, with the race's
+#   table, the circuit's, both and neither in the FROM clause; and the full function over orderings that join.
+# Expected: the same columns (a `db_column` included), and the same models visited in the same order.
+# Why: the loop's body moved into `_add_from_model!`, called at `ModelType`, and the table names go through
+#   `_model_table_at`; the set of columns decides whether a term orders by a projection or a column.
+@testset "the FROM columns an order_by reads are the ones it read (#1599 layer 5)" begin
+  race, circuit = RftModels.Rft_race, RftModels.Rft_circuit
+  for start in (PormG.PormGModel[race], PormG.PormGModel[circuit], PormG.PormGModel[race, circuit]),
+      tables in (Set(["rft_race"]), Set(["rft_circuit"]), Set(["rft_race", "rft_circuit"]), Set{String}())
+    @test (start, tables, _new_from_model_columns(start, tables)) == (start, tables, _old_from_model_columns(start, tables))
+  end
+  for t in (race, circuit)
+    @test _RFT_QB._model_table_at(t) == PormG.Models.model_table_name(t)
+  end
+  for (orders, conn, from) in ((("date",), RftMockMySQL(), Set(["rft_race"])),
+                               (("-circuitid__name", "date"), RftMockMySQL(), Set(["rft_race", "rft_circuit"])),
+                               (("circuitid__country",), RftMockSQLiteOld(), Set(["rft_race", "rft_circuit"])))
+    q = race.objects; q.order_by(orders...)
+    instruc = _RFT_QB.build(q.object; connection = conn)
+    @test (orders, sort!(collect(_RFT_QB._from_column_names(q.object, instruc)))) ==
+          (orders, sort!(collect(_old_from_model_columns(PormG.PormGModel[race], from)[1])))
   end
 end
 

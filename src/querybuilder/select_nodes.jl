@@ -145,10 +145,18 @@ function _add_hop_tables!(tables::Set{String}, object::SQLObject, segs)
     step = _relation_step(object, model, seg, i == 1)
     step === nothing && break
     model = step[2]
-    push!(tables, Models.model_table_name(model))
+    push!(tables, _model_table_at(model))
   end
   return nothing
 end
+
+# `Models.model_table_name` of a model held untyped (#1599 layer 5): at `ModelType`, the one concrete
+# `PormGModel` (#1615), and anything else through one dynamic call. Called on the abstract value, it dispatched at
+# run time, and a trimmed image had no body for it (it is inlined everywhere): the trimmed MySQL `order_by` raised
+# `MethodError` on `model_table_name(::ModelType)` while reading the FROM tables for its NULL sort key.
+_model_table_at(@nospecialize(model))::String =
+  model isa Models.ModelType ? Models.model_table_name(model) : _model_table_other(model)
+@noinline _model_table_other(@nospecialize(model))::String = Models.model_table_name(model)
 
 # The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
 # and each joined CTE's projections. A joined model is found by its table among the models the base
@@ -188,7 +196,7 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   with_order_terms(_order_cte_names_of!, object, tables)   # #1599 slice C
   candidates = PormGModel[object.model]
   for aj in values(object.alias_join)
-    push!(tables, Models.model_table_name(aj.target))
+    push!(tables, _model_table_at(aj.target))
     push!(candidates, aj.target)
   end
   mod = isdefined(object.model, :_module) ? object.model._module : nothing
@@ -203,18 +211,9 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
     m = pop!(candidates)
     m in seen && continue
     push!(seen, m)
-    in_from = Models.model_table_name(m) in tables
-    for (k, fld) in m.fields
-      in_from && push!(cols, Models.field_db_column(fld, k))
-      to = hasproperty(fld, :to) ? getproperty(fld, :to) : nothing
-      to isa PormGModel && push!(candidates, to)
-    end
-    for rel in values(m.related_objects)
-      for name in propertynames(rel)
-        target = getproperty(rel, name)
-        target isa PormGModel && push!(candidates, target)
-      end
-    end
+    # #1599 layer 5: the model's fields and relations read at `ModelType`'s declared slot types; read off the
+    # abstract `PormGModel`, every call on them was a dynamic one.
+    m isa Models.ModelType ? _add_from_model!(cols, candidates, m, tables) : _add_from_model_other!(cols, candidates, m, tables)
   end
   for (name, cte) in object.ctes
     name in tables || continue
@@ -227,6 +226,26 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
   end
   return cols
 end
+
+# One candidate model's part of `_from_column_names`: its columns when its table is in the FROM clause, and the models
+# its fields and relations reach, queued as further candidates.
+function _add_from_model!(cols::Set{String}, candidates::Vector{PormGModel}, m, tables::Set{String})
+  in_from = _model_table_at(m) in tables
+  for (k, fld) in m.fields
+    in_from && push!(cols, Models.field_db_column(fld, k))
+    to = hasproperty(fld, :to) ? getproperty(fld, :to) : nothing
+    to isa PormGModel && push!(candidates, to)
+  end
+  for rel in values(m.related_objects)
+    for name in propertynames(rel)
+      target = getproperty(rel, name)
+      target isa PormGModel && push!(candidates, target)
+    end
+  end
+  return nothing
+end
+@noinline _add_from_model_other!(cols::Set{String}, candidates::Vector{PormGModel}, @nospecialize(m), tables::Set{String}) =
+  _add_from_model!(cols, candidates, m, tables)
 
 # The CTE names an `order_by` term reads, for `_from_column_names`: a `CTEReference` anywhere in it. A
 # path into a CTE is one by then, inside a window or a `When` condition too (`_resolve_cte_string_paths`).

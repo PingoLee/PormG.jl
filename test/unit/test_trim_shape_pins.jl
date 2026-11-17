@@ -5864,6 +5864,27 @@ end
     @test all(s -> occursin("allequal", s) || occursin("getindex", s), inner)
   end
 
+  # What: a pattern lookup's render (`_render_predicate` → `_pattern_operator_sql` → the `Dialect` renderer the operator
+  #   names), for every operator in `PATTERN_LOOKUP_OPERATORS`.
+  # Expected: no dynamic call in `_render_predicate` (keyword body included) or in `_pattern_operator_sql` at the split
+  #   engine union; `_pattern_operator_sql`'s engine argument is unspecialized (bit 2), and so is every `Dialect` method
+  #   of every pattern renderer (bit 1), so a method added later without it fails here.
+  # Why: specialized on the engine, `_pattern_operator_sql(::String, ::SQLiteConnectionPool, …)` had no compiled target:
+  #   the trimmed read stopped at `name__@icontains` (#1599 layer 5).
+  @testset "a pattern lookup renders at the split engine union (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls_kw(QB._render_predicate, (String, String, String, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._pattern_operator_sql, (String, QB.ConnType, String, String)) == String[]
+    @test only(methods(QB._pattern_operator_sql)).nospecialize & 0b10 == 0b10
+    for op in QB.PATTERN_LOOKUP_OPERATORS
+      f = getglobal(PormG.Dialect, Symbol(op))
+      for m in methods(f)
+        m.module === PormG.Dialect || continue
+        @test (op, string(m.sig), m.nospecialize & 0b1) == (op, string(m.sig), 0b1)
+      end
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

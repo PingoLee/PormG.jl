@@ -13,7 +13,13 @@ for (fname, ops) in ((:_json_operator_sql, JSON_CONTAINMENT_OPERATORS),
                      (:_array_operator_sql, ARRAY_CONTAINMENT_OPERATORS),
                      (:_pattern_operator_sql, PATTERN_LOOKUP_OPERATORS))
   arms = [:(op == $(String(o)) && return Dialect.$(Symbol(o))(conn, column, ph)) for o in ops]
-  @eval function $fname(op::AbstractString, conn, column, ph)
+  # #1599 layer 5: the pattern family takes the engine unspecialized at the split union (`ConnType`), as its
+  # `Dialect` renderers take theirs (`@nospecialize(conn::T)` on every method), so each arm is a static call over
+  # the engines. Specialized on the engine, `_pattern_operator_sql(::String, ::SQLiteConnectionPool, …)` had no
+  # compiled target in a trimmed image: the read stopped at `name__@icontains`. The other three families keep
+  # theirs until a trimmed read reaches them.
+  connarg = fname === :_pattern_operator_sql ? :(@nospecialize(conn::ConnType)) : :conn
+  @eval function $fname(op::AbstractString, $connarg, column, ph)
     $(arms...)
     throw(FilterError("Invalid filter operator: $(op) is not a supported operator."))
   end

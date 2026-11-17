@@ -190,6 +190,20 @@ end
   end
 end
 
+# What: `_pattern_operator_sql` (now one method taking the engine unspecialized) against the `Dialect` renderer each
+#   operator names, called directly, for every pattern operator on each engine, with a marker, a `\$1` marker and a
+#   value that takes the renderers' untyped arm.
+# Expected: the same SQL, or the same error type and text (a capability refusal on an engine without the operator).
+# Why: the render is the same calls at the split engine union; under the JIT it must be invisible (#1599 layer 5).
+@testset "a pattern lookup renders as its Dialect renderer did (#1599 layer 5)" begin
+  for conn in _RLK_CONNS, op in _RLK_QB.PATTERN_LOOKUP_OPERATORS, ph in Any["?", raw"$1", :sym]
+    tag = (nameof(typeof(conn)), op, ph)
+    f = getglobal(PormG.Dialect, Symbol(op))
+    @test (tag, _rlk_outcome(() -> _RLK_QB._pattern_operator_sql(op, conn, "\"Tb\".\"name\"", ph))) ==
+          (tag, _rlk_outcome(() -> f(conn, "\"Tb\".\"name\"", ph)))
+  end
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

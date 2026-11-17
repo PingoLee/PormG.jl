@@ -5761,7 +5761,7 @@ end
   @testset "the Postgres.jl timestamp read pads its milliseconds without rpad (#1599 layer 2, #1614)" begin
     pgx = Base.get_extension(PormG, :PormGPostgresExt)
     src = read(joinpath(pkgdir(PormG), "ext", "PormGPostgresExt.jl"), String)
-    body = src[findfirst("function _ms(fraction)", src).start:findfirst("_datetime(m) =", src).start]
+    body = src[findfirst("_ms(fraction)", src).start:findfirst("_datetime(m) =", src).start]   # either form's definition
     @test !occursin("rpad(", body) && occursin("10^(3 - k)", body)
     @test _dynamic_calls(pgx._ms, (SubString{String},)) == String[]
   end

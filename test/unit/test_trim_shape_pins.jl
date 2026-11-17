@@ -5795,6 +5795,25 @@ end
     @test _dynamic_calls(QB._bind_predicate_value, (QB.InstructionObject, String, Vector{Int64})) == String[]
   end
 
+  # What: a membership or range list's formatting (`_format_filter_value` → `_format_list_value`), over the lists a
+  #   filter commonly holds, and the vector it builds from the formatted values (`_formatted_list`).
+  # Expected: no dynamic call in `_format_filter_value`, in the walk, in `_format_list_at` at each list type it names,
+  #   in `_formatted_list` or in `_narrowed_list` at the types it names.
+  # Why: over the untyped list, `isempty` and the comprehension's iteration and `collect` dispatched at run time: the
+  #   trimmed read stopped at `__@range` over a `Vector{Date}` in `isempty` (#1599 layer 5).
+  @testset "a membership or range list is formatted at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._format_filter_value, (Any, Any, String)) == String[]
+    @test _dynamic_calls(QB._format_list_value, (Any, Any, Bool)) == String[]
+    for L in (Vector{String}, Vector{Int64}, Vector{Float64}, Vector{Dates.Date}, Vector{Dates.DateTime}, Vector{Any})
+      @test (L, _dynamic_calls(QB._format_list_at, (Any, L, Bool))) == (L, String[])
+    end
+    @test _dynamic_calls(QB._formatted_list, (Vector{Any},)) == String[]
+    for T in (String, Int64, Float64)
+      @test (T, _dynamic_calls(QB._narrowed_list, (Type{T}, Vector{Any}))) == (T, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -87,6 +87,41 @@ _rlk_params(instruc) = sprint(show, instruc.parameters)
   end
 end
 
+# The old `_format_filter_value`, copied from the code before #1599 layer 5's lookup slice.
+function _old_format_filter_value(@nospecialize(formatter), @nospecialize(values), operator::AbstractString)
+  ranged = operator in _RLK_QB._RANGE_CHECKED_OPERATORS
+  (operator in _RLK_QB._ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray) ||
+    return _RLK_QB._format_literal_value(formatter, values, ranged)
+  isempty(values) && return _RLK_QB._format_empty_list(formatter, values, ranged)
+  return [_RLK_QB._format_literal_value(formatter, v, ranged) for v in values]
+end
+
+# What: `_format_filter_value` (now through `_format_list_value` and `_formatted_list`) against its old body, over the
+#   column formatters a membership or range list meets, every list type the walk names and lists that take its open
+#   arms (an empty list, a mixed list, a list of a type the walk does not name, a range or a tuple), a value of the
+#   wrong type, a list the formatter refuses part-way, and a scalar, under each operator.
+# Expected: the same outcome (`isequal`): the same value and the same vector type (`typeof`), or the same error type and text.
+# Why: the walk builds the vector itself instead of through the comprehension, so a trimmed image can run it; the
+#   vector type is a bound parameter's type (an empty list binds as one array on PostgreSQL), and the first value a
+#   formatter refuses is the one the refusal names.
+@testset "a membership or range list formats as it did (#1599 layer 5)" begin
+  M = PormG.Models
+  formatters = Any[M.format_date_sql, M.format_number_sql, M.format_text_sql, M.format_uuid_sql,
+                   M.format_timezone_sql, M.format_bool_sql, _RLK_QB.format_pattern_text_sql]
+  lists = Any[[Date(2008, 5, 1), Date(2008, 6, 30)], [6, 7], ["Monaco Grand Prix", "Brazil"], [1.5, 2.5],
+              [DateTime(2008, 5, 25, 14), DateTime(2008, 11, 2, 17)], Any["a", 2], Any[1, 2.5], Any[],
+              Int[], String[], Date[], [Int32(1), Int32(2)], [true, false], 1:3, ["2008-05-01", "x"],
+              ["2008-05-01", "2008-06-30"], [Date(2008, 5, 1), "2008-13-40"], Any[nothing, 1], ("a", "b"), 7,
+              "Monaco", Date(2008, 5, 25)]
+  for op in ("IN", "NOT IN", "BETWEEN", "NOT BETWEEN", "="), f in formatters, x in lists
+    tag = (op, nameof(f), typeof(x))
+    new = _rlk_outcome(() -> _RLK_QB._format_filter_value(f, x, op))
+    old = _rlk_outcome(() -> _old_format_filter_value(f, x, op))
+    @test isequal((tag, new), (tag, old))
+    new[1] === :value && old[1] === :value && @test (tag, typeof(new[2])) == (tag, typeof(old[2]))
+  end
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

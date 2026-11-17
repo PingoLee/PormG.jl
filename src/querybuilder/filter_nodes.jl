@@ -462,6 +462,53 @@ function _format_filter_value(@nospecialize(formatter), @nospecialize(values), o
   ranged = operator in _RANGE_CHECKED_OPERATORS
   (operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray) ||
     return _format_literal_value(formatter, values, ranged)
+  return _format_list_value(formatter, values, ranged)
+end
+
+# A membership or range list at its concrete type (#1599 layer 5). Over the untyped list, `isempty` and the
+# comprehension's iteration dispatched at run time, and a trimmed image had nothing compiled for the list it met:
+# the read stopped at `__@range` over a `Vector{Date}`. One arm per list a filter commonly holds, each the same two
+# steps at that type (`_format_list_at`); any other list takes them behind `@noinline` (`_format_list_other`).
+@noinline function _format_list_value(@nospecialize(formatter), @nospecialize(values), ranged::Bool)
+  values isa Vector{String} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Int64} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Float64} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Dates.Date} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Dates.DateTime} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Any} && return _format_list_at(formatter, values, ranged)
+  return _format_list_other(formatter, values, ranged)
+end
+function _format_list_at(@nospecialize(formatter), values::Vector, ranged::Bool)
+  isempty(values) && return _format_empty_list(formatter, values, ranged)
+  out = Vector{Any}(undef, length(values))
+  for i in eachindex(values)   # in order, so the first value a formatter refuses is the one reported
+    out[i] = _format_literal_value(formatter, values[i], ranged)
+  end
+  return _formatted_list(out)
+end
+
+# The vector the comprehension `[_format_literal_value(…) for v in values]` gave, from its formatted values. Its
+# element type is not inferred, so `collect` took the first value's type and widened it (`promote_typejoin`) at
+# each value of another type, through calls a trimmed image has no code for. A list whose values are all one of the
+# types a column formatter returns is that type's vector, which is what the widening gave; any other list takes
+# the same widening, behind `@noinline` (`_formatted_list_other`).
+@noinline function _formatted_list(out::Vector{Any})
+  all(x -> x isa String, out) && return _narrowed_list(String, out)
+  all(x -> x isa Int64, out) && return _narrowed_list(Int64, out)
+  all(x -> x isa Float64, out) && return _narrowed_list(Float64, out)
+  return _formatted_list_other(out)
+end
+function _narrowed_list(::Type{T}, out::Vector{Any}) where {T}
+  r = Vector{T}(undef, length(out))
+  for i in eachindex(out)
+    r[i] = out[i]::T
+  end
+  return r
+end
+@noinline _formatted_list_other(out::Vector{Any}) = collect(Base.Generator(identity, out))
+
+# A list of a type `_format_list_value` does not name: the old two steps, at run time.
+@noinline function _format_list_other(@nospecialize(formatter), @nospecialize(values), ranged::Bool)
   isempty(values) && return _format_empty_list(formatter, values, ranged)
   return [_format_literal_value(formatter, v, ranged) for v in values]
 end

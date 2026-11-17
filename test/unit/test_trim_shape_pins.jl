@@ -5777,6 +5777,24 @@ end
     @test _dynamic_calls(PormG._unowned_field, (Any, Symbol)) == String[]
   end
 
+  # What: the WHERE `BETWEEN` arm of `_render_filter_oper` (`"date__@range" => [d1, d2]` on a model field), and the
+  #   helper that binds the formatted pair (`_bind_range_value`) at the vector types a column formatter returns.
+  # Expected: no dynamic `getproperty` of `:formatter` or `:type` in `_render_filter_oper` (the field is asserted out of
+  #   `_operand_field`'s `Union{Nothing,AnyField}`), no dynamic `_bind_predicate_value` call there, and none in the
+  #   helper or in `_bind_predicate_value` at `Vector{String}` / `Vector{Int64}`.
+  # Why: over the 31-member union both slot reads were dynamic, and the formatted pair reached `_bind_predicate_value`
+  #   untyped: the trimmed read stopped at `__@range` with `MethodError: getproperty(::sDateField, ::Symbol)`
+  #   (#1599 layer 5).
+  @testset "a __@range filter on a model field binds at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    calls = _dynamic_calls(QB._render_filter_oper, (QB.OperObject, QB.InstructionObject))
+    @test !any(s -> occursin("getproperty", s) && (occursin(":formatter", s) || occursin(":type)", s)), calls)
+    @test !any(s -> occursin("_bind_predicate_value", s), calls)
+    @test _dynamic_calls(QB._bind_range_value, (QB.InstructionObject, String, Any)) == String[]
+    @test _dynamic_calls(QB._bind_predicate_value, (QB.InstructionObject, String, Vector{String})) == String[]
+    @test _dynamic_calls(QB._bind_predicate_value, (QB.InstructionObject, String, Vector{Int64})) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

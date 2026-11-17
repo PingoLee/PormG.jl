@@ -798,6 +798,20 @@ end
 @noinline _bind_formatted_other(instruc::SQLInstruction, @nospecialize(value), contains::Bool, operator::AbstractString) =
   add_parameter!(instruc, value; contains = contains, operator = operator)
 
+# `_bind_predicate_value` for a `BETWEEN` operand pair at its concrete type (#1599 layer 5). The WHERE range
+# arm formats the pair untyped (`_format_filter_value`'s comprehension takes its element type from the
+# values), so the call dispatched at run time, and a trimmed image had no compiled target for it: the read
+# stopped at `__@range`. One arm per vector a column formatter returns for a pair, each the same call at
+# that type; any other value takes the old call behind `@noinline` (`_bind_range_other`).
+@noinline function _bind_range_value(instruc::SQLInstruction, operator::AbstractString, @nospecialize(formatted))
+  formatted isa Vector{String} && return _bind_predicate_value(instruc, operator, formatted)
+  formatted isa Vector{Int64} && return _bind_predicate_value(instruc, operator, formatted)
+  formatted isa Vector{Float64} && return _bind_predicate_value(instruc, operator, formatted)
+  return _bind_range_other(instruc, operator, formatted)
+end
+@noinline _bind_range_other(instruc::SQLInstruction, operator::AbstractString, @nospecialize(formatted)) =
+  _bind_predicate_value(instruc, operator, formatted)
+
 # #972: the binding half of the three transform arms of `_get_filter_query(::SQLTypeOper, …)`.
 #
 # They bound every value with one `add_parameter!`, so `"date__@year__@range" => [1990, 1999]`
@@ -1630,10 +1644,15 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       range_field, range_label = _operand_field(v, instruc)
       if range_field === nothing && alias_key !== nothing
         placeholders = _bind_alias_value(v, alias_key, instruc)   # #1381
+      elseif range_field === nothing
+        placeholders = _bind_range_value(instruc, v.operator, _oper_literal(v))
       else
-        formatted = range_field === nothing ? _oper_literal(v) :
-          _guarded_format(range_field.formatter, _oper_literal(v), v.operator, range_label, range_field.type)
-        placeholders = _bind_predicate_value(instruc, v.operator, formatted)
+        # #1599 layer 5: the field asserted out of `_operand_field`'s `Union{Nothing,AnyField}`. Over that
+        # union its two slot reads were dynamic `getproperty` calls, the `__@range` wall of a trimmed read;
+        # the formatted pair is bound at its type (`_bind_range_value`).
+        rf = range_field::Models.AnyField
+        formatted = _guarded_format(rf.formatter, _oper_literal(v), v.operator, range_label, rf.type)
+        placeholders = _bind_range_value(instruc, v.operator, formatted)
       end
     elseif haskey(instruc.object.model.fields, col.field)
       # Does this operator take `%` decoration? `add_parameter!` then routes the value through

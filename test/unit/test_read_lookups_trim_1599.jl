@@ -234,6 +234,21 @@ end
   close(new_db); close(old_db)
 end
 
+# What: the Postgres.jl extension's wire text (`_wire_text`) for a bound membership list against Postgres.jl's own
+#   `_param`, over text lists (quotes, commas, braces, a backslash, an empty string, non-ASCII), float lists (`NaN`,
+#   `Inf`, `-0.0`, a large exponent) and the empty lists.
+# Expected: the same text.
+# Why: the arms hand the list to `_param` at its type instead of through the open arm; the text must be the one the
+#   driver made (#1599 layer 5, #1614).
+@testset "a membership list's Postgres.jl text is the driver's (#1599 layer 5)" begin
+  pgx = Base.get_extension(PormG, :PormGPostgresExt)
+  lists = Any[["Brazilian Grand Prix"], ["a,b", "c\"d", "{x}", "back\\slash", "", "São Paulo"], String[],
+              [1.5, 2.5], [NaN, Inf, -Inf, -0.0, 1.0e20], Float64[]]
+  for v in lists
+    @test (typeof(v), pgx._wire_text(v)) == (typeof(v), Postgres._param(v))
+  end
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

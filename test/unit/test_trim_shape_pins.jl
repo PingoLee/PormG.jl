@@ -5910,6 +5910,29 @@ end
     @test length(open_arm) == 2 && occursin("_pormg_lower(", open_arm[1]) && occursin("sqlreturn", open_arm[2])
   end
 
+  # What: the Postgres.jl extension's wire text for a bound membership list (`_wire_text`), which PostgreSQL binds as
+  #   one array (`"name__@in" => [...]` renders `= ANY($1)`).
+  # Expected: a static `invoke` of `Postgres._param` at `Vector{String}` and at `Vector{Float64}`, as at `Vector{Int64}`,
+  #   and no dynamic call. (The open arm, `_wire_text_other`, is itself a static call, so "no dynamic call" alone passes
+  #   on the base: the invokes are what show the arms.)
+  # Why: a text list took the open arm, whose `_param(::Vector{String})` had no code in a trimmed image: the Trim
+  #   workflow's Postgres.jl binary stopped at `name__@in` with `StatementError`, cause `MissingCodeError` (#1599
+  #   layer 5, #1614).
+  @testset "a membership list binds at its type on Postgres.jl (#1599 layer 5, #1614)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    ci, _ = only(InteractiveUtils.code_typed(pgx._wire_text, (Any,); optimize = true))
+    invoked = Set{Any}()
+    for st in ci.code
+      (st isa Expr && st.head === :invoke) || continue
+      mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      push!(invoked, mi.specTypes)
+    end
+    for L in (Vector{Int64}, Vector{String}, Vector{Float64})
+      @test (L, Tuple{typeof(Postgres._param), L} in invoked) == (L, true)
+    end
+    @test _dynamic_calls(pgx._wire_text, (Any,)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -1200,7 +1200,11 @@ const _PATTERN_REFUSED_KINDS = (:array, :tsvector, :inexact_number, :timestamp, 
 # surrogate, which `_set_field_from_sql_function` types `IntegerField` for every `Count`/`Sum` and as
 # the operand for an `Avg`, so a CTE's `Avg("grid")` — a numeric — would read as an integer's digits
 # on PostgreSQL.
-function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQLInstruction)
+#
+# #1599 layer 5: `operand_field` is `_operand_field`'s `Union{Nothing,AnyField}` and `alias` the column slot's union,
+# so the body takes both unspecialized (specialized on them the call had no compiled target: the trimmed read
+# stopped at `name__@icontains`), and the field's kind is read through `_operand_field_kind`.
+function _pattern_operand_kind(v::SQLTypeOper, @nospecialize(operand_field), @nospecialize(alias), instruc::SQLInstruction)
   col = _oper_column(v)
   col isa CTEReference && return _expression_kind(col, instruc)
   key = col isa SQLField ? memo_key(col) : nothing
@@ -1214,10 +1218,31 @@ function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQ
              for k in keys(instruc.object.ctes) if startswith(name, k * "__")]
     return !isempty(kinds) && allequal(kinds) ? first(kinds) : nothing
   end
-  operand_field !== nothing && return _field_kind(operand_field)
-  alias !== nothing && return _having_alias_kind(memo_key(:base, alias), instruc)
+  operand_field !== nothing && return _operand_field_kind(operand_field)
+  # `_alias_filter_key` returns a slot it has tested `isa String`, re-read, so inference sees the slot's union.
+  alias !== nothing && return _having_alias_kind(memo_key(:base, alias::String), instruc)
   return _expression_kind(col, instruc)
 end
+
+# `_field_kind(field)` at the field's concrete type (#1599 layer 5). `_field_kind` has a method per argument type
+# (a field, anything else), and a call over the field union dispatched at run time. One arm per column a pattern
+# lookup commonly reads, each the same call at that type; any other field takes it behind `@noinline`.
+@noinline function _operand_field_kind(@nospecialize(f))::Union{CanonicalType,Nothing}
+  f isa Models.sCharField && return _field_kind(f)
+  f isa Models.sTextField && return _field_kind(f)
+  f isa Models.sSlugField && return _field_kind(f)
+  f isa Models.sEmailField && return _field_kind(f)
+  f isa Models.sURLField && return _field_kind(f)
+  f isa Models.sIntegerField && return _field_kind(f)
+  f isa Models.sBigIntegerField && return _field_kind(f)
+  f isa Models.sIDField && return _field_kind(f)
+  f isa Models.sForeignKey && return _field_kind(f)
+  f isa Models.sDateField && return _field_kind(f)
+  f isa Models.sDateTimeField && return _field_kind(f)
+  f isa Models.sUUIDField && return _field_kind(f)
+  return _operand_field_kind_other(f)
+end
+@noinline _operand_field_kind_other(@nospecialize(f))::Union{CanonicalType,Nothing} = _field_kind(f)
 
 # The label a refused pattern lookup names: the path the user wrote, where the operand has one.
 # `_filter_path_label` asks `memo_key`, which has no method for every operand (an `F` expression).

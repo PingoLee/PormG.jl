@@ -171,6 +171,25 @@ end
   @test _RLK_QB._queue_unnamed_temporal!(nothing, left, [1, 2], "BETWEEN") === nothing
 end
 
+# What: `_operand_field_kind` against the `_field_kind` call it replaces, over a field of every type a model can
+#   declare (each `AnyField` member) and a value that is no field.
+# Expected: the same kind (`isequal`), or `nothing`.
+# Why: a pattern lookup reads its operand's kind to decide how the column is read as text and what it refuses; a kind
+#   read differently would change the SQL or the refusal (#1599 layer 5).
+@testset "a pattern operand's field kind is what _field_kind gave (#1599 layer 5)" begin
+  M = PormG.Models
+  fields = Any[M.CharField(), M.TextField(), M.SlugField(), M.EmailField(), M.URLField(), M.IntegerField(),
+               M.BigIntegerField(), M.PositiveIntegerField(), M.PositiveSmallIntegerField(),
+               M.IDField(), M.ForeignKey("Rlk_circuit"), M.OneToOneField("Rlk_circuit"), M.DateField(), M.DateTimeField(),
+               M.DateTimeField(type = "TIMESTAMP"), M.TimeField(), M.DurationField(), M.UUIDField(), M.FloatField(),
+               M.DecimalField(max_digits = 8, decimal_places = 3), M.BooleanField(), M.BinaryField(), M.JSONField(),
+               M.ImageField(), M.PasswordField(), M.GenericIPAddressField(), M.CIDRField(),
+               M.ArrayField(M.IntegerField()), M.SearchVectorField(), "not a field", nothing]
+  for f in fields
+    @test isequal((typeof(f), _RLK_QB._operand_field_kind(f)), (typeof(f), _RLK_QB._field_kind(f)))
+  end
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

@@ -5846,6 +5846,24 @@ end
     end
   end
 
+  # What: the kind of a pattern lookup's operand (`_pattern_operand_kind`), from `_render_filter_oper`, with the field
+  #   `_operand_field` resolved (`Union{Nothing,AnyField}`) and the alias slot's union.
+  # Expected: `_render_filter_oper` calls it statically; its field and alias arguments are unspecialized (bits 2 and 3);
+  #   `_operand_field_kind` makes no dynamic call. The two dynamic calls left in it (`allequal`, `getindex` over the
+  #   kinds of a CTE column's candidates) are in the CTE arm, which a model column does not take.
+  # Why: specialized on the two unions the call had no compiled target: the trimmed read stopped at `name__@icontains`
+  #   with `MethodError(_pattern_operand_kind, (OperObject, sCharField, Nothing, InstructionObject))` (#1599 layer 5).
+  @testset "a pattern lookup's operand kind is read at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    calls = _dynamic_calls(QB._render_filter_oper, (QB.OperObject, QB.InstructionObject))
+    @test !any(s -> occursin("_pattern_operand_kind", s), calls)
+    m = only(methods(QB._pattern_operand_kind))
+    @test m.nospecialize & 0b0110 == 0b0110
+    @test _dynamic_calls(QB._operand_field_kind, (Any,)) == String[]
+    inner = _dynamic_calls(QB._pattern_operand_kind, (QB.OperObject, Any, Any, QB.InstructionObject))
+    @test all(s -> occursin("allequal", s) || occursin("getindex", s), inner)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

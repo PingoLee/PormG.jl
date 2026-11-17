@@ -175,7 +175,8 @@ jobs:
   # ── The full SQLite entry: the write (#1694) ─────────────────────────────────────────────────────
   # test/trim/main.jl: boot, two creates PormG refuses before any SQL, the read steps (TRIM_READ_LINES), a create that leaves three fields to
   # the write's own fill (a DateTimeField among them), the typed read of both rows, an update and a delete,
-  # each checked by a typed read, then a bulk_insert of two rows that the typed read sees. The job fails
+  # each checked by a typed read, then a bulk_insert of two rows that the typed read sees, and one whose second row
+  # validation refuses (its refusal's text, and no row written). The job fails
   # unless the binary exits 0 and prints each of those lines.
 
   full-write:
@@ -218,7 +219,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
@@ -232,6 +233,10 @@ jobs:
             'step\tupdate\t1 rows; round 7'
             'step\tdelete\t1 rows; 1 left'
             'step\tbulk\t2 rows; 2 read back'
+            # A bulk_insert with one invalid row: the refusal by its row and field, as the JIT prints it, not the
+            # MethodError the row loop's error pass raised in a trimmed binary (#1694), and no row written.
+            'step\tbulk_refused\tInvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).'
+            'step\tbulk_refused\t0 rows written; 3 Monaco races'
           )
           missing=0
           for line in "${expected[@]}"; do

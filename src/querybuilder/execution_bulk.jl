@@ -2596,6 +2596,29 @@ function _format_bulk_cell(model::PormGModel, field::AbstractString, f_meta, @no
   end
 end
 
+# The field's formatter on a cell, as the error pass calls it (#1599 layer 7, #1694): at the cell's concrete type and
+# the formatter's (`Models.apply_formatter`), not through the field's `Function` slot on an untyped cell, which a
+# trimmed image has no code for. Its result is discarded, as the pass discarded it; only whether it raises, and what,
+# matters. One arm per value type `_format_single_at` walks, and anything else through one dynamic call.
+@noinline function _depuration_format_at(@nospecialize(formatter), @nospecialize(value))
+  value isa String && return Models.apply_formatter(formatter, value)
+  value isa Int64 && return Models.apply_formatter(formatter, value)
+  value isa Float64 && return Models.apply_formatter(formatter, value)
+  value isa Bool && return Models.apply_formatter(formatter, value)
+  value isa SubString{String} && return Models.apply_formatter(formatter, value)
+  value isa Dates.Date && return Models.apply_formatter(formatter, value)
+  value isa Dates.DateTime && return Models.apply_formatter(formatter, value)
+  value isa Dates.Time && return Models.apply_formatter(formatter, value)
+  value isa TimeZones.ZonedDateTime && return Models.apply_formatter(formatter, value)
+  value isa Decimals.Decimal && return Models.apply_formatter(formatter, value)
+  value isa UUIDs.UUID && return Models.apply_formatter(formatter, value)
+  value isa Int32 && return Models.apply_formatter(formatter, value)
+  value isa Nothing && return Models.apply_formatter(formatter, value)
+  value isa Missing && return Models.apply_formatter(formatter, value)
+  return _depuration_format_other(formatter, value)
+end
+@noinline _depuration_format_other(@nospecialize(formatter), @nospecialize(value)) = Models.apply_formatter(formatter, value)
+
 function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{String, String}, model::PormGModel, df::_BulkFrame, index::Integer; op::AbstractString = "bulk_insert")
   for field in fields
     # Check if field exists in the mapping and the frame
@@ -2603,9 +2626,12 @@ function _depuration_values_bulk_insert(fields::Vector{String}, mapping::Dict{St
     if !(_has_bulk_column(df, col_name))
       continue
     end
-    value = _bulk_column(df, col_name)[index]
+    # #1599 layer 7: the cell through the frame's column walk (`_bulk_cell`), as the row loop reads it. Indexed
+    # directly, the column was read untyped, and a trimmed image had no code for it: a failing row's refusal was
+    # replaced by `MethodError(getindex, (Vector{Int64}, Int64))`.
+    value = _bulk_cell(_bulk_column(df, col_name), Int(index))
     try
-      model.fields[field].formatter(value)
+      _depuration_format_at(model.fields[field].formatter, value)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()
       # A collection gets the refusal every writer raises (#716), not the generic message below: the

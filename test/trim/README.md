@@ -12,8 +12,9 @@ layer 5), one `Race.objects.create` that leaves the three auto-filled fields
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
-each checked by a typed read after it, and last a `bulk_insert` of two races from a `Vector` of
-`NamedTuple`s, read back typed. Each step prints one line. The read-only entry, `read.jl`, runs
+each checked by a typed read after it, then a `bulk_insert` of two races from a `Vector` of
+`NamedTuple`s, read back typed, and last a `bulk_insert` whose second row validation refuses (a date that is
+not a calendar date), which prints the refusal's type and message and checks that no row was written. Each step prints one line. The read-only entry, `read.jl`, runs
 the same boot, read and read steps without the writes; the steps both entries share are in `steps.jl`, and the
 ones the server variants share too are in `tools/reads.jl` and `tools/writes.jl`.
 
@@ -99,7 +100,8 @@ fails with the same exit code (1 boot, 2 write, 3 read, 10 a comparison filter, 
 raises or does not return the rows it picks out; `main.jl` exits 6 when a create it expects
 PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
-than 2 rows, or the read after it does not return them).
+than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
+refused with an `InvalidValueError` or writes a row).
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -156,11 +158,14 @@ step	row	3 2009 Monaco Grand Prix 2009-05-24
 step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
+step	bulk_refused	InvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).
+step	bulk_refused	0 rows written; 3 Monaco races
 ```
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
-filter, 11 an `order_by`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 124
+timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the

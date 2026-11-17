@@ -1,5 +1,5 @@
 # The steps both SQLite entries of the fixture app run (#1599): `main.jl` (boot, two refused writes, a
-# write, read, update, delete) and `read.jl` (boot, read). Included by each entry after its `using`
+# write, read, update, delete, a bulk_insert and a refused one) and `read.jl` (boot, read). Included by each entry after its `using`
 # line, so the two binaries print the same lines for the same step and exit with the same code when it
 # fails.
 #
@@ -137,6 +137,31 @@ function bulk_step()::Bool
         return r.count == 2 && back == [2010, 2011] && length(monaco) == 3
     catch e
         failed("bulk", e); return false
+    end
+end
+
+# A `bulk_insert` with one invalid row (#1694), after `bulk_step`: two Monaco races whose dates are text, the second
+# not a calendar date, so validation refuses that row, by its row and field, before any SQL. The step prints the
+# refusal's type and message, as `refused_step` does: a path a trimmed image cannot run raises a `MethodError` in
+# place of the refusal, which is what the row loop's error pass did. A typed read then checks that neither row was
+# written. Exit code 12 when the call is not refused with an `InvalidValueError` or a row was written.
+function bulk_refused_step()::Bool
+    rows = [(year = 2012, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = "2012-05-27"),
+            (year = 2013, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = "2013-02-30")]
+    refused = try
+        PormG.bulk_insert(M.Race.objects, rows)
+        say("bulk_refused", "the bulk_insert with an invalid date was not refused"); false
+    catch e
+        refusal("bulk_refused", e)
+    end
+    refused || return false
+    try
+        monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
+        written = count(x -> x.year >= 2012, monaco)
+        say("bulk_refused", string(written, " rows written; ", length(monaco), " Monaco races"))
+        return written == 0 && length(monaco) == 3
+    catch e
+        failed("bulk_refused", e); return false
     end
 end
 

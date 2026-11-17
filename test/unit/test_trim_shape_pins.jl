@@ -5693,6 +5693,42 @@ end
     end
   end
 
+  # What: the bulk writers' error pass (`_depuration_values_bulk_insert`), which runs in the row loop's `catch` when a row
+  #   fails and names the cell that cannot be formatted.
+  # Expected: it reads its cell through the frame's column walk (`_bulk_cell`), never by indexing the untyped column.
+  # Why: indexed directly, the column was read untyped, and a trimmed image had no code for the call: the full
+  #   fixture entry's failing row raised `MethodError(getindex, (Vector{Int64}, Int64))` in place of its refusal
+  #   (#1599 layer 7, #1814's residue).
+  @testset "the bulk error pass runs at concrete types (#1599 layer 7, #1694)" begin
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+    body = src[findfirst("function _depuration_values_bulk_insert", src).start:findfirst("function _normalize_on_conflict", src).start]
+    @test occursin("_bulk_cell(_bulk_column(df, col_name), Int(index))", body)
+    @test !occursin("_bulk_column(df, col_name)[index]", body)
+    # The field's formatter is called through the value walk (wall 2), never through its `Function` slot on the
+    # untyped cell; the walk makes no dynamic call (its open arm is an `invoke`).
+    QB = PormG.QueryBuilder
+    @test occursin("_depuration_format_at(model.fields[field].formatter, value)", body) && !occursin(".formatter(value)", body)
+    @test _dynamic_calls(QB._depuration_format_at, (Any, Any)) == String[]
+    # The refusals it raises take the cell unspecialized (wall 3). The pass's keyword body makes no dynamic call, and
+    # neither do the two checks it hands a failing cell to, followed down: the expression refusal (its type name and
+    # message included) and the collection refusal (into `_single_value`'s collection method).
+    @test (only(methods(QB._refuse_expression_value)).nospecialize, only(methods(QB._refuse_collection)).nospecialize) == (4, 4)
+    for m in methods(QB._expression_noun)
+      @test (m.sig, m.nospecialize) == (m.sig, 1)
+    end
+    # The type's name and text go through `_type_name`/`_type_text` (their open arms, for a `Type` that is not a
+    # `DataType`, are the dynamic calls they replace, and are skipped); Base's printing inside `string` is not claimed.
+    open_arms = (QB._type_name_other, QB._type_text_other)
+    @test _dynamic_calls_deep(QB._refuse_expression_value, (PormG.Models.ModelType, String, Any, String);
+                              depth = 2, skip = open_arms) == String[]
+    for F in (PormG.Models.sDateField, PormG.Models.sCharField, PormG.Models.sJSONField)
+      @test (F, _dynamic_calls_deep(QB._refuse_collection, (F, String, Any, String); depth = 2, skip = open_arms)) == (F, String[])
+    end
+    @test (_dynamic_calls(QB._type_name, (Any,)), _dynamic_calls(QB._type_text, (Any,))) == (String[], String[])
+    @test _dynamic_calls_kw(QB._depuration_values_bulk_insert,
+                            (Vector{String}, Dict{String,String}, PormG.Models.ModelType, QB._BulkFrame, Int)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

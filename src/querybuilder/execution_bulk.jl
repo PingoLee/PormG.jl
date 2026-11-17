@@ -1485,6 +1485,12 @@ end
 # chunks, in Ecto's `{count, rows}` shape. `rows` is `nothing` unless `bulk_insert` was given
 # `returning=` (#671), which fills the slot without changing the return type a second time.
 _bulk_result(count::Integer, rows = nothing) = (count = Int(count), rows = rows)
+# `_bulk_result` of a total held untyped: at `Int`, what every driver's count adds up to, and anything else through one
+# dynamic call (#1599 layer 7, #1614). `rows = nothing` is the default, so the call with it is the same call; `rows`
+# stays specialized, so the result is the same concrete `NamedTuple` type the direct call returned.
+@noinline _bulk_result_at(@nospecialize(count), rows) =
+  count isa Int ? _bulk_result(count, rows) : _bulk_result_other(count, rows)
+@noinline _bulk_result_other(@nospecialize(count), rows) = _bulk_result(count, rows)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # bulk_insert(…; returning=) (#671)
@@ -2041,7 +2047,12 @@ Base.@nospecializeinfer function _bulk_insert_frame(objct::SQLObjectHandler, mod
           # run-time element type, so iterating it below was a call with no compiled target in a trimmed image.
           cells = Any[_format_bulk_cell(model, field, metas[j], _bulk_cell(sources[j], index), "bulk_insert", index; conn = connection) for (j, field) in enumerate(fields_df)]
           if pg_arrays
-            foreach((column, cell) -> push!(column, _pg_array_element(cell)), chunk_columns, cells)
+            # A loop, not `foreach` over a closure (#1599 layer 7, #1614): the closure was called with each cell's run-time
+            # type, which a trimmed image had no instance for (`MethodError` on the closure with `(Vector{Any}, Int64)`).
+            # The same pushes, in order, to the shorter length as `foreach` stopped; each cell through the typed walk.
+            for j in 1:min(length(chunk_columns), length(cells))
+              push!(chunk_columns[j], _pg_array_element_at(cells[j]))
+            end
           else
             # A loop, not a comprehension (#1599 layer 7): the comprehension's closure captured `parameters`,
             # which this loop reassigns after each chunk, so it was boxed. The same placeholders, in order. Each
@@ -2139,10 +2150,12 @@ Base.@nospecializeinfer function _bulk_insert_frame(objct::SQLObjectHandler, mod
       return length(results) == 1 ? results[1] : results
     end
 
-    # Executed, each chunk contributed its inserted-row count (#670).
-    _returning === nothing && return _bulk_result(_bulk_count_total(results))
+    # Executed, each chunk contributed its inserted-row count (#670). The total through `_bulk_result_at` (#1599 layer 7,
+    # #1614): `_bulk_count_total`'s open arm makes its result untyped, so `_bulk_result` on it was a dynamic call, which a
+    # trimmed MySQL binary had no target for (`MethodError(_bulk_result, (Int64,))`).
+    _returning === nothing && return _bulk_result_at(_bulk_count_total(results), nothing)
     # A table of the caller's kind (#1344 phase 4), one row per input row.
-    return _bulk_result(_bulk_count_total(results), _returning_table(src, _returning, returned_rows))
+    return _bulk_result_at(_bulk_count_total(results), _returning_table(src, _returning, returned_rows))
 end
 bulk_insert(model::PormGModel, @nospecialize(src); kwargs...) = bulk_insert(model |> object, src; kwargs...)
 bulk_insert(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_insert"); objct -> bulk_insert(objct, src; kwargs...))
@@ -2399,6 +2412,22 @@ _pg_array_element(value::AbstractString) = String(value)
 _pg_array_element(value::PormGBytes) = _pg_bytea_text(value)
 _pg_array_element(value::PormGArrayLiteral) = value.literal   # one element of a `text[]` (#28)
 _pg_array_element(value) = string(value)
+# `_pg_array_element` of an untyped formatted cell (#1599 layer 7, #1614): each method above at the cell's type, over the
+# types a field formatter returns, and anything else through one dynamic call.
+@noinline function _pg_array_element_at(@nospecialize(cell))
+  cell isa String && return _pg_array_element(cell)
+  cell isa Int64 && return _pg_array_element(cell)
+  cell isa Missing && return _pg_array_element(cell)
+  cell isa Nothing && return _pg_array_element(cell)
+  cell isa Bool && return _pg_array_element(cell)
+  cell isa SubString{String} && return _pg_array_element(cell)
+  cell isa Int32 && return _pg_array_element(cell)
+  cell isa Float64 && return _pg_array_element(cell)
+  cell isa PormGBytes && return _pg_array_element(cell)
+  cell isa PormGArrayLiteral && return _pg_array_element(cell)
+  return _pg_array_element_other(cell)
+end
+@noinline _pg_array_element_other(@nospecialize(cell)) = _pg_array_element(cell)
 
 # ── Array columns (#28) ──
 # A column of `ArrayField` values cannot travel as one `int[][]` parameter: a PostgreSQL array is
@@ -3217,7 +3246,9 @@ function _bulk_update(objct::SQLObjectHandler, @nospecialize(src),
           # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
           cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
           if pg_arrays
-            foreach((column, cell) -> push!(column, _pg_array_element(cell)), columns, cells)
+            for j in 1:min(length(columns), length(cells))   # as in `bulk_insert` (#1599 layer 7)
+              push!(columns[j], _pg_array_element_at(cells[j]))
+            end
           else
             push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
           end

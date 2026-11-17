@@ -1,7 +1,7 @@
 # The juliac --trim entry of the fixture's MySQL variant (#1599, #1614): `../main.jl`'s app with MySQL.jl
 # in place of SQLite — boot, one typed read, the comparison filters and order_by (`../tools/reads.jl`), the single-row
-# write (`../tools/writes.jl`: create, read back, update, delete) and one statement the server refuses
-# (`../tools/failing.jl`).
+# write (`../tools/writes.jl`: create, read back, update, delete), a `bulk_insert` of two rows and one statement
+# the server refuses (`../tools/failing.jl`).
 #   JIT:  julia --project=test/trim/mysql test/trim/mysql/main.jl
 #   exe:  <build dir>/main                   (see ../README.md, "The MySQL variant")
 #
@@ -121,6 +121,8 @@ function (@main)(args::Vector{String})::Cint
     query_step() || return Cint(3)
     update_step() || return Cint(7)
     delete_step() || return Cint(8)
+    # `bulk_insert` of two Monaco races, read back (#1694, #1614, `../tools/writes.jl`).
+    bulk_step(circuitid) || return Cint(9)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
     fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)

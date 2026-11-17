@@ -624,7 +624,16 @@ end
 const _TIMESTAMP_TEXT = r"^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?$"
 const _TIMESTAMPTZ_TEXT = r"^(\d{4,})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d{1,6}))?([+-])(\d\d)(?::(\d\d))?(?::(\d\d))?$"
 
-_ms(fraction) = fraction === nothing ? 0 : parse(Int, rpad(fraction, 3, '0')[1:3])
+# The milliseconds of a fraction of 1 to 6 digits (the patterns above): its first three digits, padded with zeros on
+# the right. Not through `rpad`, which pads with a `Char` its signature types abstractly, so its `repeat` call had no
+# compiled target in a trimmed image (#1599 layer 2, #1614). PostgreSQL drops a fraction's trailing zeros, so a value
+# whose milliseconds end in 0 has fewer than three digits, and a trimmed Postgres.jl `create` failed on about one
+# write in ten. The same value: "5" is 500, "12" is 120, "123456" is 123.
+function _ms(fraction)::Int
+  fraction === nothing && return 0
+  k = min(3, ncodeunits(fraction))
+  return parse(Int, SubString(fraction, 1, k)) * 10^(3 - k)
+end
 
 _datetime(m) = DateTime(parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]),
                         parse(Int, m[4]), parse(Int, m[5]), parse(Int, m[6]), _ms(m[7]))
@@ -906,8 +915,31 @@ _wire_text(@nospecialize(v))::Union{String, Missing} =
   v isa DateTime ? Postgres._param(v) :
   v isa Decimals.Decimal ? Postgres._param(v) :
   v isa Vector{Int} ? Postgres._param(v) :
+  v isa Vector{Any} ? _wire_array(v) :
   _wire_text_other(v)
 @noinline _wire_text_other(@nospecialize(v))::Union{String, Missing} = Postgres._param(v)
+
+# A column array a bulk write binds (`unnest`, #1599 layer 7, #1614). Postgres.jl renders a `Vector{Any}` element by
+# element through its `_aparam`, one dispatch per untyped element, which a trimmed image had no code for (a trimmed
+# `bulk_insert` raised `MissingCodeError` in `_param(::Vector{Any})`). Its elements are what `_pg_array_element`
+# returns, `missing`, an integer or a `String`, so when every element is `missing` or one of `String`, `Int64` and
+# `Bool`, the vector is handed over at that element type. Postgres.jl's own `_param` renders it, each element through
+# the same `_aparam` method as before, so the text is the same. Any other vector goes as it was.
+function _wire_array(v::Vector{Any})::Union{String, Missing}
+  all(x -> x isa Union{Missing, String}, v) && return Postgres._param(_narrowed(String, v))
+  all(x -> x isa Union{Missing, Int64}, v) && return Postgres._param(_narrowed(Int64, v))
+  all(x -> x isa Union{Missing, Bool}, v) && return Postgres._param(_narrowed(Bool, v))
+  return _wire_text_other(v)
+end
+# `v`'s elements as a `Vector{Union{Missing, T}}`, each read at its type (every element is `missing` or a `T`).
+function _narrowed(::Type{T}, v::Vector{Any})::Vector{Union{Missing, T}} where {T}
+  out = Vector{Union{Missing, T}}(undef, length(v))
+  for i in eachindex(v)
+    x = v[i]
+    out[i] = x isa T ? x : missing
+  end
+  return out
+end
 
 # An interrupt that lands during a TLS read reaches us wrapped in the TLS layer's own error, with the
 # `InterruptException` as its `cause`. Core recognises an abandoned await by the `InterruptException`

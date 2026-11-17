@@ -3140,8 +3140,8 @@ end
       @test isempty(intersect(boxed, [:columns, :parameters, :returning_sql]))
     end
 
-    # The total at its type.
-    @test count("_bulk_result(_bulk_count_total(results)", bi_src) == 2 && !occursin("sum(results", bi_src)
+    # The total at its type, through `_bulk_result_at` since #1614 (the call on the untyped total was dynamic).
+    @test count("_bulk_result_at(_bulk_count_total(results)", bi_src) == 2 && !occursin("sum(results", bi_src)
   end
 
   # What: the single-row write's path on MySQL and on PostgreSQL through Postgres.jl (#1599 layer 7, #1614), one group
@@ -5727,6 +5727,54 @@ end
     @test (_dynamic_calls(QB._type_name, (Any,)), _dynamic_calls(QB._type_text, (Any,))) == (String[], String[])
     @test _dynamic_calls_kw(QB._depuration_values_bulk_insert,
                             (Vector{String}, Dict{String,String}, PormG.Models.ModelType, QB._BulkFrame, Int)) == String[]
+  end
+
+  # What: the bulk writers' total (`_bulk_result_at`, what `bulk_insert` returns its count through).
+  # Expected: no dynamic call; `bulk_insert`'s body calls it, never `_bulk_result` on the untyped total.
+  # Why: `_bulk_count_total`'s open arm makes its result untyped, so `_bulk_result` on it was a dynamic call: the trimmed
+  #   MySQL `bulk_insert` raised `MethodError(_bulk_result, (Int64,))` (#1599 layer 7, #1614).
+  @testset "bulk_insert on the servers runs at concrete types (#1599 layer 7, #1614)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._bulk_result_at, (Any, Nothing)) == String[]
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+    @test !occursin("_bulk_result(_bulk_count_total(results)", src) && occursin("_bulk_result_at(_bulk_count_total(results), nothing)", src)
+    # PostgreSQL's column arrays (wall 2 on Postgres.jl): filled by a loop through `_pg_array_element_at`, never by a
+    # `foreach` closure called with each cell's run-time type; the walk makes no dynamic call.
+    @test !occursin("foreach((column, cell) -> push!(column, _pg_array_element(cell))", src)
+    @test occursin("push!(chunk_columns[j], _pg_array_element_at(cells[j]))", src)
+    @test _dynamic_calls(QB._pg_array_element_at, (Any,)) == String[]
+    # Postgres.jl binds each column array (wall 3 on Postgres.jl): handed over at a concrete element type, so its
+    # per-element rendering makes no dynamic call (the open arm, a vector of another kind, is skipped).
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    @test _dynamic_calls_deep(pgx._wire_array, (Vector{Any},); depth = 3, skip = (pgx._wire_text_other,)) == String[]
+    @test _dynamic_calls(pgx._wire_text, (Any,)) == String[]
+  end
+
+  # What: the Postgres.jl extension's read of a timestamp's milliseconds (`_ms`), under every `timestamp`/`timestamptz`
+  #   value a Postgres.jl result returns, the `RETURNING` row of a `create` included.
+  # Expected: no `rpad` in it (a source pin: under the JIT the call inside `rpad` resolves, so a reflection pin passes on
+  #   the old body too), and no dynamic call in its own body.
+  # Why: `rpad` pads with a `Char` its signature types abstractly, and its `repeat` call had no compiled target in a
+  #   trimmed image. PostgreSQL drops a fraction's trailing zeros, so a timestamp whose milliseconds ended in 0 needed the
+  #   pad: the trimmed Postgres.jl `create` failed on about one write in ten, and `bulk_insert`'s step on the next
+  #   (#1599 layer 2, #1614).
+  @testset "the Postgres.jl timestamp read pads its milliseconds without rpad (#1599 layer 2, #1614)" begin
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    src = read(joinpath(pkgdir(PormG), "ext", "PormGPostgresExt.jl"), String)
+    body = src[findfirst("_ms(fraction)", src).start:findfirst("_datetime(m) =", src).start]   # either form's definition
+    @test !occursin("rpad(", body) && occursin("10^(3 - k)", body)
+    @test _dynamic_calls(pgx._ms, (SubString{String},)) == String[]
+  end
+
+  # What: the cause walk (`_unowned_field`) on a `Core.MissingCodeError`, what a trimmed image raises for a call it has
+  #   no code for.
+  # Expected: it is one of the walk's known exceptions, so its field is read statically, never through the open arm's
+  #   `hasproperty`.
+  # Why: through the open arm, `hasproperty` had no compiled target either, and that `MethodError` replaced the error
+  #   being reported: the trimmed Postgres.jl `create` above surfaced as `cause missed: hasproperty` (#1599, #1614).
+  @testset "the cause walk reads a MissingCodeError statically (#1599, #1614)" begin
+    @test Core.MissingCodeError in PormG._KNOWN_EXCEPTIONS
+    @test _dynamic_calls(PormG._unowned_field, (Any, Symbol)) == String[]
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

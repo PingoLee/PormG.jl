@@ -159,7 +159,7 @@ step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
 step	bulk_refused	InvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).
-step	bulk_refused	0 rows written; 3 Monaco races
+step	bulk_refused	0 rows written; 1 Monaco races
 ```
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
@@ -178,7 +178,7 @@ by running the workflow by hand on the branch, or by the next nightly run.
 (`ext/PormGMySQLExt.jl`), which no SQLite build compiles. Its entry, `mysql/main.jl`, boots through
 `register_connection("f1", "mysql://…"; adapter = "MySQL")` (#1769), so no YAML is read, and then
 runs the typed read, the read steps of `tools/reads.jl`, then the single-row write of `tools/writes.jl` (#1614): Monaco's id by a typed
-read, a create, the read back (2 rows), an update and a delete, each step the line the SQLite entry
+read, a create, the read back (2 rows), an update, a delete and a `bulk_insert` of two rows, each step the line the SQLite entry
 prints. The server comes from environment variables (`tools/server.jl`), read at run time. With none of
 them set it is `127.0.0.1:1`, where nothing listens, so no database is needed: under the JIT the read
 raises `PoolConnectError`, and the binary stops there too.
@@ -222,7 +222,7 @@ build-mysql/main
 ```
 
 Against a server the trimmed binary connects, binds the parameters, runs the statement and returns the
-row its JIT control prints (#1599), then runs the write (#1614):
+row its JIT control prints (#1599), then runs the write and `bulk_insert` (#1614):
 
 ```
 step	main	entered
@@ -241,6 +241,7 @@ step	row	1 2008 Monaco Grand Prix 2008-05-25
 step	row	3 2009 Monaco Grand Prix 2009-05-24
 step	update	1 rows; round 7
 step	delete	1 rows; 1 left
+step	bulk	2 rows; 2 read back
 ```
 
 The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables
@@ -341,7 +342,7 @@ Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` 
 `timeout -k 10 300`. Before the MySQL run the job flushes the server's privileges, which empties
 `caching_sha2_password`'s cache: `prep.jl` and the JIT control logged in already, and without the flush the
 binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line and the four read-step lines, prints the write's
-`write ok`, `query 2 rows`, `update 1 rows; round 7` and `delete 1 rows; 1 left` lines (the written row's id is
+`write ok`, `query 2 rows`, `update 1 rows; round 7`, `delete 1 rows; 1 left` and `bulk 2 rows; 2 read back` lines (the written row's id is
 not checked: the JIT control used one), and its `fail` step prints
 `threw StatementError` with the server's own SQLSTATE (`42S02` on MySQL, `42P01` on PostgreSQL), the
 server's message and a cause that is not a `MethodError`. The rows are reported as in the SQLite job, in

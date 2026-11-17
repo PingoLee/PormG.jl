@@ -119,26 +119,7 @@ include(joinpath(@__DIR__, "tools", "writes.jl"))
 # server variants, so every binary prints the same lines (#1599 layer 5).
 include(joinpath(@__DIR__, "tools", "reads.jl"))
 
-# `bulk_insert` (#1694), after the delete: two Monaco races from a `Vector` of `NamedTuple`s, the input a
-# trimmed program holds at a concrete type, leaving the three auto-filled fields to the write's own fill.
-# A typed read then sees both. Exit code 9 when the call raises, its count is not 2, or the read does not
-# return the two rows. `bulk_insert` returns `(count, rows)` with `rows = nothing` without `returning=`,
-# asserted at that type so the step prints the count without a call on an untyped value.
-function bulk_step()::Bool
-    try
-        rows = [(year = 2010, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
-                (year = 2011, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2011, 5, 29))]
-        r = PormG.bulk_insert(M.Race.objects, rows)::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
-        # The read every binary of the fixture runs (`query_step`'s), with the new rows picked out here, so this
-        # step checks the write alone; the comparison filters are `tools/reads.jl`'s steps (#1599 layer 5).
-        monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
-        back = sort!([x.year for x in monaco if x.year >= 2010])
-        say("bulk", string(r.count, " rows; ", length(back), " read back"))
-        return r.count == 2 && back == [2010, 2011] && length(monaco) == 3
-    catch e
-        failed("bulk", e); return false
-    end
-end
+# `bulk_step` (a `bulk_insert` of two rows, read back) is in `tools/writes.jl`, shared with the server variants (#1614).
 
 # A `bulk_insert` with one invalid row (#1694), after `bulk_step`: two Monaco races whose dates are text, the second
 # not a calendar date, so validation refuses that row, by its row and field, before any SQL. The step prints the
@@ -159,7 +140,7 @@ function bulk_refused_step()::Bool
         monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
         written = count(x -> x.year >= 2012, monaco)
         say("bulk_refused", string(written, " rows written; ", length(monaco), " Monaco races"))
-        return written == 0 && length(monaco) == 3
+        return written == 0 && length(monaco) == 1   # the prepped race: `bulk_step` removed its two
     catch e
         failed("bulk_refused", e); return false
     end

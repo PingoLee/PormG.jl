@@ -77,16 +77,21 @@ _pormg_lower(x) = lowercase(string(x))
 # (`udf_error`, specialized on the error): the trimmed read stopped at `name__@icontains` with a `StatementError`
 # and then hung at exit, in `sqlite3_close_v2`. This callback reads its one value as SQLite.jl's does
 # (`sqlvalue`), folds it at its type and returns it with `sqlreturn`; any other value takes `_pormg_lower` at run
-# time, as before. A failure is reported to SQLite as SQLite.jl 1.10's `udf_error` reports it, as the query's
-# `SQLiteException`, rather than unwinding through SQLite's C caller.
+# time, as before. A failure (`lowercase` raises `InvalidCharError` on a TEXT value that is not valid UTF-8) takes
+# the path the loaded SQLite.jl's own callback takes: from 1.10 on it is reported to SQLite as `udf_error` reports
+# it, and the query raises `SQLiteException`; before 1.10 the callback had no `try`, so the error is rethrown,
+# as it was.
 function _pormg_lower_callback(context::Ptr{Cvoid}, nargs::Cint, values::Ptr{Ptr{Cvoid}})::Cvoid
   try
     _pormg_lower_return(context, SQLite.sqlvalue(values, 1))
   catch err
+    _SQLITE_REPORTS_UDF_ERRORS || rethrow()
     _pormg_udf_error(context, err)
   end
   return nothing
 end
+# Whether the loaded SQLite.jl reports a callback's error to SQLite (`udf_error`, 1.10 and later) or lets it unwind.
+const _SQLITE_REPORTS_UDF_ERRORS = isdefined(SQLite, :udf_error)
 @noinline function _pormg_lower_return(context::Ptr{Cvoid}, @nospecialize(v))
   v isa String && return SQLite.sqlreturn(context, _pormg_lower(v))
   v isa Missing && return SQLite.sqlreturn(context, _pormg_lower(v))

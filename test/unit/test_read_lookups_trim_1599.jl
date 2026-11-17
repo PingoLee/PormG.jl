@@ -206,8 +206,10 @@ end
 
 # What: `pormg_lower` registered through the extension's typed callback (`_register_pormg_lower!`) against the same
 #   function registered through `SQLite.register`, on two in-memory databases, over text (ASCII, accented, a German
-#   sharp s, empty), NULL, integers, floats and a blob, alone and inside the `LIKE` an `@icontains` filter renders.
-# Expected: the same rows: each value and its type (`typeof`), and the same `LIKE` answers.
+#   sharp s, empty), NULL, integers, floats and a blob, alone and inside the `LIKE` an `@icontains` filter renders, and a
+#   TEXT value that is not valid UTF-8, on which `lowercase` raises.
+# Expected: the same rows: each value and its type (`typeof`), and the same `LIKE` answers; for the invalid text, the
+#   same error type and text.
 # Why: every case-insensitive pattern lookup on SQLite folds both sides through this function; a value folded
 #   differently would change the rows a filter matches (#1599 layer 5).
 @testset "pormg_lower answers as the SQLite.register'd function did (#1599 layer 5)" begin
@@ -224,6 +226,11 @@ end
               "SELECT pormg_lower('Monaco') = pormg_lower('MONACO') AS v")
     @test isequal((sql, rows(new_db, sql)), (sql, rows(old_db, sql)))
   end
+  # A TEXT value that is not valid UTF-8: `lowercase` raises, and the query raises what SQLite.jl's own callback made
+  # of it (from 1.10, a `SQLiteException` carrying the error's text; before, the error itself).
+  bad = "SELECT pormg_lower(CAST(x'ff41' AS TEXT)) AS v"
+  @test _rlk_outcome(() -> rows(new_db, bad)) == _rlk_outcome(() -> rows(old_db, bad))
+  @test _rlk_outcome(() -> rows(new_db, bad))[1] === :raised
   close(new_db); close(old_db)
 end
 

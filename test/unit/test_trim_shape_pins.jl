@@ -5816,8 +5816,9 @@ end
 
   # What: a filter's value node for the unnamed-temporal check (`_literal_value_node`) when the value is a membership or
   #   range list.
-  # Expected: no dynamic call in `_literal_value_node` (the lists it names reach `_filter_value_node` at their type), and
-  #   none in `_filter_value_node` at those list types.
+  # Expected: no dynamic call in `_literal_value_node`, none in `_filter_value_node` at the list types it names, and an
+  #   arm for each of those lists in its source (the reflection checks alone pass on the base, whose open arm is a
+  #   static call too).
   # Why: a list took the open arm's run-time call to `_filter_value_node`, which a trimmed image had no target for: the
   #   read stopped at `MethodError(_filter_value_node, (Vector{Date},))` on `__@range` (#1599 layer 5).
   @testset "a filter's list value is checked at concrete types (#1599 layer 5)" begin
@@ -5828,7 +5829,10 @@ end
     end
     src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "filter_nodes.jl"), String)
     body = src[findfirst("function _literal_value_node(", src).start:findfirst("_literal_value_node_other(@nospecialize", src).start]
-    @test occursin("x isa Vector{Dates.Date} && return _filter_value_node(x)", body)
+    # The open arm is a static call into `_literal_value_node_other` on the base too, so the arms are pinned by source.
+    for L in ("Vector{String}", "Vector{Int64}", "Vector{Float64}", "Vector{Dates.Date}", "Vector{Dates.DateTime}")
+      @test (L, occursin("x isa $(L) && return _filter_value_node(x)", body)) == (L, true)
+    end
   end
 
   # What: queuing a `@range` filter's two bounds for the unnamed-temporal check (`_queue_unnamed_temporal!` →
@@ -5839,7 +5843,8 @@ end
   @testset "a @range filter's bounds are queued at concrete types (#1599 layer 5)" begin
     QB = PormG.QueryBuilder
     P = Vector{Tuple{Any,Any,String}}
-    @test _dynamic_calls(QB._queue_unnamed_temporal!, (P, Any, Any, String)) == String[]
+    # Only the range arm changed: with inlining off the other arm's `push!` is a call too (#1816's coverage lesson).
+    @test !any(s -> occursin("foreach", s), _dynamic_calls(QB._queue_unnamed_temporal!, (P, Any, Any, String)))
     @test _dynamic_calls(QB._queue_range_bounds!, (P, Any, Any)) == String[]
     for L in (Vector{QB.SQLText}, Vector{Int64}, Vector{Float64}, Vector{Dates.Date}, Vector{Dates.DateTime})
       @test (L, _dynamic_calls(QB._queue_range_at!, (P, Any, L))) == (L, String[])
@@ -5849,8 +5854,9 @@ end
   # What: the kind of a pattern lookup's operand (`_pattern_operand_kind`), from `_render_filter_oper`, with the field
   #   `_operand_field` resolved (`Union{Nothing,AnyField}`) and the alias slot's union.
   # Expected: `_render_filter_oper` calls it statically; its field and alias arguments are unspecialized (bits 2 and 3);
-  #   `_operand_field_kind` makes no dynamic call. The two dynamic calls left in it (`allequal`, `getindex` over the
-  #   kinds of a CTE column's candidates) are in the CTE arm, which a model column does not take.
+  #   `_operand_field_kind` makes no dynamic call, and neither the field's kind nor the alias's memo key is read through
+  #   one. (The CTE arm's `allequal`/`getindex` over its candidates' kinds are dynamic, and with inlining off so are a
+  #   few `Base` calls on the two unspecialized arguments; neither is on a model column's path.)
   # Why: specialized on the two unions the call had no compiled target: the trimmed read stopped at `name__@icontains`
   #   with `MethodError(_pattern_operand_kind, (OperObject, sCharField, Nothing, InstructionObject))` (#1599 layer 5).
   @testset "a pattern lookup's operand kind is read at concrete types (#1599 layer 5)" begin
@@ -5861,7 +5867,7 @@ end
     @test m.nospecialize & 0b0110 == 0b0110
     @test _dynamic_calls(QB._operand_field_kind, (Any,)) == String[]
     inner = _dynamic_calls(QB._pattern_operand_kind, (QB.OperObject, Any, Any, QB.InstructionObject))
-    @test all(s -> occursin("allequal", s) || occursin("getindex", s), inner)
+    @test !any(s -> occursin("_field_kind", s) || occursin("memo_key", s) || occursin("_having_alias_kind", s), inner)
   end
 
   # What: a pattern lookup's render (`_render_predicate` → `_pattern_operator_sql` → the `Dialect` renderer the operator
@@ -5889,7 +5895,7 @@ end
   #   its SQL (`pormg_lower(col) LIKE pormg_lower(?)`): its registration and the callback SQLite calls per value.
   # Expected: `_create_sqlite_connection` registers it through `_register_pormg_lower!`, not `SQLite.register`; no dynamic
   #   call in the registration or the callback; in `_pormg_lower_return`, only the open arm's two (a value of a type
-  #   the walk does not name).
+  #   the walk does not name); the callback's error path follows the loaded SQLite.jl (`udf_error` from 1.10).
   # Why: SQLite.jl's scalar callback calls the function through a `Function` slot over a `Vector{Any}`, and its error
   #   report is specialized on the error: in a trimmed image both raised, the read stopped at `name__@icontains` with a
   #   `StatementError` whose cause was `MethodError(udf_error, …)`, and the binary hung at exit (#1599 layer 5).
@@ -5899,8 +5905,9 @@ end
     @test !occursin("SQLite.register(new_conn, _pormg_lower;", src) && occursin("_register_pormg_lower!(new_conn)", src)
     @test _dynamic_calls(sx._pormg_lower_callback, (Ptr{Cvoid}, Cint, Ptr{Ptr{Cvoid}})) == String[]
     @test _dynamic_calls(sx._register_pormg_lower!, (SQLite.DB,)) == String[]
+    @test sx._SQLITE_REPORTS_UDF_ERRORS === isdefined(SQLite, :udf_error)
     open_arm = _dynamic_calls(sx._pormg_lower_return, (Ptr{Cvoid}, Any))
-    @test length(open_arm) == 2 && occursin("_pormg_lower(_3)", open_arm[1]) && occursin("sqlreturn", open_arm[2])
+    @test length(open_arm) == 2 && occursin("_pormg_lower(", open_arm[1]) && occursin("sqlreturn", open_arm[2])
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

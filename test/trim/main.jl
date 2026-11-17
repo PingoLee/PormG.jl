@@ -1,5 +1,5 @@
-# The juliac --trim entry of the fixture app (#1616, #1599): boot, two refused writes, two comparison filters
-# and an order_by each way, one write, one typed read, one update, one delete, one bulk_insert of two rows and
+# The juliac --trim entry of the fixture app (#1616, #1599): boot, two refused writes, two comparison filters,
+# an order_by each way and the other common lookups, one write, one typed read, one update, one delete, one bulk_insert of two rows and
 # one bulk_insert validation refuses.
 #   JIT:  julia --project=test/trim test/trim/main.jl <run dir>
 #   exe:  <build dir>/main <run dir>         (see README.md)
@@ -14,6 +14,7 @@ function (@main)(args::Vector{String})::Cint
     refused_step() || return Cint(6)
     compare_step() || return Cint(10)  # before the write: the two seeded races (`tools/reads.jl`)
     order_step() || return Cint(11)
+    lookup_step() || return Cint(13)
     write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)

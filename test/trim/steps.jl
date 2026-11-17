@@ -140,7 +140,7 @@ function bulk_refused_step()::Bool
         monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
         written = count(x -> x.year >= 2012, monaco)
         say("bulk_refused", string(written, " rows written; ", length(monaco), " Monaco races"))
-        return written == 0 && length(monaco) == 3
+        return written == 0 && length(monaco) == 1   # the prepped race: `bulk_step` removed its two
     catch e
         failed("bulk_refused", e); return false
     end

@@ -236,7 +236,7 @@ jobs:
             # A bulk_insert with one invalid row: the refusal by its row and field, as the JIT prints it, not the
             # MethodError the row loop's error pass raised in a trimmed binary (#1694), and no row written.
             'step\tbulk_refused\tInvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).'
-            'step\tbulk_refused\t0 rows written; 3 Monaco races'
+            'step\tbulk_refused\t0 rows written; 1 Monaco races'
           )
           missing=0
           for line in "${expected[@]}"; do

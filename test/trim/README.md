@@ -159,7 +159,7 @@ step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
 step	bulk_refused	InvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).
-step	bulk_refused	0 rows written; 3 Monaco races
+step	bulk_refused	0 rows written; 1 Monaco races
 ```
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a

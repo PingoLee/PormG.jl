@@ -63,9 +63,11 @@ end
 # `bulk_insert` (#1694, #1614), after the delete: two Monaco races from a `Vector` of `NamedTuple`s, the input a
 # trimmed program holds at a concrete type, leaving the three auto-filled fields to the write's own fill. The SQLite
 # entry passes the Monaco circuit's id, 1; a server entry the one `monaco_circuitid_step` read, as for `write_step`.
-# A typed read then sees both. Exit code 9 when the call raises, its count is not 2, or the read does not
-# return the two rows. `bulk_insert` returns `(count, rows)` with `rows = nothing` without `returning=`,
-# asserted at that type so the step prints the count without a call on an untyped value.
+# A typed read then sees both, and the step deletes them again (a `year__@gte` filter), so it leaves the database as it
+# found it: a server job runs its binary right after its JIT control, on the same database (#1614). Exit code 9 when
+# the call raises, its count is not 2, the read does not return the two rows, or the delete does not remove them.
+# `bulk_insert` returns `(count, rows)` with `rows = nothing` without `returning=`, asserted at that type so the step
+# prints the count without a call on an untyped value.
 function bulk_step(circuitid::Int)::Bool
     try
         rows = [(year = 2010, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
@@ -76,7 +78,9 @@ function bulk_step(circuitid::Int)::Bool
         monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
         back = sort!([x.year for x in monaco if x.year >= 2010])
         say("bulk", string(r.count, " rows; ", length(back), " read back"))
-        return r.count == 2 && back == [2010, 2011] && length(monaco) == 3
+        removed = first(M.Race.objects.filter("year__@gte" => 2010).delete()::Tuple{Int, Dict{String, Integer}})
+        removed == 2 || say("bulk", string("removed ", removed, " rows, expected 2"))
+        return r.count == 2 && back == [2010, 2011] && length(monaco) == 3 && removed == 2
     catch e
         failed("bulk", e); return false
     end

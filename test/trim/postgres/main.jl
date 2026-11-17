@@ -1,5 +1,5 @@
 # The juliac --trim entry of the fixture's Postgres.jl variant (#1599, #1614): `../main.jl`'s app with
-# Postgres.jl in place of SQLite — boot, one typed read, the single-row
+# Postgres.jl in place of SQLite — boot, one typed read, the comparison filters and order_by (`../tools/reads.jl`), the single-row
 # write (`../tools/writes.jl`: create, read back, update, delete) and one statement the server refuses
 # (`../tools/failing.jl`).
 #   JIT:  julia --project=test/trim/postgres test/trim/postgres/main.jl
@@ -110,6 +110,7 @@ function query_step()::Bool
 end
 
 include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
+include(joinpath(@__DIR__, "..", "tools", "reads.jl"))
 
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
@@ -124,6 +125,9 @@ function (@main)(args::Vector{String})::Cint
         failed("boot", e); return Cint(1)
     end
     query_step() || return Cint(3)
+    # The comparison filters and `order_by` (#1599 layer 5, `../tools/reads.jl`), on the two seeded races.
+    compare_step() || return Cint(10)
+    order_step() || return Cint(11)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()

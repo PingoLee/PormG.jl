@@ -1912,12 +1912,17 @@ end
 # so a chain of arithmetic is walked once rather than once per level. A filter pair renders through the
 # same scope (`_get_filter_query(::SQLTypeOper)`, `_render_alias_predicate`).
 const _UNNAMED_TEMPORAL_OPERATIONS = (_ARITHMETIC_OPERATIONS..., _ORDERING_OPERATIONS..., "BETWEEN", "NOT BETWEEN")
+# The queue: each comparison's two sides, any node shape, and its operator. A concrete element type (#1599
+# layer 5): queued in an `Any[]`, each element was read back untyped, and destructuring it was a call with
+# no compiled target in a trimmed image (a `date__@gte` filter stopped at `indexed_iterate`, #1814 wall 21).
+const _PendingTemporal = Vector{Tuple{Any,Any,String}}
 function _checking_unnamed_temporal(f, instruc::SQLInstruction)
   _types_temporal_operands(instruc.connection) && return f(nothing)
   tls = task_local_storage()
-  outer = get(tls, :_pormg_unnamed_temporal, nothing)
+  # Read back at the type this function stores, its one writer: out of `task_local_storage()` it is `Any`.
+  outer = get(tls, :_pormg_unnamed_temporal, nothing)::Union{Nothing,Tuple{SQLInstruction,_PendingTemporal}}
   outer !== nothing && outer[1] === instruc && return f(outer[2])   # the outermost render checks it
-  pending = Any[]
+  pending = _PendingTemporal()
   tls[:_pormg_unnamed_temporal] = (instruc, pending)
   try
     result = f(pending)
@@ -1943,21 +1948,24 @@ function _queue_unnamed_temporal!(pending, @nospecialize(left), @nospecialize(ri
   end
   return nothing
 end
-function _refuse_unnamed_temporal(pending, instruc::SQLInstruction)
+# The memo's answer is read back at the type the closure returns (#1599 layer 5): out of the memo it is
+# `Any`, and destructuring it was a dynamic call. The two found tuples are built element by element, as the
+# splat of `hit` was an `_apply_iterate` on an untyped value.
+function _refuse_unnamed_temporal(pending::_PendingTemporal, instruc::SQLInstruction)
   isempty(pending) && return nothing
   found = _memo_kind(pending, instruc, :unnamed_temporal) do
     for (left, right, op) in pending
       time = _time_arithmetic_side(left, right, op, instruc)
       time === nothing || return (time, CTime(), op, true)
       hit = _unnamed_temporal_side(left, right, instruc)
-      hit === nothing || return (hit..., op, false)
+      hit === nothing || return (hit[1], hit[2], op, false)
     end
     return nothing
-  end
+  end::Union{Nothing,Tuple{Any,Any,String,Bool}}
   found === nothing && return nothing
   side, kind, op, time = found
-  time && throw(_time_arithmetic_refusal(instruc.connection, op, _unnamed_side_label(side)))
-  throw(_unnamed_temporal_refusal(instruc.connection, op, _unnamed_side_label(side), kind))
+  time && throw(_time_arithmetic_refusal(instruc.connection, op, _unnamed_side_label_any(side)))
+  throw(_unnamed_temporal_refusal(instruc.connection, op, _unnamed_side_label_any(side), kind))
 end
 
 # #1323 — arithmetic on a time of day, or with one beside it. A `TimeField` is no left of a day shift
@@ -1966,11 +1974,11 @@ end
 # digits spell. PostgreSQL has no `time ± integer` and says so at the server. What arithmetic on a time
 # of day means (`time ± interval`, wrapping at midnight) is a feature of its own, not rendered here, so
 # the refusal names no spelling. The side the walk names a time, or `nothing`.
-function _time_arithmetic_side(left, right, op, instruc::SQLInstruction)
+function _time_arithmetic_side(@nospecialize(left), @nospecialize(right), op::String, instruc::SQLInstruction)
   op in _ARITHMETIC_OPERATIONS || return nothing
   for side in (left, right)
-    _is_null_literal(side isa SQLText ? side.field : side) && continue
-    _side_walk_kind(side, instruc) isa CTime && return side
+    _null_side(side) && continue
+    _side_walk_kind_any(side, instruc) isa CTime && return side
   end
   return nothing
 end
@@ -1985,33 +1993,49 @@ _unnamed_side_label(::SubqueryObject) = "`Subquery(…)`"
 _unnamed_side_label(p::OuterRefObject) = "`OuterRef(\"$(p.field_name)\")`"
 _unnamed_side_label(path::String) = "`$(path)`"
 _unnamed_side_label(::Any) = "a value"
+# The label of an untyped side (#1599 layer 5): each method above at its type.
+@noinline function _unnamed_side_label_any(@nospecialize(p))::String
+  p isa FObject && return _unnamed_side_label(p)
+  p isa WindowFunction && return _unnamed_side_label(p)
+  p isa FExpression && return _unnamed_side_label(p)
+  p isa SQLField && return _unnamed_side_label(p)
+  p isa CTEReference && return _unnamed_side_label(p)
+  p isa JoinedReference && return _unnamed_side_label(p)
+  p isa SubqueryObject && return _unnamed_side_label(p)
+  p isa OuterRefObject && return _unnamed_side_label(p)
+  p isa String && return _unnamed_side_label(p)
+  return _unnamed_side_label_other(p)
+end
+@noinline _unnamed_side_label_other(@nospecialize(p))::String = _unnamed_side_label(p)
 # The spellings that state the type, from what is at stake and what the engine can cast to: an interval
-# has no cast on either engine, a timestamp none on SQLite (#822).
-function _unnamed_temporal_remedy(@nospecialize(conn), kind)
+# has no cast on either engine, a timestamp none on SQLite (#822). `timestamp` is the engine's
+# `_timestamp_remedy`, read by the refusal at the engine's type (#1599 layer 5): read here, from an
+# unspecialized connection, it was a dynamic call, and the refusal's kind arrives untyped from the queue.
+function _unnamed_temporal_remedy(@nospecialize(kind), timestamp::String)
   kind isa CTime && return "give every value of a `Case` or `Coalesce` the one type (then = F(\"time\"), " *
                            "default = Time(0)), and compare a time with a time (a Time literal)"
   values = "give every value of a `Case` or `Coalesce` the one type, and do the arithmetic inside each " *
            "branch"
   kind isa CInterval && return values * " (then = F(\"fastestlaptime\") * 2, default = Second(0))"
   kind isa CDate && return values * " (then = F(\"date\") + 1), or cast the value to a date (Cast(…, \"date\"))"
-  return values * _timestamp_remedy(conn)
+  return values * timestamp
 end
-_timestamp_remedy(::PormGSQLite) = " (then = F(\"start_at\") + Hour(1))"
-_timestamp_remedy(::PormGMySQL) = ", or cast the value to a timestamp (Cast(…, \"timestamp\"))"
+_timestamp_remedy(@nospecialize(conn::PormGSQLite)) = " (then = F(\"start_at\") + Hour(1))"
+_timestamp_remedy(@nospecialize(conn::PormGMySQL)) = ", or cast the value to a timestamp (Cast(…, \"timestamp\"))"
 # #1323: beside a time of day, the message names that, not the three kinds #1310 covered.
-_temporal_beside(kind) = kind isa CTime ? "a time of day" : "a date, a timestamp or an interval"
-_unnamed_temporal_refusal(@nospecialize(conn::PormGSQLite), op, label, kind) =
+_temporal_beside(@nospecialize(kind)) = kind isa CTime ? "a time of day" : "a date, a timestamp or an interval"
+_unnamed_temporal_refusal(@nospecialize(conn::PormGSQLite), op, label, @nospecialize(kind)) =
   QueryBuildError("`$(op)` beside $(_temporal_beside(kind)), with $(label) on one side, is not " *
                   "supported on SQLite: PormG cannot type $(label), and the SQL depends on the type, since a " *
                   (kind isa CTime ? "time is its `HH:MM:SS` text there" :
                                     "date is text there and an interval is its `HH:MM:SS` text") *
-                  ". State the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
-_unnamed_temporal_refusal(@nospecialize(conn::PormGMySQL), op, label, kind) =
+                  ". State the type: " * _unnamed_temporal_remedy(kind, _timestamp_remedy(conn)) * ".")
+_unnamed_temporal_refusal(@nospecialize(conn::PormGMySQL), op, label, @nospecialize(kind)) =
   QueryBuildError("`$(op)` beside $(_temporal_beside(kind)), with $(label) on one side, is not " *
                   "supported on MySQL: PormG cannot type $(label), and the SQL depends on the type, since " *
                   (kind isa CTime ? "MySQL reads a time there as the number its digits spell (06:00:00 is 60000)" :
                                     "MySQL reads a date there as the number its digits spell (2009-03-29 is 20090329)") *
-                  ". State the type: " * _unnamed_temporal_remedy(conn, kind) * ".")
+                  ". State the type: " * _unnamed_temporal_remedy(kind, _timestamp_remedy(conn)) * ".")
 _time_arithmetic_refusal(@nospecialize(conn::PormGSQLite), op, label) =
   QueryBuildError("`$(op)` on a time of day ($(label)) is not supported on SQLite: a time is its `HH:MM:SS` " *
                   "text there, and `$(op)` computes on the number its leading digits spell (06:00:00 + 1 is 7). " *

@@ -115,6 +115,10 @@ end
 # the server variants (#1614), so every binary prints the same lines.
 include(joinpath(@__DIR__, "tools", "writes.jl"))
 
+# The read steps after the first typed read (`compare_step`, `order_step`) are in `tools/reads.jl`, shared with the
+# server variants, so every binary prints the same lines (#1599 layer 5).
+include(joinpath(@__DIR__, "tools", "reads.jl"))
+
 # `bulk_insert` (#1694), after the delete: two Monaco races from a `Vector` of `NamedTuple`s, the input a
 # trimmed program holds at a concrete type, leaving the three auto-filled fields to the write's own fill.
 # A typed read then sees both. Exit code 9 when the call raises, its count is not 2, or the read does not
@@ -125,9 +129,8 @@ function bulk_step()::Bool
         rows = [(year = 2010, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
                 (year = 2011, round = 6, circuitid = 1, name = "Monaco Grand Prix", date = Date(2011, 5, 29))]
         r = PormG.bulk_insert(M.Race.objects, rows)::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
-        # The read every binary of the fixture runs (`query_step`'s), with the new rows picked out here: a
-        # `year__@gte` filter takes the render's unnamed-temporal check, which a trimmed image cannot run yet
-        # (#1599 layer 5, not this step's subject).
+        # The read every binary of the fixture runs (`query_step`'s), with the new rows picked out here, so this
+        # step checks the write alone; the comparison filters are `tools/reads.jl`'s steps (#1599 layer 5).
         monaco = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
         back = sort!([x.year for x in monaco if x.year >= 2010])
         say("bulk", string(r.count, " rows; ", length(back), " read back"))

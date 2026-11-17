@@ -1,5 +1,6 @@
 # Seed the MySQL variant's database under the JIT (#1599, #1614): PormG's own DDL for Circuit and Race, the
-# Monaco and Interlagos circuits and one Monaco race, so the fixture's read returns one row. The binary does
+# Monaco and Interlagos circuits and one Monaco race, so the fixture's read returns one row,
+# and one Brazilian race for the comparison and order steps (`../tools/reads.jl`). The binary does
 # not `migrate` (#1603).
 #   PORMG_TRIM_DATABASE=pormg_trim … julia --project=test/trim/mysql test/trim/mysql/prep.jl
 #
@@ -31,4 +32,7 @@ M.Circuit.objects.create("circuitref" => "interlagos", "name" => "Autódromo Jos
 monaco = M.Circuit.objects.filter("circuitref" => "monaco").values("circuitid").list()[1]
 M.Race.objects.create("year" => 2008, "round" => 6, "circuitid" => monaco["circuitid"],
                       "name" => "Monaco Grand Prix", "date" => Date(2008, 5, 25))
+interlagos = M.Circuit.objects.filter("circuitref" => "interlagos").values("circuitid").list()[1]
+M.Race.objects.create("year" => 2008, "round" => 18, "circuitid" => interlagos["circuitid"],
+                      "name" => "Brazilian Grand Prix", "date" => Date(2008, 11, 2))
 println("prepped ", trim_where(server))

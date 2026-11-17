@@ -6,20 +6,24 @@ built as a trimmed binary). It is #1616's first checkbox.
 What it does (`main.jl`): boot with the connection built in code (`register_connection` and
 `Models.set_models(models; key)`, #1606 — no `connection.yml` is read), two creates PormG refuses
 before any SQL (a date string that is not a calendar date, and a `Bool` for a text column; each prints
-the refusal's type and message), one `Race.objects.create` that leaves the three auto-filled fields
+the refusal's type and message), the read steps of `tools/reads.jl` (a comparison filter on a date and on an
+integer, `date__@gte` and `round__@lt`, and an `order_by` each way, over the two races `prep.jl` seeds; #1599
+layer 5), one `Race.objects.create` that leaves the three auto-filled fields
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
 each checked by a typed read after it, and last a `bulk_insert` of two races from a `Vector` of
 `NamedTuple`s, read back typed. Each step prints one line. The read-only entry, `read.jl`, runs
-the same boot and read without the writes; the steps both entries share are in `steps.jl`.
+the same boot, read and read steps without the writes; the steps both entries share are in `steps.jl`, and the
+ones the server variants share too are in `tools/reads.jl` and `tools/writes.jl`.
 
 Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's binary completes
 (#1694): it prints both refusals, fills the three automatic values, runs its `INSERT` and reads the row
 back on the SQLite worker, and its typed read then returns both rows, the one it wrote included; its
 `update` sets that row's `round` and its `delete` removes it, each shown by the read after it; its
 `bulk_insert` writes two rows, the three auto-filled fields included, and the typed read sees both. It
-prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788). The
+prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788), and the
+rows its comparison filters and its `order_by` pick out, in order. The
 `Trim (juliac)` workflow checks that both binaries still do (see "The read-only entry and its CI job"
 and "The full entry's CI job" below).
 
@@ -45,7 +49,7 @@ the repository root:
 ```
 julia --project=test/trim -e 'using Pkg; Pkg.instantiate()'
 julia --project=test/trim test/trim/prep.jl run          # seeds run/f1.sqlite under the JIT
-julia --project=test/trim test/trim/main.jl run          # the JIT control: refusals, write, read, update, delete
+julia --project=test/trim test/trim/main.jl run          # the JIT control: refusals, read steps, write, read, update, delete, bulk
 
 mkdir -p build && cd build
 JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe main \
@@ -61,8 +65,9 @@ time, which `main` prints with the function it missed.
 
 ## The read-only entry and its CI job
 
-`read.jl` is `main.jl` without the write: boot, then the typed read. Since #1788 its trimmed binary
-prints the row its JIT control prints, and exits 0:
+`read.jl` is `main.jl` without the write: boot, the typed read, then the read steps. Since #1788 its trimmed
+binary prints the row its JIT control prints, and since #1599's layer-5 slice the rows of its comparison filters
+and its `order_by`; it exits 0:
 
 ```
 step	main	entered
@@ -70,6 +75,10 @@ step	ext	true
 step	boot	ok
 step	query	1 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	compare	date__@gte 1 rows: Brazilian Grand Prix
+step	compare	round__@lt 1 rows: Monaco Grand Prix
+step	order	date: Monaco Grand Prix, Brazilian Grand Prix
+step	order	-date: Brazilian Grand Prix, Monaco Grand Prix
 step	elapsed_ms	1
 ```
 
@@ -77,7 +86,7 @@ Build and run it like the full entry, from the repository root:
 
 ```
 julia --project=test/trim test/trim/prep.jl run
-julia --project=test/trim test/trim/read.jl run          # the JIT control: boot, 1 row
+julia --project=test/trim test/trim/read.jl run          # the JIT control: boot, 1 row, the read steps
 
 mkdir -p build && cd build
 JULIA_CPU_TARGET=native juliac --project ../test/trim --output-exe read \
@@ -86,7 +95,8 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 ```
 
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
-fails with the same exit code (1 boot, 2 write, 3 read; `main.jl` exits 6 when a create it expects
+fails with the same exit code (1 boot, 2 write, 3 read, 10 a comparison filter, 11 an `order_by`, each when it
+raises or does not return the rows it picks out; `main.jl` exits 6 when a create it expects
 PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
 than 2 rows, or the read after it does not return them).
@@ -114,7 +124,7 @@ It is a separate run, not part of the default one, because it adds about 20 s.
 
 **The workflow** (`.github/workflows/trim.yml`, named `Trim (juliac)`) builds this entry with the
 Julia and JuliaC versions above, runs the binary under a 300 s timeout, and fails unless it exits 0
-and prints the `row` line above. It then makes the `tasks` run, which fails unless it exits 0 with
+and prints the `row` line and the four read-step lines above (`TRIM_READ_LINES` in the workflow). It then makes the `tasks` run, which fails unless it exits 0 with
 both its lines. The timeout is there because a task body the image never compiled
 dies silently, so a broken binary hangs rather than crashes (#1788). The verifier's rows are
 reported, never checked: the step lines of both runs, `rows.py` and `classify.py --layers` go to the
@@ -135,18 +145,23 @@ and prints each of these lines, as its JIT control prints them:
 
 ```
 step	refused	InvalidValueError: …        (twice: the invalid date, then the Bool name)
+step	compare	date__@gte 1 rows: Brazilian Grand Prix
+step	compare	round__@lt 1 rows: Monaco Grand Prix
+step	order	date: Monaco Grand Prix, Brazilian Grand Prix
+step	order	-date: Brazilian Grand Prix, Monaco Grand Prix
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
-step	row	2 2009 Monaco Grand Prix 2009-05-24
+step	row	3 2009 Monaco Grand Prix 2009-05-24
 step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
 ```
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
-create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 124 timed
-out). The rows are reported as in the read-only job, in the
+create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
+filter, 11 an `order_by`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
 extension both SQLite jobs build. A change under `src/` that could break the trimmed write is checked
@@ -157,7 +172,7 @@ by running the workflow by hand on the branch, or by the next nightly run.
 `mysql/` builds the same app with MySQL.jl in place of SQLite, to measure the MySQL extension
 (`ext/PormGMySQLExt.jl`), which no SQLite build compiles. Its entry, `mysql/main.jl`, boots through
 `register_connection("f1", "mysql://…"; adapter = "MySQL")` (#1769), so no YAML is read, and then
-runs the typed read, then the single-row write of `tools/writes.jl` (#1614): Monaco's id by a typed
+runs the typed read, the read steps of `tools/reads.jl`, then the single-row write of `tools/writes.jl` (#1614): Monaco's id by a typed
 read, a create, the read back (2 rows), an update and a delete, each step the line the SQLite entry
 prints. The server comes from environment variables (`tools/server.jl`), read at run time. With none of
 them set it is `127.0.0.1:1`, where nothing listens, so no database is needed: under the JIT the read
@@ -196,7 +211,7 @@ is, so an IPv6 address is not supported; use a name or an IPv4 address. With the
 the repository root:
 
 ```
-julia --project=test/trim/mysql test/trim/mysql/prep.jl  # PormG's DDL, two circuits, one Monaco race
+julia --project=test/trim/mysql test/trim/mysql/prep.jl  # PormG's DDL, two circuits, a Monaco and a Brazilian race
 julia --project=test/trim/mysql test/trim/mysql/main.jl  # the JIT control: boot ok, the row, the write
 build-mysql/main
 ```
@@ -211,10 +226,14 @@ step	server	127.0.0.1:3306/pormg_trim
 step	boot	ok
 step	query	1 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	compare	date__@gte 1 rows: Brazilian Grand Prix
+step	compare	round__@lt 1 rows: Monaco Grand Prix
+step	order	date: Monaco Grand Prix, Brazilian Grand Prix
+step	order	-date: Brazilian Grand Prix, Monaco Grand Prix
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
-step	row	2 2009 Monaco Grand Prix 2009-05-24
+step	row	3 2009 Monaco Grand Prix 2009-05-24
 step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 ```
@@ -316,7 +335,7 @@ Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` 
 `prep.jl`, runs the JIT control, builds the binary with the pinned Julia and JuliaC, and runs it under
 `timeout -k 10 300`. Before the MySQL run the job flushes the server's privileges, which empties
 `caching_sha2_password`'s cache: `prep.jl` and the JIT control logged in already, and without the flush the
-binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line, prints the write's
+binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line and the four read-step lines, prints the write's
 `write ok`, `query 2 rows`, `update 1 rows; round 7` and `delete 1 rows; 1 left` lines (the written row's id is
 not checked: the JIT control used one), and its `fail` step prints
 `threw StatementError` with the server's own SQLSTATE (`42S02` on MySQL, `42P01` on PostgreSQL), the

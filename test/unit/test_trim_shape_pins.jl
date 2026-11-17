@@ -4072,8 +4072,14 @@ end
                :_bitwise_not_sql, :_xor_sql, :_untyped_date_refusal, :_day_count_shift_sql,
                :_duration_operand_units, :_duration_value_sql, :_json_document_marker, :_meaning_refusal,
                # the callees the ones above hand the connection to
-               :_computes, :_interval_ms_as_text, :_duration_values_units, :_unnamed_temporal_remedy,
-               :_interval_error)
+               :_computes, :_interval_ms_as_text, :_duration_values_units,
+               # (`_unnamed_temporal_remedy` was listed here until #1599 layer 5: it no longer takes the
+               # connection, so the refusals read `_timestamp_remedy` instead, listed below)
+               :_interval_error,
+               # the engine's timestamp remedy, read by the refusals at the engine's type (#1599 layer 5)
+               :_timestamp_remedy,
+               # an ORDER BY term's render at concrete types, and its open arm (#1599 layer 5)
+               :_order_term_at, :_order_term_other)
     checked = 0
     for name in union(Set(callees), setdiff(facts, write_facts))
       f = getglobal(QB, name)
@@ -4089,7 +4095,7 @@ end
       end
     end
     # The exact count records the set: a method added, removed or renamed in it changes it.
-    @test checked == 192
+    @test checked == 195
     # Their engine argument, the first, stays specialized. `_inserted_row_query`'s `result` (its fourth, bit 3) is
     # unspecialized since #1614; nothing else is, on any of the three.
     for name in write_facts, m in methods(getglobal(QB, name))
@@ -5561,6 +5567,130 @@ end
     me = MethodError(identity, ("database is closed", "disk i/o error"))
     @test PormG._unowned_string(me) == "MethodError"
     @test PormG._unowned_error_text(me) == "methoderror"
+  end
+
+  # What: the unnamed-temporal check (#1310) a comparison filter runs on SQLite and MySQL
+  #   (`_refuse_unnamed_temporal` over the queue `_checking_unnamed_temporal` fills), its side walks, and the
+  #   refusals it raises.
+  # Expected: the queue is a `Vector{Tuple{Any,Any,String}}`, and the check over it makes no dynamic call down to
+  #   the functions its walks name at a side's concrete type (`_side_walk_kind`, `_temporal_inside`,
+  #   `_unnamed_side_label`, `_is_null_literal`), whose own bodies are not claimed here; each walk's one open arm
+  #   is an `invoke`. The two side questions and the refusal builders take their untyped arguments
+  #   unspecialized, and the remedy reads `_timestamp_remedy` at the engine's type, in the refusal.
+  # Why: the queue was an `Any[]`, so each queued comparison was read back untyped and destructured through
+  #   `indexed_iterate`, which a trimmed image had no code for: a `date__@gte` filter raised
+  #   `MissingCodeError` in the trimmed SQLite and MySQL reads (#1599 layer 5, #1814 wall 21).
+  @testset "a comparison filter's unnamed-temporal check runs at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    @test isdefined(QB, :_PendingTemporal) && QB._PendingTemporal === Vector{Tuple{Any,Any,String}}
+    skip = (QB._side_walk_kind_other, QB._null_literal_other, QB._unnamed_side_label_other,
+            QB._side_walk_kind, QB._temporal_inside, QB._unnamed_side_label, QB._is_null_literal)
+    @test _dynamic_calls_deep(QB._refuse_unnamed_temporal, (QB._PendingTemporal, QB.InstructionObject);
+                              depth = 4, skip = skip) == String[]
+    I = QB.InstructionObject
+    for (f, tt) in ((QB._side_walk_kind_any, (Any, I)), (QB._null_literal_any, (Any,)), (QB._null_side, (Any,)),
+                    (QB._unnamed_side, (Any, I)), (QB._temporal_inside_any, (Any, I)), (QB._held_temporal, (Any, I)),
+                    (QB._unnamed_side_label_any, (Any,)), (QB._unnamed_temporal_side, (Any, Any, I)),
+                    (QB._time_arithmetic_side, (Any, Any, String, I)), (QB._is_temporal_kind, (Any,)),
+                    (QB._unnamed_temporal_remedy, (Any, String)), (QB._temporal_beside, (Any,)))
+      @test (nameof(f), _dynamic_calls(f, tt)) == (nameof(f), String[])
+    end
+    @test (only(methods(QB._unnamed_temporal_side)).nospecialize, only(methods(QB._time_arithmetic_side)).nospecialize) == (3, 3)
+    for name in (:_unnamed_temporal_refusal, :_time_arithmetic_refusal, :_timestamp_remedy), m in methods(getglobal(QB, name))
+      # The connection (bit 0) everywhere, and the kind (bit 3) where there is one.
+      @test (name, m.nospecialize) == (name, name === :_unnamed_temporal_refusal ? 9 : 1)
+    end
+    for C in (K.PormGSQLite, K.PormGMySQL)
+      @test _dynamic_calls_deep(QB._unnamed_temporal_refusal, (C, String, String, Any); depth = 3) == String[]
+      @test _dynamic_calls_deep(QB._time_arithmetic_refusal, (C, String, String); depth = 3) == String[]
+    end
+    # The queue's one writer stores the concrete vector, and the found answer is built without a splat.
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_render.jl"), String)
+    body = src[findfirst("function _checking_unnamed_temporal", src).start:findfirst("function _queue_unnamed_temporal!", src).start]
+    @test occursin("pending = _PendingTemporal()", body) && !occursin("Any[]", body)
+    refuse = src[findfirst("function _refuse_unnamed_temporal", src).start:findfirst("function _time_arithmetic_side", src).start]
+    @test occursin("(hit[1], hit[2], op, false)", refuse) && !occursin("hit...", refuse)
+  end
+
+  # What: a bound literal's kind (`_infer_kind(::SQLText, …)`), which the check asks of a filter's value side.
+  # Expected: no dynamic call: the null test and the literal's kind go through walks over the slot (`_null_literal_any`,
+  #   `_literal_kind_any`), whose open arms are `invoke`s.
+  # Why: called on the `Any` slot, `_is_null_literal` dispatched at run time to a body a trimmed image never compiled
+  #   (it is always inlined): the trimmed SQLite and MySQL `date__@gte` reads raised `MethodError` on
+  #   `_is_null_literal(::String)` once the queue was typed (#1599 layer 5).
+  @testset "a bound literal's kind is read without a dynamic call (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    for P in (QB._AllKinds, QB._MeaningKinds)
+      @test (P, _dynamic_calls(QB._infer_kind, (QB.SQLText, QB.InstructionObject, P))) == (P, String[])
+      @test (P, _dynamic_calls(QB._literal_kind_any, (Any, P))) == (P, String[])
+    end
+  end
+
+  # What: the projected-path walk over an ORDER BY term (`_collect_projected_paths!` on an `SQLOrder`), which
+  #   MySQL's ordering reads for its NULL sort key (`_from_column_names`).
+  # Expected: no dynamic call, and no call into the field-part walk's open arm (`_with_field_part_other`): the
+  #   term's slot, an `SQLField`, is walked at its type.
+  # Why: the term went through `_with_field_part_open`, which has no arm for an `SQLField`, so it reached the open
+  #   arm, whose dynamic call had no compiled target: the trimmed MySQL `order_by` raised `MissingCodeError` on
+  #   `_collect_part_paths!(::SQLField, …)` (#1599 layer 5). The open arm's call is behind an `invoke`, so a
+  #   one-level scan alone passes on the old code; the pin reads the invoked methods too.
+  @testset "an order_by term's paths are walked at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    tt = (Vector{String}, QB.SQLOrder, Int)
+    @test _dynamic_calls(QB._collect_projected_paths!, tt) == String[]
+    ci, _ = only(code_typed(QB._collect_projected_paths!, tt; optimize = true))
+    invoked = Symbol[]
+    for st in ci.code
+      (st isa Expr && st.head === :invoke) || continue
+      mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      mi isa Core.MethodInstance && mi.def isa Method && push!(invoked, mi.def.name)
+    end
+    @test !(:_with_field_part_other in invoked) && !(:_with_field_part_open in invoked)
+  end
+
+  # What: the FROM tables' columns a MySQL `order_by` reads for its NULL sort key (`_from_column_names`): the table of
+  #   a model held untyped (`_model_table_at`), a relation path's hops (`_add_hop_tables!`) and one candidate model's
+  #   columns and relations (`_add_from_model!`, at `ModelType`).
+  # Expected: no dynamic call in any of them; `_from_column_names` reads a candidate through the split, never through
+  #   `model_table_name` on the abstract `PormGModel`.
+  # Why: `model_table_name` on an abstract model dispatched at run time to a body a trimmed image never compiled (it is
+  #   inlined everywhere): the trimmed MySQL `order_by` raised `MethodError` on `model_table_name(::ModelType)`
+  #   (#1599 layer 5).
+  @testset "the FROM columns of a MySQL order_by are read at ModelType (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    @test _dynamic_calls(QB._model_table_at, (Any,)) == String[]
+    @test _dynamic_calls_deep(QB._add_from_model!, (Set{String}, Vector{K.PormGModel}, PormG.Models.ModelType, Set{String});
+                              depth = 3) == String[]
+    for V in (Vector{SubString{String}}, Vector{String})
+      @test (V, _dynamic_calls(QB._add_hop_tables!, (Set{String}, QB.SQLObjectQuery, V))) == (V, String[])
+    end
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "select_nodes.jl"), String)
+    body = src[findfirst("function _from_column_names", src).start:findfirst("function _add_from_model!", src).start]
+    @test !occursin("Models.model_table_name(", body) && occursin("_add_from_model!(cols, candidates, m, tables)", body)
+  end
+
+  # What: an ORDER BY term's render call (`_order_term_at`, which `_render_order_terms` calls for every term).
+  # Expected: both calls from `_render_order_terms` (with and without a NULL flag) and the helper's calls of
+  #   `_order_term_sql` resolve statically; the helper takes the term, the connection and the flag
+  #   unspecialized (bits 0, 3 and 4), and its one open arm, for a term that is not text, is an `invoke`.
+  # Why: the term is held in a slot typed as a union of node types, and the keyword call built a `NamedTuple`
+  #   whose type was a `UnionAll`, so both calls dispatched at run time: the trimmed Postgres.jl read's
+  #   `order_by` raised `MethodError` on `_order_term_sql(::String, ::String, ::Symbol, ::PostgresConnectionPool)`
+  #   (#1599 layer 5).
+  @testset "an order_by term is rendered at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder; K = PormG.Kernel
+    CT = fieldtype(QB.InstructionObject, :connection)
+    # Skipped: the open arm, and the capability barriers MySQL's refusal reaches (`Dialect._supports_at`,
+    # `_capability_error_at`), whose one dynamic call each is reviewed in their own pin. With inlining off (CI's coverage
+    # run) the walk reaches them; inlined, it does not.
+    D = PormG.Dialect
+    @test _dynamic_calls_deep(QB._order_term_at, (Any, String, Symbol, CT, Union{Nothing,String});
+                              depth = 1, skip = (QB._order_term_other, D._supports_at, D._capability_error_at)) == String[]
+    @test only(methods(QB._order_term_at)).nospecialize == 1 | 8 | 16
+    for V in (QB.OrderTermView, Vector{K.SQLTypeOrder})
+      calls = _dynamic_calls(QB._render_order_terms, (V, QB.SQLObjectQuery, QB.InstructionObject))
+      @test (V, filter(c -> occursin("_order_term", c), calls)) == (V, String[])
+    end
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

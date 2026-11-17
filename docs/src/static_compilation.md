@@ -25,6 +25,11 @@ else is untested in a trimmed binary, even where it compiles.
   - MySQL 8.4, through MySQL.jl;
   - PostgreSQL 18, through Postgres.jl (see [PostgreSQL](#PostgreSQL-through-Postgres.jl) below).
 
+  The same read with a comparison filter on a date or an integer (`filter("date__@gte" => Date(2008, 6, 1))`,
+  `filter("round__@lt" => 10)`), and with `order_by("date")` or `order_by("-date")`, has run on the three
+  drivers too (#1599). The other comparison lookups (`__@gt`, `__@lte`, `__@range`) take the same render and
+  have not run.
+
   The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
   nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)
   are built to run trimmed, but no trimmed binary has run them yet.
@@ -55,7 +60,8 @@ else is untested in a trimmed binary, even where it compiles.
   statement is still running on.
 
 PormG checks these with a fixture application, `test/trim/` in the repository. Its `Trim (juliac)`
-workflow builds and runs it every night: the SQLite read and the pool's tasks, the SQLite write
+workflow builds and runs it every night: the SQLite read (its comparison filters and `order_by` included) and
+the pool's tasks, the SQLite write
 (refusals, create, read, update, delete, `bulk_insert`), and the MySQL and Postgres.jl reads, single-row
 writes and refused statements,
 against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is checked by hand.

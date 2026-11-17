@@ -140,6 +140,37 @@ end
   end
 end
 
+# The old range-bound queue, copied from `_queue_unnamed_temporal!` before #1599 layer 5's lookup slice.
+function _old_queue(pending, @nospecialize(left), @nospecialize(right), op)
+  pending === nothing && return nothing
+  op in _RLK_QB._UNNAMED_TEMPORAL_OPERATIONS || return nothing
+  if op in ("BETWEEN", "NOT BETWEEN") && right isa Union{AbstractVector,Tuple}
+    foreach(r -> push!(pending, (left, r, "@range")), right)
+  else
+    push!(pending, (left, right, op))
+  end
+  return nothing
+end
+
+# What: `_queue_unnamed_temporal!` (now through `_queue_range_bounds!`) against its old body, over each operator a
+#   filter queues and right sides of each list type the walk names, a tuple, a mixed list, an empty one and a scalar.
+# Expected: the same entries queued, in order, and the same return.
+# Why: the walk queues each bound at the list's type; a bound queued differently would change which `@range` filters
+#   the check refuses (#1599 layer 5).
+@testset "a filter's bounds are queued as before (#1599 layer 5)" begin
+  left = _RLK_QB.SQLField("date")
+  rights = Any[[_RLK_QB.SQLText("a"), _RLK_QB.SQLText("b")], [6, 7], [1.5, 2.5], [Date(2008), Date(2009)],
+               [DateTime(2008), DateTime(2009)], (1, 2), Any[1, "a"], Int[], 5, _RLK_QB.SQLText("x")]
+  for op in ("BETWEEN", "NOT BETWEEN", ">=", "<", "+", "IN", "="), r in rights
+    pn = Tuple{Any,Any,String}[]
+    po = Tuple{Any,Any,String}[]
+    tag = (op, typeof(r))
+    @test (tag, _RLK_QB._queue_unnamed_temporal!(pn, left, r, op)) == (tag, _old_queue(po, left, r, op))
+    @test isequal((tag, pn), (tag, po))
+  end
+  @test _RLK_QB._queue_unnamed_temporal!(nothing, left, [1, 2], "BETWEEN") === nothing
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

@@ -5831,6 +5831,21 @@ end
     @test occursin("x isa Vector{Dates.Date} && return _filter_value_node(x)", body)
   end
 
+  # What: queuing a `@range` filter's two bounds for the unnamed-temporal check (`_queue_unnamed_temporal!` →
+  #   `_queue_range_bounds!`).
+  # Expected: no dynamic call in either, nor in `_queue_range_at!` at each list type the walk names.
+  # Why: `foreach` over the untyped list dispatched at run time, a call a trimmed image has no target for, on every
+  #   `__@range` filter after its value node (#1599 layer 5).
+  @testset "a @range filter's bounds are queued at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    P = Vector{Tuple{Any,Any,String}}
+    @test _dynamic_calls(QB._queue_unnamed_temporal!, (P, Any, Any, String)) == String[]
+    @test _dynamic_calls(QB._queue_range_bounds!, (P, Any, Any)) == String[]
+    for L in (Vector{QB.SQLText}, Vector{Int64}, Vector{Float64}, Vector{Dates.Date}, Vector{Dates.DateTime})
+      @test (L, _dynamic_calls(QB._queue_range_at!, (P, Any, L))) == (L, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

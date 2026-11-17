@@ -1942,10 +1942,30 @@ function _queue_unnamed_temporal!(pending, @nospecialize(left), @nospecialize(ri
   pending === nothing && return nothing
   op in _UNNAMED_TEMPORAL_OPERATIONS || return nothing
   if op in ("BETWEEN", "NOT BETWEEN") && right isa Union{AbstractVector,Tuple}
-    foreach(r -> push!(pending, (left, r, "@range")), right)
+    _queue_range_bounds!(pending, left, right)
   else
     push!(pending, (left, right, op))
   end
+  return nothing
+end
+# Each `@range` bound queued at the list's concrete type (#1599 layer 5). Over the untyped list `foreach` dispatched
+# at run time, a call a trimmed image had no target for (`"date__@range" => [d1, d2]`). One arm per list a filter's
+# value node commonly is (`_filter_value_node` turns a text list into `SQLText`s), each the same `foreach` at that
+# type; any other list or tuple takes it behind `@noinline` (`_queue_range_other!`).
+@noinline function _queue_range_bounds!(pending, @nospecialize(left), @nospecialize(right))
+  right isa Vector{SQLText} && return _queue_range_at!(pending, left, right)
+  right isa Vector{Int64} && return _queue_range_at!(pending, left, right)
+  right isa Vector{Float64} && return _queue_range_at!(pending, left, right)
+  right isa Vector{Dates.Date} && return _queue_range_at!(pending, left, right)
+  right isa Vector{Dates.DateTime} && return _queue_range_at!(pending, left, right)
+  return _queue_range_other!(pending, left, right)
+end
+function _queue_range_at!(pending, @nospecialize(left), right::Vector)
+  foreach(r -> push!(pending, (left, r, "@range")), right)
+  return nothing
+end
+@noinline function _queue_range_other!(pending, @nospecialize(left), @nospecialize(right))
+  foreach(r -> push!(pending, (left, r, "@range")), right)
   return nothing
 end
 # The memo's answer is read back at the type the closure returns (#1599 layer 5): out of the memo it is

@@ -105,3 +105,20 @@ end
     @test isequal(new_cols, old_cols)
   end
 end
+
+# What: a column array a PostgreSQL bulk write binds, through `_wire_array` (the Postgres.jl extension's text for a
+#   `Vector{Any}` parameter), against Postgres.jl's own `_param` on the vector as it was: text columns with quotes,
+#   backslashes, braces, commas and `NULL` spelled as text, integer and boolean columns, all-`missing`, empty, and
+#   vectors that take the open arm (mixed kinds, a narrower integer).
+# Expected: the same array literal, character for character.
+# Why: the vector is now handed to Postgres.jl at a concrete element type, so its per-element rendering is static in a
+#   trimmed image; the text the server parses must not change.
+@testset "a PostgreSQL bulk column array binds the same text (#1599 layer 7, #1614)" begin
+  vectors = Any[Any["Monaco", missing, "b\"c", "back\\slash", "{brace}", "a, b", "NULL", ""],
+                Any[2010, 2011, missing, -1], Any[true, false, missing], Any[missing, missing], Any[],
+                Any[1, "x"], Any[Int32(3), missing], Any["Monaco"], Any[0]]
+  for v in vectors
+    @test (repr(v), _SBT_PGX._wire_array(v)) == (repr(v), Postgres._param(v))
+    @test (repr(v), _SBT_PGX._wire_text(v)) == (repr(v), Postgres._param(v))
+  end
+end

@@ -915,8 +915,31 @@ _wire_text(@nospecialize(v))::Union{String, Missing} =
   v isa DateTime ? Postgres._param(v) :
   v isa Decimals.Decimal ? Postgres._param(v) :
   v isa Vector{Int} ? Postgres._param(v) :
+  v isa Vector{Any} ? _wire_array(v) :
   _wire_text_other(v)
 @noinline _wire_text_other(@nospecialize(v))::Union{String, Missing} = Postgres._param(v)
+
+# A column array a bulk write binds (`unnest`, #1599 layer 7, #1614). Postgres.jl renders a `Vector{Any}` element by
+# element through its `_aparam`, one dispatch per untyped element, which a trimmed image had no code for (a trimmed
+# `bulk_insert` raised `MissingCodeError` in `_param(::Vector{Any})`). Its elements are what `_pg_array_element`
+# returns, `missing`, an integer or a `String`, so when every element is `missing` or one of `String`, `Int64` and
+# `Bool`, the vector is handed over at that element type. Postgres.jl's own `_param` renders it, each element through
+# the same `_aparam` method as before, so the text is the same. Any other vector goes as it was.
+function _wire_array(v::Vector{Any})::Union{String, Missing}
+  all(x -> x isa Union{Missing, String}, v) && return Postgres._param(_narrowed(String, v))
+  all(x -> x isa Union{Missing, Int64}, v) && return Postgres._param(_narrowed(Int64, v))
+  all(x -> x isa Union{Missing, Bool}, v) && return Postgres._param(_narrowed(Bool, v))
+  return _wire_text_other(v)
+end
+# `v`'s elements as a `Vector{Union{Missing, T}}`, each read at its type (every element is `missing` or a `T`).
+function _narrowed(::Type{T}, v::Vector{Any})::Vector{Union{Missing, T}} where {T}
+  out = Vector{Union{Missing, T}}(undef, length(v))
+  for i in eachindex(v)
+    x = v[i]
+    out[i] = x isa T ? x : missing
+  end
+  return out
+end
 
 # An interrupt that lands during a TLS read reaches us wrapped in the TLS layer's own error, with the
 # `InterruptException` as its `cause`. Core recognises an abandoned await by the `InterruptException`

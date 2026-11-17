@@ -5743,6 +5743,11 @@ end
     @test !occursin("foreach((column, cell) -> push!(column, _pg_array_element(cell))", src)
     @test occursin("push!(chunk_columns[j], _pg_array_element_at(cells[j]))", src)
     @test _dynamic_calls(QB._pg_array_element_at, (Any,)) == String[]
+    # Postgres.jl binds each column array (wall 3 on Postgres.jl): handed over at a concrete element type, so its
+    # per-element rendering makes no dynamic call (the open arm, a vector of another kind, is skipped).
+    pgx = Base.get_extension(PormG, :PormGPostgresExt)
+    @test _dynamic_calls_deep(pgx._wire_array, (Vector{Any},); depth = 3, skip = (pgx._wire_text_other,)) == String[]
+    @test _dynamic_calls(pgx._wire_text, (Any,)) == String[]
   end
 
   # What: the Postgres.jl extension's read of a timestamp's milliseconds (`_ms`), under every `timestamp`/`timestamptz`

@@ -2,8 +2,8 @@
 
 !!! warning "Experimental"
     Building a PormG application into a standalone executable with `juliac --trim` is **experimental**.
-    One kind of read and the single-row write are known to work, on three drivers, and on SQLite
-    `bulk_insert`. Other writes have not run in a trimmed binary yet, and what this page describes may change between
+    One kind of read, the single-row write and `bulk_insert` are known to work, on three drivers.
+    Other writes have not run in a trimmed binary yet, and what this page describes may change between
     releases without an upgrade note. Work in progress is tracked in
     [#1599](https://github.com/PingoLee/PormG.jl/issues/1599) (the trimmed application) and
     [#1614](https://github.com/PingoLee/PormG.jl/issues/1614) (the drivers).
@@ -45,12 +45,13 @@ else is untested in a trimmed binary, even where it compiles.
   - the refusals PormG raises before any SQL: an `InvalidValueError` for a date string that is not a
     calendar date, and for a `Bool` given to a text column (run on SQLite; the check is the same on every
     driver).
-- **`bulk_insert` on SQLite** (#1694), from a `Vector` of `NamedTuple`s whose element type is concrete
+- **`bulk_insert`** (#1694, #1614), on SQLite, on MySQL 8.4 and on PostgreSQL 18 through Postgres.jl
+  (whose bulk write binds each column as an array, `unnest`), from a `Vector` of `NamedTuple`s whose element type is concrete
   (`[(year = 2010, round = 6, …), …]`), with the fields the write fills itself left out (the same
   `auto_now_add`, `auto_now` and `auto_add` fields as above) and no `columns=`, `on_conflict` or
   `returning`. It returns `(count = 2, rows = nothing)` and a typed read sees the rows. A row that
   fails validation is refused as under the JIT: an `InvalidValueError` naming its row and field (a
-  date that is not a calendar date has run), with no row written (#1694). No trimmed binary has run
+  date that is not a calendar date has run, on SQLite), with no row written (#1694). No trimmed binary has run
   any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword options. Two of them are known not to work yet:
   `returning=` and a primary-key column in the table still take calls a trimmed binary cannot make.
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
@@ -64,14 +65,13 @@ PormG checks these with a fixture application, `test/trim/` in the repository. I
 workflow builds and runs it every night: the SQLite read (its comparison filters and `order_by` included) and
 the pool's tasks, the SQLite write
 (refusals, create, read, update, delete, `bulk_insert`), and the MySQL and Postgres.jl reads, single-row
-writes and refused statements,
+writes, `bulk_insert` and refused statements,
 against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is checked by hand.
 
 ## What does not work yet
 
 - **Writes beyond the single-row write** (#1694) have not run in a trimmed binary. Use the JIT for
   them, or a separate process:
-  - `bulk_insert` on MySQL or through Postgres.jl;
   - `bulk_update`, `bulk_copy` and the other bulk writers, and `bulk_insert` beyond the input above;
   - a `bulk_insert` row refused for any reason other than the one that has run (below): a collection
     in a column, an SQL expression for a value, a formatter that raises something other than an

@@ -5814,6 +5814,23 @@ end
     end
   end
 
+  # What: a filter's value node for the unnamed-temporal check (`_literal_value_node`) when the value is a membership or
+  #   range list.
+  # Expected: no dynamic call in `_literal_value_node` (the lists it names reach `_filter_value_node` at their type), and
+  #   none in `_filter_value_node` at those list types.
+  # Why: a list took the open arm's run-time call to `_filter_value_node`, which a trimmed image had no target for: the
+  #   read stopped at `MethodError(_filter_value_node, (Vector{Date},))` on `__@range` (#1599 layer 5).
+  @testset "a filter's list value is checked at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._literal_value_node, (Any,)) == String[]
+    for L in (Vector{String}, Vector{Int64}, Vector{Float64}, Vector{Dates.Date}, Vector{Dates.DateTime})
+      @test (L, _dynamic_calls(QB._filter_value_node, (L,))) == (L, String[])
+    end
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "filter_nodes.jl"), String)
+    body = src[findfirst("function _literal_value_node(", src).start:findfirst("_literal_value_node_other(@nospecialize", src).start]
+    @test occursin("x isa Vector{Dates.Date} && return _filter_value_node(x)", body)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

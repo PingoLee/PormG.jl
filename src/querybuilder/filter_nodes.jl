@@ -1371,6 +1371,13 @@ end
   x isa SubString{String} && return _filter_value_node(x)
   x isa Union{Int64, Int32, Float64, Bool, Nothing, Missing, Dates.Date, Dates.DateTime, Dates.Time,
               TimeZones.ZonedDateTime, Decimals.Decimal, UUIDs.UUID} && return x
+  # #1599 layer 5: a membership or range list, handed to its method at its type (the trimmed read's `__@range`
+  # over a `Vector{Date}` stopped at the open arm's call).
+  x isa Vector{String} && return _filter_value_node(x)
+  x isa Vector{Int64} && return _filter_value_node(x)
+  x isa Vector{Float64} && return _filter_value_node(x)
+  x isa Vector{Dates.Date} && return _filter_value_node(x)
+  x isa Vector{Dates.DateTime} && return _filter_value_node(x)
   return _literal_value_node_other(x)
 end
 @noinline _literal_value_node_other(@nospecialize(x)) = _filter_value_node(x)

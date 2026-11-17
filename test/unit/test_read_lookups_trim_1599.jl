@@ -122,6 +122,24 @@ end
   end
 end
 
+# What: a filter's value node for the unnamed-temporal check (`_literal_value_node`) against the `_filter_value_node`
+#   call it replaces, over the scalars and lists a filter holds, the lists the walk names included, and values that take
+#   the open arm.
+# Expected: the same node (`isequal`, and the same type), or the same error.
+# Why: the walk hands a list to `_filter_value_node` at its type; a list read differently would change which
+#   comparisons the check refuses (#1599 layer 5).
+@testset "a filter's value node is what _filter_value_node gave (#1599 layer 5)" begin
+  values = Any["Monaco", SubString("Monaco", 1, 3), 6, 2.5, Date(2008), DateTime(2008), nothing, missing,
+               ["A", "M"], [6, 7], [1.5, 2.5], [Date(2008), Date(2009)], [DateTime(2008), DateTime(2009)], Any["a", 2],
+               String[], Int[], ("a", "b"), (1, 2), [Int32(1)], [SubString("ab", 1, 1)], :sym]
+  for x in values
+    new = _rlk_outcome(() -> _RLK_QB._literal_value_node(x))
+    old = _rlk_outcome(() -> _RLK_QB._filter_value_node(x))
+    @test isequal((typeof(x), new), (typeof(x), old))
+    new[1] === :value && @test (typeof(x), typeof(new[2])) == (typeof(x), typeof(old[2]))
+  end
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

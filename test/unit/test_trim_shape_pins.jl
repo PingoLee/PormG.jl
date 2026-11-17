@@ -3140,8 +3140,8 @@ end
       @test isempty(intersect(boxed, [:columns, :parameters, :returning_sql]))
     end
 
-    # The total at its type.
-    @test count("_bulk_result(_bulk_count_total(results)", bi_src) == 2 && !occursin("sum(results", bi_src)
+    # The total at its type, through `_bulk_result_at` since #1614 (the call on the untyped total was dynamic).
+    @test count("_bulk_result_at(_bulk_count_total(results)", bi_src) == 2 && !occursin("sum(results", bi_src)
   end
 
   # What: the single-row write's path on MySQL and on PostgreSQL through Postgres.jl (#1599 layer 7, #1614), one group

@@ -71,6 +71,52 @@ _pormg_lower(x::AbstractString) = lowercase(x)
 _pormg_lower(::Missing) = missing
 _pormg_lower(x) = lowercase(string(x))
 
+# #1599 layer 5: `pormg_lower` is registered with a callback compiled at its types, not through
+# `SQLite.register`. SQLite.jl's scalar callback calls the function through a `Function` slot over a
+# `Vector{Any}` of its arguments, so in a trimmed image it raised a `MethodError`, and so did the error report
+# (`udf_error`, specialized on the error): the trimmed read stopped at `name__@icontains` with a `StatementError`
+# and then hung at exit, in `sqlite3_close_v2`. This callback reads its one value as SQLite.jl's does
+# (`sqlvalue`), folds it at its type and returns it with `sqlreturn`; any other value takes `_pormg_lower` at run
+# time, as before. A failure is reported to SQLite as SQLite.jl 1.10's `udf_error` reports it, as the query's
+# `SQLiteException`, rather than unwinding through SQLite's C caller.
+function _pormg_lower_callback(context::Ptr{Cvoid}, nargs::Cint, values::Ptr{Ptr{Cvoid}})::Cvoid
+  try
+    _pormg_lower_return(context, SQLite.sqlvalue(values, 1))
+  catch err
+    _pormg_udf_error(context, err)
+  end
+  return nothing
+end
+@noinline function _pormg_lower_return(context::Ptr{Cvoid}, @nospecialize(v))
+  v isa String && return SQLite.sqlreturn(context, _pormg_lower(v))
+  v isa Missing && return SQLite.sqlreturn(context, _pormg_lower(v))
+  v isa Int64 && return SQLite.sqlreturn(context, _pormg_lower(v))
+  v isa Float64 && return SQLite.sqlreturn(context, _pormg_lower(v))
+  return SQLite.sqlreturn(context, _pormg_lower(v))
+end
+@noinline function _pormg_udf_error(context::Ptr{Cvoid}, @nospecialize(err))
+  try
+    if err isa OutOfMemoryError
+      SQLite.C.sqlite3_result_error_nomem(context)
+    else
+      message = sprint(showerror, err)
+      SQLite.C.sqlite3_result_error(context, message, sizeof(message))
+    end
+  catch  # swallows a failure to format the error: SQLite still gets one, as SQLite.jl's `udf_error` gives it
+    SQLite.C.sqlite3_result_error(context, "Julia exception in SQLite callback", -1)
+  end
+  return nothing
+end
+
+# `SQLite.register(db, _pormg_lower; nargs = 1, name = "pormg_lower", isdeterm = true)`, with the callback above.
+function _register_pormg_lower!(db::SQLite.DB)
+  callback = @cfunction(_pormg_lower_callback, Cvoid, (Ptr{Cvoid}, Cint, Ptr{Ptr{Cvoid}}))
+  enc = SQLite.C.SQLITE_UTF8 | SQLite.C.SQLITE_DETERMINISTIC
+  rc = SQLite.C.sqlite3_create_function_v2(db.handle, "pormg_lower", 1, enc, C_NULL, callback, C_NULL, C_NULL, C_NULL)
+  rc == SQLite.C.SQLITE_OK || SQLite.sqliteerror(db)
+  return nothing
+end
+
 # `LPad`/`RPad` for SQLite (#122), which has no LPAD/RPAD. Registered per-connection (below) as
 # `pormg_lpad`/`pormg_rpad`, which src/Dialect.jl emits. PostgreSQL's semantics, character for
 # character: a string longer than `n` is cut to its first `n` characters (for both sides), a `fill`
@@ -97,7 +143,7 @@ _pormg_rpad(s, n, fill) = any(ismissing, (s, n, fill)) ? missing : _pormg_pad(s,
 function _create_sqlite_connection(connection_string::String; read_only::Bool = false)
   new_conn = SQLite.DB(connection_string)
   # Unicode-aware case folding for the i* lookups (#78). Deterministic so it stays index-eligible.
-  SQLite.register(new_conn, _pormg_lower; nargs = 1, name = "pormg_lower", isdeterm = true)
+  _register_pormg_lower!(new_conn)
   # String padding for `LPad`/`RPad` (#122).
   SQLite.register(new_conn, _pormg_lpad; nargs = 3, name = "pormg_lpad", isdeterm = true)
   SQLite.register(new_conn, _pormg_rpad; nargs = 3, name = "pormg_rpad", isdeterm = true)

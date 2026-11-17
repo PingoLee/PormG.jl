@@ -204,6 +204,29 @@ end
   end
 end
 
+# What: `pormg_lower` registered through the extension's typed callback (`_register_pormg_lower!`) against the same
+#   function registered through `SQLite.register`, on two in-memory databases, over text (ASCII, accented, a German
+#   sharp s, empty), NULL, integers, floats and a blob, alone and inside the `LIKE` an `@icontains` filter renders.
+# Expected: the same rows: each value and its type (`typeof`), and the same `LIKE` answers.
+# Why: every case-insensitive pattern lookup on SQLite folds both sides through this function; a value folded
+#   differently would change the rows a filter matches (#1599 layer 5).
+@testset "pormg_lower answers as the SQLite.register'd function did (#1599 layer 5)" begin
+  sx = Base.get_extension(PormG, :PormGSQLiteExt)
+  new_db, old_db = SQLite.DB(), SQLite.DB()
+  sx._register_pormg_lower!(new_db)
+  SQLite.register(old_db, sx._pormg_lower; nargs = 1, name = "pormg_lower", isdeterm = true)
+  rows(db, sql) = [(x, typeof(x)) for x in SQLite.DBInterface.execute(db, sql) |> SQLite.Tables.columntable |> first]
+  for sql in ("SELECT pormg_lower('RÄIKKÖNEN') AS v", "SELECT pormg_lower('Monaco Grand Prix') AS v",
+              "SELECT pormg_lower('STRASSE ß') AS v", "SELECT pormg_lower('') AS v", "SELECT pormg_lower(NULL) AS v",
+              "SELECT pormg_lower(42) AS v", "SELECT pormg_lower(-2.5) AS v", "SELECT pormg_lower(x'414243') AS v",
+              "SELECT pormg_lower('Räikkönen') LIKE pormg_lower('%RÄIK%') AS v",
+              "SELECT pormg_lower('Brazilian Grand Prix') LIKE pormg_lower('%brazil%') AS v",
+              "SELECT pormg_lower('Monaco') = pormg_lower('MONACO') AS v")
+    @test isequal((sql, rows(new_db, sql)), (sql, rows(old_db, sql)))
+  end
+  close(new_db); close(old_db)
+end
+
 # What: a `__@range`, a `__@nrange` and a `__@in` filter end to end on each engine: a date, integer, float and text
 #   pair on a model field, a text pair across the foreign key, an integer and a text membership list, and values the
 #   formatter refuses.

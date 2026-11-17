@@ -5885,6 +5885,24 @@ end
     end
   end
 
+  # What: the SQLite extension's `pormg_lower` function, which every case-insensitive pattern lookup on SQLite calls in
+  #   its SQL (`pormg_lower(col) LIKE pormg_lower(?)`): its registration and the callback SQLite calls per value.
+  # Expected: `_create_sqlite_connection` registers it through `_register_pormg_lower!`, not `SQLite.register`; no dynamic
+  #   call in the registration or the callback; in `_pormg_lower_return`, only the open arm's two (a value of a type
+  #   the walk does not name).
+  # Why: SQLite.jl's scalar callback calls the function through a `Function` slot over a `Vector{Any}`, and its error
+  #   report is specialized on the error: in a trimmed image both raised, the read stopped at `name__@icontains` with a
+  #   `StatementError` whose cause was `MethodError(udf_error, …)`, and the binary hung at exit (#1599 layer 5).
+  @testset "pormg_lower runs at concrete types on SQLite (#1599 layer 5)" begin
+    sx = Base.get_extension(PormG, :PormGSQLiteExt)
+    src = read(joinpath(pkgdir(PormG), "ext", "PormGSQLiteExt.jl"), String)
+    @test !occursin("SQLite.register(new_conn, _pormg_lower;", src) && occursin("_register_pormg_lower!(new_conn)", src)
+    @test _dynamic_calls(sx._pormg_lower_callback, (Ptr{Cvoid}, Cint, Ptr{Ptr{Cvoid}})) == String[]
+    @test _dynamic_calls(sx._register_pormg_lower!, (SQLite.DB,)) == String[]
+    open_arm = _dynamic_calls(sx._pormg_lower_return, (Ptr{Cvoid}, Any))
+    @test length(open_arm) == 2 && occursin("_pormg_lower(_3)", open_arm[1]) && occursin("sqlreturn", open_arm[2])
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

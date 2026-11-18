@@ -623,7 +623,15 @@ end
 # `add_parameter!` has pushed it. That also keeps a large `__@in` filter list from being deep-copied
 # once per chunk.
 # ─────────────────────────────────────────────────────────────────────────────
-_fork_parameters(pq::PgParameterizedQuery) =
+# #1599 layer 7, #1694: the bindings at the `Vector{Any}` a collector holds, so `collect(Any, …)` is a static call; the
+# slot is typed `Union{AbstractVector,Tuple}`, and over it the call dispatched at run time, on the path every
+# `bulk_update` chunk on PostgreSQL takes. Any other container is collected as before. The same new vector either way.
+function _fork_parameters(pq::PgParameterizedQuery)
+  params = pq.parameters
+  params isa Vector{Any} && return PgParameterizedQuery(pq.sql, collect(Any, params), pq.parameter_count)
+  return _fork_pg_parameters_other(pq)
+end
+@noinline _fork_pg_parameters_other(pq::PgParameterizedQuery) =
   PgParameterizedQuery(pq.sql, collect(Any, pq.parameters), pq.parameter_count)
 
 function _fork_parameters(sq::T) where {T<:_BucketedQuery}

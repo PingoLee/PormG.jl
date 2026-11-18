@@ -1111,24 +1111,52 @@ _without_numeric_read(k) = _numeric_view(k) === nothing ? k : nothing
 
 # A `Case` with no `output_field`: its value is a branch's, so it has the kind its `then` values and
 # its default agree on. A branch value that is a string is a literal, not a path (#965).
+#
+# #1599 layer 5: the branches are read at the column's concrete type (`_case_then_values`) and each value's kind through
+# the walks over an untyped value (`_infer_kind_any`, `_literal_kind_any`, which the pins file compares with the calls
+# they replace): over the untyped column and values the calls dispatched at run time (`Case(When(…), default = …)`).
 function _case_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)
-  values = Any[]
-  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
-    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return nothing
-    push!(values, get(branch.kwargs, "then", nothing))
-  end
+  values = _case_then_values(p.column)
+  values === nothing && return nothing
   push!(values, get(p.kwargs, "else", nothing))
   kind = nothing
   for value in values
     literal = value isa SQLText ? value.field : value
     _is_null_literal(literal) && continue
-    k = value isa Union{SQLObject,SQLType} && !(value isa SQLText) ? _infer_kind(value, instruc, policy) :
-        _literal_kind(literal, policy)
+    k = value isa Union{SQLObject,SQLType} && !(value isa SQLText) ? _infer_kind_any(value, instruc, policy) :
+        _literal_kind_any(literal, policy)
     k === nothing && return nothing
     kind = kind === nothing ? k : _unify_kinds(kind, k, policy)
     kind === nothing && return nothing
   end
   return kind
+end
+
+# The `then` value of each branch of a `Case`'s column, or `nothing` when a branch is not a `When` (the loop
+# `_case_kind` made over `p.column isa AbstractVector ? p.column : (p.column,)`). A `Case` holds a `Vector{FObject}` or one
+# `FObject`, read at its type; any other column takes the old loop, behind `@noinline`.
+function _case_then_values(@nospecialize(column))::Union{Nothing,Vector{Any}}
+  values = Any[]
+  if column isa Vector{FObject}
+    for branch in column
+      branch.function_name == "WHEN" || return nothing
+      push!(values, get(branch.kwargs, "then", nothing))
+    end
+    return values
+  elseif column isa FObject
+    column.function_name == "WHEN" || return nothing
+    push!(values, get(column.kwargs, "then", nothing))
+    return values
+  end
+  return _case_then_values_other(column)
+end
+@noinline function _case_then_values_other(@nospecialize(column))::Union{Nothing,Vector{Any}}
+  values = Any[]
+  for branch in (column isa AbstractVector ? column : (column,))
+    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return nothing
+    push!(values, get(branch.kwargs, "then", nothing))
+  end
+  return values
 end
 
 # #824 — the kind of a CTE column. The body is built before the outer query (`build_cte_clause`

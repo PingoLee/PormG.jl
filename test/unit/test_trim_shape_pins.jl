@@ -6053,6 +6053,19 @@ end
     @test _dynamic_calls(QB._in_pair, (Any, String)) == String[]
   end
 
+  # What: the sargable rewrite of a date bucket (`"date__@year" => 2008`): its field, its binds (`_bucket_bind`,
+  #   `_add_parameter_at`) and its bounds (`_bucket_bounds_at`).
+  # Expected: no dynamic call in the rewrite or its helpers.
+  # Why: the field came back untyped from the resolvers, the binds went through a closure over a union, and the bounds
+  #   helpers were called on the untyped value: each dispatched at run time (#1599 layer 5).
+  @testset "a date bucket's sargable rewrite runs at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._render_sargable_date_range, (QB.OperObject, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._bucket_bind, (QB.InstructionObject, PormG.Models.AnyField, Any, Any)) == String[]
+    @test _dynamic_calls(QB._add_parameter_at, (QB.InstructionObject, Any)) == String[]
+    @test _dynamic_calls(QB._bucket_bounds_at, (typeof(QB._year_bucket_bounds), Any, Bool)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

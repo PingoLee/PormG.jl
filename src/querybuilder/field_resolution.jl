@@ -406,7 +406,7 @@ function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruct
     literal = !(then isa Union{SQLObject,SQLType}) || then isa SQLText
     raw = then isa SQLText ? then.field : then
     _is_null_literal(raw) && continue
-    k = literal ? _literal_kind(raw, _AllKinds()) : _infer_kind(then, instruc, _AllKinds())
+    k = literal ? _literal_kind(raw, _AllKinds()) : _infer_kind_any(then, instruc, _AllKinds())
     k === nothing && return nothing
     kind = _unify_kinds(kind, k, _AllKinds())
     kind === nothing && return nothing

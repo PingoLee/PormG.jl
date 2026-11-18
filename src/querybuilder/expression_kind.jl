@@ -201,7 +201,7 @@ function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_Every
 end
 _arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_EveryKind) = x isa Bool ? nothing : _literal_kind(x, policy)
 _arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_EveryKind) = _literal_kind(x, policy)
-_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind(x, instruc, policy)
+_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind_any(x, instruc, policy)
 # `_arithmetic_side_kind(x, instruc, policy)` for a side a caller holds untyped (#1599 layer 5): an
 # `FExpression` operand, a factor. The literal arms are `_literal_kind`'s answers for the two methods above
 # (a `Bool` has none, any other integer is `CInt64`, a decimal a width-less `CDecimal`, any other float
@@ -352,7 +352,7 @@ end
 function _render_side_kind(@nospecialize(x), instruc::SQLInstruction; right::Bool = false)::Union{CanonicalType,Nothing}
   x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
   if x isa FObject
-    walked = _infer_kind(x, instruc, _AllKinds())
+    walked = _infer_kind_any(x, instruc, _AllKinds())
     walked isa CInterval && return walked   # #1583: with the calendar part it may hold
     # #1307: so is a date or a timestamp, the side of the date-shift arms (`_temporal_result_kind`).
     walked isa Union{CDate,CDateTime} && return walked
@@ -610,8 +610,8 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   # that has them (`_decimal_extract_kind`).
   decimal = _decimal_extract_kind(p, instruc, policy)
   decimal === nothing || return decimal
-  rule === :operand && return _with_window_default(p, _infer_kind(p.column, instruc, policy), instruc, policy)
-  rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
+  rule === :operand && return _with_window_default(p, _infer_kind_any(p.column, instruc, policy), instruc, policy)
+  rule === :first_operand && return _infer_kind_any(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
   rule in (:promoting, :numeric) && return _number_kind(p, rule, instruc, policy)
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
@@ -624,7 +624,7 @@ _infer_function_kind(::Any, ::SQLInstruction, ::_EveryKind) = nothing
 # "interval")` is still that many months. The declaration names the type; the operand names the months.
 function _declared_calendar(kind, p::FObject, instruc::SQLInstruction, policy::_EveryKind)
   kind isa CInterval || return kind
-  carried = p.function_name == "CASE" ? _case_kind(p, instruc, policy) : _infer_kind(_first_operand(p), instruc, policy)
+  carried = p.function_name == "CASE" ? _case_kind(p, instruc, policy) : _infer_kind_any(_first_operand(p), instruc, policy)
   return carried isa CInterval && carried.calendar ? carried : kind
 end
 
@@ -640,7 +640,7 @@ function _with_window_default(p, kind, instruc::SQLInstruction, policy::_EveryKi
   # A NULL default is never the value (`lag(int4, int, NULL)` is an `int4`): skipped, as `_agreeing_kind`
   # skips a NULL operand.
   _is_null_literal(literal) && return kind
-  k = literal isa Union{SQLObject,SQLType} ? _infer_kind(literal, instruc, policy) : _literal_kind(literal, policy)
+  k = literal isa Union{SQLObject,SQLType} ? _infer_kind_any(literal, instruc, policy) : _literal_kind(literal, policy)
   return k === nothing ? nothing : _unify_kinds(kind, k, policy)
 end
 
@@ -662,7 +662,7 @@ over that integer, not over `(x)::numeric`. Their `_computed_kind` methods answe
 operand, so the SQL and the walk agree by construction. Read after the operand renders.
 """
 function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
-  k = _infer_kind(_first_operand(p), instruc, _AllKinds())
+  k = _infer_kind_any(_first_operand(p), instruc, _AllKinds())
   return k isa Union{CInt16,CInt32,CInt64} ? k : nothing
 end
 
@@ -676,7 +676,7 @@ widens that sum to `numeric`, so `Dialect.SUM` renders it `::bigint` there (#114
 `bigint` already. Read after the operand renders.
 """
 _sums_bigint(p::SQLTypeFunction, instruc::SQLInstruction) =
-  _infer_kind(_first_operand(p), instruc, _AllKinds()) isa CInt64
+  _infer_kind_any(_first_operand(p), instruc, _AllKinds()) isa CInt64
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
@@ -849,7 +849,7 @@ _mysql_number_kind(::Any) = nothing
 # the declaration alone (`_declaration_instruction`) has no engine, so nothing is computed there.
 _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_AllKinds) =
   instruc.connection === nothing ? nothing :
-  _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
+  _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind_any(_first_operand(p), instruc, policy), instruc.connection)
 function _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_MeaningKinds)
   operands = p.column isa AbstractVector ? p.column : (p.column,)
   return _output_kind(Val(Symbol(p.function_name)), rule, [_arithmetic_side_kind(o, instruc, policy) for o in operands])
@@ -932,7 +932,7 @@ function _read_kind(x, instruc::SQLInstruction; rendered = nothing)::Union{Nothi
     k = _read_kind(x.column, instruc)
     return _unapplied_window_default(x, k, instruc) ? _computed_meaning(k) : k
   end
-  return _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
+  return _read_view(_infer_kind_any(x, instruc, _MeaningKinds()), x, instruc)
 end
 
 # #1599 round 8, row 31: store a projection's kind into `projection_kinds` with the kind at its concrete
@@ -1035,7 +1035,7 @@ function _declared_stored_decimal(x, instruc::SQLInstruction)
   (k isa CDecimal && k.precision !== nothing) || return nothing
   for operand in (x.column isa AbstractVector ? x.column : (x.column,))
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue
-    _infer_kind(operand, instruc, _AllKinds()) == k || return nothing
+    _infer_kind_any(operand, instruc, _AllKinds()) == k || return nothing
   end
   return k
 end

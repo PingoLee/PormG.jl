@@ -688,7 +688,7 @@ function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction
   sides = Tuple{Symbol,String,Bool}[]
   for value in _temporal_mix_values(p)
     # #1386: a key lookup is the key's value, of the data's type (`CJSONValue`, #1458): no class.
-    class = _temporal_mix_class(_infer_kind(value, instruc, _AllKinds()))
+    class = _temporal_mix_class(_infer_kind_any(value, instruc, _AllKinds()))
     class === nothing && continue
     side = (class, _temporal_mix_label(value), value isa SQLText)
     for seen in sides
@@ -905,7 +905,7 @@ function _cte_textless_record(p::CTEReference, instruc::SQLInstruction)::Union{T
   side = _cte_division(p, instruc, :quotient)
   side === nothing || return (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
   occursin("__", p.path) && return nothing
-  k = _infer_kind(p, instruc, _MeaningKinds())
+  k = _infer_kind_any(p, instruc, _MeaningKinds())
   tag = k isa CDateTime ? :timestamp : k isa CInterval ? :interval : k isa CFloat64 ? :float :
         k isa CDecimal && _cte_decimal_places(p, k, instruc) != 0 ? :decimal : nothing
   tag === nothing && return nothing
@@ -1348,7 +1348,7 @@ function _interval_operand(operand, instruc::SQLInstruction)
   side = _concat_textless_operand(operand, instruc)
   side !== nothing && side[1] === :interval && return side
   if side === nothing || side[1] === :numeric
-    _infer_kind(operand, instruc, _MeaningKinds()) isa CInterval &&
+    _infer_kind_any(operand, instruc, _MeaningKinds()) isa CInterval &&
       return (:interval, side === nothing ? "an interval expression" : side[2])
   end
   return nothing
@@ -1363,7 +1363,7 @@ function _temporal_number_operand(operand, instruc::SQLInstruction)
   side = _interval_operand(operand, instruc)
   side === nothing || return side
   kind = operand isa Union{Dates.TimeType,ZonedDateTime} ? literal_canonical_kind(operand) :
-         _infer_kind(operand, instruc, _MeaningKinds())
+         _infer_kind_any(operand, instruc, _MeaningKinds())
   tag = kind isa CDate ? :date : kind isa CTime ? :time : kind isa CDateTime ? :timestamp : nothing
   tag === nothing && return nothing
   literal = operand isa SQLText ? operand.field : operand
@@ -1377,7 +1377,7 @@ end
 # `:decimal`, the kinds a `:date` departure row lists; `nothing` for anything else, a boolean
 # included. Read under `_MeaningKinds`, so a computed number is what its call means.
 function _number_operand(operand, instruc::SQLInstruction)
-  kind = _infer_kind(operand, instruc, _MeaningKinds())
+  kind = _infer_kind_any(operand, instruc, _MeaningKinds())
   tag = kind isa Union{CInt16,CInt32,CInt64} ? :integer : kind isa CFloat64 ? :float :
         kind isa CDecimal ? :decimal : nothing
   tag === nothing && return nothing
@@ -1544,7 +1544,7 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
     # division row of phase 4) — refused where the engine fact says such a sum departs
     # (`_untyped_sum_departs`), whether or not a `bigint` can be seen inside it. A sum of TEMPORAL
     # arithmetic is no such sum: the walk types it since #1034 step 5a, an interval, no integer quotient.
-    side = name == "SUM" && _infer_kind(operand, instruc, _AllKinds()) === nothing ?
+    side = name == "SUM" && _infer_kind_any(operand, instruc, _AllKinds()) === nothing ?
            (:numeric_whole_division, "a value PormG cannot type") : nothing
     side === nothing && (side = _whole_numeric_operand(operand, instruc))
     side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
@@ -1616,7 +1616,7 @@ function _decimal_extract_kind(p::Union{FObject,WindowFunction}, instruc::SQLIns
   up = _extract_part_at(part)
   up in ("EPOCH", "MILLISECONDS") && return CDecimal(nothing, nothing)
   up == "MICROSECONDS" && return CDecimal(nothing, 0)
-  up == "JULIAN" && return CDecimal(nothing, _infer_kind(p.column, instruc, policy) isa CDate ? 0 : nothing)
+  up == "JULIAN" && return CDecimal(nothing, _infer_kind_any(p.column, instruc, policy) isa CDate ? 0 : nothing)
   return nothing
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)

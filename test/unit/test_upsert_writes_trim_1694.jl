@@ -198,3 +198,32 @@ end
     @test new.parameters !== pq.parameters
   end
 end
+
+# The old `_writes_zero_key` (base `91a66a381`), as the oracle.
+function _old_writes_zero_key(insert, model, name::String)::Bool
+  haskey(insert, name) || return false
+  bound = _UPS_QB._format_single(model.fields[name], name, insert[name], "insert")
+  bound isa Number && return iszero(bound)
+  number = bound isa AbstractString ? tryparse(Float64, strip(bound)) : nothing
+  return number !== nothing && iszero(number)
+end
+
+# What: `_writes_zero_key` (MySQL's `update_or_create`, #1599 layer 7) against the old check, over keys that write
+#   zero and keys that do not, as integers, text and floats, and a missing key.
+# Expected: the same answer, or the same refusal, for every value.
+# Why: `iszero` on the untyped bound value had no compiled target: the trimmed MySQL binary stopped there.
+module UpsZeroModels
+import PormG
+import PormG.Models
+Race::Models.ModelType = Models.Model("ups_zero_race", raceid = Models.IDField(), year = Models.IntegerField(),
+  name = Models.CharField(max_length = 80), score = Models.FloatField(null = true))
+end
+@testset "MySQL's zero-key check answers as before (#1599 layer 7)" begin
+  m = UpsZeroModels.Race
+  for (name, v) in (("raceid", 0), ("raceid", 7), ("raceid", "00"), ("raceid", " 0 "), ("raceid", "7"), ("raceid", "x"),
+                    ("raceid", 0.0), ("raceid", -0.0), ("raceid", 2.5), ("score", 0.0), ("score", 1.5), ("name", "0"), ("name", "a"))
+    ins = OrderedCollections.OrderedDict{String,Any}(name => v)
+    @test (name, v, _ups_outcome(() -> _UPS_QB._writes_zero_key(ins, m, name))) == (name, v, _ups_outcome(() -> _old_writes_zero_key(ins, m, name)))
+  end
+  @test _UPS_QB._writes_zero_key(OrderedCollections.OrderedDict{String,Any}(), m, "raceid") === false
+end

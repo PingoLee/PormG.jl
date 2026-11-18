@@ -6245,6 +6245,11 @@ end
     @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
     @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
   end
+    # MySQL's reads and its zero-key check (found by the Trim workflow's MySQL job: `iszero(::Int64)`; the probe then
+    # found the local closure the reads went through, called dynamically and with a `kwcall`).
+    @test _dynamic_calls(QB._writes_zero_key, (PormG.OrderedCollections.OrderedDict{String,Any}, PormG.Models.ModelType, String)) == String[]
+    @test _dynamic_calls(QB._mysql_target_rows, (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, Vector{String},
+                                                 String, PormG.ConnectionPool.MySQLConnectionPool, QB._FieldRowDecoder, String, Bool)) == String[]
 
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.

@@ -660,25 +660,25 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
   # is (#1815): `Tables.rowtable` on the driver's result decided the row's type at run time. The read-back's row is the
   # one `_row_to_field_keyed_dict` built from it; a pre-check reads only whether there is a row.
   decoder = _FieldRowDecoder(model, connection)
-  target_rows(head::String; lock::Bool = false) =
-    (q = _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection; lock = lock);
-     _read_back_rows(settings, q[1], q[2], decoder))
   do_upsert = () -> begin
-    existed = counts_insert ? false : !isempty(target_rows("SELECT 1"))
+    existed = counts_insert ? false :
+      !isempty(_mysql_target_rows(settings, real_obj, model, target_fields, safe_table_name, connection, decoder, "SELECT 1", false))
     result = fetch(settings, sql, parameters)
     count = backend_num_affected_rows(connection, result)
     # Without AUTO_INCREMENT, a count of 1 is an insert or an unchanged hit. A plain read tells them apart
     # for a row the pre-check could not see (committed after this transaction's REPEATABLE READ snapshot):
     # it misses that row and sees this transaction's own insert (measured).
     if !counts_insert && !existed && count == 1
-      existed = isempty(target_rows("SELECT 1"))
+      existed = isempty(_mysql_target_rows(settings, real_obj, model, target_fields, safe_table_name, connection, decoder,
+                                           "SELECT 1", false))
     end
     created = _odku_created(counts_insert, existed, count,
                             counts_insert ? backend_last_insert_id(connection, result) : 0)
     # A locking read: under REPEATABLE READ a plain one reads the transaction's snapshot, which misses
     # a row another session committed after it, when this statement hit it unchanged (measured). The
     # ODKU already locked that row, so the read waits on nothing.
-    rows = target_rows("SELECT $(_returned_columns(model, connection, safe_table_name))"; lock = true)
+    rows = _mysql_target_rows(settings, real_obj, model, target_fields, safe_table_name, connection, decoder,
+                              "SELECT $(_returned_columns(model, connection, safe_table_name))", true)
     isempty(rows) && throw(StatementError(_backend_name(connection),
       "update_or_create: the statement reported success, but the $(model.name) row could not be read " *
       "back: a trigger may have dropped it, or the lookup does not match what was stored."))
@@ -692,6 +692,14 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
   return (_owned_row(dict, model), created)
 end
 
+# The rows `_select_by_target` reads, decoded as they are read (#1599 layer 7, #1694). A function, not a local closure:
+# the closure `do_upsert` captured was called through a dynamic call, and its keyword through a `kwcall`.
+function _mysql_target_rows(settings, real_obj, model, target_fields, safe_table_name, connection, decoder::_FieldRowDecoder,
+                            head::String, lock::Bool)::Vector{Dict{Symbol,Any}}
+  sql, params = _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection; lock = lock)
+  return _read_back_rows(settings, sql, params, decoder)
+end
+
 # Whether one row's `ON DUPLICATE KEY UPDATE` inserted, from its report (the table above): with an
 # AUTO_INCREMENT primary key (`counts_insert`), a count of 1 and a non-zero id; otherwise the pre-check
 # found no row, and the count is not the 2 of a duplicate it changed.
@@ -700,9 +708,22 @@ _odku_created(counts_insert::Bool, existed::Bool, count::Integer, id::Integer)::
 
 # Whether the row writes 0 into its key `name`, as the INSERT binds it: a number, or text that reads as
 # one (`"00"` stores 0, measured through update_or_create).
+#
+# #1599 layer 7, #1694: the bound value is untyped, and `iszero` on it dispatched at run time: the trimmed MySQL
+# `update_or_create` stopped at `iszero(::Int64)`. An `Int64` and a `String` (what the formatters return for a key) are
+# read at their types; anything else takes the checks as before.
 function _writes_zero_key(insert, model, name::String)::Bool
   haskey(insert, name) || return false
   bound = _format_single(model.fields[name], name, insert[name], "insert")
+  bound isa Int64 && return iszero(bound)
+  bound isa String && return _text_writes_zero(bound)
+  return _writes_zero_other(bound)
+end
+function _text_writes_zero(bound::String)::Bool
+  number = tryparse(Float64, strip(bound))
+  return number !== nothing && iszero(number)
+end
+@noinline function _writes_zero_other(@nospecialize(bound))::Bool
   bound isa Number && return iszero(bound)
   number = bound isa AbstractString ? tryparse(Float64, strip(bound)) : nothing
   return number !== nothing && iszero(number)

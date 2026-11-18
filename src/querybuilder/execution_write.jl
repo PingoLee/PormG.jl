@@ -554,15 +554,33 @@ function _run_update_or_create(connection::PormGPostgres, settings, real_obj, mo
   if show_query !== :execute
     return _show_query_result(show_query, exec_sql, connection, model.name, :insert; parameters=parameters)
   end
-  result = fetch(settings, exec_sql, parameters)
-  dict = _row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection)
+  # PormG's own pool: the returned row decoded as it is read (`_FieldRowDecoder`, #1599 layer 7, #1694), as `create`'s
+  # is (#1815): `Tables.rowtable(result) |> first` decided the row's type at run time, which a trimmed image has no code
+  # for. The sentinel column is no field's, so it is kept under its own name, undecoded. Any other PostgreSQL pool (an
+  # application's test double with its own `fetch`) reads the row as before.
+  dict = if settings.connections isa PostgresConnectionPool
+    (fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}})[1]
+  else
+    _row_to_field_keyed_dict(Tables.rowtable(fetch(settings, exec_sql, parameters)) |> Base.first, model, connection)
+  end
   # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
   created_raw = pop!(dict, Symbol("__pormg_created"), false)
-  created = created_raw === true || created_raw == 1   # always a Bool (xmax = 0 → PG boolean)
+  created = _created_flag(created_raw)   # always a Bool (xmax = 0 → PG boolean)
   # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
   # write supplied an explicit primary key.
   return (_owned_row(dict, model), created)
 end
+
+# `x === true || x == 1` (#1599 layer 7, #1694), with `==` made at the value's type: the sentinel is read untyped, and on
+# an update the driver hands back `false`, so `false == 1` dispatched at run time, which a trimmed image has no code
+# for. The same answer for every value: `false` and an integer at their types, anything else through the old `== 1`.
+@noinline function _created_flag(@nospecialize(x))
+  x === true && return true
+  x isa Bool && return false
+  x isa Int64 && return x == 1
+  return _created_flag_other(x)
+end
+@noinline _created_flag_other(@nospecialize(x)) = x == 1   # `missing` stays `missing`, as the expression gave
 
 function _run_update_or_create(connection::PormGSQLite, settings, real_obj, model, sql, parameters,
                                safe_table_name, target_fields, show_query)
@@ -584,24 +602,32 @@ function _run_update_or_create(connection::PormGSQLite, settings, real_obj, mode
     tp = get_parameter(connection)
     set_context!(tp, :where)
     for f in target_fields
-      add_parameter!(tp, real_obj.insert[f] |> _write_formatter(model.fields[f], connection))
+      # At the formatted value's type (#1599 layer 7): the value is untyped, and `add_parameter!` on it dispatched at
+      # run time. The same call (`_bind_written_value!`'s arms), the same placeholder.
+      _bind_written_value!(tp, Models.apply_formatter(_write_formatter(model.fields[f], connection), real_obj.insert[f]))
     end
     tp
   end
+  # The pre-check's and the read-back's rows decoded as they are read (`_FieldRowDecoder`, #1599 layer 7, #1694), as
+  # `create`'s read-back is (#1815): SQLite's materialized rows are `NamedTuple`s of a type decided by the statement,
+  # which a trimmed image has no code for. The read-back's row is the one `_row_to_field_keyed_dict` built from it.
+  decoder = _FieldRowDecoder(model, connection)
 
   do_upsert = () -> begin
-    existed = !isempty(fetch(settings, precheck_sql, make_target_params()) |> Tables.rowtable)
+    existed = !isempty(_read_back_rows(settings, precheck_sql, make_target_params(), decoder))
     fetch(settings, sql, parameters)
-    rows = fetch(settings, readback_sql, make_target_params()) |> Tables.rowtable
+    rows = _read_back_rows(settings, readback_sql, make_target_params(), decoder)
     dict = isempty(rows) ?
       Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(real_obj.insert)) :
-      _row_to_field_keyed_dict(rows[1], model, connection)
+      rows[1]
     (dict, !existed)
   end
 
   # Pre-check + upsert + read-back must share one connection under one BEGIN IMMEDIATE.
-  dict, created = transaction_connection_for(settings) !== nothing ?
-    do_upsert() : run_in_transaction(do_upsert, settings)
+  # At the closure's own type (#1599 layer 7): `run_in_transaction` returns what it runs untyped, and destructuring it was
+  # a call a trimmed image has no code for (`indexed_iterate(::Tuple{Dict{Symbol, Any}, Bool}, …)`).
+  dict, created = (transaction_connection_for(settings) !== nothing ?
+    do_upsert() : run_in_transaction(do_upsert, settings))::Tuple{Dict{Symbol, Any}, Bool}
 
   # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if this
   # write supplied an explicit primary key.
@@ -630,35 +656,39 @@ function _run_update_or_create(connection::PormGMySQL, settings, real_obj, model
   # the OK packet's id is then 0 for the insert too, so the reads decide, as without AUTO_INCREMENT.
   counts_insert = pk !== nothing && _is_auto_generated_bulk_primary_key(model.fields[String(pk)]) &&
                   !_writes_zero_key(real_obj.insert, model, String(pk))
+  # Each read's rows decoded as they are read (`_FieldRowDecoder`, #1599 layer 7, #1694), as `create`'s MySQL read-back
+  # is (#1815): `Tables.rowtable` on the driver's result decided the row's type at run time. The read-back's row is the
+  # one `_row_to_field_keyed_dict` built from it; a pre-check reads only whether there is a row.
+  decoder = _FieldRowDecoder(model, connection)
+  target_rows(head::String; lock::Bool = false) =
+    (q = _select_by_target(head, real_obj, model, target_fields, safe_table_name, connection; lock = lock);
+     _read_back_rows(settings, q[1], q[2], decoder))
   do_upsert = () -> begin
-    existed = counts_insert ? false :
-      !isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
-                                                 safe_table_name, connection)...) |> Tables.rowtable)
+    existed = counts_insert ? false : !isempty(target_rows("SELECT 1"))
     result = fetch(settings, sql, parameters)
     count = backend_num_affected_rows(connection, result)
     # Without AUTO_INCREMENT, a count of 1 is an insert or an unchanged hit. A plain read tells them apart
     # for a row the pre-check could not see (committed after this transaction's REPEATABLE READ snapshot):
     # it misses that row and sees this transaction's own insert (measured).
     if !counts_insert && !existed && count == 1
-      existed = isempty(fetch(settings, _select_by_target("SELECT 1", real_obj, model, target_fields,
-                                                          safe_table_name, connection)...) |> Tables.rowtable)
+      existed = isempty(target_rows("SELECT 1"))
     end
     created = _odku_created(counts_insert, existed, count,
                             counts_insert ? backend_last_insert_id(connection, result) : 0)
     # A locking read: under REPEATABLE READ a plain one reads the transaction's snapshot, which misses
     # a row another session committed after it, when this statement hit it unchanged (measured). The
     # ODKU already locked that row, so the read waits on nothing.
-    rows = fetch(settings, _select_by_target("SELECT $(_returned_columns(model, connection, safe_table_name))", real_obj, model,
-                                             target_fields, safe_table_name, connection; lock = true)...) |>
-      Tables.rowtable
+    rows = target_rows("SELECT $(_returned_columns(model, connection, safe_table_name))"; lock = true)
     isempty(rows) && throw(StatementError(_backend_name(connection),
       "update_or_create: the statement reported success, but the $(model.name) row could not be read " *
       "back: a trigger may have dropped it, or the lookup does not match what was stored."))
-    (_row_to_field_keyed_dict(rows[1], model, connection), created)
+    (rows[1], created)
   end
   # The statement and its read-back share one connection, so the report and the row are this call's.
-  dict, created = transaction_connection_for(settings) !== nothing ?
-    do_upsert() : run_in_transaction(do_upsert, settings)
+  # At the closure's own type (#1599 layer 7): `run_in_transaction` returns what it runs untyped, and destructuring it was
+  # a call a trimmed image has no code for (`indexed_iterate(::Tuple{Dict{Symbol, Any}, Bool}, …)`).
+  dict, created = (transaction_connection_for(settings) !== nothing ?
+    do_upsert() : run_in_transaction(do_upsert, settings))::Tuple{Dict{Symbol, Any}, Bool}
   return (_owned_row(dict, model), created)
 end
 
@@ -686,7 +716,7 @@ function _select_by_target(head, real_obj, model, target_fields, safe_table_name
   set_context!(params, :where)
   # A JSON column's document compares as JSON (`_json_document_marker`): on MySQL a bare marker is a
   # JSON string, which no stored document equals.
-  marker(f) = (ph = add_parameter!(params, real_obj.insert[f] |> _write_formatter(model.fields[f], connection));
+  marker(f) = (ph = _bind_written_value!(params, Models.apply_formatter(_write_formatter(model.fields[f], connection), real_obj.insert[f]))::String;
                _is_json_field(model.fields[f]) ? _json_document_marker(connection, ph) : ph)
   where_sql = join(["$(safe_column_identifier(Models.model_column(model, f), connection)) = $(marker(f))"
                     for f in target_fields], " AND ")

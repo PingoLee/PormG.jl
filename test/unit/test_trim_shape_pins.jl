@@ -6229,6 +6229,23 @@ end
     @test _dynamic_calls_kw(QB._get_or_create!, (QB.SQLObjectQuery, Tuple{Pair{String,Int64}})) == String[]
   end
 
+  # What: `update_or_create`'s run per engine (`_run_update_or_create`) and the sentinel it reads on PostgreSQL.
+  # Expected: no dynamic call on SQLite and MySQL (the reads decoded as they are read, the binds and the formatter at
+  #   their types, the closure's result asserted); on PostgreSQL only the stand-in pool's arm (the old read, by design)
+  #   is dynamic, and `_created_flag` makes no dynamic call.
+  # Why: `Tables.rowtable` on a driver result, `|>` through an untyped formatter, destructuring `run_in_transaction`'s
+  #   untyped result and `false == 1` were walls in the trimmed `update_or_create` (#1599 layer 7, #1694).
+  @testset "update_or_create runs at concrete types on every engine (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    rest = (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, String)
+    tail = (String, Vector{String}, Symbol)
+    @test _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.SQLiteConnectionPool, rest..., QB.SQLiteParameterizedQuery, tail...)) == String[]
+    @test _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.MySQLConnectionPool, rest..., QB.MySQLParameterizedQuery, tail...)) == String[]
+    pg = _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, rest..., QB.PgParameterizedQuery, tail...))
+    @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
+    @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

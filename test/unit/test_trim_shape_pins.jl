@@ -6038,6 +6038,28 @@ end
     @test all(s -> occursin("\"YYYY-MM\"", s), _dynamic_calls(QB._temporal_row_of, (QB.FObject,)))
   end
 
+  # What: a function's render: its column handed to the renderer ladder (`_function_sql`), its options read
+  #   (`Dialect.FnOptions`), its rules by name (`_result_rule_by_name`, `_operand_domain_by_name`), its column rendered
+  #   (`_get_select_query_at`), and a `Case`'s branches (`_render_case_branches_at`).
+  # Expected: no dynamic call in any; the rule ladders name every rule a `Val` method states.
+  # Why: a column held untyped, an option read as an abstract `AbstractString`, a `Val` built from a name at run time:
+  #   each stopped the trimmed read of `Extract("date", "month") == 11` or a `Case` (#1599 layer 5).
+  @testset "a function renders at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._function_sql, (String, Any, Dict{String,Any}, QB._SQLEngine)) == String[]
+    @test _dynamic_calls(PormG.Dialect.FnOptions, (Dict{String,Any},)) == String[]
+    for (f, rule) in ((QB._result_rule_by_name, QB._result_rule), (QB._operand_domain_by_name, QB._operand_domain))
+      @test (nameof(f), _dynamic_calls(f, (String,))) == (nameof(f), String[])
+      for m in methods(rule)
+        P = Base.unwrap_unionall(m.sig).parameters
+        (length(P) == 2 && P[2] isa DataType && P[2] <: Val && length(P[2].parameters) == 1) || continue
+        n = String(P[2].parameters[1])
+        @test (n, f(n)) == (n, rule(Val(Symbol(n))))
+      end
+    end
+    @test _dynamic_calls(QB._render_case_branches_at, (Any, QB.InstructionObject, Union{Nothing,String})) == String[]
+  end
+
   # What: a filter's construction over a function (`_check_function` on an `FObject` and an `OperObject`, through the
   #   column walk `_check_operands_at`) and the error a pair raises (`_in_pair`).
   # Expected: no dynamic call in any of them; `_in_pair`'s error argument is unspecialized.

@@ -569,6 +569,22 @@ _render_case_branches(col::AbstractVector, instruc::SQLInstruction; _as::Union{N
   Any[_render_case_branch(b, instruc; _as = _as) for b in col]
 _render_case_branches(col, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
   _render_case_branch(col, instruc; _as = _as)
+# `_render_case_branches(column, instruc; _as)` for a `Case`'s column, held untyped, at its concrete type and with the
+# keyword at a concrete type (#1599 layer 5): a `Case` holds one `When` (`FObject`) or a `Vector{FObject}`. Over the
+# untyped column the keyword call dispatched at run time (`Case(When("name" => …, then = 6), default = 100)`); any
+# other column takes it behind `@noinline`.
+function _render_case_branches_at(@nospecialize(col), instruc::SQLInstruction, _as::Union{Nothing,String})
+  if col isa FObject
+    _as === nothing && return _render_case_branches(col, instruc; _as = nothing)
+    return _render_case_branches(col, instruc; _as = _as::String)
+  elseif col isa Vector{FObject}
+    _as === nothing && return _render_case_branches(col, instruc; _as = nothing)
+    return _render_case_branches(col, instruc; _as = _as::String)
+  end
+  return _render_case_branches_other(col, instruc, _as)
+end
+@noinline _render_case_branches_other(@nospecialize(col), instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _render_case_branches(col, instruc; _as = _as)
 
 # #31: the full-text nodes, at the one site every function renders through as a value. On SQLite each
 # is refused here, naming the outermost one the caller wrote, before any operand binds. A
@@ -1033,7 +1049,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       end
     end
   elseif v.function_name == "CASE"
-    resolved_column = _render_case_branches(v.column, instruc; _as = _as)
+    resolved_column = _render_case_branches_at(v.column, instruc, _as)
   elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE") || _is_combined_fts(v)
     # #31: in text order — the vector or document, then the query, then the headline's options.
     # #1021: a sum of vectors renders its two halves the same way, left to right.

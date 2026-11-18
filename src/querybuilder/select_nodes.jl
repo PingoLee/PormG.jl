@@ -695,11 +695,11 @@ end
 # The temporal kind a date function's operand has, from the type walk (a column, a literal, an
 # expression), for the engines that spell a part by it (MySQL's date arms in `Dialect`); `nothing` when
 # the walk names no date or time.
-_temporal_hint(::CDate) = :date
-_temporal_hint(::CDateTime) = :datetime
-_temporal_hint(::CTime) = :time
-_temporal_hint(::CInterval) = :interval
-_temporal_hint(::Any) = nothing
+# #1599 layer 5: one method, the kind unspecialized and tested with `isa` (its caller holds the abstract
+# `CanonicalType` `_expression_kind` answers, no compileable signature for the five methods this replaces: the trimmed
+# read stopped at `_temporal_hint(::CDate)` on `Extract("date", "month") == 11`). The same hint for every kind.
+_temporal_hint(@nospecialize(k))::Union{Symbol,Nothing} =
+  k isa CDate ? :date : k isa CDateTime ? :datetime : k isa CTime ? :time : k isa CInterval ? :interval : nothing
 
 # Refuses a date/time node over a model field its part cannot read, naming both (#1070: by the part's
 # row, so a public `Extract` is checked exactly as the `__@` transform that builds it). Fails OPEN,

@@ -6175,6 +6175,26 @@ end
     @test _dynamic_calls(QB._non_null_operand_kinds, (Any, QB.InstructionObject)) == String[]
   end
 
+  # What: the insert map of a copied query (`_copy_insert`), which every copying terminal (`bulk_update`'s `deepcopy` of
+  #   its handler) goes through.
+  # Expected: `deepcopy(::SQLObjectQuery)` copies the map through `_copy_insert` (only its open arm, `_copy_insert_other`,
+  #   deep-copies it), and `_copy_insert` makes no dynamic call.
+  # Why: `deepcopy` walked the map's fields generically: the trimmed `bulk_update` stopped at
+  #   `deepcopy_internal(::Vector{Int32}, …)` (#1599 layer 7, #1694).
+  @testset "a copied query's insert map is copied without the generic walk (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    OD = PormG.OrderedCollections.OrderedDict{String,Any}
+    ci, _ = only(InteractiveUtils.code_typed(Base.deepcopy, (QB.SQLObjectQuery,); optimize = true))
+    invoked = Any[]
+    for st in ci.code
+      (st isa Expr && st.head === :invoke) || continue
+      mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      push!(invoked, mi.specTypes)
+    end
+    @test Tuple{typeof(QB._copy_insert), OD} in invoked   # the base reached the map through `deepcopy_internal(::Any, …)`
+    @test _dynamic_calls(QB._copy_insert, (OD,)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

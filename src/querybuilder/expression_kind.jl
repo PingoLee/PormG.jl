@@ -766,12 +766,11 @@ end
 # places a literal needs (`projection_types.jl`).
 _kind_scale(k::CDecimal) = k.scale
 _kind_scale(::Union{CInt16,CInt32,CInt64}) = 0
-_numeric_rank(::CInt16) = 0
-_numeric_rank(::CInt32) = 1
-_numeric_rank(::CInt64) = 2
-_numeric_rank(::CDecimal) = 3
-_numeric_rank(::CFloat64) = 4
-_numeric_rank(::Any) = nothing
+# #1599 layer 5: one method, the kind unspecialized and tested with `isa`. Its callers hold a kind typed by the abstract
+# `CanonicalType`, which is no compileable signature, so a call into the six methods this replaces dispatched at run
+# time: the trimmed read stopped at `_numeric_rank(::CInt32)` on `F("round") + 2000`. The same rank for every kind.
+_numeric_rank(@nospecialize(k))::Union{Int,Nothing} =
+  k isa CInt16 ? 0 : k isa CInt32 ? 1 : k isa CInt64 ? 2 : k isa CDecimal ? 3 : k isa CFloat64 ? 4 : nothing
 
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:

@@ -242,7 +242,7 @@ const RSCOPE_SET_CONTEXT_ALLOWED = Dict(
     # bulk insert / bulk update rows, and each bulk_update chunk's forked collector.
     "src/querybuilder/execution_bulk.jl" => Dict(
         "set_context!(parameters, :select)" => 3,
-        "new_chunk_parameters() = (p = _fork_parameters(base_box[]); set_context!(p, :select); p)" => 1),   # #1599 layer 7: the collector in a box of one type
+        "new_chunk_parameters() = (p = _fork_parameters(chunk_base); set_context!(p, :select); p)" => 1),   # #1599 layer 7: the collector at the connection's type
     # the many-to-many manager's own INSERT / DELETE / SELECT statements; `add` is one method per
     # engine since #1413, each starting its own collector.
     "src/querybuilder/many_to_many.jl" => Dict(

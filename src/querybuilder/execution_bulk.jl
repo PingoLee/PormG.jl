@@ -3268,10 +3268,12 @@ function _bulk_update_frame(work::SQLObjectHandler, model::PormGModel, settings,
 
   results = []
   # A chunk's rows bind into the :select context (the row source)
-  # The collector the chunks fork from, in a box of one concrete type (#1599 layer 7): a closure's type is made from its
-  # captured values' types, and `base_parameters` is one of three collectors, so capturing it left the loop's type open.
-  base_box = Base.RefValue{ParamCollector}(base_parameters::ParamCollector)
-  new_chunk_parameters() = (p = _fork_parameters(base_box[]); set_context!(p, :select); p)
+  # The collector the chunks fork from, at the connection's own collector type (#1599 layer 7, `_engine_collector`): a
+  # closure's type is made from its captured values' types, and `base_parameters` is one of three collectors, so
+  # capturing it left the loop's type open; held as the union, every bind in the loop compiled for all three collectors.
+  # Narrowed here, after `base_parameters.parameter_count` was read, so a missing collector raises where it did.
+  chunk_base = _engine_collector(connection, base_parameters)
+  new_chunk_parameters() = (p = _fork_parameters(chunk_base); set_context!(p, :select); p)
   update_loop = () -> begin
     count::Integer = 0
     total::Integer = df.row_count

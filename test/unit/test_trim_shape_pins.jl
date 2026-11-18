@@ -5981,6 +5981,24 @@ end
     @test !occursin("_on_join_right(() -> _render_operand_typed(", src) && !occursin("_on_join_right(() -> _set_update_query_operand(", src)
   end
 
+  # What: an operand's bind (`_add_typed_parameter!`, `_add_formatted_parameter!`) and the formatter family it reads
+  #   (`_unranged`), the label a refusal names (`_formatter_type_label`, `_formatter_name`), a kind's numeric rank
+  #   (`_numeric_rank`), and a function's column render (`_get_select_query_at`).
+  # Expected: no dynamic call in any of them (`_unranged`, `_formatter_type_label`, `_formatter_name` and
+  #   `_numeric_rank` take their argument unspecialized: one method each).
+  # Why: each was a run-time dispatch on the trimmed read of `F("round") + 2000`, `F("round") + 1 == 19` and
+  #   `Extract("date", "month") == 11`: the `sql_type` keyword's union, a `Function`-typed formatter, the abstract
+  #   `CanonicalType`, a function's untyped column (#1599 layer 5).
+  @testset "an expression's bind, kind and column render at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._add_typed_parameter!, (QB.InstructionObject, Int64, Union{Nothing,String})) == String[]
+    @test _dynamic_calls(QB._add_formatted_parameter!, (QB.InstructionObject, Any, Union{Nothing,String})) == String[]
+    for f in (QB._unranged, QB._formatter_type_label, QB._formatter_name, QB._numeric_rank)
+      @test (nameof(f), length(methods(f)), _dynamic_calls(f, (Any,))) == (nameof(f), 1, String[])
+    end
+    @test _dynamic_calls(QB._get_select_query_at, (Any, QB.InstructionObject, Union{Nothing,String})) == String[]
+  end
+
   # What: the uncast-JSON-key refusal over an arithmetic node's two sides and over a comparison's right operand
   #   (`_refuse_uncast_json_key`, `_refuse_json_key_right_operand`), and the carrier probe's walk (`_json_number_side_at`)
   #   with the probe's own recursion into an `FExpression` or an `SQLField`.

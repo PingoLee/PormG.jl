@@ -506,6 +506,27 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
              for k in 1:length(cols)]
 end
 
+# `_get_select_query(column, instruc; _as)` for a function's column, held untyped (`v.column`, or SQLite's rotations of
+# it), with the keyword at a concrete type (#1599 layer 5). Over the untyped column the keyword call dispatched at run
+# time, and a trimmed image had no target for it: the read stopped at `kwcall((_as = nothing,), _get_select_query,
+# ::String, …)` on `Extract("date", "month") == 11`. A column name, the leaf, is the same call at its type. A nested
+# node (a function, an expression, a list) renders through this render again, so a static call to it is a frame in that
+# recursion, which a trimmed image cannot compile (the #1711 class, measured: an "unresolved invoke" of the walk
+# itself); it keeps the old call, behind `@noinline`.
+function _get_select_query_at(@nospecialize(column), instruc::SQLInstruction, _as::Union{Nothing,String})
+  if column isa String
+    _as === nothing && return _get_select_query(column, instruc; _as = nothing)
+    return _get_select_query(column, instruc; _as = _as::String)
+  elseif column isa OperObject
+    # A `When`'s condition (`Case(When("round__@lt" => 10, then = 1), …)`).
+    _as === nothing && return _get_select_query(column, instruc; _as = nothing)
+    return _get_select_query(column, instruc; _as = _as::String)
+  end
+  return _get_select_query_other(column, instruc, _as)
+end
+@noinline _get_select_query_other(@nospecialize(column), instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _get_select_query(column, instruc, _as=_as)
+
 # #1028 — one operand rendered exactly as `_get_select_query` renders it — the same SQL, the same
 # binds, in the same order — with the kind that render computed: `(sql, kind)`. Only two shapes keep a
 # kind: `F` arithmetic (`_set_update_query_typed` is what `_get_select_query(::SQLTypeF)` renders
@@ -1008,7 +1029,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # #1304: `Concat`, `LPad`/`RPad` and the declared casts render here too. They kept the kind their
     # operands' render computed, for the checks below, until #1034 step 5a/5c made the walk name the
     # same kinds (the render and the walk share one rule since step 5b) — the checks read the walk.
-    resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
+    resolved_column = _get_select_query_at(_null_skipping_operands(v, instruc), instruc, _as)
   end
   # #942: the half of the `When` condition check construction could not do. Read after the condition
   # renders, so a joined path's field memo exists for `_expression_formatter` to find.

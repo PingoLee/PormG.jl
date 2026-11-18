@@ -166,3 +166,20 @@ end
   end
 end
 
+# What: `_set_update_query_left_at` against the `_set_update_query_left` call it replaces, over the left sides an
+#   expression holds (a column, a joined path, an integer, a float, a date, an `Int32`, an `F` expression, a function)
+#   and each arithmetic operator, on each engine.
+# Expected: the same SQL (or error) and the same parameters bound.
+# Why: the walk hands the left side to the call at its type so a trimmed image can (#1599 layer 5).
+@testset "an expression's left side renders as before (#1599 layer 5)" begin
+  lefts = Any["round", "circuitid__name", 2000, 2.5, Date(2008, 5, 25), Int32(3), F("round") + 1, Extract("date", "month"),
+              true]
+  for conn in _REX_CONNS, op in ("+", "-", "*", "/", "<<", "%"), x in lefts
+    tag = (nameof(typeof(conn)), op, typeof(x))
+    ni, oi = _rex_instruc(conn), _rex_instruc(conn)
+    @test (tag, _rex_outcome(() -> _REX_QB._set_update_query_left_at(x, op, ni))) ==
+          (tag, _rex_outcome(() -> _REX_QB._set_update_query_left(x, op, oi)))
+    @test (tag, _rex_params(ni)) == (tag, _rex_params(oi))
+  end
+end
+

@@ -354,9 +354,21 @@ function _render_left_typed(@nospecialize(value), operation::String, instruc::SQ
   value isa FExpression && return _render_expr_typed(value, instruc)
   value isa FObject && return _render_function_operand_typed(value, instruc)
   value isa _DurationOperand && return _render_duration_value(value, instruc)   # #1553
-  sql = _set_update_query_left(value, operation, instruc)
+  sql = _set_update_query_left_at(value, operation, instruc)
   return sql, _render_side_kind(value, instruc)   # #1034 step 5b: the one side rule
 end
+# `_set_update_query_left` at the left side's concrete type (#1599 layer 5): the value arrives unspecialized, so the
+# call dispatched at run time, and a trimmed image had no target for it (the read stopped at
+# `_set_update_query_left(::String, ::String, …)` on `F("round") + 2000`). A column name and the two number literals
+# a left side commonly is, each the same call at that type; any other value takes it behind `@noinline`.
+function _set_update_query_left_at(@nospecialize(value), operation::String, instruc::SQLInstruction)
+  value isa String && return _set_update_query_left(value, operation, instruc)
+  value isa Int64 && return _set_update_query_left(value, operation, instruc)
+  value isa Float64 && return _set_update_query_left(value, operation, instruc)
+  return _set_update_query_left_other(value, operation, instruc)
+end
+@noinline _set_update_query_left_other(@nospecialize(value), operation::String, instruc::SQLInstruction) =
+  _set_update_query_left(value, operation, instruc)
 
 # #907 — a function as a side of an expression, rendered ONCE by `_render_function_typed`, which is
 # what `_get_select_query` renders for it, so its SQL and its bindings are the ones it always had.

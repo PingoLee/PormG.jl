@@ -5943,6 +5943,19 @@ end
     @test only(methods(QB._render_column_rhs)).nospecialize & 0b100 == 0b100
   end
 
+  # What: an expression's left side (`_render_left_typed` → `_set_update_query_left_at` → `_set_update_query_left`).
+  # Expected: no dynamic call to `_set_update_query_left` from `_render_left_typed`, none in the walk, and none in the
+  #   callee at `String` (a column, the left side of `F("round") + 2000`).
+  # Why: the left side arrives unspecialized, so the call dispatched at run time: the trimmed read stopped at
+  #   `_set_update_query_left(::String, ::String, …)` (#1599 layer 5).
+  @testset "an expression's left side renders at its type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test !any(s -> occursin("_set_update_query_left", s),
+               _dynamic_calls(QB._render_left_typed, (Any, String, QB.InstructionObject)))
+    @test _dynamic_calls(QB._set_update_query_left_at, (Any, String, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._set_update_query_left, (String, String, QB.InstructionObject)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

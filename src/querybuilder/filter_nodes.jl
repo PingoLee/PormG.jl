@@ -976,17 +976,25 @@ end
 #
 # #1528: every column-RHS filter ends here, once its right has rendered, so a JSON key (or a value
 # carrying one) on the right is refused here, once, as in the expression spelling.
-function _render_column_rhs(column::AbstractString, v::SQLTypeOper, rhs, instruc::SQLInstruction)::String
+#
+# #1599 layer 5: `rhs` is taken unspecialized, since a right side's render can answer untyped (an `OuterRef` renders
+# against the abstract outer instruction); specialized on it, the call had no compiled target in a trimmed image (the
+# read stopped at `"year__@gt" => F("round") + 2000`). The pattern arm binds through `_render_predicate_any`, the same
+# call at the value's type, and a `String` right side is joined at its type; any other value as before.
+function _render_column_rhs(column::AbstractString, v::SQLTypeOper, @nospecialize(rhs), instruc::SQLInstruction)::String
   # Every caller reaches here with a node on the right (a column expression, a subquery, a CTE column).
   rhs_node = _oper_value_node(v)
   rhs_node === nothing || _refuse_json_key_right_operand(rhs_node, instruc)
   operator = v.operator
   operator in VERBATIM_PATTERN_OPERATORS &&
-    return _render_predicate(column, operator, rhs, instruc)
+    return _render_predicate_any(column, operator, rhs, instruc, false)
   operator in ("=", ">", "<", ">=", "<=", "<>", "!=") ||
     throw(FilterError("Invalid filter operator: $(operator) does not take a column expression."))
-  return string(column, " ", operator, " ", rhs)
+  rhs isa String && return string(column, " ", operator, " ", rhs)
+  return _column_rhs_text_other(column, operator, rhs)
 end
+@noinline _column_rhs_text_other(column::AbstractString, operator::AbstractString, @nospecialize(rhs))::String =
+  string(column, " ", operator, " ", rhs)
 
 # #894 — the milliseconds a SQLite `DurationField` filter compares, or `nothing` for the text
 # comparison every other filter makes. Ordering lookups only (`@gt`/`@gte`/`@lt`/`@lte`/`@range`/

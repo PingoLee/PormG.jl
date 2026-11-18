@@ -5927,6 +5927,22 @@ end
     @test length(inner) == 1 && occursin("foreach", only(inner))
   end
 
+  # What: a column right side of a filter (`"year__@gt" => F("round") + 2000`, a CTE or joined column, an `OuterRef`),
+  #   rendered through `_column_rhs_sql` and joined by `_render_column_rhs`.
+  # Expected: `_render_filter_oper` calls neither `_on_join_right` nor `_render_column_rhs` dynamically; neither helper
+  #   makes a dynamic call; `_render_column_rhs`'s right side is unspecialized (bit 3).
+  # Why: a closure over the right side's four-member union had no concrete type, and the right side's render answers
+  #   untyped for an `OuterRef`: the trimmed read stopped at `_on_join_right(::var"#…"{…, FExpression}, …)` (#1599 layer 5).
+  @testset "a column right side renders at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    calls = _dynamic_calls(QB._render_filter_oper, (QB.OperObject, QB.InstructionObject))
+    @test !any(s -> occursin("_on_join_right", s) || occursin("_render_column_rhs", s), calls)
+    U = Union{QB.FExpression,QB.OuterRefObject,QB.CTEReference,QB.JoinedReference}
+    @test _dynamic_calls(QB._column_rhs_sql, (U, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._render_column_rhs, (String, QB.OperObject, Any, QB.InstructionObject)) == String[]
+    @test only(methods(QB._render_column_rhs)).nospecialize & 0b100 == 0b100
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

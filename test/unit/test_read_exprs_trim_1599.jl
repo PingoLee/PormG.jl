@@ -151,3 +151,18 @@ end
   end
 end
 
+# What: `_render_column_rhs` against its old body, for each comparison operator, a pattern operator (`iexact`) and one
+#   that takes no column right side, with a `String` right side and with values that take the open arm.
+# Expected: the same text, or the same error type and text.
+# Why: the right side is now taken unspecialized and joined at its type (#1599 layer 5).
+@testset "a column comparison joins its sides as before (#1599 layer 5)" begin
+  for conn in _REX_CONNS, op in ("=", ">", "<", ">=", "<=", "<>", "!=", "IEXACT", "LIKE", "BETWEEN"),
+      rhs in Any["\"Tb\".\"year\"", SubString("(\"Tb\".\"round\" + ?)", 1), 7, :sym]
+    v = _REX_QB.OperObject(column = _REX_QB.SQLField("round"), operator = op, values = F("year"))
+    tag = (nameof(typeof(conn)), op, typeof(rhs))
+    ni, oi = _rex_instruc(conn), _rex_instruc(conn)
+    @test (tag, _rex_outcome(() -> _REX_QB._render_column_rhs("\"Tb\".\"round\"", v, rhs, ni))) ==
+          (tag, _rex_outcome(() -> _old_render_column_rhs("\"Tb\".\"round\"", v, rhs, oi)))
+  end
+end
+

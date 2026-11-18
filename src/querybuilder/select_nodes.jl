@@ -1269,7 +1269,11 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       if isa(deferred_val, Union{SQLObject,SQLType})
         resolved_kwargs[key] = _get_select_query(deferred_val, instruc)
       else
-        resolved_kwargs[key] = add_parameter!(instruc, deferred_val; sql_type=_deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc))
+        # #1599 layer 5: the value bound at its type (`_add_formatted_parameter!`, the same call); over the untyped value
+        # and `sql_type` the keyword call dispatched at run time (`Case(When(…, then = 6), default = 100)`).
+        st = _deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc)
+        resolved_kwargs[key] = st isa Union{Nothing,String} ? _add_formatted_parameter!(instruc, deferred_val, st) :
+                               add_parameter!(instruc, deferred_val; sql_type=st)
       end
     end
   end

@@ -321,7 +321,9 @@ _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::S
 #
 
 # select
-function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
+# #1599 layer 5: the value unspecialized (callers hold a keyword's untyped value, a `Case` branch's `then`); the body
+# only tests it with `isa`. Specialized on it, the call had no compiled target in a trimmed image.
+function _infer_parameter_sql_type(@nospecialize(value), instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
   _casts_bind_parameters(instruc.connection) || return nothing
   # #1175: a zoned literal reaches a declared type (a `Case` `output_field`) through its instant.
   # Cast straight to `date`, PostgreSQL would read the offset text's wall-clock date instead.

@@ -6026,6 +6026,18 @@ end
     end
   end
 
+  # What: a date part's name read from a node (`_extract_part_at`), and the values a node's `kwargs` hold compared with a
+  #   string (`_kwarg_is`).
+  # Expected: no dynamic call in either, and none in `_temporal_row_of` (the `Extract` arm: the part's row and name).
+  # Why: `Dialect.extract_part` over the untyped part, the `lowercase` of its answer, and `==` over an untyped value
+  #   dispatched at run time: `Extract("date", "month") == 11` and `"date__@year" => 2008` stopped there (#1599 layer 5).
+  @testset "a node's part and keyword values are read at their types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._extract_part_at, (Any,)) == String[]
+    @test _dynamic_calls(QB._kwarg_is, (Dict{String,Any}, String, String)) == String[]
+    @test all(s -> occursin("\"YYYY-MM\"", s), _dynamic_calls(QB._temporal_row_of, (QB.FObject,)))
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

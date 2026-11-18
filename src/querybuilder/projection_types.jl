@@ -1567,7 +1567,7 @@ function _integer_transform(p::Union{FObject,WindowFunction})::Bool
   p.function_name in _INTEGER_TRANSFORMS && return true
   p.function_name == "EXTRACT" || return false
   part = get(p.kwargs, "part", nothing)
-  return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
+  return part isa AbstractString && _extract_part_at(part) in _INTEGER_EXTRACT_PARTS
 end
 
 # #1457, #1552 — the parts that are a decimal on every engine that has them, and SQLite has none of
@@ -1590,7 +1590,7 @@ function _decimal_extract_kind(p::Union{FObject,WindowFunction}, instruc::SQLIns
   p.function_name == "EXTRACT" || return nothing
   part = get(p.kwargs, "part", nothing)
   part isa AbstractString || return nothing
-  up = Dialect.extract_part(part)
+  up = _extract_part_at(part)
   up in ("EPOCH", "MILLISECONDS") && return CDecimal(nothing, nothing)
   up == "MICROSECONDS" && return CDecimal(nothing, 0)
   up == "JULIAN" && return CDecimal(nothing, _infer_kind(p.column, instruc, policy) isa CDate ? 0 : nothing)

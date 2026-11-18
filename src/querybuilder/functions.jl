@@ -1093,13 +1093,32 @@ const _TEMPORAL_FUNCTION_ROWS = Dict{String,_TemporalRow}(
 # a caller writes it (`hour`, `isodow`), or the node's own name. `nothing` for a node that is no date
 # part. `ToChar` is checked only for the `"YYYY-MM"` mask `@yyyy_mm` builds: `to_char` also formats a
 # number on PostgreSQL, so an arbitrary mask says nothing about its operand's type.
+# `Dialect.extract_part(part)` for a part read untyped from a node's `kwargs` (#1599 layer 5): `Extract` stores
+# `String(part)`, which is the same call at its type; any other value takes it behind `@noinline`. `extract_part`
+# returns a `String` whenever it returns (the part uppercased, or as given). Over the untyped part the call, and the
+# `lowercase` of its answer, dispatched at run time: the trimmed read stopped there on `Extract("date", "month") == 11`.
+# `get(kwargs, key, nothing) == value` with the stored value read at its type (#1599 layer 5): a `String` compared at its
+# type, `nothing` is `false` (what `nothing == value` answers), anything else through `==` at run time, as before (a
+# `missing` still answers `missing`). Over the untyped value `==` dispatched at run time, and a trimmed image had no
+# target for it: the read stopped at `==(::String, ::String)` in the sargable rewrite of `"date__@year" => 2008`.
+function _kwarg_is(kwargs::Dict{String,Any}, key::String, value::String)
+  v = get(kwargs, key, nothing)
+  v isa String && return v == value
+  v === nothing && return false
+  return _kwarg_is_other(v, value)
+end
+@noinline _kwarg_is_other(@nospecialize(v), value::String) = v == value
+
+_extract_part_at(@nospecialize(part))::String = part isa String ? Dialect.extract_part(part) : _extract_part_other(part)
+@noinline _extract_part_other(@nospecialize(part))::String = Dialect.extract_part(part)
+
 function _temporal_row_of(v::FObject)
   name = v.function_name
   if name == "EXTRACT"
-    up = Dialect.extract_part(v.kwargs["part"])
+    up = _extract_part_at(v.kwargs["part"])
     return _EXTRACT_PART_ROWS[up], lowercase(up)
   elseif name == "EXTRACT_DATE"
-    get(v.kwargs, "format", nothing) == "YYYY-MM" || return nothing
+    _kwarg_is(v.kwargs, "format", "YYYY-MM") || return nothing
     return _temporal_row(_CALENDAR_READS, Models.format_yyyy_mm), "yyyy_mm"
   end
   row = get(_TEMPORAL_FUNCTION_ROWS, name, nothing)

@@ -353,7 +353,7 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
 
   # The bucket gate runs BEFORE the column is resolved: resolving a joined path renders its join,
   # and a non-bucket transform (`@month`, `@quarter`, …) must never reach that.
-  bucket = if fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM"
+  bucket = if fobj.function_name == "EXTRACT_DATE" && _kwarg_is(fobj.kwargs, "format", "YYYY-MM")
     :yyyy_mm
   elseif fobj.function_name == "DATE"
     # #562: `@date` used to be a `ToChar(x, "YYYY-MM-DD")`, i.e. an `EXTRACT_DATE` node carrying the
@@ -362,7 +362,7 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
     # `DateField` the rewrite DROPS the transform entirely, so a stale marker here does not render
     # wrong SQL — it silently stops rewriting, the #376 failure mode.
     :date
-  elseif fobj.function_name == "EXTRACT" && get(fobj.kwargs, "part", nothing) == "YEAR"
+  elseif fobj.function_name == "EXTRACT" && _kwarg_is(fobj.kwargs, "part", "YEAR")
     :year
   else
     return nothing

@@ -23,7 +23,7 @@ using Test
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using PormG
 using Dates
-using PormG.QueryBuilder: F, Q, Qor, Case, When, Extract, Coalesce, Sum, Count, Lower, OuterRef, CTE, Joined
+using PormG.QueryBuilder: F, Q, Qor, Case, When, Extract, Coalesce, Sum, Count, Lower, Upper, OuterRef, CTE, Joined
 
 const _REX_QB = PormG.QueryBuilder
 
@@ -384,6 +384,27 @@ function _old_in_pair(e, pair::AbstractString)
 end
 _rex_show(x) = x === nothing ? "nothing" : sprint(show, x)
 
+# The old keyword rebuilds of `_check_function(::FObject)` and `(::SQLTypeOper)` (base `9964254e2`), as the oracle for
+# the positional ones. Their children go through the current walk, which the `_check_operands_at` comparison covers.
+_old_check_fobject(f) = _REX_QB.FObject(function_name = f.function_name,
+                                        column = _REX_QB._check_function(_REX_QB._fresh_operands(f.column)),
+                                        aggregate = f.aggregate, formatter = f.formatter, _as = f._as,
+                                        kwargs = _REX_QB._walk_kwargs(f.kwargs))
+function _old_check_oper(f)
+  node = _REX_QB._oper_value_node(f)
+  values = node isa Union{_REX_QB.SQLTypeFunction,_REX_QB.FExpression} ? _REX_QB._check_function(node) : _REX_QB._oper_literal(f)
+  return _REX_QB.OperObject(operator = f.operator, values = values, column = _REX_QB._check_function(_REX_QB._oper_column(f)))
+end
+# Structural equality: the same concrete type at every level and equal leaves (a function slot by identity).
+function _rex_same(a, b)
+  typeof(a) === typeof(b) || return false
+  a isa Function && return a === b
+  a isa AbstractDict && return keys(a) == keys(b) && all(k -> _rex_same(a[k], b[k]), keys(a))
+  a isa AbstractVector && return length(a) == length(b) && all(i -> _rex_same(a[i], b[i]), eachindex(a))
+  (a isa Union{Number,AbstractString,Symbol,Nothing,Missing,Dates.TimeType} || !isstructtype(typeof(a))) && return isequal(a, b)
+  return all(n -> _rex_same(getfield(a, n), getfield(b, n)), fieldnames(typeof(a)))
+end
+
 # What: the later walls' typed forms against the old forms or the calls they replace: a node's part (`_extract_part_at`)
 #   and keyword comparison (`_kwarg_is`), a null literal, a temporal hint, the pair error (`_in_pair`), a `Case`'s kind,
 #   values and agreeing kind, the build-time column walk (`_check_operands_at`, compared by what it renders), an
@@ -436,16 +457,44 @@ _rex_show(x) = x === nothing ? "nothing" : sprint(show, x)
       @test (tag, _rex_outcome(() -> _REX_QB._kind_formatter_at(k, instruc))) == (tag, _rex_outcome(() -> _REX_QB._kind_formatter(k, instruc)))
     end
   end
-  # The build-time column walk: the same node, compared by what the built query renders.
-  for q in (() -> _REX_RACE.objects.filter("date__@year" => 2008), () -> _REX_RACE.objects.filter("date__@year__@range" => [2007, 2009]),
-            () -> _REX_RACE.objects.filter("round__@gte" => Case(When("name" => "x", then = 6), default = 100)),
-            () -> _REX_RACE.objects.filter(Case(When("round__@lt" => 10, then = 1), default = 0) == 1),
-            () -> _REX_RACE.objects.values("raceid", "c" => Coalesce("score", 0)))
-    for conn in _REX_CONNS
-      PormG.config["rex_mock"].connections = conn
-      d = q().list(show_query = :dict)
-      @test occursin("SELECT", d[:sql_text])
+  # The build-time walk: each rebuilt node against the old keyword rebuild, field by field (the review's #3a: the
+  # rendered query is the base-vs-branch SQL differential's to compare, so here the node itself is).
+  PormG.config["rex_mock"].connections = RexMockSQLite()
+  fobjs = Any[Extract("date", "month"), Coalesce("score", 0), Coalesce("round", "year"), Lower(Upper("name")),
+              Case(When("round__@lt" => 10, then = 1), default = 0), Case(When("name" => "x", then = 6), default = 100),
+              Case([When("name" => "x", then = 6), When("year" => 2008, then = F("round"))], default = nothing),
+              Sum(F("round") + 1), Extract(F("date"), "year")]
+  opers = Any[]
+  for c in fobjs
+    c.function_name == "CASE" || continue
+    for w in (c.column isa Vector ? c.column : Any[c.column])
+      w isa _REX_QB.FObject && w.column isa _REX_QB.OperObject && push!(opers, w.column)
     end
+  end
+  @test length(opers) >= 4   # the corpus reaches the OperObject rebuild, not only the FObject one
+  for f in fobjs
+    @test (f.function_name, _rex_outcome(() -> _rex_same(_REX_QB._check_function(deepcopy(f)), _old_check_fobject(deepcopy(f))))) ==
+          (f.function_name, (:value, true))
+  end
+  for o in opers
+    @test (o.operator, _rex_outcome(() -> _rex_same(_REX_QB._check_function(deepcopy(o)), _old_check_oper(deepcopy(o))))) ==
+          (o.operator, (:value, true))
+  end
+  # The rule ladders against the `Val` dispatch they replace: every name a rule states, names none states, and a name
+  # `Symbol` refuses (a NUL inside), which raised before the dispatch and still raises (the review's #1a).
+  for (rule, ladder) in ((_REX_QB._result_rule, _REX_QB._result_rule_by_name), (_REX_QB._operand_domain, _REX_QB._operand_domain_by_name))
+    names = String[]
+    for m in methods(rule)
+      P = Base.unwrap_unionall(m.sig).parameters
+      V = P[end]
+      V isa DataType && V <: Val && V.parameters[1] isa Symbol && push!(names, String(V.parameters[1]))
+    end
+    @test length(names) > 10
+    for n in vcat(names, ["sum", "SUM ", "", "NOT_A_FUNCTION", "WHEN", "CASE", "EXTRACT", "COALESCE", "A\0B"])
+      @test (n, _rex_outcome(() -> ladder(n))) == (n, _rex_outcome(() -> rule(Val(Symbol(n)))))
+      @test (n, _rex_outcome(() -> ladder(SubString(n * "x", 1, ncodeunits(n))))) == (n, _rex_outcome(() -> rule(Val(Symbol(n)))))
+    end
+    @test_throws ArgumentError ladder("A\0B")
   end
   PormG.config["rex_mock"].connections = RexMockSQLite()
   for c in Any["round", ["a", "b"], Any["a", 2], F("round") + 1, Extract("date", "month"), _REX_QB.SQLField("round"), 5]

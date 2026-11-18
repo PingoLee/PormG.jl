@@ -2370,19 +2370,25 @@ end
 # rule stated beside a new constructor is reached with no list to keep. A name with no method here gets the fallback
 # method's answer (`:unknown`, `nothing`), through a `Val` no rule names, so the call stays static: the name `EXTRACT`
 # states no operand domain, and the run-time `Val` was the wall. As for `Dialect`'s ladder, the list is a snapshot of
-# this load: a rule added later in the session (under Revise) is seen once the package is reloaded.
+# this load: a rule added later in the session (under Revise) is seen once the package is reloaded. A method on any other
+# shape (a `Union` of `Val`s, a second argument) is refused here, when the package loads, rather than left out of the
+# ladder to answer the fallback's `:unknown` at run time; the two methods every rule has, the fallback on `::Val` and
+# the entry point on `::SQLTypeFunction`, are the only others.
 for (rule, ladder) in ((:_result_rule, :_result_rule_by_name), (:_operand_domain, :_operand_domain_by_name))
   stated = String[]
   for m in methods(getglobal(@__MODULE__, rule))
     P = Base.unwrap_unionall(m.sig).parameters
-    length(P) == 2 || continue
-    V = P[2]
-    (V isa DataType && V <: Val && length(V.parameters) == 1 && V.parameters[1] isa Symbol) || continue
-    push!(stated, String(V.parameters[1]))
+    V = length(P) == 2 ? P[2] : nothing
+    if V isa DataType && V <: Val && length(V.parameters) == 1 && V.parameters[1] isa Symbol
+      push!(stated, String(V.parameters[1]))
+    elseif !(V === Val || V === SQLTypeFunction)
+      error("#1599: `$(rule)` has a method on `$(m.sig)`, which its by-name ladder cannot read; state the rule on one `Val{:NAME}`")
+    end
   end
   arms = [:(name == $n && return $rule($(Val(Symbol(n))))) for n in sort!(stated)]
   @eval function $ladder(name::AbstractString)
     $(arms...)
+    Symbol(name)   # what `Val(Symbol(name))` raised for a name no `Symbol` can be (a NUL inside), raised here too
     return $rule($(Val(:_pormg_no_stated_rule)))
   end
 end

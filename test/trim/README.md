@@ -8,8 +8,9 @@ What it does (`main.jl`): boot with the connection built in code (`register_conn
 before any SQL (a date string that is not a calendar date, and a `Bool` for a text column; each prints
 the refusal's type and message), the read steps of `tools/reads.jl` (a comparison filter on a date and on an
 integer, `date__@gte` and `round__@lt`, an `order_by` each way, and the other common lookups: `__@gt`, `__@lte`,
-`__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains` and `__@contains`, over the
-two races `prep.jl` seeds; #1599 layer 5), one `Race.objects.create` that leaves the three auto-filled fields
+`__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains` and `__@contains`, and the
+comparisons against an expression: an `F` with arithmetic on each side, `Extract`, the `@year` transform and a
+`Case`/`When` on each side, over the two races `prep.jl` seeds; #1599 layer 5), one `Race.objects.create` that leaves the three auto-filled fields
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
@@ -25,7 +26,7 @@ back on the SQLite worker, and its typed read then returns both rows, the one it
 `update` sets that row's `round` and its `delete` removes it, each shown by the read after it; its
 `bulk_insert` writes two rows, the three auto-filled fields included, and the typed read sees both. It
 prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788), and the
-rows its comparison filters, its `order_by` and its other lookups pick out, in order. The
+rows its comparison filters, its `order_by`, its other lookups and its expression comparisons pick out, in order. The
 `Trim (juliac)` workflow checks that both binaries still do (see "The read-only entry and its CI job"
 and "The full entry's CI job" below).
 
@@ -69,7 +70,7 @@ time, which `main` prints with the function it missed.
 
 `read.jl` is `main.jl` without the write: boot, the typed read, then the read steps. Since #1788 its trimmed
 binary prints the row its JIT control prints, and since #1599's layer-5 slices the rows of its comparison filters,
-its `order_by` and its other lookups; it exits 0:
+its `order_by`, its other lookups and its expression comparisons; it exits 0:
 
 ```
 step	main	entered
@@ -90,6 +91,12 @@ step	lookup	date__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	lookup	date__@isnull true 0 rows: none
 step	lookup	name__@icontains 1 rows: Brazilian Grand Prix
 step	lookup	name__@contains 1 rows: Monaco Grand Prix
+step	expr	year__@gt F(round) + 2000 1 rows: Monaco Grand Prix
+step	expr	F(round) + 1 == 19 1 rows: Brazilian Grand Prix
+step	expr	Extract(date, month) == 11 1 rows: Brazilian Grand Prix
+step	expr	date__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	expr	round__@gte Case 1 rows: Monaco Grand Prix
+step	expr	Case == 1 1 rows: Monaco Grand Prix
 step	elapsed_ms	1
 ```
 
@@ -107,7 +114,7 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
 fails with the same exit code (1 boot, 2 write, 3 read, 10 a comparison filter, 11 an `order_by`, 13 one of the
-other lookups, each when it raises or does not return the rows it picks out; `main.jl` exits 6 when a create it expects
+other lookups, 14 an expression comparison, each when it raises or does not return the rows it picks out; `main.jl` exits 6 when a create it expects
 PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
@@ -170,6 +177,12 @@ step	lookup	date__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	lookup	date__@isnull true 0 rows: none
 step	lookup	name__@icontains 1 rows: Brazilian Grand Prix
 step	lookup	name__@contains 1 rows: Monaco Grand Prix
+step	expr	year__@gt F(round) + 2000 1 rows: Monaco Grand Prix
+step	expr	F(round) + 1 == 19 1 rows: Brazilian Grand Prix
+step	expr	Extract(date, month) == 11 1 rows: Brazilian Grand Prix
+step	expr	date__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	expr	round__@gte Case 1 rows: Monaco Grand Prix
+step	expr	Case == 1 1 rows: Monaco Grand Prix
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -183,7 +196,7 @@ step	bulk_refused	0 rows written; 1 Monaco races
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
-filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 124
+filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 124
 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
@@ -263,6 +276,12 @@ step	lookup	date__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	lookup	date__@isnull true 0 rows: none
 step	lookup	name__@icontains 1 rows: Brazilian Grand Prix
 step	lookup	name__@contains 1 rows: Monaco Grand Prix
+step	expr	year__@gt F(round) + 2000 1 rows: Monaco Grand Prix
+step	expr	F(round) + 1 == 19 1 rows: Brazilian Grand Prix
+step	expr	Extract(date, month) == 11 1 rows: Brazilian Grand Prix
+step	expr	date__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	expr	round__@gte Case 1 rows: Monaco Grand Prix
+step	expr	Case == 1 1 rows: Monaco Grand Prix
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25

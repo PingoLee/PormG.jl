@@ -6038,6 +6038,21 @@ end
     @test all(s -> occursin("\"YYYY-MM\"", s), _dynamic_calls(QB._temporal_row_of, (QB.FObject,)))
   end
 
+  # What: a filter's construction over a function (`_check_function` on an `FObject` and an `OperObject`, through the
+  #   column walk `_check_operands_at`) and the error a pair raises (`_in_pair`).
+  # Expected: no dynamic call in any of them; `_in_pair`'s error argument is unspecialized.
+  # Why: `_fresh_operands` and `_check_function` over an untyped column, and the keyword constructors over untyped
+  #   values, dispatched at run time; `_in_pair` specialized on the caught error raised its own `MethodError`, which
+  #   replaced the one being reported (`"date__@year" => 2008`, `Case(When(…))`) (#1599 layer 5).
+  @testset "a filter over a function is built at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._check_operands_at, (Any,)) == String[]
+    @test _dynamic_calls(QB._check_function, (QB.FObject,)) == String[]
+    @test _dynamic_calls(QB._check_function, (QB.OperObject,)) == String[]
+    @test only(methods(QB._in_pair)).nospecialize & 0b1 == 0b1
+    @test _dynamic_calls(QB._in_pair, (Any, String)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

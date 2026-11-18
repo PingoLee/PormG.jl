@@ -95,6 +95,37 @@ end
   end
 end
 
+# The old `_normalize_uoc_pairs` (base `91a66a381`), as the oracle.
+function _old_normalize_uoc_pairs(x, what::AbstractString; op::AbstractString = "update_or_create")
+  items = x isa Pair ? (x,) : x
+  out = Pair[]
+  for item in items
+    item isa Pair ||
+      throw(PormG.QueryBuildError("Error in $op, each $what entry must be a `field => value` pair, got $(typeof(item))"))
+    push!(out, item)
+  end
+  return out
+end
+
+# What: `_normalize_uoc_pairs` against the old normalizer, over every argument shape the upserts accept (a tuple of
+#   pairs, a vector of mixed pairs, one bare pair, `Symbol` keys, an empty vector) and shapes it refuses.
+# Expected: the same pairs, each key as the `string(k)` every reader of the old pair took, each value the same object;
+#   the same refusal, with the same text.
+# Why: the old `Vector{Pair}` made each key and value untyped, and the trimmed `get_or_create` stopped at the insert
+#   map's `setindex!`.
+@testset "an upsert's lookup and defaults pairs are read as before (#1599 layer 7)" begin
+  laps = [78, 77]
+  args = Any[("raceid" => 9_000_001,), ["year" => 2012, "round" => 6, "name" => "Monaco Grand Prix", "date" => Date(2012, 5, 27)],
+             "raceid" => 1, [:year => 2012, "round" => 6], Pair[], ("raceid" => 1, "laps" => laps), ("raceid" => 1, 5), [1, 2], (:raceid => nothing,)]
+  for a in args, op in ("get_or_create", "update_or_create")
+    old = _ups_outcome(() -> [(string(p.first), p.second) for p in _old_normalize_uoc_pairs(a, "lookup"; op = op)])
+    new = _ups_outcome(() -> [(p.first, p.second) for p in _UPS_QB._normalize_uoc_pairs(a, "lookup"; op = op)])
+    @test (a, op, new) == (a, op, old)
+  end
+  out = _UPS_QB._normalize_uoc_pairs(("raceid" => 1, "laps" => laps), "lookup")
+  @test out isa Vector{Pair{String, Any}} && out[2].second === laps
+end
+
 # What: `_fork_parameters` on a PostgreSQL collector (#1599 layer 7) against the expression it replaces, over a
 #   `Vector{Any}` of bindings (the typed arm) and other containers (the open arm).
 # Expected: a new collector with the same SQL, an equal but distinct `Vector{Any}` and the same count.

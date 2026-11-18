@@ -6216,6 +6216,19 @@ end
     @test _dynamic_calls(QB._ensure_unique_bulk_update_keys!, (QB._BulkFrame, Dict{String,String}, Vector{String})) == String[]
   end
 
+  # What: the upserts' lookup and defaults pairs (`_normalize_uoc_pairs`) and their fill of the insert map
+  #   (`_put_insert!`), and the two entry points' bodies.
+  # Expected: the pairs come back as `Vector{Pair{String,Any}}`; the fill and both keyword bodies make no dynamic call.
+  # Why: a `Vector{Pair}` held keys and values untyped, so `k => v` was a `UnionAll` call and `insert[k] = v` a dynamic
+  #   `setindex!`: the trimmed `update_or_create`/`get_or_create` stopped at each (#1599 layer 7, #1694).
+  @testset "an upsert's pairs and insert map are read and filled at their types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    @test Base.return_types(QB._normalize_uoc_pairs, (Tuple{Pair{String,Int64}}, String)) == Any[Vector{Pair{String,Any}}]
+    @test _dynamic_calls(QB._put_insert!, (PormG.OrderedCollections.OrderedDict{String,Any}, String, Any)) == String[]
+    @test _dynamic_calls_kw(QB._update_or_create!, (QB.SQLObjectQuery, Tuple{Pair{String,Int64}})) == String[]
+    @test _dynamic_calls_kw(QB._get_or_create!, (QB.SQLObjectQuery, Tuple{Pair{String,Int64}})) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

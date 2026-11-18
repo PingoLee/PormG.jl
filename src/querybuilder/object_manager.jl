@@ -414,16 +414,41 @@ end
 
 # Coerce a lookup/defaults argument into a Vector{Pair}, tolerating a tuple (positional args),
 # a vector, or a single bare Pair; reject any non-Pair element with an actionable error.
+#
+# #1599 layer 7, #1694: each pair is kept as `Pair{String,Any}`, its key the `string(k)` every reader of it took
+# (`string` of a `String` is that string; of a `Symbol`, its name). A `Vector{Pair}` held its keys and values untyped,
+# so each `string(k)` and each `insert[key] = v` after it dispatched at run time, and the trimmed `get_or_create`
+# stopped at `setindex!(::OrderedDict{String,Any}, ::Int64, ::String)`. A non-pair is refused first, as before.
 function _normalize_uoc_pairs(x, what::AbstractString; op::AbstractString = "update_or_create")
   items = x isa Pair ? (x,) : x
-  out = Pair[]
+  out = Pair{String,Any}[]
   for item in items
     item isa Pair ||
       throw(QueryBuildError("Error in $op, each $what entry must be a `field => value` pair, got $(typeof(item))"))
-    push!(out, item)
+    push!(out, Pair{String,Any}(_uoc_key(item.first), item.second))   # the element `push!` converted `k => v` to
   end
   return out
 end
+_uoc_key(@nospecialize(k))::String = k isa String ? k : _uoc_key_other(k)
+@noinline _uoc_key_other(@nospecialize(k))::String = string(k)
+
+# `insert[key] = v` at the value's type (#1599 layer 7, #1694), as `_fill_formatted!` writes a filled field. Over an
+# untyped `v`, `setindex!` on the `OrderedDict{String,Any}` stays a dynamic call even with its one method, and the
+# trimmed `get_or_create` stopped there. One arm per type a lookup or default value commonly is, each the same
+# assignment; any other value is assigned as before.
+@noinline function _put_insert!(insert::OrderedCollections.OrderedDict{String,Any}, key::String, @nospecialize(v))
+  v isa Int64 && return (insert[key] = v; nothing)
+  v isa String && return (insert[key] = v; nothing)
+  v isa Float64 && return (insert[key] = v; nothing)
+  v isa Bool && return (insert[key] = v; nothing)
+  v isa Dates.Date && return (insert[key] = v; nothing)
+  v isa Dates.DateTime && return (insert[key] = v; nothing)
+  v isa Nothing && return (insert[key] = v; nothing)
+  v isa Missing && return (insert[key] = v; nothing)
+  return _put_insert_other!(insert, key, v)
+end
+@noinline _put_insert_other!(insert::OrderedCollections.OrderedDict{String,Any}, key::String, @nospecialize(v)) =
+  (insert[key] = v; nothing)
 
 # Django-style row-level upsert (#30). `lookup` pairs identify the row — their fields become the
 # ON CONFLICT target and their values the INSERT match values; `defaults` are the columns SET on a
@@ -460,8 +485,8 @@ function _update_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query:
 
   # Merge into the insert map (lookup then defaults; order preserved for deterministic SQL, #97).
   q.insert = OrderedCollections.OrderedDict{String,Any}()
-  for (k, v) in lookup_pairs;  q.insert[string(k)] = v; end
-  for (k, v) in default_pairs; q.insert[string(k)] = v; end
+  for (k, v) in lookup_pairs;  _put_insert!(q.insert, string(k), v); end
+  for (k, v) in default_pairs; _put_insert!(q.insert, string(k), v); end
 
   # target = lookup keys; SET = defaults, plus every auto_now field (refresh on conflict, matching
   # update()) that isn't already a default and isn't a lookup key. auto_now_add is create-only and
@@ -512,8 +537,8 @@ function _get_or_create!(q::SQLObject, lookup; defaults = Pair[], show_query::Sy
 
   # Merge into the insert map (lookup then defaults; order preserved for deterministic SQL, #97).
   q.insert = OrderedCollections.OrderedDict{String,Any}()
-  for (k, v) in lookup_pairs;  q.insert[string(k)] = v; end
-  for (k, v) in default_pairs; q.insert[string(k)] = v; end
+  for (k, v) in lookup_pairs;  _put_insert!(q.insert, string(k), v); end
+  for (k, v) in default_pairs; _put_insert!(q.insert, string(k), v); end
 
   return _get_or_create(q; target_fields = lookup_keys, show_query = show_query)
 end

@@ -1396,6 +1396,22 @@ end
 # Where the engine casts to no boolean type (`_normalizes_boolean_cast`, MySQL): a boolean target over
 # booleans or integers is `((x) <> 0)`, NULL kept, as PostgreSQL's `integer::boolean` reads it; over any
 # other value refused, since what MySQL would make of it (a text's leading digits) is no boolean.
+# #1599 layer 5: the kinds of the operands that are not a NULL literal, read only through `isa` (`any`/`all` below),
+# so the vector's element type is no answer. A filtered comprehension over the `Vector{Any}` every caller hands it
+# built `Iterators.Filter(closure, ::Vector{Any})` at run time, a `UnionAll` call a trimmed image had no code for: the
+# MySQL binary stopped there at `"round__@gte" => Case(…)` (this check runs where the engine stores an interval as
+# its count or casts to no boolean, MySQL). Any other container takes the open arm, the comprehension as before.
+function _non_null_operand_kinds(@nospecialize(values), instruc::SQLInstruction)::Vector{Union{CanonicalType,Nothing}}
+  values isa Vector{Any} || return _non_null_operand_kinds_other(values, instruc)
+  kinds = Union{CanonicalType,Nothing}[]
+  for x in values
+    _is_null_operand(x) || push!(kinds, _expression_kind(x, instruc))
+  end
+  return kinds
+end
+@noinline _non_null_operand_kinds_other(@nospecialize(values), instruc::SQLInstruction)::Vector{Union{CanonicalType,Nothing}} =
+  [_expression_kind(x, instruc) for x in values if !_is_null_operand(x)]
+
 const _ONE_OF_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE")
 const _ONE_OF_NAMES = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
                            "NULLIF" => "NullIf", "CASE" => "Case")
@@ -1409,7 +1425,7 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   # wrote checks its operands, and names itself.
   haskey(v.kwargs, "rotation_of") && return nothing
   values = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : Any[v.column]
-  kinds = [_expression_kind(x, instruc) for x in values if !_is_null_operand(x)]
+  kinds = _non_null_operand_kinds(values, instruc)
   engine = _backend_name(conn)
   interval = units && any(k -> k isa CInterval, kinds)
   label() = v.function_name == "CAST" || _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v)) ?

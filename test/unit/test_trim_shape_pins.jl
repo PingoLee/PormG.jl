@@ -6161,6 +6161,20 @@ end
     @test _dynamic_calls(pgx._wire_text, (Any,)) == String[]
   end
 
+  # What: the MySQL declared-output check (`_mysql_declared_output`), which every `Case`, `Coalesce`, `Greatest`, `Least`,
+  #   `NullIf` and `Cast` render asks on an engine that stores an interval as its count or casts to no boolean (MySQL).
+  # Expected: no dynamic `collect`, `any` or `all` over the operand kinds; the kinds walk itself makes no dynamic call.
+  #   (What stays dynamic, `isempty`/`_declared_kind` over an untyped declared type, is after the early return for an
+  #   undeclared node.)
+  # Why: the filtered comprehension built `Iterators.Filter` at run time: the trimmed MySQL binary stopped at
+  #   `"round__@gte" => Case(…)` with `MethodError`, missed `UnionAll` (#1599 layer 5, Trim run 44290558739).
+  @testset "the MySQL declared-output check reads its operand kinds at one type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    calls = _dynamic_calls(QB._mysql_declared_output, (QB.FObject, QB.InstructionObject))
+    @test !any(s -> occursin(r"collect|Filter|\.any\(|\.all\(", s), calls)
+    @test _dynamic_calls(QB._non_null_operand_kinds, (Any, QB.InstructionObject)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

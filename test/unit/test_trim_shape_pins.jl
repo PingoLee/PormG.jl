@@ -5910,6 +5910,23 @@ end
     @test length(open_arm) == 2 && occursin("_pormg_lower(", open_arm[1]) && occursin("sqlreturn", open_arm[2])
   end
 
+  # What: the condition walk (`_each_condition_leaf`), which every projection and filter value is asked through (an
+  #   alias, an aggregate, a window), and its vector arm (`_each_condition_leaf_in`).
+  # Expected: the node argument is unspecialized (bit 2), no dynamic call in the walk but the vector arm's open
+  #   `foreach`, and that one call only (the vectors it names are static).
+  # Why: specialized on the node, each recursive call into an `Any` slot had no compiled target: the trimmed read
+  #   stopped at `_each_condition_leaf(…, ::Int64, …)` on `"year__@gt" => F("round") + 2000` (#1599 layer 5).
+  @testset "the condition walk recurses at one compiled body (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    m = only(methods(QB._each_condition_leaf, (Function, Any, Int)))
+    @test m.nospecialize & 0b10 == 0b10
+    @test _dynamic_calls(QB._each_condition_leaf, (typeof(identity), Any)) == String[]
+    walk = _dynamic_calls(QB._each_condition_leaf, (typeof(identity), Any, Int))
+    @test isempty(walk) || all(s -> occursin("foreach", s), walk)
+    inner = _dynamic_calls(QB._each_condition_leaf_in, (typeof(identity), Any, Int))
+    @test length(inner) == 1 && occursin("foreach", only(inner))
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

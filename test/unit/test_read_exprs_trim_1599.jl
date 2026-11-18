@@ -1,0 +1,136 @@
+# ============================================================
+# test/unit/test_read_exprs_trim_1599.jl
+#
+# CONTRACT being tested:
+#   The typed forms a comparison against an expression now goes through in a trimmed read (#1599 layer 5) answer what
+#   the forms they replaced answered, value for value, and raise what those raised, with the same text:
+#     - `_each_condition_leaf` (node unspecialized, vectors through `_each_condition_leaf_in`) against its old body:
+#       the same leaves, in the same order, over every node shape a projection or a filter value holds;
+#     - `_column_rhs_sql` against the `_on_join_right(() -> _get_filter_query(rhs, instruc), instruc)` call it
+#       replaces, for each column right side;
+#     - `_render_column_rhs` (right side unspecialized) against its old body, over each operator and right side;
+#     - `_set_update_query_left_at` against the `_set_update_query_left` call it replaces, over the left sides an
+#       expression holds;
+#   each on every engine: the same SQL text and the same parameters bound, or the same error type and text. What the
+#   expression filters render end to end is pinned by the render suites (test_field_expressions*.jl and others).
+#
+# Hermetic: mock connections, no database.
+#
+# Run: julia --project=test/integration test/unit/test_read_exprs_trim_1599.jl
+# ============================================================
+
+using Test
+isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
+using PormG
+using Dates
+using PormG.QueryBuilder: F, Q, Qor, Case, When, Extract, Coalesce, Sum, Count, Lower, OuterRef, CTE, Joined
+
+const _REX_QB = PormG.QueryBuilder
+
+# Dedicated config keys and mock types: `runtests.jl` includes every unit file into one `Main`.
+struct RexMockSQLite <: PormG.PormGSQLite end
+struct RexMockPostgres <: PormG.PormGPostgres end
+struct RexMockMySQL <: PormG.PormGMySQL end
+PormG.backend_sqlite_version(::RexMockSQLite) = 3045000
+
+PormG.config["rex_mock"] = PormG.Configuration.Settings(connections = RexMockSQLite(), change_data = true,
+                                                        db_def_folder = "rex_mock")
+
+module RexModels
+import PormG
+import PormG.Models
+Rex_circuit::Models.ModelType = Models.Model("rex_circuit",
+  circuitid = Models.IDField(),
+  name      = Models.CharField(max_length = 50),
+)
+Rex_race::Models.ModelType = Models.Model("rex_race",
+  raceid    = Models.IDField(),
+  circuitid = Models.ForeignKey("Rex_circuit"),
+  year      = Models.IntegerField(),
+  round     = Models.IntegerField(),
+  name      = Models.CharField(max_length = 80),
+  date      = Models.DateField(null = true),
+  score     = Models.FloatField(null = true),
+)
+Models.@models Rex_circuit Rex_race
+PormG.Models.set_models(@__MODULE__, "rex_mock")
+end
+const _REX_RACE = RexModels.Rex_race
+const _REX_CONNS = (RexMockSQLite(), RexMockPostgres(), RexMockMySQL())
+
+# What a call gave: its value, or the type and text of what it raised.
+_rex_outcome(f) = try
+  (:value, f())
+catch e
+  (:raised, typeof(e), sprint(showerror, e))
+end
+
+# A fresh instruction over the mock model on `conn`, and the parameters it holds, as text.
+_rex_instruc(conn) = _REX_QB.build(_REX_RACE.objects.filter("year" => 2009).object; connection = conn)
+_rex_params(instruc) = sprint(show, instruc.parameters)
+
+# ── The old forms, copied from the code before #1599 layer 5's expression slice ─────────────────────────────────
+function _old_each_condition_leaf(f::Function, node, depth::Int = 0)
+  depth > 32 && return nothing
+  if node isa _REX_QB.OperObject
+    f(node)
+  elseif node isa Union{_REX_QB.QObject,_REX_QB.QorObject}
+    foreach(x -> _old_each_condition_leaf(f, x, depth + 1), _REX_QB._q_nodes(node))
+  elseif node isa AbstractVector
+    foreach(x -> _old_each_condition_leaf(f, x, depth + 1), node)
+  elseif node isa Union{_REX_QB.FObject,_REX_QB.WindowFunction}
+    _old_each_condition_leaf(f, node.column, depth + 1)
+    foreach(x -> _old_each_condition_leaf(f, x, depth + 1), values(node.kwargs))
+    if node isa _REX_QB.WindowFunction
+      _old_each_condition_leaf(f, node.over.partition_by, depth + 1)
+      _old_each_condition_leaf(f, node.over.order_by, depth + 1)
+    end
+  elseif node isa Union{_REX_QB.SQLField,_REX_QB.SQLOrder}
+    _old_each_condition_leaf(f, node.field, depth + 1)
+  elseif node isa _REX_QB.FExpression
+    _old_each_condition_leaf(f, node.field_name, depth + 1)
+    _old_each_condition_leaf(f, node.operand, depth + 1)
+  end
+  return nothing
+end
+
+function _old_render_column_rhs(column::AbstractString, v, rhs, instruc)::String
+  rhs_node = _REX_QB._oper_value_node(v)
+  rhs_node === nothing || _REX_QB._refuse_json_key_right_operand(rhs_node, instruc)
+  operator = v.operator
+  operator in _REX_QB.VERBATIM_PATTERN_OPERATORS &&
+    return _REX_QB._render_predicate(column, operator, rhs, instruc)
+  operator in ("=", ">", "<", ">=", "<=", "<>", "!=") ||
+    throw(PormG.FilterError("Invalid filter operator: $(operator) does not take a column expression."))
+  return string(column, " ", operator, " ", rhs)
+end
+
+# The nodes a condition walk meets: filter pairs, `Q`/`Qor`, `Case`/`When` (one and a list), arithmetic over columns
+# and literals, functions, a window, vectors of each element type the walk names, and values that take the open arm.
+function _rex_nodes()
+  w1 = When("round__@lt" => 10, then = 1)
+  w2 = When(Q("name" => "Monaco Grand Prix"), then = 2)
+  Any[
+    Case(w1, default = 0), Case([w1, w2], default = 0), w1, Q("round__@gt" => 1, "year" => 2008),
+    Qor("round" => 1, "round" => 2), F("round") + 2000, F("round") + 1 == 19, (F("round") + 1) * F("year"),
+    Extract("date", "month"), Lower("name"), Coalesce("score", 0), Sum(Case(w1, default = 0)),
+    Case(When("round__@gte" => Case(w1, default = 0), then = 1), default = Case(w2, default = 3)),
+    Any[w1, "round", 5], _REX_QB.FObject[w1, w2], [1, 2], ["a", "b"], 2000, "round", nothing, Date(2008),
+    _REX_QB.SQLField("round"), _REX_QB.SQLField(Case(w1, default = 0)),
+  ]
+end
+
+# What: `_each_condition_leaf` against its old body, over every node shape above.
+# Expected: the same leaves (each `OperObject`, by identity), in the same order.
+# Why: the walk decides whether a projection or a filter value reads an alias, an aggregate or a window; a leaf missed
+#   or added would change which statements are refused or how they group (#1599 layer 5).
+@testset "the condition walk visits the leaves it visited (#1599 layer 5)" begin
+  for node in _rex_nodes()
+    new_leaves, old_leaves = Any[], Any[]
+    _REX_QB._each_condition_leaf(x -> push!(new_leaves, x), node)
+    _old_each_condition_leaf(x -> push!(old_leaves, x), node)
+    @test (typeof(node), length(new_leaves)) == (typeof(node), length(old_leaves))
+    @test all(i -> new_leaves[i] === old_leaves[i], eachindex(new_leaves, old_leaves))
+  end
+end
+

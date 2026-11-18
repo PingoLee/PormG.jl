@@ -287,14 +287,18 @@ end
 # Depth cap as in `_guard_no_aggregate_predicate`.
 # `_each_condition_leaf` with the node first, the argument order the slot walks call in (#1698).
 _each_condition_leaf_of(node, f::F) where {F<:Function} = _each_condition_leaf(f, node)
-function _each_condition_leaf(f::Function, node, depth::Int = 0)
+# #1599 layer 5: the node is taken unspecialized. The walk recurses into slots typed `Any` (an `FExpression`'s operand,
+# a function's column), so each recursive call specialized on the node had no compiled target in a trimmed image:
+# the read stopped at `_each_condition_leaf(…, ::Int64, …)` on `"year__@gt" => F("round") + 2000`. One body; the
+# branches narrow the node with `isa`.
+function _each_condition_leaf(f::Function, @nospecialize(node), depth::Int = 0)
   depth > 32 && return nothing
   if node isa OperObject   # the only `SQLTypeOper`: `f` reads it through its accessors (#1599 round 10)
     f(node)
   elseif node isa Union{QObject,QorObject}   # each term at its concrete type (#1698 phase 2)
     foreach(x -> _each_condition_leaf(f, x, depth + 1), _q_nodes(node))
   elseif node isa AbstractVector
-    foreach(x -> _each_condition_leaf(f, x, depth + 1), node)
+    _each_condition_leaf_in(f, node, depth)
   elseif node isa Union{FObject,WindowFunction}
     _each_condition_leaf(f, node.column, depth + 1)
     foreach(x -> _each_condition_leaf(f, x, depth + 1), values(node.kwargs))
@@ -312,6 +316,15 @@ function _each_condition_leaf(f::Function, node, depth::Int = 0)
     _each_condition_leaf(f, node.operand, depth + 1)
   end
   return nothing
+end
+# The vector arm at the vector's concrete type: a function's operand list, a `Case`'s `When`s, a window's PARTITION BY
+# and ORDER BY. Over the unspecialized node `foreach` dispatched at run time; any other vector still does.
+@noinline function _each_condition_leaf_in(f::F, @nospecialize(v), depth::Int) where {F<:Function}
+  v isa Vector{Any} && return foreach(x -> _each_condition_leaf(f, x, depth + 1), v)
+  v isa Vector{FObject} && return foreach(x -> _each_condition_leaf(f, x, depth + 1), v)
+  v isa Vector{WindowPartitionPart} && return foreach(x -> _each_condition_leaf(f, x, depth + 1), v)
+  v isa Vector{WindowOrderPart} && return foreach(x -> _each_condition_leaf(f, x, depth + 1), v)
+  return foreach(x -> _each_condition_leaf(f, x, depth + 1), v)
 end
 
 # The filter key when it names something on the model — a field, or a `__` path whose first segment

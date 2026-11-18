@@ -1885,10 +1885,10 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # path) — there the formatter came from the OPERAND's own type above, so the type label comes
     # from the formatter rather than from a column that was never found. The same when the left's
     # kind overrode the column's (#801): the column's `type` would name a formatter not used.
-    return add_parameter!(instruc,
+    return _add_formatted_parameter!(instruc,
       _guarded_format(formatter, operand, operation, field_name,
-                      f !== nothing && formatter === f.formatter ? f.type : _formatter_type_label(formatter));
-      sql_type=sql_type)
+                      f !== nothing && formatter === f.formatter ? f.type : _formatter_type_label(formatter)),
+      sql_type)
   elseif isa(operand, String)
     # Check if it's a field reference
     if _is_field_path(operand, instruc)
@@ -1901,7 +1901,7 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     else
       # Keep scalar literals parameterized with an explicit SQL type on PostgreSQL so
       # expressions like integer_column / 2.0 don't get inferred back to integer.
-      return add_parameter!(instruc, operand; sql_type=_infer_parameter_sql_type(operand, instruc))
+      return _add_typed_parameter!(instruc, operand, _infer_parameter_sql_type(operand, instruc))
     end
   elseif isa(operand, Integer)
     # SECURITY: parameterize the integer (bitwise shifts and ordinary arithmetic).
@@ -1912,11 +1912,33 @@ function _set_update_query_operand(operand::Any, field_name::Any, operation::Str
     # Whole days are now normalized into `Day(n)` by `_set_update_query_typed` BEFORE this function
     # is reached, so an integer that survives to here is genuinely arithmetic, never a duration.
     sql_type = (operation in ["<<", ">>"]) ? "integer" : _infer_parameter_sql_type(operand, instruc)
-    return add_parameter!(instruc, operand; sql_type=sql_type)
+    return _add_typed_parameter!(instruc, operand, sql_type)
   else
     # SECURITY: Use parameterized query for other numeric values
-    return add_parameter!(instruc, operand; sql_type=_infer_parameter_sql_type(operand, instruc))
+    return _add_typed_parameter!(instruc, operand, _infer_parameter_sql_type(operand, instruc))
   end
+end
+
+# `add_parameter!(instruc, formatted; sql_type)` for a formatter's answer, untyped, at its concrete type (#1599 layer 5),
+# the `_bind_formatted_value` shape: one arm per type a column formatter returns, each `_add_typed_parameter!` at that
+# type; any other value takes the old call behind `@noinline`.
+@noinline function _add_formatted_parameter!(instruc::SQLInstruction, @nospecialize(formatted), sql_type::Union{Nothing,String})
+  formatted isa String && return _add_typed_parameter!(instruc, formatted, sql_type)
+  formatted isa Int64 && return _add_typed_parameter!(instruc, formatted, sql_type)
+  formatted isa Float64 && return _add_typed_parameter!(instruc, formatted, sql_type)
+  formatted isa Bool && return _add_typed_parameter!(instruc, formatted, sql_type)
+  return _add_formatted_parameter_other(instruc, formatted, sql_type)
+end
+@noinline _add_formatted_parameter_other(instruc::SQLInstruction, @nospecialize(formatted), sql_type::Union{Nothing,String}) =
+  add_parameter!(instruc, formatted; sql_type = sql_type)
+
+# `add_parameter!(instruc, value; sql_type)` with the keyword at a concrete type (#1599 layer 5). `sql_type` is
+# `_infer_parameter_sql_type`'s `Union{Nothing,String}`, so the keyword `NamedTuple` had no concrete type and the call
+# dispatched at run time: the trimmed read stopped at `kwcall((sql_type = nothing,), add_parameter!, …, ::Int64)` on
+# `F("round") + 2000`. The same call, once per type the keyword can have.
+function _add_typed_parameter!(instruc::SQLInstruction, value, sql_type::Union{Nothing,String})
+  sql_type === nothing && return add_parameter!(instruc, value; sql_type = nothing)
+  return add_parameter!(instruc, value; sql_type = sql_type::String)
 end
 
 function _set_update_query_left(value::Any, operation::String, instruc::SQLInstruction)
@@ -1924,7 +1946,7 @@ function _set_update_query_left(value::Any, operation::String, instruc::SQLInstr
     return _get_filter_query(value, instruc)
   elseif value isa Integer
     sql_type = (operation in ["<<", ">>"]) ? "integer" : _infer_parameter_sql_type(value, instruc)
-    return add_parameter!(instruc, value; sql_type=sql_type)
+    return _add_typed_parameter!(instruc, value, sql_type)
   elseif value isa Float64
     # #1476: a float on the left of `-` or `/` (`10.5 - F("points")`), bound as one.
     return add_parameter!(instruc, value; sql_type=_infer_parameter_sql_type(value, instruc))

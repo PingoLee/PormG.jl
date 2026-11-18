@@ -345,8 +345,12 @@ const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REP
 # `"YYYY-MM"` label. The range belongs to the part, not to an expression computed from it: `hour + 1`
 # reaches 24, and `Coalesce("ts__@month", 0)` is 0 for a NULL date. Such an expression keeps the
 # family (a number, a text) and drops the range.
-_unranged(f) = f in Models.PERIOD_FORMATTERS ? Models.format_number_sql :
-               f === Models.format_yyyy_mm   ? Models.format_text_sql : f
+#
+# #1599 layer 5: `f` is a formatter held as `Function` (a field's or a node's slot), so the body takes it unspecialized,
+# and the period formatters are matched by `===` (no formatter type defines `==`, so it is what `in`'s `==` answered):
+# specialized on `f`, the call had no compiled target in a trimmed image (`F("round") + 2000`).
+_unranged(@nospecialize(f)) = any(p -> p === f, Models.PERIOD_FORMATTERS) ? Models.format_number_sql :
+                              f === Models.format_yyyy_mm ? Models.format_text_sql : f
 
 # #1034 step 4 — the formatter a value compared with this expression must satisfy, or `nothing` when
 # its type cannot be named. Only a type that is KNOWN is returned — see `_having_alias_formatter`.

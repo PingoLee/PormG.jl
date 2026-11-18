@@ -201,6 +201,42 @@ end
   end
 end
 
+# What: `_add_typed_parameter!` and `_add_formatted_parameter!` against the `add_parameter!(…; sql_type)` call they
+#   replace, over the values a renderer binds and both kinds of `sql_type`, on each engine.
+# Expected: the same placeholder (or error) and the same parameters bound.
+# Why: the helpers make the same call with the keyword (and the formatted value) at a concrete type (#1599 layer 5).
+@testset "an operand binds as add_parameter! bound it (#1599 layer 5)" begin
+  vals = Any[2000, 2.5, "2008-05-25", true, Int32(3), nothing, PormG.Models.Decimals.Decimal(0, 15, -1), [1, 2]]
+  for conn in _REX_CONNS, v in vals, st in (nothing, "bigint", "double precision", "date")
+    tag = (nameof(typeof(conn)), typeof(v), st)
+    for f in (_REX_QB._add_typed_parameter!, _REX_QB._add_formatted_parameter!)
+      ni, oi = _rex_instruc(conn), _rex_instruc(conn)
+      @test (tag, nameof(f), _rex_outcome(() -> f(ni, v, st))) ==
+            (tag, nameof(f), _rex_outcome(() -> _REX_QB.add_parameter!(oi, v; sql_type = st)))
+      @test (tag, _rex_params(ni)) == (tag, _rex_params(oi))
+    end
+  end
+end
+
+# The old `_unranged`, copied from the code before #1599 layer 5's expression slice.
+_old_unranged(f) = f in PormG.Models.PERIOD_FORMATTERS ? PormG.Models.format_number_sql :
+                   f === PormG.Models.format_yyyy_mm ? PormG.Models.format_text_sql : f
+
+# What: `_unranged` (formatter unspecialized, matched by `===`) against its old body (`in`), over every formatter
+#   `Models` defines, the period formatters, `format_yyyy_mm`, a formatter's closure, a functor and `nothing`.
+# Expected: the same formatter, by identity.
+# Why: the family a value compared with an expression must satisfy is read from it; a formatter read differently would
+#   change the cast a parameter takes or the refusal a pattern lookup raises (#1599 layer 5).
+@testset "an unranged formatter is the one it was (#1599 layer 5)" begin
+  M = PormG.Models
+  fs = Any[M.PERIOD_FORMATTERS..., M.format_yyyy_mm, M.format_number_sql, M.format_text_sql, M.format_date_sql,
+           M.format_bool_sql, M.format_uuid_sql, M.format_json_sql, M.format_timezone_sql, M.format_duration_sql,
+           M.format_binary_sql, M.unranged_formatter(M.format_month_sql), getfield(M.ArrayField(M.IntegerField()), :formatter), nothing, 5]
+  for f in fs
+    @test (typeof(f), _REX_QB._unranged(f) === _old_unranged(f)) == (typeof(f), true)
+  end
+end
+
 # What: `_set_update_query_operand_at` against the keyword call it replaces, over right operands, left sides (a column,
 #   an `F` expression) and `left_kind`, on each engine.
 # Expected: the same SQL (or error) and the same parameters bound.

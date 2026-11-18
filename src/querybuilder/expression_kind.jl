@@ -56,13 +56,17 @@ struct CJSONValue <: CanonicalType end
 _json_key_value(field, instruc::SQLInstruction, key) =
   field isa Models.sJSONField && memo_json_lookup(instruc, key)
 
+# #1599 layer 5: `x` is taken unspecialized and asked through `_infer_kind_any`, which names every `_infer_kind` method
+# (the pins file compares the two): its callers hand it a node's untyped slot (a function's column, an operand), and
+# specialized on it the call had no compiled target in a trimmed image (`Extract("date", "month") == 11`).
 """
     _expression_kind(x, instruc) -> Union{CanonicalType, Nothing}
 
 Every type PormG can name for the expression `x`, on `instruc`'s engine, or `nothing` when it names
 none. Read after `x` renders. See the policies above.
 """
-_expression_kind(x, instruc::SQLInstruction)::Union{CanonicalType,Nothing} = _infer_kind(x, instruc, _AllKinds())
+_expression_kind(@nospecialize(x), instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
+  _infer_kind_any(x, instruc, _AllKinds())::Union{CanonicalType,Nothing}   # every `_infer_kind` method answers one
 
 # ── The walk ─────────────────────────────────────────────────────────────────────────────────────────
 function _infer_kind(p::String, instruc::SQLInstruction, policy::_EveryKind)

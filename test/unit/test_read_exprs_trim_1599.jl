@@ -183,3 +183,37 @@ end
   end
 end
 
+# What: `_render_operand_typed_at` (the walk the expression renderers call) against the keyword call it replaces, over
+#   right operands (integer, float, text literal, a field path, an `F` expression, a function, a date, a `Bool`), left
+#   sides (a column, an `F` expression) and `left_kind` (none, an integer, a date), on each engine.
+# Expected: the same SQL and kind (or error) and the same parameters bound.
+# Why: the walk hands the operand to the positional body at its type so a trimmed image can (#1599 layer 5).
+@testset "an expression's right operand renders as before (#1599 layer 5)" begin
+  rights = Any[2000, 2.5, "x", "year", F("year") + 1, Extract("date", "month"), Date(2008, 5, 25), true, Int32(3)]
+  lefts = Any["round", F("round") + 1]
+  kinds = Any[nothing, PormG.Kernel.CInt32(), PormG.Kernel.CDate()]
+  for conn in _REX_CONNS, op in ("+", "-", "*", ">", "="), r in rights, l in lefts, k in kinds
+    tag = (nameof(typeof(conn)), op, typeof(r), typeof(l), typeof(k))
+    ni, oi = _rex_instruc(conn), _rex_instruc(conn)
+    @test (tag, _rex_outcome(() -> _REX_QB._render_operand_typed_at(r, l, op, ni, k))) ==
+          (tag, _rex_outcome(() -> _REX_QB._render_operand_typed(r, l, op, oi; left_kind = k)))
+    @test (tag, _rex_params(ni)) == (tag, _rex_params(oi))
+  end
+end
+
+# What: `_set_update_query_operand_at` against the keyword call it replaces, over right operands, left sides (a column,
+#   an `F` expression) and `left_kind`, on each engine.
+# Expected: the same SQL (or error) and the same parameters bound.
+# Why: the walk hands the operand to the positional body at its type so a trimmed image can (#1599 layer 5).
+@testset "an expression's operand binds as before (#1599 layer 5)" begin
+  rights = Any[19, 2.5, "x", "year", F("year") + 1, Extract("date", "month"), Date(2008, 5, 25), true]
+  for conn in _REX_CONNS, op in ("+", "=", ">", "<<"), r in rights, l in Any["round", F("round") + 1],
+      k in Any[nothing, PormG.Kernel.CInt32()]
+    tag = (nameof(typeof(conn)), op, typeof(r), typeof(l), typeof(k))
+    ni, oi = _rex_instruc(conn), _rex_instruc(conn)
+    @test (tag, _rex_outcome(() -> _REX_QB._set_update_query_operand_at(r, l, op, ni, k))) ==
+          (tag, _rex_outcome(() -> _REX_QB._set_update_query_operand(r, l, op, oi; left_kind = k)))
+    @test (tag, _rex_params(ni)) == (tag, _rex_params(oi))
+  end
+end
+

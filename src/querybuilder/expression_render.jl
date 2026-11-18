@@ -1238,12 +1238,17 @@ _unordered_interval_error(op::String, @nospecialize(conn)) = _interval_error(
 # representation of THAT kind, since the difference reads both sides as the instants they are. On
 # PostgreSQL it carries the cast that names it, because `date - $1` has three candidate operators
 # (`date - date`, `date - integer`, `date - interval`) and an uncast parameter is ambiguous among them.
-function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
-                               left_kind::TemporalKind = nothing)::Tuple{String,_RenderKind}
+_render_operand_typed(operand, field_name, operation::String, instruc::SQLInstruction;
+                      left_kind::TemporalKind = nothing)::Tuple{String,_RenderKind} =
+  _render_operand_typed(operand, field_name, operation, instruc, left_kind)
+# #1599 layer 5: the body is positional (`left_kind` the fifth argument), and the keyword method above forwards to it.
+# The render recurses through itself (an `FExpression` operand renders its own sides), and a keyword call inside that
+# cycle is a kw-sorter a trimmed image cannot compile ("unresolved invoke", the #1693 class).
+function _render_operand_typed(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction,
+                               left_kind::TemporalKind)::Tuple{String,_RenderKind}
   # #985: a comparison's right side, inside an ON clause; arithmetic inherits the side it sits on.
   if operation in _COMPARISON_OPERATIONS && _join_side_change(instruc, :right) !== nothing
-    return _on_join_right(() -> _render_operand_typed(operand, field_name, operation, instruc;
-                                                      left_kind = left_kind), instruc)
+    return _render_operand_on_join(operand, field_name, operation, instruc, left_kind)
   end
   operand isa FExpression && return _render_expr_typed(operand, instruc)
   operand isa FObject && return _render_function_operand_typed(operand, instruc)   # #907
@@ -1260,8 +1265,74 @@ function _render_operand_typed(operand::Any, field_name::Any, operation::String,
                left_kind == CDateTime(false) ? "timestamp" : "timestamptz"
     return add_parameter!(instruc, value_formatter(kind, instruc.connection)(operand); sql_type = sql_type), kind
   end
-  sql = _set_update_query_operand(operand, field_name, operation, instruc; left_kind = left_kind)
+  sql = _set_update_query_operand(operand, field_name, operation, instruc, left_kind)
   return sql, _render_side_kind(operand, instruc; right = true)   # #1034 step 5b: the one side rule
+end
+
+# `_render_operand_typed(operand, field_name, operation, instruc; left_kind)` from a caller that holds the sides untyped
+# (an `FExpression`'s slots, #1599 layer 5). Over the untyped sides, and a keyword whose type is the `TemporalKind`
+# union, the call dispatched at run time, and a trimmed image had no target for it: the read stopped at the keyword
+# call with an `Int64` operand on `F("round") + 2000`. The common case, no temporal left and a column on the left, is
+# the same call at the operand's type (the positional body, so no keyword call sits in the render's recursion);
+# anything else takes it untyped, behind `@noinline`.
+function _render_operand_typed_at(@nospecialize(operand), @nospecialize(field_name), operation::String,
+                                  instruc::SQLInstruction, @nospecialize(left_kind))::Tuple{String,_RenderKind}
+  if left_kind === nothing && field_name isa String
+    fn = field_name::String
+    operand isa Int64 && return _render_operand_typed(operand, fn, operation, instruc, nothing)
+    operand isa Float64 && return _render_operand_typed(operand, fn, operation, instruc, nothing)
+    operand isa String && return _render_operand_typed(operand, fn, operation, instruc, nothing)
+    operand isa FExpression && return _render_operand_typed(operand, fn, operation, instruc, nothing)
+    operand isa FObject && return _render_operand_typed(operand, fn, operation, instruc, nothing)
+  end
+  return _render_operand_typed_other(operand, field_name, operation, instruc, left_kind)
+end
+@noinline _render_operand_typed_other(@nospecialize(operand), @nospecialize(field_name), operation::String,
+                                      instruc::SQLInstruction, @nospecialize(left_kind))::Tuple{String,_RenderKind} =
+  _render_operand_typed(operand, field_name, operation, instruc, left_kind)
+
+# `_set_update_query_operand(operand, field_name, operation, instruc; left_kind)` from a caller that holds the sides
+# untyped, as `_render_operand_typed_at` is for the typed render (#1599 layer 5): the trimmed read stopped at the keyword
+# call with an `Int64` operand and an `FExpression` left on `F("round") + 1 == 19`. The common case, no temporal left
+# and a column, an expression or a function on the left (`Extract("date", "month") == 11`), is the positional body at
+# the operand's type; anything else takes it untyped, behind `@noinline`.
+function _set_update_query_operand_at(@nospecialize(operand), @nospecialize(field_name), operation::String,
+                                      instruc::SQLInstruction, @nospecialize(left_kind))
+  if left_kind === nothing && field_name isa Union{String,FExpression,FObject}
+    field_name isa String && return _set_update_query_operand_typed_left(operand, field_name::String, operation, instruc)
+    field_name isa FObject && return _set_update_query_operand_typed_left(operand, field_name::FObject, operation, instruc)
+    return _set_update_query_operand_typed_left(operand, field_name::FExpression, operation, instruc)
+  end
+  return _set_update_query_operand_other(operand, field_name, operation, instruc, left_kind)
+end
+function _set_update_query_operand_typed_left(@nospecialize(operand), field_name::Union{String,FExpression,FObject},
+                                              operation::String, instruc::SQLInstruction)
+  operand isa Int64 && return _set_update_query_operand(operand, field_name, operation, instruc, nothing)
+  operand isa Float64 && return _set_update_query_operand(operand, field_name, operation, instruc, nothing)
+  operand isa String && return _set_update_query_operand(operand, field_name, operation, instruc, nothing)
+  operand isa FExpression && return _set_update_query_operand(operand, field_name, operation, instruc, nothing)
+  operand isa FObject && return _set_update_query_operand(operand, field_name, operation, instruc, nothing)
+  return _set_update_query_operand_other(operand, field_name, operation, instruc, nothing)
+end
+@noinline _set_update_query_operand_other(@nospecialize(operand), @nospecialize(field_name), operation::String,
+                                          instruc::SQLInstruction, @nospecialize(left_kind)) =
+  _set_update_query_operand(operand, field_name, operation, instruc, left_kind)
+
+# The right side of a comparison inside an ON clause (#985): the same render again, under the join's right side. Behind
+# a barrier that calls `_on_join_right` dynamically (#1599 layer 5): a static call nests `_with_render_scope` inside the
+# one a column right side already opened (`_column_rhs_sql`), re-entered with another closure type, and a trimmed image
+# cannot compile a frame in that recursion (the read stopped at `_render_operand_typed(::Int64, …)`, an "unresolved
+# invoke", the #1711 class). Under the JIT the call is the same; a trimmed binary does not run it (no ON clause on its
+# path).
+@noinline function _render_operand_on_join(@nospecialize(operand), @nospecialize(field_name), operation::String,
+                                           instruc::SQLInstruction, @nospecialize(left_kind))::Tuple{String,_RenderKind}
+  return Base.inferencebarrier(_on_join_right)(() -> _render_operand_typed(operand, field_name, operation, instruc, left_kind),
+                                               instruc)::Tuple{String,_RenderKind}
+end
+@noinline function _set_update_query_operand_on_join(@nospecialize(operand), @nospecialize(field_name), operation::String,
+                                                     instruc::SQLInstruction, @nospecialize(left_kind))
+  return Base.inferencebarrier(_on_join_right)(() -> _set_update_query_operand(operand, field_name, operation, instruc, left_kind),
+                                               instruc)
 end
 
 # #1549 — the PostgreSQL cast of a date or timestamp literal on the LEFT, the mirror of the right-hand
@@ -1382,7 +1453,7 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
 
   if op isa String && op in _COMPARISON_OPERATIONS
     if expr_right
-      right_side, right_kind = _render_operand_typed(rhs, lhs, op, instruc; left_kind = bind_kind)
+      right_side, right_kind = _render_operand_typed_at(rhs, lhs, op, instruc, bind_kind)
       _is_interval_kind(right_kind) || _refuse_interval_against_number(op, instruc)
       if sqlite && (left_kind isa _IntervalMs || right_kind isa _IntervalMs)
         lms = _interval_ms_sql(left_side, lhs, left_kind, instruc)
@@ -1457,11 +1528,11 @@ function _render_interval_left(v::FExpression, left_side::String, left_kind::_Re
       _interval_ms_sql(left_side, lhs, left_kind, instruc) === nothing &&
       _duration_value_units(rhs, instruc.connection) !== nothing &&
       throw(_unordered_interval_error(op, instruc.connection))
-    return "($(left_side) $(op) $(_set_update_query_operand(rhs, lhs, op, instruc; left_kind = bind_kind)))", nothing
+    return "($(left_side) $(op) $(_set_update_query_operand_at(rhs, lhs, op, instruc, bind_kind)))", nothing
   end
 
   if op isa String && op in _ARITHMETIC_OPERATIONS
-    right_side, right_kind = _render_operand_typed(rhs, lhs, op, instruc; left_kind = bind_kind)
+    right_side, right_kind = _render_operand_typed_at(rhs, lhs, op, instruc, bind_kind)
     # #1553: a duration literal on the left takes an interval under `-` and a number under `/` (`+` and
     # `*` commute and never put one here). Everything else is refused on EVERY engine: PostgreSQL would
     # render `interval - integer` or `interval / interval`, which fail when the statement runs. A date
@@ -1660,12 +1731,16 @@ _date_part_formatter(::Any, ::SQLInstruction) = nothing
 
 # `left_kind` (#564): the kind the LEFT side evaluates to, when the caller has it. Only the temporal
 # literal arm reads it — the `xor` call sites legitimately have no temporal left and pass nothing.
-function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction;
-                                   left_kind::TemporalKind = nothing)
+_set_update_query_operand(operand, field_name, operation::String, instruc::SQLInstruction;
+                          left_kind::TemporalKind = nothing) =
+  _set_update_query_operand(operand, field_name, operation, instruc, left_kind)
+# #1599 layer 5: positional, as `_render_operand_typed`'s body is and for its reason: it is called inside that render's
+# recursion, where a keyword call is a kw-sorter a trimmed image cannot compile.
+function _set_update_query_operand(operand::Any, field_name::Any, operation::String, instruc::SQLInstruction,
+                                   left_kind::TemporalKind)
   # #985: the same right side as `_render_operand_typed`, for the operands that bind or render plainly.
   if operation in _COMPARISON_OPERATIONS && _join_side_change(instruc, :right) !== nothing
-    return _on_join_right(() -> _set_update_query_operand(operand, field_name, operation, instruc;
-                                                          left_kind = left_kind), instruc)
+    return _set_update_query_operand_on_join(operand, field_name, operation, instruc, left_kind)
   end
   if isa(operand, FExpression)
     return _set_update_query(operand, instruc)
@@ -2122,7 +2197,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # Bitwise, never temporal. Each engine's own spelling (`_xor_sql`), which may name a side twice, so
     # the sides render on each call.
     sides = () -> (_set_update_query_left(lhs, v.operation, instruc),
-                   _set_update_query_operand(rhs, lhs, v.operation, instruc))
+                   _set_update_query_operand_at(rhs, lhs, v.operation, instruc, nothing))
     sql = _xor_sql(instruc.connection, sides)
     # #1581: an interval on either side has no bits; asked once the sides have rendered.
     _refuse_bitwise_interval("xor", lhs, instruc)
@@ -2200,8 +2275,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
                               "arithmetic is text, not a date. Pass a date instead — " *
                               "F(\"date\") - Date(2009, 3, 1) — or a field name, F(\"date\") - \"dob\"."))
       end
-      right_side, right_kind = _render_operand_typed(rhs, lhs, v.operation, instruc;
-                                                     left_kind = left_kind)
+      right_side, right_kind = _render_operand_typed_at(rhs, lhs, v.operation, instruc, left_kind)
       # #1549: a literal on the left takes its PostgreSQL cast now that the right is typed.
       lhs isa _TemporalLiteral && (left_side = _cast_temporal_left(left_side, left_kind, right_kind, instruc))
       # #882: an integer column on the right is a day count, typed once it has rendered.
@@ -2250,8 +2324,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
     # non-temporal right binds exactly as it did.
     count_kind = v.operation in ("+", "-") ? _day_count_column_kind(lhs, left_kind, instruc) : left_kind
     if count_kind isa Union{CInt32,CInt64} && v.operation in ("+", "-")
-      right_side, right_kind = _render_operand_typed(rhs, lhs, v.operation, instruc;
-                                                     left_kind = left_kind)
+      right_side, right_kind = _render_operand_typed_at(rhs, lhs, v.operation, instruc, left_kind)
       # #881: no meaning on any engine. #1572: PostgreSQL too, which has no `integer ± interval` and
       # failed when the statement ran.
       _is_interval_kind(right_kind) &&
@@ -2286,7 +2359,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
       # #907: a function on the right is typed too (`F("points") * Sum("time")`), as it is on the left;
       # #1465: a window function too (`F("grid") * Lag("fastestlaptime", over = …)`).
       if _typed_right_operand(rhs, instruc)
-        right_side, right_kind = _render_operand_typed(rhs, lhs, v.operation, instruc)
+        right_side, right_kind = _render_operand_typed_at(rhs, lhs, v.operation, instruc, nothing)
         # #881: an interval on the right (`F("points") * d`, `F("points") > d`).
         _is_interval_kind(right_kind) &&
           return _render_interval_right(v, left_side, left_kind, right_side, right_kind, instruc)
@@ -2310,7 +2383,7 @@ function _render_expr_node_sql(v::FExpression, instruc::SQLInstruction)::Tuple{S
 
     # #564: the left's kind travels to the binder, so the representation the literal binds and the
     # one the wrapper renders come from the same value rather than from two resolvers that agree.
-    right_side = _set_update_query_operand(rhs, lhs, v.operation, instruc; left_kind = left_kind)
+    right_side = _set_update_query_operand_at(rhs, lhs, v.operation, instruc, left_kind)
     # #1130: a `Subquery` is typed only once it has rendered; where an interval is its integer (MySQL),
     # one holding an interval compared with this left, which is none, is refused. (A `CTE(...)` handle
     # is a typed right side since #1581, so it never reaches here under a comparison on MySQL, nor under

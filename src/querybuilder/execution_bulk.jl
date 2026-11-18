@@ -1148,8 +1148,34 @@ function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
 
   isempty(dynamic_filters) && return nothing
 
+  # #1599 layer 7, #1694: one match column of integers or of text, the key a `bulk_update` by id or by a code has, is
+  # checked by its values themselves: a one-element tuple and its element are equal and hash alike, so the same rows
+  # are duplicates, and the first duplicate is reported by the same two rows. The tuple of a run-time length, its hash
+  # and the comprehension of untyped columns were calls a trimmed image has no code for (`_array_for_inner`). Any other
+  # key (several columns, another type) is checked as before.
+  key_columns = AbstractVector[_bulk_column(df, mapping[field]) for field in dynamic_filters]
+  if length(key_columns) == 1
+    only_column = key_columns[1]
+    only_column isa Vector{Int64} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
+    only_column isa Vector{String} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
+  end
+  return _ensure_unique_bulk_update_keys_other(df, key_columns, dynamic_filters)
+end
+function _ensure_unique_bulk_update_key(column::Vector{T}, row_count::Int, dynamic_filters::Vector{String}) where {T}
+  seen_keys = Dict{T, Int}()
+  for index in 1:row_count
+    key = column[index]
+    if haskey(seen_keys, key)
+      filters_text = join(dynamic_filters, ", ")
+      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))
+    end
+    seen_keys[key] = index
+  end
+  return nothing
+end
+@noinline function _ensure_unique_bulk_update_keys_other(df::_BulkFrame, key_columns::Vector{AbstractVector},
+                                                         dynamic_filters::Vector{String})
   seen_keys = Dict{Tuple, Int}()
-  key_columns = [_bulk_column(df, mapping[field]) for field in dynamic_filters]
   for index in 1:df.row_count
     key = Tuple(column[index] for column in key_columns)
     if haskey(seen_keys, key)
@@ -1159,7 +1185,6 @@ function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
     end
     seen_keys[key] = index
   end
-
   return nothing
 end
 

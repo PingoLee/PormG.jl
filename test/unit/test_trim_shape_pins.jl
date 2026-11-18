@@ -6195,6 +6195,27 @@ end
     @test _dynamic_calls(QB._copy_insert, (OD,)) == String[]
   end
 
+  # What: `bulk_update`'s pipeline after its frame (`_bulk_update_frame`), at the types the call hands it, and the
+  #   duplicate-key check (`_ensure_unique_bulk_update_keys!`).
+  # Expected: no dynamic call in either; and in the frame pipeline's callees, two levels down, no untyped
+  #   comprehension, no `push!` on a boxed vector and no untyped total. (What stays dynamic there is off the fixture's
+  #   path: a static `filters=` pair and the dry-run `show_query` arm.)
+  # Why: over an unspecialized source the frame call, then the chunk loop's open closure type (abstract comprehensions,
+  #   a boxed `columns`/`rows`, a captured three-way collector), then the tuple keys were walls one after another in the
+  #   trimmed `bulk_update` (#1599 layer 7, #1694).
+  @testset "bulk_update's frame pipeline and key check make their calls statically (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    tt = (QB.ObjectHandler, PormG.Models.ModelType, PormG.Configuration.Settings, PormG.ConnectionPool.SQLiteConnectionPool,
+          QB._BulkFrame, Vector{Union{String, Pair{String, String}}}, Vector{String},
+          Vector{Union{String, Pair{String, <:Any}}}, Symbol, Int)
+    @test _dynamic_calls(QB._bulk_update_frame, tt) == String[]
+    deep = _dynamic_calls_deep(QB._bulk_update_frame, tt; depth = 2, skip = (Base.deepcopy_internal,))
+    @test !any(s -> !occursin("_bulk_result_other", s) &&   # the designed open arm of `_bulk_result_at`
+                    occursin(r"_array_for|collect_to|Base\.push!|_bulk_result\(|run_in_transaction|_fork_parameters", s), deep)
+    @test _dynamic_calls(QB._fork_parameters, (QB.PgParameterizedQuery,)) == String[]
+    @test _dynamic_calls(QB._ensure_unique_bulk_update_keys!, (QB._BulkFrame, Dict{String,String}, Vector{String})) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

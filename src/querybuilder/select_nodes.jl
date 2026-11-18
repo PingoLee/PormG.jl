@@ -384,7 +384,11 @@ end
 # Type-checked before any `==`: that slot also takes a column expression, and `==` on an
 # `FExpression` or `JoinedReference` builds a predicate node, not a `Bool` (#541) — `val == "NULL"`
 # on `then = F("points")` raised `TypeError: non-boolean (FExpression)` before any SQL existed.
-_is_null_literal(x) = x isa Missing || x === nothing || (x isa AbstractString && x == "NULL")
+# #1599 layer 5: the value unspecialized (its callers hold a node's untyped slot: a `Case` branch, an operand), the
+# text compared at `String` first; specialized on the value, the call had no compiled target in a trimmed image
+# (`_is_null_literal(::Int64)` on a `Case` value). The same answer for every value.
+_is_null_literal(@nospecialize(x)) = x isa Missing || x === nothing ||
+                                     (x isa String ? x == "NULL" : (x isa AbstractString && x == "NULL"))
 
 function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{Nothing,String}=nothing)
   if _is_null_literal(value)

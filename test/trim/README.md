@@ -16,7 +16,9 @@ comparisons against an expression: an `F` with arithmetic on each side, `Extract
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
 each checked by a typed read after it, then a `bulk_insert` of two races from a `Vector` of
 `NamedTuple`s, read back typed, and last a `bulk_insert` whose second row validation refuses (a date that is
-not a calendar date), which prints the refusal's type and message and checks that no row was written. Each step prints one line. The read-only entry, `read.jl`, runs
+not a calendar date), which prints the refusal's type and message and checks that no row was written, then a
+`bulk_update` of two bulk-inserted races matched on `raceid` and an `update_or_create` that inserts one explicit id
+and then updates it, each read back typed and undone (#1694). Each step prints one line. The read-only entry, `read.jl`, runs
 the same boot, read and read steps without the writes; the steps both entries share are in `steps.jl`, and the
 ones the server variants share too are in `tools/reads.jl` and `tools/writes.jl`.
 
@@ -24,7 +26,8 @@ Not a test the unit suite runs: it needs Julia 1.13 and JuliaC. The full entry's
 (#1694): it prints both refusals, fills the three automatic values, runs its `INSERT` and reads the row
 back on the SQLite worker, and its typed read then returns both rows, the one it wrote included; its
 `update` sets that row's `round` and its `delete` removes it, each shown by the read after it; its
-`bulk_insert` writes two rows, the three auto-filled fields included, and the typed read sees both. It
+`bulk_insert` writes two rows, the three auto-filled fields included, and the typed read sees both; its
+`bulk_update` sets both rows' `round` and its `update_or_create` reports an insert and then an update. It
 prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788), and the
 rows its comparison filters, its `order_by`, its other lookups and its expression comparisons pick out, in order. The
 `Trim (juliac)` workflow checks that both binaries still do (see "The read-only entry and its CI job"
@@ -118,7 +121,9 @@ other lookups, 14 an expression comparison, each when it raises or does not retu
 PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
-refused with an `InvalidValueError` or writes a row).
+refused with an `InvalidValueError` or writes a row, 15 when its `bulk_update` and 16 when its `update_or_create`
+raises or the read after it does not show the change). `get_or_create` has no step: on a hit it reads its row through
+the untyped `first()`, whose rows a trimmed image cannot read.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -192,12 +197,14 @@ step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
 step	bulk_refused	InvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).
 step	bulk_refused	0 rows written; 1 Monaco races
+step	bulk_update	2 rows; rounds 7, 8
+step	update_or_create	first created true; second created false; round 7
 ```
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
-filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 124
-timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
+`bulk_update`, 16 `update_or_create`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -289,6 +296,8 @@ step	row	3 2009 Monaco Grand Prix 2009-05-24
 step	update	1 rows; round 7
 step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
+step	bulk_update	2 rows; rounds 7, 8
+step	update_or_create	first created true; second created false; round 7
 ```
 
 The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables

@@ -142,8 +142,7 @@ function (@main)(args::Vector{String})::Cint
     bulk_step(circuitid) || return Cint(9)
     # The upsert-shaped writes, each read back typed and undone (#1694, `../tools/writes.jl`).
     bulk_update_step(circuitid) || return Cint(15)
-    get_or_create_step(circuitid) || return Cint(16)
-    update_or_create_step(circuitid) || return Cint(17)
+    update_or_create_step(circuitid) || return Cint(16)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
     fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.PostgresConnectionPool{:postgres}) || return Cint(6)

@@ -237,7 +237,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
@@ -255,6 +255,10 @@ jobs:
             # MethodError the row loop's error pass raised in a trimmed binary (#1694), and no row written.
             'step\tbulk_refused\tInvalidValueError: Error in bulk_insert, row 2 for model race, field `date`: The date is invalid: it is not a calendar date in the format YYYY-MM-DD (from column date).'
             'step\tbulk_refused\t0 rows written; 1 Monaco races'
+            # The upsert-shaped writes (#1694): bulk_update of the two bulk-inserted races, then update_or_create's insert
+            # and update of one explicit id, each read back typed and undone (test/trim/tools/writes.jl).
+            'step\tbulk_update\t2 rows; rounds 7, 8'
+            'step\tupdate_or_create\tfirst created true; second created false; round 7'
           )
           missing=0
           for line in "${expected[@]}"; do
@@ -374,7 +378,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -391,7 +395,7 @@ jobs:
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete, then a bulk_insert of two rows read back (#1694). The written row's id
           # is not checked: the JIT control used one.
-          for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left' 'step\tbulk\t2 rows; 2 read back'; do
+          for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left' 'step\tbulk\t2 rows; 2 read back' 'step\tbulk_update\t2 rows; rounds 7, 8' 'step\tupdate_or_create\tfirst created true; second created false; round 7'; do
             if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
               echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing: $line"
               exit 1
@@ -513,7 +517,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -530,7 +534,7 @@ jobs:
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete, then a bulk_insert of two rows read back (#1694). The written row's id
           # is not checked: the JIT control used one.
-          for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left' 'step\tbulk\t2 rows; 2 read back'; do
+          for line in 'step\twrite\tok' 'step\tquery\t2 rows' 'step\tupdate\t1 rows; round 7' 'step\tdelete\t1 rows; 1 left' 'step\tbulk\t2 rows; 2 read back' 'step\tbulk_update\t2 rows; rounds 7, 8' 'step\tupdate_or_create\tfirst created true; second created false; round 7'; do
             if ! grep -qxF "$(printf '%b' "$line")" build/run.txt; then
               echo "::error::the trimmed $TRIM_VARIANT binary exited 0 without printing: $line"
               exit 1

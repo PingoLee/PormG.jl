@@ -35,6 +35,14 @@ else is untested in a trimmed binary, even where it compiles.
   have no code for; so does a pattern lookup over a column of a kind other than text, an integer, a date, a
   timestamp or a UUID.
 
+  A comparison against an expression has run on the three drivers too: an `F` with arithmetic on either side
+  (`"year__@gt" => F("round") + 2000`, `filter(F("round") + 1 == 19)`), a date part (`Extract("date", "month") ==
+  11`, `"date__@year" => 2008`) and a `Case`/`When` on either side (`"round__@gte" => Case(When("name" => …, then = 6),
+  default = 100)`, `filter(Case(When("round__@lt" => 10, then = 1), default = 0) == 1)`). Inside them, the shapes
+  those spellings build run at their types; a nested function, a `Case` with an `output_field`, a number function
+  (`Sum`, `Round`, …), an `OuterRef`, and an expression on the right of a comparison inside a join's `on(...)` keep a
+  call a trimmed binary may have no code for.
+
   The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
   nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)
   are built to run trimmed, but no trimmed binary has run them yet.

@@ -332,3 +332,124 @@ end
   end
 end
 
+# ── The old forms of the later walls, copied from the code before this slice ─────────────────────────────────────
+_old_is_null_literal(x) = x isa Missing || x === nothing || (x isa AbstractString && x == "NULL")
+_old_temporal_hint(::PormG.Kernel.CDate) = :date
+_old_temporal_hint(::PormG.Kernel.CDateTime) = :datetime
+_old_temporal_hint(::PormG.Kernel.CTime) = :time
+_old_temporal_hint(::PormG.Kernel.CInterval) = :interval
+_old_temporal_hint(::Any) = nothing
+function _old_case_kind(p, instruc, policy)
+  values = Any[]
+  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
+    (branch isa _REX_QB.SQLTypeFunction && branch.function_name == "WHEN") || return nothing
+    push!(values, get(branch.kwargs, "then", nothing))
+  end
+  push!(values, get(p.kwargs, "else", nothing))
+  kind = nothing
+  for value in values
+    literal = value isa _REX_QB.SQLText ? value.field : value
+    _old_is_null_literal(literal) && continue
+    k = value isa Union{PormG.Kernel.SQLObject,PormG.Kernel.SQLType} && !(value isa _REX_QB.SQLText) ?
+        _REX_QB._infer_kind(value, instruc, policy) : _REX_QB._literal_kind(literal, policy)
+    k === nothing && return nothing
+    kind = kind === nothing ? k : _REX_QB._unify_kinds(kind, k, policy)
+    kind === nothing && return nothing
+  end
+  return kind
+end
+function _old_agreeing_kind(p, instruc, policy)
+  kind = nothing
+  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+    _old_is_null_literal(operand isa _REX_QB.SQLText ? operand.field : operand) && continue
+    k = _REX_QB._infer_kind(operand, instruc, policy)
+    k === nothing && return nothing
+    kind = kind === nothing ? k : _REX_QB._unify_kinds(kind, k, policy)
+    kind === nothing && return nothing
+  end
+  return kind
+end
+function _old_case_values(p)
+  values = Any[]
+  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
+    branch isa _REX_QB.SQLTypeFunction && branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+  end
+  push!(values, get(p.kwargs, "else", nothing))
+  return Any[v isa Union{PormG.Kernel.SQLObject,PormG.Kernel.SQLType} ? v : _REX_QB.SQLText(v) for v in values
+             if !_old_is_null_literal(v isa _REX_QB.SQLText ? v.field : v)]
+end
+function _old_in_pair(e, pair::AbstractString)
+  e isa PormG.PormGError && fieldnames(typeof(e)) == (:msg,) || return nothing
+  return typeof(e)(string(e.msg, " — in ", pair))
+end
+_rex_show(x) = x === nothing ? "nothing" : sprint(show, x)
+
+# What: the later walls' typed forms against the old forms or the calls they replace: a node's part (`_extract_part_at`)
+#   and keyword comparison (`_kwarg_is`), a null literal, a temporal hint, the pair error (`_in_pair`), a `Case`'s kind,
+#   values and agreeing kind, the build-time column walk (`_check_operands_at`, compared by what it renders), an
+#   expression's kind (`_expression_kind` against `_infer_kind`), and the kind formatter (`_kind_formatter_at`), over the
+#   values each meets and ones that take its open arm.
+# Expected: the same answer (`isequal`), or the same error type and text.
+# Why: each is one call a trimmed image can make in place of a run-time dispatch; under the JIT it must be invisible
+#   (#1599 layer 5).
+@testset "the later walls' typed forms answer as before (#1599 layer 5)" begin
+  K = PormG.Kernel
+  for p in Any["month", "MONTH", "year", SubString("hour!", 1, 4), "years", 5]
+    @test (p, _rex_outcome(() -> _REX_QB._extract_part_at(p))) == (p, _rex_outcome(() -> PormG.Dialect.extract_part(p)))
+  end
+  for v in Any["YYYY-MM", "YEAR", SubString("YEAR", 1), nothing, 5, missing, "year"], key in ("part", "format")
+    d = Dict{String,Any}(key => v)
+    @test isequal((v, _REX_QB._kwarg_is(d, key, "YEAR")), (v, get(d, key, nothing) == "YEAR"))
+    @test isequal((v, _REX_QB._kwarg_is(d, "other", "YEAR")), (v, get(d, "other", nothing) == "YEAR"))
+  end
+  for x in Any["NULL", SubString("NULL", 1), "null", nothing, missing, 0, :NULL, _REX_QB.SQLText("NULL")]
+    @test (typeof(x), _REX_QB._is_null_literal(x)) == (typeof(x), _old_is_null_literal(x))
+  end
+  for k in Any[K.CDate(), K.CDateTime(true), K.CTime(), K.CInterval(), K.CInt32(), nothing, 1]
+    @test (typeof(k), _REX_QB._temporal_hint(k)) == (typeof(k), _old_temporal_hint(k))
+  end
+  for e in Any[PormG.FilterError("bad"), PormG.InvalidValueError("bad value"), MethodError(sum, (1,)), ErrorException("x")]
+    @test (typeof(e), _rex_outcome(() -> _rex_show(_REX_QB._in_pair(e, "the pair")))) ==
+          (typeof(e), _rex_outcome(() -> _rex_show(_old_in_pair(e, "the pair"))))
+  end
+  cases = Any[Case(When("round__@lt" => 10, then = 1), default = 0), Case([When("round__@lt" => 10, then = 1),
+              When("name" => "x", then = 2)], default = 100), Case(When("round__@lt" => 10, then = 1.5), default = 0),
+              Case(When("round__@lt" => 10, then = "a"), default = "b"), Case(When("round__@lt" => 10, then = F("year")), default = 0),
+              Case(When("round__@lt" => 10, then = 1), default = nothing), Coalesce("score", 0), Coalesce("round", "year")]
+  for conn in _REX_CONNS
+    instruc = _rex_instruc(conn)
+    for c in cases, P in (_REX_QB._AllKinds(), _REX_QB._MeaningKinds())
+      tag = (nameof(typeof(conn)), c.function_name, typeof(P))
+      c.function_name == "CASE" &&
+        @test isequal((tag, _rex_outcome(() -> _REX_QB._case_kind(c, instruc, P))), (tag, _rex_outcome(() -> _old_case_kind(c, instruc, P))))
+      @test isequal((tag, _rex_outcome(() -> _REX_QB._agreeing_kind(c, instruc, P))),
+                    (tag, _rex_outcome(() -> _old_agreeing_kind(c, instruc, P))))
+    end
+    for c in cases
+      c.function_name == "CASE" || continue
+      @test isequal(_rex_show(_REX_QB._case_values(c)), _rex_show(_old_case_values(c)))
+    end
+    for x in Any["round", "date", F("round") + 1, Extract("date", "month"), cases[1], _REX_QB.SQLText(5), 5, nothing]
+      tag = (nameof(typeof(conn)), typeof(x))
+      @test isequal((tag, _REX_QB._expression_kind(x, instruc)), (tag, _REX_QB._infer_kind(x, instruc, _REX_QB._AllKinds())))
+      k = _REX_QB._infer_kind(x, instruc, _REX_QB._AllKinds())
+      @test (tag, _rex_outcome(() -> _REX_QB._kind_formatter_at(k, instruc))) == (tag, _rex_outcome(() -> _REX_QB._kind_formatter(k, instruc)))
+    end
+  end
+  # The build-time column walk: the same node, compared by what the built query renders.
+  for q in (() -> _REX_RACE.objects.filter("date__@year" => 2008), () -> _REX_RACE.objects.filter("date__@year__@range" => [2007, 2009]),
+            () -> _REX_RACE.objects.filter("round__@gte" => Case(When("name" => "x", then = 6), default = 100)),
+            () -> _REX_RACE.objects.filter(Case(When("round__@lt" => 10, then = 1), default = 0) == 1),
+            () -> _REX_RACE.objects.values("raceid", "c" => Coalesce("score", 0)))
+    for conn in _REX_CONNS
+      PormG.config["rex_mock"].connections = conn
+      d = q().list(show_query = :dict)
+      @test occursin("SELECT", d[:sql_text])
+    end
+  end
+  PormG.config["rex_mock"].connections = RexMockSQLite()
+  for c in Any["round", ["a", "b"], Any["a", 2], F("round") + 1, Extract("date", "month"), _REX_QB.SQLField("round"), 5]
+    @test (typeof(c), _rex_outcome(() -> _rex_show(_REX_QB._check_operands_at(c)))) ==
+          (typeof(c), _rex_outcome(() -> _rex_show(_REX_QB._check_function(_REX_QB._fresh_operands(c)))))
+  end
+end

@@ -390,7 +390,7 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
     end
     return nothing
   end
-  formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
+  formatter = _kind_formatter_at(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   return name in ("SUM", "AVG") ? Models.format_number_sql : nothing   # an operand the walk cannot type
 end
@@ -399,7 +399,7 @@ end
 # comparison is a boolean, which the walk names.
 function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _expression_formatter(p.column, instruc)
-  formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
+  formatter = _kind_formatter_at(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
   # formatter. See `_unranged`. Only what the walk does not type reaches here (a JSON key lookup).

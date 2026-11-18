@@ -6038,6 +6038,35 @@ end
     @test all(s -> occursin("\"YYYY-MM\"", s), _dynamic_calls(QB._temporal_row_of, (QB.FObject,)))
   end
 
+  # What: an expression's kind (`_expression_kind`), and the readers that took `_infer_kind` on an untyped value: they
+  #   call the walk (`_infer_kind_any`) now; and the kind classifiers asked of an abstract kind (`_temporal_hint`,
+  #   `_temporal_mix_class`, `_kind_formatter_at`).
+  # Expected: `_expression_kind` is one unspecialized method with no dynamic call; no `_infer_kind(` call outside its
+  #   methods and the walk but the one open arm (`_agreeing_kind_other`), by source; the classifiers make none.
+  # Why: a function's untyped column and an abstract `CanonicalType` reached them from every function render:
+  #   `_expression_kind(::String, …)`, `_temporal_hint(::CDate)`, `_infer_kind(::SQLText, …)`,
+  #   `_temporal_mix_class(::CInt64)` and `_kind_formatter(::CInt64, …)` each stopped the trimmed read (#1599 layer 5).
+  @testset "an expression's kind is read through the walks (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    m = only(methods(QB._expression_kind))
+    @test m.nospecialize & 0b1 == 0b1
+    @test _dynamic_calls(QB._expression_kind, (Any, QB.InstructionObject)) == String[]
+    for (f, tt) in ((QB._temporal_hint, (Any,)), (QB._temporal_mix_class, (Any,)), (QB._kind_formatter_at, (Any, QB.InstructionObject)))
+      @test (nameof(f), _dynamic_calls(f, tt)) == (nameof(f), String[])
+    end
+    @test length(methods(QB._temporal_hint)) == 1 && length(methods(QB._temporal_mix_class)) == 1
+    direct = String[]
+    for f in readdir(joinpath(pkgdir(PormG), "src", "querybuilder"); join = true)
+      for (i, line) in enumerate(eachline(f))
+        occursin(r"(?<![A-Za-z_])_infer_kind\(", line) || continue
+        occursin(r"_infer_kind\((p|x)?::|function _infer_kind|x isa .* && return _infer_kind\(x", line) && continue
+        occursin(r"^\s*#", line) && continue
+        push!(direct, string(basename(f), ":", i))
+      end
+    end
+    @test length(direct) == 1 && startswith(only(direct), "expression_kind.jl")
+  end
+
   # What: a function's render: its column handed to the renderer ladder (`_function_sql`), its options read
   #   (`Dialect.FnOptions`), its rules by name (`_result_rule_by_name`, `_operand_domain_by_name`), its column rendered
   #   (`_get_select_query_at`), and a `Case`'s branches (`_render_case_branches_at`).

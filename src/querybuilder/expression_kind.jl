@@ -559,6 +559,30 @@ _kind_formatter(::CArray, ::SQLInstruction) = nothing
 _kind_formatter(k::CanonicalType, instruc::SQLInstruction) =
   instruc.connection === nothing ? nothing : value_formatter(k, instruc.connection)
 _kind_formatter(::Nothing, ::SQLInstruction) = nothing
+# `_kind_formatter(k, instruc)` for a kind typed by the abstract `CanonicalType` (what `_expression_kind` answers), at
+# the kind's concrete type (#1599 layer 5): over the abstract kind the call dispatched at run time, and a trimmed image
+# had no target for it (`Case(When(…), default = 0) == 1`). One arm per kind; anything else takes the old call behind
+# `@noinline`, so its answer, or its `MethodError`, is the one `_kind_formatter` gives.
+@noinline function _kind_formatter_at(@nospecialize(k), instruc::SQLInstruction)
+  k === nothing && return _kind_formatter(k, instruc)
+  k isa CBool && return _kind_formatter(k, instruc)
+  k isa CInt16 && return _kind_formatter(k, instruc)
+  k isa CInt32 && return _kind_formatter(k, instruc)
+  k isa CInt64 && return _kind_formatter(k, instruc)
+  k isa CFloat64 && return _kind_formatter(k, instruc)
+  k isa CText && return _kind_formatter(k, instruc)
+  k isa CVarChar && return _kind_formatter(k, instruc)
+  k isa CArray && return _kind_formatter(k, instruc)
+  k isa CDecimal && return _kind_formatter(k, instruc)
+  k isa CDate && return _kind_formatter(k, instruc)
+  k isa CDateTime && return _kind_formatter(k, instruc)
+  k isa CTime && return _kind_formatter(k, instruc)
+  k isa CInterval && return _kind_formatter(k, instruc)
+  k isa CUUID && return _kind_formatter(k, instruc)
+  k isa CJSON && return _kind_formatter(k, instruc)
+  return _kind_formatter_other(k, instruc)
+end
+@noinline _kind_formatter_other(@nospecialize(k), instruc::SQLInstruction) = _kind_formatter(k, instruc)
 # The family a field and a kind agree on: every integer width is one, and so is every text, every
 # decimal width and both timestamps; any other kind is its own.
 _kind_family(::Union{CInt16,CInt32,CInt64}) = CInt64

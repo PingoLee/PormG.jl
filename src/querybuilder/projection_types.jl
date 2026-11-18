@@ -580,11 +580,34 @@ end
 # A raw value is a literal — a string too, not a path (`_case_kind`) — so it is wrapped as one.
 function _case_values(p::FObject)
   values = Any[]
-  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
-    branch isa SQLTypeFunction && branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+  # #1599 layer 5: the branches at the column's concrete type (a `Case` holds a `Vector{FObject}` or one `FObject`);
+  # over the untyped column the iteration dispatched at run time. Any other column takes the old loop.
+  col = p.column
+  if col isa Vector{FObject}
+    for branch in col
+      branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+    end
+  elseif col isa FObject
+    col.function_name == "WHEN" && push!(values, get(col.kwargs, "then", nothing))
+  else
+    _case_values_other!(values, col)
   end
   push!(values, get(p.kwargs, "else", nothing))
-  return Any[v isa Union{SQLObject,SQLType} ? v : SQLText(v) for v in values if !_is_null_literal(v isa SQLText ? v.field : v)]
+  # #1599 layer 5: a loop, not a comprehension: the comprehension's closures were called on each untyped value, a run-time
+  # dispatch a trimmed image had no target for (`Case(When(…, then = 6), default = 100)`). The same vector, in order.
+  out = Any[]
+  for v in values
+    _is_null_literal(v isa SQLText ? v.field : v) && continue
+    push!(out, v isa Union{SQLObject,SQLType} ? v : SQLText(v))
+  end
+  return out
+end
+
+@noinline function _case_values_other!(values::Vector{Any}, @nospecialize(column))
+  for branch in (column isa AbstractVector ? column : (column,))
+    branch isa SQLTypeFunction && branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+  end
+  return values
 end
 
 # #1200 — a value that is one of several operands' (`Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case`

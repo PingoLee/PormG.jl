@@ -730,10 +730,38 @@ end
 # would run text through a date parser (`Coalesce("note", Date(…))`). A NULL literal is skipped: it is
 # never the value. A declared `output_field` never reaches here: `_infer_function_kind` answers it
 # first, as the cast it renders (#852).
+#
+# #1599 layer 5: the operands read at the column's concrete type and each kind through `_infer_kind_any` (the walk over an
+# untyped value); over the untyped column the iteration and the calls dispatched at run time. Any other list takes the
+# old loop, behind `@noinline`.
 function _agreeing_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
+  col = p.column
+  col isa Vector{Any} && return _agreeing_kind_of(col, instruc, policy)
+  col isa Vector{FObject} && return _agreeing_kind_of(col, instruc, policy)
+  col isa AbstractVector && return _agreeing_kind_other(col, instruc, policy)
+  return _agreeing_kind_one(col, instruc, policy)
+end
+# The loop below over one operand: a NULL literal is no value (`nothing`); otherwise its kind.
+function _agreeing_kind_one(@nospecialize(operand), instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
+  _is_null_literal(operand isa SQLText ? operand.field : operand) && return nothing
+  return _infer_kind_any(operand, instruc, policy)::Union{CanonicalType,Nothing}
+end
+function _agreeing_kind_of(operands::Union{Vector{Any},Vector{FObject}}, instruc::SQLInstruction,
+                           policy::_EveryKind)::Union{CanonicalType,Nothing}
   kind = nothing
-  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+  for operand in operands
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue   # the #812 `Case` rule
+    k = _infer_kind_any(operand, instruc, policy)
+    k === nothing && return nothing
+    kind = kind === nothing ? k : _unify_kinds(kind, k, policy)
+    kind === nothing && return nothing
+  end
+  return kind
+end
+@noinline function _agreeing_kind_other(@nospecialize(operands), instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
+  kind = nothing
+  for operand in operands
+    _is_null_literal(operand isa SQLText ? operand.field : operand) && continue
     k = _infer_kind(operand, instruc, policy)
     k === nothing && return nothing
     kind = kind === nothing ? k : _unify_kinds(kind, k, policy)

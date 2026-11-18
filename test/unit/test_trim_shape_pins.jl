@@ -6066,6 +6066,27 @@ end
     @test _dynamic_calls(QB._bucket_bounds_at, (typeof(QB._year_bucket_bounds), Any, Bool)) == String[]
   end
 
+  # What: a `Case`'s kind and values (`_case_kind`, `_case_then_values`, `_case_values`, `_agreeing_kind`), a null
+  #   literal's test (`_is_null_literal`), a branch value's bind type (`_infer_parameter_sql_type`), and the JSON probe
+  #   over a function's values (`_json_number_side(::FObject)`).
+  # Expected: no dynamic call in the `Case` readers or `_is_null_literal` (its open arm's `==` over a non-`String` text
+  #   excepted); `_is_null_literal` and `_infer_parameter_sql_type` take their value unspecialized; the probe iterates no
+  #   untyped value.
+  # Why: each read a `Case`'s untyped column or values, a run-time dispatch the trimmed read stopped at in turn
+  #   (#1599 layer 5).
+  @testset "a Case is read at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    for P in (QB._AllKinds, QB._MeaningKinds)
+      @test (P, _dynamic_calls(QB._case_kind, (QB.FObject, QB.InstructionObject, P))) == (P, String[])
+      @test (P, _dynamic_calls(QB._agreeing_kind, (QB.FObject, QB.InstructionObject, P))) == (P, String[])
+    end
+    @test _dynamic_calls(QB._case_then_values, (Any,)) == String[]
+    @test _dynamic_calls(QB._case_values, (QB.FObject,)) == String[]
+    @test all(s -> occursin("== \"NULL\"", s), _dynamic_calls(QB._is_null_literal, (Any,)))
+    @test only(methods(QB._is_null_literal)).nospecialize & 0b1 == 0b1
+    @test !any(s -> occursin("iterate", s), _dynamic_calls(QB._json_number_side, (QB.FObject, QB.InstructionObject)))
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

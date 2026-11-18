@@ -158,14 +158,20 @@ function _fo_string(d::Dict{String,Any}, k::String)::Union{Nothing,String}
   v = Base.get(d, k, nothing)
   v === nothing && return nothing
   v isa AbstractString || throw(_fo_type_refusal(k))
-  return String(v)
+  return _fo_text(v)
 end
 function _fo_precision(d::Dict{String,Any})::Union{Int,String}
   v = Base.get(d, "precision", 0)
+  v isa Int && return v   # #1599 layer 5: the default and what a builder stores, at its type (`Int(::Integer)` dispatched)
   v isa Integer && return Int(v)
   v isa AbstractString || throw(_fo_type_refusal("precision"))
-  return String(v)
+  return _fo_text(v)
 end
+# `String(v)` for a value read untyped from the options (#1599 layer 5): a `String`, which the builders store, is itself
+# (what `String(::String)` returns); any other text converts as before, behind `@noinline`. `String` over the abstract
+# `AbstractString` dispatched at run time, and a trimmed image had no target for it (`Extract("date", "month") == 11`).
+_fo_text(@nospecialize(v))::String = v isa String ? v : _fo_text_other(v)
+@noinline _fo_text_other(@nospecialize(v))::String = String(v)
 function _fo_normalization(d::Dict{String,Any})::Union{Nothing,Int}
   v = Base.get(d, "normalization", nothing)
   v === nothing && return nothing
@@ -175,7 +181,14 @@ function _fo_normalization(d::Dict{String,Any})::Union{Nothing,Int}
   return Int(v)
 end
 # #31: the weights go through the one validation `SearchRank` applies when it is built.
-_fo_weights(d::Dict{String,Any})::Union{Nothing,Vector{Float64}} = ts_rank_weights(Base.get(d, "weights", nothing))
+# #1599 layer 5: absent (every function but `SearchRank`), `nothing` at once, which is what `ts_rank_weights(nothing)`
+# returns; over the untyped value the call dispatched at run time (the trimmed read stopped at
+# `ts_rank_weights(::Nothing)` on `Extract("date", "month") == 11`).
+function _fo_weights(d::Dict{String,Any})::Union{Nothing,Vector{Float64}}
+  w = Base.get(d, "weights", nothing)
+  w === nothing && return nothing
+  return ts_rank_weights(w)
+end
 function _fo_kind(d::Dict{String,Any}, k::String, ::Type{T}) where T
   v = Base.get(d, k, nothing)
   v isa T || throw(_fo_type_refusal(k))

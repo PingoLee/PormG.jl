@@ -648,16 +648,21 @@ end
 # whatever the untyped one is. `(class, what, literal)` names each side by its type and its label, never
 # a value, and says whether it is a literal. No departure table is read; the walk's kinds are the
 # engine's own, so a cast the engine renders as text (a uuid cast on SQLite) is text there.
-_temporal_mix_class(::CDate) = :date
-_temporal_mix_class(k::CDateTime) = k.with_timezone ? :timestamptz : :timestamp
-_temporal_mix_class(::CTime) = :time
-_temporal_mix_class(::CInterval) = :interval
-_temporal_mix_class(::Union{CText,CVarChar}) = :text
-_temporal_mix_class(::Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}) = :number
-_temporal_mix_class(::CUUID) = :uuid
-_temporal_mix_class(::CBool) = :bool
-_temporal_mix_class(::CJSON) = :json
-_temporal_mix_class(::Any) = nothing
+# #1599 layer 5: one method, the kind unspecialized and tested with `isa` (the caller holds the abstract `CanonicalType`
+# `_infer_kind` answers; the ten methods this replaces had no compileable signature for it: the trimmed read stopped at
+# `_temporal_mix_class(::CInt64)` on a `Case` value). The same class for every kind.
+function _temporal_mix_class(@nospecialize(k))::Union{Symbol,Nothing}
+  k isa CDate && return :date
+  k isa CDateTime && return (k.with_timezone ? :timestamptz : :timestamp)
+  k isa CTime && return :time
+  k isa CInterval && return :interval
+  k isa Union{CText,CVarChar} && return :text
+  k isa Union{CInt16,CInt32,CInt64,CFloat64,CDecimal} && return :number
+  k isa CUUID && return :uuid
+  k isa CBool && return :bool
+  k isa CJSON && return :json
+  return nothing
+end
 const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
 
 # The pairs of classes that are a mix: any two that differ (#1200, #1327, #1321), except a UUID beside

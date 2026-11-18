@@ -1364,6 +1364,25 @@ format_pattern_number_sql(value::AbstractFloat) = string(Models.format_number_sq
 format_pattern_number_sql(value) = format_pattern_text_sql(value)
 _lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatter(field.formatter, operator)
 
+# A column right side rendered as a comparison's right (`_on_join_right`), at its concrete node type (#1599 layer 5). A
+# closure over the four-member union had no concrete type, so the call into `_on_join_right` had no compiled target
+# in a trimmed image: the read stopped at `"year__@gt" => F("round") + 2000`. Each arm binds its own typed local
+# before the closure captures it (a captured variable keeps the type it was declared with).
+function _column_rhs_sql(rhs_ref::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}, instruc::SQLInstruction)
+  if rhs_ref isa FExpression
+    fx = rhs_ref::FExpression
+    return _on_join_right(() -> _get_filter_query(fx, instruc), instruc)
+  elseif rhs_ref isa OuterRefObject
+    outer = rhs_ref::OuterRefObject
+    return _on_join_right(() -> _get_filter_query(outer, instruc), instruc)
+  elseif rhs_ref isa CTEReference
+    cte = rhs_ref::CTEReference
+    return _on_join_right(() -> _get_filter_query(cte, instruc), instruc)
+  end
+  joined = rhs_ref::JoinedReference
+  return _on_join_right(() -> _get_filter_query(joined, instruc), instruc)
+end
+
 # #1310: an ordering pair (`"date__@gt" => F("meta__round")`, `"meta__d__@range" => […]`) is checked
 # as its `F` spelling is (`_checking_unnamed_temporal`, `expression_render.jl`), after both sides render.
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
@@ -1551,7 +1570,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
-    placeholders = _on_join_right(() -> _get_filter_query(rhs_ref, instruc), instruc)
+    placeholders = _column_rhs_sql(rhs_ref, instruc)
     _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v, placeholders, instruc)
   elseif isa(value_node, SQLTypeFunction)

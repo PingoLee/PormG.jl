@@ -134,3 +134,20 @@ end
   end
 end
 
+# What: `_column_rhs_sql` against the call it replaces, for an `F` right side, a CTE column, a joined column and an
+#   `OuterRef` with no outer query (a refusal), on each engine.
+# Expected: the same SQL (or error) and the same parameters bound.
+# Why: the helper renders the same call at the right side's concrete type so a trimmed image can (#1599 layer 5).
+@testset "a column right side renders as _on_join_right rendered it (#1599 layer 5)" begin
+  rights = Any[F("round") + 2000, F("year"), F("round") * 2 + F("year"), CTE("r", "round"), Joined("d", "round"),
+               OuterRef("round")]
+  for conn in _REX_CONNS, r in rights
+    tag = (nameof(typeof(conn)), typeof(r))
+    ni, oi = _rex_instruc(conn), _rex_instruc(conn)
+    new = _rex_outcome(() -> _REX_QB._column_rhs_sql(r, ni))
+    old = _rex_outcome(() -> _REX_QB._on_join_right(() -> _REX_QB._get_filter_query(r, oi), oi))
+    @test (tag, new) == (tag, old)
+    @test (tag, _rex_params(ni)) == (tag, _rex_params(oi))
+  end
+end
+

@@ -894,10 +894,19 @@ end
 @noinline _nth_value_open(@nospecialize(column), @nospecialize(n), over_sql::String, @nospecialize(conn)) =
   Dialect.NTH_VALUE(column, n, over_sql, conn)
 
-function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, @nospecialize(conn::_SQLEngine))
+# #1599 layer 5: the rendered column is taken unspecialized (the render holds it untyped) and handed to the renderer
+# ladder at the two shapes it has, the SQL text of one operand (`String`) and a multi-operand function's list
+# (`Vector{Any}`); anything else takes the ladder at run time, behind `@noinline`. Specialized on the column, the call
+# had no compiled target in a trimmed image (`Extract("date", "month") == 11`).
+function _function_sql(name::AbstractString, @nospecialize(column), kwargs::Dict{String,Any}, @nospecialize(conn::_SQLEngine))
   name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
-  return _dialect_function_sql(name, column, Dialect.FnOptions(kwargs), conn)
+  opts = Dialect.FnOptions(kwargs)
+  column isa String && return _dialect_function_sql(name, column, opts, conn)
+  column isa Vector{Any} && return _dialect_function_sql(name, column, opts, conn)
+  return _dialect_function_sql_other(name, column, opts, conn)
 end
+@noinline _dialect_function_sql_other(name::AbstractString, @nospecialize(column), opts::Dialect.FnOptions,
+                                      @nospecialize(conn::_SQLEngine)) = _dialect_function_sql(name, column, opts, conn)
 
 # #1611 — the renderer by its name, as one branch per name, generated at definition time. It was
 # `getfield(Dialect, Symbol(name))(…)`: a binding looked up by a name at run time, which a static

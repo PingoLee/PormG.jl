@@ -253,3 +253,43 @@ end
   end
 end
 
+# What: the JSON-key carrier probe through its walk (`_json_number_side_at`) against `_json_number_side` called on the
+#   value directly, and the arithmetic and right-operand refusals over operand pairs, over every node a side can be
+#   (a column, a JSON key path, arithmetic over it, a function over it, a `Cast`, a CTE column, a literal).
+# Expected: the same answer; the same refusal (type and text) or none.
+# Why: the walk names every method of the probe; an operand read differently would refuse a valid expression or let an
+#   uncast JSON key through (#1599 layer 5).
+module RexJsonModels
+import PormG
+import PormG.Models
+Rex_doc::Models.ModelType = Models.Model("rex_doc", docid = Models.IDField(), payload = Models.JSONField(),
+                                         n = Models.IntegerField())
+Models.@models Rex_doc
+PormG.Models.set_models(@__MODULE__, "rex_mock")
+end
+@testset "the JSON-key probe answers through its walk as before (#1599 layer 5)" begin
+  D = RexJsonModels.Rex_doc
+  nodes = Any["n", "payload__k", F("payload__k") + 1, F("n") + 1, Extract("payload__k", "year"),
+              PormG.QueryBuilder.Cast("payload__k", "integer"), Coalesce("payload__k", 0), 7, nothing,
+              _REX_QB.SQLField("payload__k"), CTE("r", "n")]
+  for conn in _REX_CONNS
+    instruc = _REX_QB.build(D.objects.filter("n" => 1).object; connection = conn)
+    for x in nodes
+      tag = (nameof(typeof(conn)), typeof(x))
+      @test (tag, _rex_outcome(() -> _REX_QB._json_number_side_at(x, instruc))) ==
+            (tag, _rex_outcome(() -> _REX_QB._json_number_side(x, instruc)))
+      for y in nodes
+        new = _rex_outcome(() -> _REX_QB._refuse_uncast_json_key(_REX_QB._JSONKeyArithmetic("+", :quoted), (x, y), instruc))
+        old = _rex_outcome(() -> begin
+          for o in (x, y)
+            side = _REX_QB._json_number_side(o, instruc)
+            side === nothing || throw(_REX_QB._json_key_refusal(_REX_QB._JSONKeyArithmetic("+", :quoted), side))
+          end
+          nothing
+        end)
+        @test (tag, typeof(y), new) == (tag, typeof(y), old)
+      end
+    end
+  end
+end
+

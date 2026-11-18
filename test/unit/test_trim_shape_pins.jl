@@ -5956,6 +5956,33 @@ end
     @test _dynamic_calls(QB._set_update_query_left, (String, String, QB.InstructionObject)) == String[]
   end
 
+  # What: the uncast-JSON-key refusal over an arithmetic node's two sides and over a comparison's right operand
+  #   (`_refuse_uncast_json_key`, `_refuse_json_key_right_operand`), and the carrier probe's walk (`_json_number_side_at`)
+  #   with the probe's own recursion into an `FExpression` or an `SQLField`.
+  # Expected: no dynamic call in the tuple and single-operand refusals, the walk, or the probe at `FExpression`/`SQLField`;
+  #   the walk names every method of the probe (a method added later without an arm fails here).
+  # Why: every arithmetic node and comparison asks this after it renders, over untyped sides: the trimmed read stopped at
+  #   `_refuse_uncast_json_key(_JSONKeyArithmetic, ::Tuple{String,Int64}, …)` and `_json_number_side(::Int64, …)` (#1599 layer 5).
+  @testset "the uncast-JSON-key refusal asks its probe at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._refuse_uncast_json_key, (QB._JSONKeyArithmetic, Tuple, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._json_number_side_at, (Any, QB.InstructionObject)) == String[]
+    for T in (QB.FExpression, QB.SQLField)
+      @test (T, _dynamic_calls(QB._json_number_side, (T, QB.InstructionObject))) == (T, String[])
+    end
+    # Every method's operand type has its arm (by source: a small method is inlined into the walk, so no `invoke` shows it).
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "json_key_refusal.jl"), String)
+    walk = src[findfirst("function _json_number_side_at(", src).start:end]
+    walk = walk[1:findfirst("\nend", walk).start]
+    for m in methods(QB._json_number_side)
+      P = m.sig.parameters[2]
+      P === Any && continue
+      for T in Base.uniontypes(P)
+        @test (T, occursin("x isa $(nameof(T)) && return _json_number_side(x, instruc)", walk)) == (T, true)
+      end
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -85,3 +85,76 @@ function bulk_step(circuitid::Int)::Bool
         failed("bulk", e); return false
     end
 end
+
+# The upsert-shaped writes (#1694, #1599 layer 7), after `bulk_step`. Each leaves the database as it found it (a server
+# job runs its binary right after its JIT control, on the same database, #1614) and is checked by a typed read. The two
+# row-level upserts look their row up by `raceid`, the primary key: `get_or_create`/`update_or_create` need a unique
+# constraint behind the lookup, and the fixture's only ones are primary keys. The explicit ids are far above any id a
+# sequence gives in the fixture, and each step deletes its row again (a row-level write does not resync the sequence).
+const UPSERT_GET_ID = 9_000_001
+const UPSERT_UOC_ID = 9_000_002
+
+# `bulk_update` (exit code 15): two Monaco races written by `bulk_insert`, their ids read typed, their `round` set from a
+# `Vector` of `NamedTuple`s matched on `raceid`, read back typed, then deleted. `bulk_update` returns `(count, rows)`
+# with `rows = nothing`, asserted at that type.
+function bulk_update_step(circuitid::Int)::Bool
+    try
+        PormG.bulk_insert(M.Race.objects,
+            [(year = 2010, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
+             (year = 2011, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2011, 5, 29))])
+        written = M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)
+        length(written) == 2 || (say("bulk_update", string(length(written), " rows to update")); return false)
+        r = PormG.bulk_update(M.Race.objects, [(raceid = written[1].raceid, round = 7), (raceid = written[2].raceid, round = 8)];
+                              columns = ["round"], match_on = ["raceid"])::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        back = M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)
+        rounds = [x.round for x in back]
+        say("bulk_update", string(r.count, " rows; rounds ", join(rounds, ", ")))
+        removed = first(M.Race.objects.filter("year__@gte" => 2010).delete()::Tuple{Int, Dict{String, Integer}})
+        return r.count == 2 && rounds == [7, 8] && removed == 2
+    catch e
+        failed("bulk_update", e); return false
+    end
+end
+
+# `get_or_create` (exit code 16): a hit on the seeded 2008 Monaco race leaves it as it was (`created` false), then a miss
+# on `UPSERT_GET_ID` inserts it with its `defaults` (`created` true), read back typed and deleted.
+function get_or_create_step(circuitid::Int)::Bool
+    try
+        seeded = M.Race.objects.filter("circuitid__country" => "Monaco", "year" => 2008).list(RaceRow)
+        length(seeded) == 1 || (say("get_or_create", string(length(seeded), " seeded Monaco races")); return false)
+        hit = M.Race.objects.get_or_create("raceid" => seeded[1].raceid;
+            defaults = ["year" => 1999, "round" => 1, "circuitid" => circuitid, "name" => "never written"])::Tuple{PormGRow, Bool}
+        after_hit = M.Race.objects.filter("raceid" => seeded[1].raceid).list(RaceRow)
+        miss = M.Race.objects.get_or_create("raceid" => UPSERT_GET_ID;
+            defaults = ["year" => 2012, "round" => 6, "circuitid" => circuitid, "name" => "Monaco Grand Prix",
+                        "date" => Date(2012, 5, 27)])::Tuple{PormGRow, Bool}
+        made = M.Race.objects.filter("raceid" => UPSERT_GET_ID).list(RaceRow)
+        say("get_or_create", string("hit created ", hit[2], "; miss created ", miss[2], "; ", length(made), " row ",
+                                    isempty(made) ? "-" : string(made[1].year)))
+        removed = first(M.Race.objects.filter("raceid" => UPSERT_GET_ID).delete()::Tuple{Int, Dict{String, Integer}})
+        return !hit[2] && length(after_hit) == 1 && after_hit[1] == seeded[1] &&
+               miss[2] && length(made) == 1 && made[1].year == 2012 && removed == 1
+    catch e
+        failed("get_or_create", e); return false
+    end
+end
+
+# `update_or_create` (exit code 17): `UPSERT_UOC_ID` is a miss, so the first call inserts it (`created` true); the same
+# call with `round => 7` updates it (`created` false); read back typed and deleted.
+function update_or_create_step(circuitid::Int)::Bool
+    try
+        first_call = M.Race.objects.update_or_create("raceid" => UPSERT_UOC_ID;
+            defaults = ["year" => 2013, "round" => 6, "circuitid" => circuitid, "name" => "Monaco Grand Prix",
+                        "date" => Date(2013, 5, 26)])::Tuple{PormGRow, Bool}
+        second_call = M.Race.objects.update_or_create("raceid" => UPSERT_UOC_ID;
+            defaults = ["year" => 2013, "round" => 7, "circuitid" => circuitid, "name" => "Monaco Grand Prix",
+                        "date" => Date(2013, 5, 26)])::Tuple{PormGRow, Bool}
+        back = M.Race.objects.filter("raceid" => UPSERT_UOC_ID).list(RaceRow)
+        say("update_or_create", string("first created ", first_call[2], "; second created ", second_call[2], "; round ",
+                                       isempty(back) ? "-" : string(back[1].round)))
+        removed = first(M.Race.objects.filter("raceid" => UPSERT_UOC_ID).delete()::Tuple{Int, Dict{String, Integer}})
+        return first_call[2] && !second_call[2] && length(back) == 1 && back[1].round == 7 && removed == 1
+    catch e
+        failed("update_or_create", e); return false
+    end
+end

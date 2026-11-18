@@ -253,6 +253,45 @@ end
   end
 end
 
+# The old forms of `_numeric_rank` and `_formatter_type_label`, copied from the code before this slice.
+_old_numeric_rank(::PormG.Kernel.CInt16) = 0
+_old_numeric_rank(::PormG.Kernel.CInt32) = 1
+_old_numeric_rank(::PormG.Kernel.CInt64) = 2
+_old_numeric_rank(::PormG.Kernel.CDecimal) = 3
+_old_numeric_rank(::PormG.Kernel.CFloat64) = 4
+_old_numeric_rank(::Any) = nothing
+function _old_formatter_type_label(formatter)::String
+  formatter === PormG.Dialect._format_mysql_duration && return "duration"
+  n = string(nameof(formatter))
+  m = match(r"^format_(.+)_sql$", n)
+  m === nothing || return replace(m.captures[1], '_' => ' ')
+  m2 = match(r"^format_(.+)$", n)
+  return m2 === nothing ? n : replace(m2.captures[1], '_' => '-')
+end
+
+# What: `_numeric_rank` (one method, `isa`) and `_formatter_type_label` (name read at concrete types) against their old
+#   forms, over every canonical kind and every formatter a column or a node holds (a closure, a functor, a value that is
+#   no function).
+# Expected: the same rank; the same label, or the same error type and text.
+# Why: the rank decides an expression's numeric kind and the label is a refusal's text (#1599 layer 5).
+@testset "a kind's rank and a formatter's label are what they were (#1599 layer 5)" begin
+  K = PormG.Kernel
+  kinds = Any[K.CInt16(), K.CInt32(), K.CInt64(), K.CDecimal(8, 3), K.CDecimal(nothing, nothing), K.CFloat64(), K.CText(),
+              K.CDate(), K.CDateTime(true), K.CBool(), K.CJSON(), nothing, 1]
+  for k in kinds
+    @test (typeof(k), _REX_QB._numeric_rank(k)) == (typeof(k), _old_numeric_rank(k))
+  end
+  M = PormG.Models
+  fs = Any[M.PERIOD_FORMATTERS..., M.format_yyyy_mm, M.format_number_sql, M.format_text_sql, M.format_date_sql,
+           M.format_bool_sql, M.format_uuid_sql, M.format_json_sql, M.format_timezone_sql, M.format_duration_sql,
+           PormG.Dialect._format_mysql_duration, M.unranged_formatter(M.format_month_sql),
+           getfield(M.ArrayField(M.IntegerField()), :formatter), x -> x, sum, 5]
+  for f in fs
+    @test (typeof(f), _rex_outcome(() -> _REX_QB._formatter_type_label(f))) ==
+          (typeof(f), _rex_outcome(() -> _old_formatter_type_label(f)))
+  end
+end
+
 # What: the JSON-key carrier probe through its walk (`_json_number_side_at`) against `_json_number_side` called on the
 #   value directly, and the arithmetic and right-operand refusals over operand pairs, over every node a side can be
 #   (a column, a JSON key path, arithmetic over it, a function over it, a `Cast`, a CTE column, a literal).

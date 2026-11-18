@@ -660,15 +660,32 @@ _guarded_format(@nospecialize(formatter), @nospecialize(values), operator::Abstr
 # outside the convention. Falling through to the bare function name was the first cut and it put
 # "is the type format_yyyy_mm" — an internal symbol — in a sentence a user reads; truthful and
 # unreadable are not the same bar. `yyyy-mm` is what that formatter actually demands.
-function _formatter_type_label(formatter)::String
+#
+# #1599 layer 5: the formatter is taken unspecialized (callers hold it as `Function`), and its name is read at concrete
+# types (`_formatter_name`): specialized on it, the call had no compiled target in a trimmed image, and `nameof` over an
+# abstract `Function` dispatched at run time (`F("round") + 1 == 19`, a value compared with an expression).
+function _formatter_type_label(@nospecialize(formatter))::String
   # #1130: MySQL's `DurationField` formatter (a BIGINT of microseconds) demands what SQLite's does.
   formatter === Dialect._format_mysql_duration && return "duration"
-  n = string(nameof(formatter))
+  n = string(_formatter_name(formatter))
   m = match(r"^format_(.+)_sql$", n)
   m === nothing || return replace(m.captures[1], '_' => ' ')
   m2 = match(r"^format_(.+)$", n)
   return m2 === nothing ? n : replace(m2.captures[1], '_' => '-')
 end
+
+# `nameof(formatter)`: for a plain generic function (a singleton type, as every `format_*_sql` is), the name of its
+# type, which is what `nameof(::Function)` reads, here through typed field reads. Anything else (a functor such as
+# `ArrayFormatter`, which defines its own `nameof`, a closure that captures, an intrinsic) through `nameof` itself,
+# behind `@noinline`.
+@noinline function _formatter_name(@nospecialize(f))::Symbol
+  if f isa Function && !(f isa Core.IntrinsicFunction)
+    T = typeof(f)::DataType
+    isdefined(T, :instance) && !(f isa Models.ArrayFormatter) && return (T.name::Core.TypeName).singletonname::Symbol
+  end
+  return _formatter_name_other(f)
+end
+@noinline _formatter_name_other(@nospecialize(f))::Symbol = nameof(f)
 
 # #576: message labels for a site whose column is a TRANSFORM rather than a field. The transform
 # ladder has an `FObject`, which carries neither a `.type` nor the `field_name` local the `BETWEEN`

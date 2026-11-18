@@ -5956,6 +5956,31 @@ end
     @test _dynamic_calls(QB._set_update_query_left, (String, String, QB.InstructionObject)) == String[]
   end
 
+  # What: an expression's right operand (`_render_operand_typed_at` / `_set_update_query_operand_at` → the positional
+  #   bodies), and their ON-clause re-entry (`_render_operand_on_join`, `_set_update_query_operand_on_join`).
+  # Expected: no dynamic call in either walk; none in the positional bodies at an `Int64` operand and a column or an
+  #   expression on the left; the ON-clause re-entry calls `_on_join_right` behind `Base.inferencebarrier` (a source pin:
+  #   that call is dynamic by design, so a static one cannot nest `_with_render_scope` in itself).
+  # Why: the sides are untyped `FExpression` slots and `left_kind` is the `TemporalKind` union: the trimmed read stopped at
+  #   the keyword calls into both bodies, and, once those were static, at an "unresolved invoke" of
+  #   `_render_operand_typed(::Int64, …)`, a frame in the `_with_render_scope` recursion (#1711's class) (#1599 layer 5).
+  @testset "an expression's right operand renders at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._render_operand_typed_at, (Any, Any, String, QB.InstructionObject, Any)) == String[]
+    @test _dynamic_calls(QB._set_update_query_operand_at, (Any, Any, String, QB.InstructionObject, Any)) == String[]
+    # (`!==` is a call too with inlining off, the coverage lesson of #1816; it is no dispatch.)
+    for L in (String, QB.FExpression)
+      calls = filter(s -> !occursin(" !== ", s), _dynamic_calls(QB._set_update_query_operand, (Int64, L, String, QB.InstructionObject, Nothing)))
+      @test (L, calls) == (L, String[])
+    end
+    # The ON-clause branch's result is converted to the declared return type, the one call left (as in `_render_left_typed`).
+    @test all(s -> occursin("Base.convert(Tuple{String", s),
+              _dynamic_calls(QB._render_operand_typed, (Int64, String, String, QB.InstructionObject, Nothing)))
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_render.jl"), String)
+    @test count("Base.inferencebarrier(_on_join_right)", src) == 2
+    @test !occursin("_on_join_right(() -> _render_operand_typed(", src) && !occursin("_on_join_right(() -> _set_update_query_operand(", src)
+  end
+
   # What: the uncast-JSON-key refusal over an arithmetic node's two sides and over a comparison's right operand
   #   (`_refuse_uncast_json_key`, `_refuse_json_key_right_operand`), and the carrier probe's walk (`_json_number_side_at`)
   #   with the probe's own recursion into an `FExpression` or an `SQLField`.

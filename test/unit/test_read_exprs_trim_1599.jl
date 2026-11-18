@@ -502,3 +502,29 @@ end
           (typeof(c), _rex_outcome(() -> _rex_show(_REX_QB._check_function(_REX_QB._fresh_operands(c)))))
   end
 end
+
+# What: `_non_null_operand_kinds`, the operand kinds of `_mysql_declared_output` (#1599 layer 5), against the filtered
+#   comprehension it replaces, on all three engines, over operand lists with and without NULL literals.
+# Expected: the same kinds, in the same order (the vector's element type aside: its only readers are `isa` predicates);
+#   and the MySQL check over the fixture's `Case` and its siblings gives the same outcome as the render it guards.
+# Why: the comprehension built `Iterators.Filter` at run time, and the trimmed MySQL binary stopped there at
+#   `"round__@gte" => Case(…)`.
+@testset "the MySQL declared-output check reads its operand kinds as before (#1599 layer 5)" begin
+  lists = Any[Any[6, 100], Any["round", 0], Any[_REX_QB.SQLText(nothing), 5], Any[F("round") + 1, _REX_QB.SQLText(nothing)],
+              Any[Extract("date", "month"), "year", 2.5], Any[], Any[_REX_QB.SQLText(nothing)]]
+  for conn in _REX_CONNS
+    instruc = _rex_instruc(conn)
+    for vs in lists
+      old = [_REX_QB._expression_kind(x, instruc) for x in vs if !_REX_QB._is_null_operand(x)]
+      new = _REX_QB._non_null_operand_kinds(vs, instruc)
+      @test (nameof(typeof(conn)), length(vs), collect(Any, new)) == (nameof(typeof(conn)), length(vs), collect(Any, old))
+    end
+    @test collect(Any, _REX_QB._non_null_operand_kinds(["round", "year"], instruc)) ==
+          collect(Any, [_REX_QB._expression_kind(x, instruc) for x in ["round", "year"] if !_REX_QB._is_null_operand(x)])
+    for f in (Case(When("name" => "Monaco Grand Prix", then = 6), default = 100), Case(When("round__@lt" => 10, then = 1), default = 0),
+              Coalesce("score", 0), Coalesce("round", "year"))
+      out = _rex_outcome(() -> _REX_QB._mysql_declared_output(f, instruc))
+      @test (nameof(typeof(conn)), f.function_name, out) == (nameof(typeof(conn)), f.function_name, (:value, nothing))
+    end
+  end
+end

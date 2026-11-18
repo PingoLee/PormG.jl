@@ -122,7 +122,7 @@ PormG to refuse is not refused with an `InvalidValueError`, 7 when its update an
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
 refused with an `InvalidValueError` or writes a row, 15 when its `bulk_update` and 16 when its `update_or_create`
-raises or the read after it does not show the change). `get_or_create` has no step: on a hit it reads its row through
+raises, the read after it does not show the change, or the delete that undoes it does not remove its rows). `get_or_create` has no step: on a hit it reads its row through
 the untyped `first()`, whose rows a trimmed image cannot read.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's

@@ -191,8 +191,8 @@ end
 # No read makes a deep copy of the caller's handler
 # Each read against the same work done with no copy at all (`_render_select`, `_list_owned`,
 # `_list_raw` on a handler already carrying what the terminal adds), as relative allocation counts so
-# they hold across Julia versions: a terminal may cost less than three quarters of one `deepcopy` of
-# the handler over that. Its own shallow copy (`_terminal_copy`: a struct and two vectors), limit,
+# they hold across Julia versions: a terminal may cost less than one `deepcopy` of the handler over
+# that. Its own shallow copy (`_terminal_copy`: a struct and two vectors), limit,
 # ordering and result shaping stay well under it; a deep copy put back costs a whole one.
 # ─────────────────────────────────────────────────────────────────────────────
 function _bw_allocs(f::F) where {F}
@@ -202,7 +202,10 @@ end
 function _bw_no_deep_copy(name, terminal::F, baseline::G, q) where {F,G}
     copy_allocs = _bw_allocs(() -> deepcopy(q))
     extra = _bw_allocs(terminal) - _bw_allocs(baseline)
-    ok = extra < 3 * copy_allocs / 4
+    # Under one whole copy: a deep copy put back adds at least `copy_allocs` to the terminal's own work. The bound was
+    # three quarters of a copy until #1694 made the copy itself cheaper (an empty insert map is no longer walked
+    # generically: 71 → 61 allocations for the handler below, measured), which left `aggregate()`'s own 45 on the line.
+    ok = extra < copy_allocs
     ok || @info "#1624 deep copy margin" terminal = name extra copy = copy_allocs
     return ok
 end

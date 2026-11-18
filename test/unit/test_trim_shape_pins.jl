@@ -6211,7 +6211,11 @@ end
     @test _dynamic_calls(QB._bulk_update_frame, tt) == String[]
     deep = _dynamic_calls_deep(QB._bulk_update_frame, tt; depth = 2, skip = (Base.deepcopy_internal,))
     @test !any(s -> !occursin("_bulk_result_other", s) &&   # the designed open arm of `_bulk_result_at`
-                    occursin(r"_array_for|collect_to|Base\.push!|_bulk_result\(|run_in_transaction|_fork_parameters", s), deep)
+                    occursin(r"_array_for|collect_to|_bulk_result\(|run_in_transaction|_fork_parameters", s), deep)
+    # A `push!` (or any call) on a boxed capture in the pipeline's own closures: the deep list names each callee, so the
+    # chunk loop's lines are the ones whose caller is a `_bulk_update_frame` closure (the review's scoping: an
+    # unrelated `QueryBuilder.push!` elsewhere in the callees is not this pipeline's).
+    @test !any(s -> occursin(r"^Tuple\{PormG\.QueryBuilder\.var\"#_bulk_update_frame", s) && occursin(r"push!|getfield\(.*:contents", s), deep)
     @test _dynamic_calls(QB._fork_parameters, (QB.PgParameterizedQuery,)) == String[]
     @test _dynamic_calls(QB._ensure_unique_bulk_update_keys!, (QB._BulkFrame, Dict{String,String}, Vector{String})) == String[]
   end
@@ -6241,15 +6245,15 @@ end
     tail = (String, Vector{String}, Symbol)
     @test _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.SQLiteConnectionPool, rest..., QB.SQLiteParameterizedQuery, tail...)) == String[]
     @test _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.MySQLConnectionPool, rest..., QB.MySQLParameterizedQuery, tail...)) == String[]
-    pg = _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, rest..., QB.PgParameterizedQuery, tail...))
-    @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
-    @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
-  end
     # MySQL's reads and its zero-key check (found by the Trim workflow's MySQL job: `iszero(::Int64)`; the probe then
     # found the local closure the reads went through, called dynamically and with a `kwcall`).
     @test _dynamic_calls(QB._writes_zero_key, (PormG.OrderedCollections.OrderedDict{String,Any}, PormG.Models.ModelType, String)) == String[]
     @test _dynamic_calls(QB._mysql_target_rows, (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, Vector{String},
                                                  String, PormG.ConnectionPool.MySQLConnectionPool, QB._FieldRowDecoder, String, Bool)) == String[]
+    pg = _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, rest..., QB.PgParameterizedQuery, tail...))
+    @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
+    @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
+  end
 
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.

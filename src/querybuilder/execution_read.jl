@@ -1500,9 +1500,24 @@ function _list_raw(q::SQLObjectHandler)::Vector{Dict{Symbol,Any}}
   return _with_connection(q) do settings, connection, conn_key
     rendered = _render_select(q, connection=connection, show_query=:execute)
     _refuse_lock_outside_transaction(q, rendered.instruction)
+    _decodes_on_fetch(settings) || return _list_raw_undecoded(settings, rendered.sql, rendered.instruction, connection)
     decoder = _ProjectionRowDecoder(rendered.instruction, connection)
     return _fetch_projection_rows(settings, rendered.sql, rendered.instruction.parameters, decoder)
   end
+end
+
+# Whether `settings`' pool is one of PormG's own, whose `fetch` takes `_decode` and decodes the rows as it reads them
+# (#1599 layer 6). Any other pool (an application's test double with its own `fetch`, which may take no `_decode` or
+# answer with any Tables.jl source) reads its rows as before.
+function _decodes_on_fetch(settings)::Bool
+  pool = settings.connections
+  return pool isa PostgresConnectionPool || pool isa SQLiteConnectionPool || pool isa MySQLConnectionPool
+end
+
+# The untyped read as it was before #1599 layer 6, for a pool `_decodes_on_fetch` does not list: the result, then
+# its rows built with the projections' parsers. Behind `@noinline`: the result's type is the pool's own.
+@noinline function _list_raw_undecoded(settings, sql::String, built::SQLInstruction, connection)
+  return _rows_from_result(fetch(settings, sql, built.parameters), _projection_parsers(built, connection))::Vector{Dict{Symbol,Any}}
 end
 
 # The statement's parameters at their concrete collector type, as `_fetch_rows` hands them (typed_read.jl).

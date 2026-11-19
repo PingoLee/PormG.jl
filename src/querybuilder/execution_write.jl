@@ -875,6 +875,7 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       # #1599 layer 6: decoded as it is read, into the rows `_row_to_field_keyed_dict` built (`sized`). Through
       # `Tables.rowtable` the row type was decided at run time, and the trimmed `get_or_create` stopped there.
       sql, params = _select_by_target(head, real_obj, model, target_fields, table, connection; lock = lock)
+      _decodes_on_fetch(settings) || return _found_row_undecoded(settings, sql, params, model, connection)
       rows = _read_back_rows(settings, sql, params, _FieldRowDecoder(model, connection; sized = true))
       isempty(rows) ? nothing : _owned_row(rows[1], model)
     end
@@ -937,6 +938,14 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
   end
 end
 
+# get_or_create's lookup read as it was before #1599 layer 6, for a pool `_decodes_on_fetch` does not list (a test
+# double with its own `fetch`): the result's rows, the first one keyed by field. Behind `@noinline`: the result's
+# type is the pool's own.
+@noinline function _found_row_undecoded(settings, sql::String, params, model::PormGModel, connection)
+  rows = fetch(settings, sql, params) |> Tables.rowtable
+  return isempty(rows) ? nothing : _owned_row(_row_to_field_keyed_dict(rows[1], model, connection), model)
+end
+
 # get_or_create's miss: run `insert_sql` and return `(PormGRow, created)`, one method per engine.
 function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql, parameters, fetch_by_target,
                          target_fields)
@@ -945,7 +954,7 @@ function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql,
   # built (`sized`), as `create`'s `RETURNING` does; `Tables.rowtable` decided its type at run time, and the trimmed
   # Postgres.jl `get_or_create` stopped there on a miss. Any other pool (a test double whose `fetch` may take no
   # `_decode`) reads as before.
-  dict = if settings.connections isa PostgresConnectionPool
+  dict = if _decodes_on_fetch(settings)
     returned = try
       fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection; sized = true))::Vector{Dict{Symbol,Any}}
     catch e

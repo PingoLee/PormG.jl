@@ -12,10 +12,16 @@
 # The database is `pormg_trim` unless `--database=` names another, and the name must contain `trim`, as each
 # `prep.jl` requires: the fixture empties its tables, so it never runs against the integration suite's database.
 # The runner prints one line, `runner	<host>:<port>/<database>`, and the child's exit code; never the user or the
-# password, in output or in an error. It exits with the child's code.
+# password, in output or in an error. It exits with the child's code, `128 + n` when signal `n` killed it (a trimmed
+# binary that aborts), and 127 when the command could not be started.
+#
+# It reaches the server over TCP, as the fixture's URL does, so the folder must set `host:` (a name or an IPv4
+# address, not a socket directory or `hostaddr:`) and `password:`; `tools/server.jl` reads an empty password as its
+# default. Loading the folder may connect to the folder's own database once, when it lists `extensions:` (the load
+# checks they are installed); the runner itself runs nothing there.
 
 using PormG
-using LibPQ, MySQL   # the pool the load builds needs its driver; the runner never queries through it
+using LibPQ, Postgres, MySQL   # the pool the load builds needs its driver (`postgres_driver:` may name Postgres.jl)
 
 const USAGE = "usage: runner.jl <db_my|db_2|<folder>> [--env=<env>] [--database=<name>] -- <command...>"
 
@@ -72,11 +78,16 @@ function main(args::Vector{String})
         runner_fail("the folder's adapter is `$(adapter)`; the runner serves the MySQL and PostgreSQL variants")
     setting(cfg, "url") === nothing ||
         runner_fail("the folder sets `url:`; the runner reads `host:`, `port:`, `username:` and `password:`")
-    host = something(setting(cfg, "host"), "127.0.0.1")
+    setting(cfg, "hostaddr") === nothing ||
+        runner_fail("the folder sets `hostaddr:`; the runner reads `host:`, a name or an IPv4 address")
+    host = setting(cfg, "host")
+    host === nothing && runner_fail("the folder sets no `host:`; the runner connects over TCP, as the fixture does")
+    startswith(host, "/") && runner_fail("the folder's `host:` is a socket directory; the runner connects over TCP")
     port = something(setting(cfg, "port"), adapter == "MySQL" ? "3306" : "5432")
     user = setting(cfg, "username")
     user === nothing && runner_fail("the folder sets no `username:`")
-    password = something(setting(cfg, "password"), "")
+    password = setting(cfg, "password")
+    password === nothing && runner_fail("the folder sets no `password:` (tools/server.jl reads an empty one as its default)")
 
     env_vars = copy(ENV)
     env_vars["PORMG_TRIM_HOST"] = host
@@ -88,12 +99,22 @@ function main(args::Vector{String})
 
     println("runner\t", host, ":", port, "/", database)
     flush(stdout)
-    # `ignorestatus`: a failing command is reported by its exit code alone. `run` would throw a
-    # `ProcessFailedException`, and an error that shows the process would carry its environment.
-    proc = run(ignorestatus(setenv(Cmd(cmd), env_vars)))
-    code = proc.exitcode
-    println("runner\texit ", code)
-    return code
+    # Nothing that shows the process is ever printed: `show(::Cmd)` of a `setenv` command lists its environment, the
+    # password included. `ignorestatus` keeps a failing command from throwing `ProcessFailedException`, and a command
+    # that cannot be started (`IOError: could not spawn …`, which shows it) is caught and named by its first word only.
+    proc = try
+        run(ignorestatus(setenv(Cmd(cmd), env_vars)))
+    catch e
+        e isa InterruptException && rethrow()
+        println(stderr, "runner: could not start `", cmd[1], "` (", nameof(typeof(e)), ")")
+        return 127
+    end
+    if proc.termsignal != 0
+        println("runner\tkilled by signal ", proc.termsignal)
+        return 128 + proc.termsignal
+    end
+    println("runner\texit ", proc.exitcode)
+    return proc.exitcode
 end
 
 exit(main(ARGS))

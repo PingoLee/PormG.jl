@@ -432,27 +432,38 @@ julia --project=test/integration test/trim/tools/runner.jl db_my -- <command...>
 worktree pass the main checkout's folder as a path instead
 (`…/PormG.jl/test/integration/db_my`).
 
+The folder must set `host:` (a name or an IPv4 address: the runner connects over TCP, as the fixture's URL
+does) and `password:`, or the runner refuses it. It exits with the child's code, `128 + n` when signal `n`
+killed the child, and 127 when the command could not be started.
+
 The MySQL variant, from the repository root, after building `build-mysql/main` as above:
 
 ```
-R="julia --project=test/integration test/trim/tools/runner.jl db_my --"
-$R julia --project=test/trim/mysql test/trim/mysql/prep.jl   # PormG's DDL and the two races
-$R julia --project=test/trim/mysql test/trim/mysql/main.jl   # the JIT control
-sudo mysql -e "FLUSH PRIVILEGES"                            # empty caching_sha2_password's cache, as CI does
-$R build-mysql/main                                         # the trimmed binary
+trim_my() { julia --project=test/integration test/trim/tools/runner.jl db_my -- "$@"; }
+trim_my julia --project=test/trim/mysql test/trim/mysql/prep.jl   # PormG's DDL and the two races
+trim_my julia --project=test/trim/mysql test/trim/mysql/main.jl   # the JIT control
+trim_my julia --project=test/trim/mysql test/trim/mysql/prep.jl   # the two races again
+sudo mysql -e "FLUSH PRIVILEGES"                                 # empty caching_sha2_password's cache, as CI does
+trim_my build-mysql/main                                         # the trimmed binary
 ```
+
+`prep.jl` and the JIT control log in, which fills `caching_sha2_password`'s cache, so without the flush the
+binary takes the cached fast path and never runs the full authentication CI's job checks. The flush needs the
+`RELOAD` privilege; an account without it still runs every step, on the fast path.
 
 The PostgreSQL variant, after building `build-postgres/main`:
 
 ```
-R="julia --project=test/integration test/trim/tools/runner.jl db_2 --"
-$R julia --project=test/trim/postgres test/trim/postgres/prep.jl
-$R julia --project=test/trim/postgres test/trim/postgres/main.jl
-$R build-postgres/main
+trim_pg() { julia --project=test/integration test/trim/tools/runner.jl db_2 -- "$@"; }
+trim_pg julia --project=test/trim/postgres test/trim/postgres/prep.jl
+trim_pg julia --project=test/trim/postgres test/trim/postgres/main.jl
+trim_pg julia --project=test/trim/postgres test/trim/postgres/prep.jl
+trim_pg build-postgres/main
 ```
 
-The binary prints the JIT control's lines; the written rows' ids differ, since the JIT control's write used
-one (see the MySQL variant). Run `prep.jl` again before each binary run to start from the two seeded races.
+Each binary run starts from `prep.jl`'s two races, as the JIT control does, so the binary prints the JIT
+control's lines. Only the written rows' ids differ: `prep.jl` does not reset the server's sequences (see the
+MySQL variant).
 
 ## Reading the build log
 

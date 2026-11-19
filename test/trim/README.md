@@ -412,6 +412,48 @@ not, as for the SQLite job. Neither variant commits a `Manifest.toml`, so each r
 MySQL.jl or Postgres.jl that PormG's `[compat]` admits: as for SQLite, a red nightly with no PormG change
 may be a driver release, and the `Instantiate the fixture` step prints the versions.
 
+## Running the server variants locally
+
+`tools/runner.jl` runs a command with the `PORMG_TRIM_*` variables pointed at a local server, taking the
+server's host, port, user and password from an integration configuration folder: `test/integration/db_my`
+for MySQL, `test/integration/db_2` for PostgreSQL. It loads the folder in place with
+`PormG.Configuration.load` (environment `dev`, as the integration suite does; `--env=` picks another), so
+the folder's `connection.yml` is read by PormG and never copied, and it sets the variables in the child
+process's environment only. The database is `pormg_trim` (`--database=` names another; it must contain
+`trim`), which the integration account must be able to use: the fixture's database, never the suite's. It
+prints `runner	<host>:<port>/<database>` and the child's exit code, never the user or the password, and
+exits with the child's code. It runs in the integration environment, which carries both drivers:
+
+```
+julia --project=test/integration test/trim/tools/runner.jl db_my -- <command...>
+```
+
+`db_my` and `db_2` name this checkout's folders. The `connection.yml` files are gitignored, so in a git
+worktree pass the main checkout's folder as a path instead
+(`…/PormG.jl/test/integration/db_my`).
+
+The MySQL variant, from the repository root, after building `build-mysql/main` as above:
+
+```
+R="julia --project=test/integration test/trim/tools/runner.jl db_my --"
+$R julia --project=test/trim/mysql test/trim/mysql/prep.jl   # PormG's DDL and the two races
+$R julia --project=test/trim/mysql test/trim/mysql/main.jl   # the JIT control
+sudo mysql -e "FLUSH PRIVILEGES"                            # empty caching_sha2_password's cache, as CI does
+$R build-mysql/main                                         # the trimmed binary
+```
+
+The PostgreSQL variant, after building `build-postgres/main`:
+
+```
+R="julia --project=test/integration test/trim/tools/runner.jl db_2 --"
+$R julia --project=test/trim/postgres test/trim/postgres/prep.jl
+$R julia --project=test/trim/postgres test/trim/postgres/main.jl
+$R build-postgres/main
+```
+
+The binary prints the JIT control's lines; the written rows' ids differ, since the JIT control's write used
+one (see the MySQL variant). Run `prep.jl` again before each binary run to start from the two seeded races.
+
 ## Reading the build log
 
 Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only

@@ -6175,6 +6175,86 @@ end
     @test _dynamic_calls(QB._non_null_operand_kinds, (Any, QB.InstructionObject)) == String[]
   end
 
+  # What: the insert map of a copied query (`_copy_insert`), which every copying terminal (`bulk_update`'s `deepcopy` of
+  #   its handler) goes through.
+  # Expected: `deepcopy(::SQLObjectQuery)` copies the map through `_copy_insert` (only its open arm, `_copy_insert_other`,
+  #   deep-copies it), and `_copy_insert` makes no dynamic call.
+  # Why: `deepcopy` walked the map's fields generically: the trimmed `bulk_update` stopped at
+  #   `deepcopy_internal(::Vector{Int32}, …)` (#1599 layer 7, #1694).
+  @testset "a copied query's insert map is copied without the generic walk (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    OD = PormG.OrderedCollections.OrderedDict{String,Any}
+    ci, _ = only(InteractiveUtils.code_typed(Base.deepcopy, (QB.SQLObjectQuery,); optimize = true))
+    invoked = Any[]
+    for st in ci.code
+      (st isa Expr && st.head === :invoke) || continue
+      mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+      push!(invoked, mi.specTypes)
+    end
+    @test Tuple{typeof(QB._copy_insert), OD} in invoked   # the base reached the map through `deepcopy_internal(::Any, …)`
+    @test _dynamic_calls(QB._copy_insert, (OD,)) == String[]
+  end
+
+  # What: `bulk_update`'s pipeline after its frame (`_bulk_update_frame`), at the types the call hands it, and the
+  #   duplicate-key check (`_ensure_unique_bulk_update_keys!`).
+  # Expected: no dynamic call in either; and in the frame pipeline's callees, two levels down, no untyped
+  #   comprehension, no `push!` on a boxed vector and no untyped total. (What stays dynamic there is off the fixture's
+  #   path: a static `filters=` pair and the dry-run `show_query` arm.)
+  # Why: over an unspecialized source the frame call, then the chunk loop's open closure type (abstract comprehensions,
+  #   a boxed `columns`/`rows`, a captured three-way collector), then the tuple keys were walls one after another in the
+  #   trimmed `bulk_update` (#1599 layer 7, #1694).
+  @testset "bulk_update's frame pipeline and key check make their calls statically (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    tt = (QB.ObjectHandler, PormG.Models.ModelType, PormG.Configuration.Settings, PormG.ConnectionPool.SQLiteConnectionPool,
+          QB._BulkFrame, Vector{Union{String, Pair{String, String}}}, Vector{String},
+          Vector{Union{String, Pair{String, <:Any}}}, Symbol, Int)
+    @test _dynamic_calls(QB._bulk_update_frame, tt) == String[]
+    deep = _dynamic_calls_deep(QB._bulk_update_frame, tt; depth = 2, skip = (Base.deepcopy_internal,))
+    @test !any(s -> !occursin("_bulk_result_other", s) &&   # the designed open arm of `_bulk_result_at`
+                    occursin(r"_array_for|collect_to|_bulk_result\(|run_in_transaction|_fork_parameters", s), deep)
+    # A `push!` (or any call) on a boxed capture in the pipeline's own closures: the deep list names each callee, so the
+    # chunk loop's lines are the ones whose caller is a `_bulk_update_frame` closure (the review's scoping: an
+    # unrelated `QueryBuilder.push!` elsewhere in the callees is not this pipeline's).
+    @test !any(s -> occursin(r"^Tuple\{PormG\.QueryBuilder\.var\"#_bulk_update_frame", s) && occursin(r"push!|getfield\(.*:contents", s), deep)
+    @test _dynamic_calls(QB._fork_parameters, (QB.PgParameterizedQuery,)) == String[]
+    @test _dynamic_calls(QB._ensure_unique_bulk_update_keys!, (QB._BulkFrame, Dict{String,String}, Vector{String})) == String[]
+  end
+
+  # What: the upserts' lookup and defaults pairs (`_normalize_uoc_pairs`) and their fill of the insert map
+  #   (`_put_insert!`), and the two entry points' bodies.
+  # Expected: the pairs come back as `Vector{Pair{String,Any}}`; the fill and both keyword bodies make no dynamic call.
+  # Why: a `Vector{Pair}` held keys and values untyped, so `k => v` was a `UnionAll` call and `insert[k] = v` a dynamic
+  #   `setindex!`: the trimmed `update_or_create`/`get_or_create` stopped at each (#1599 layer 7, #1694).
+  @testset "an upsert's pairs and insert map are read and filled at their types (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    @test Base.return_types(QB._normalize_uoc_pairs, (Tuple{Pair{String,Int64}}, String)) == Any[Vector{Pair{String,Any}}]
+    @test _dynamic_calls(QB._put_insert!, (PormG.OrderedCollections.OrderedDict{String,Any}, String, Any)) == String[]
+    @test _dynamic_calls_kw(QB._update_or_create!, (QB.SQLObjectQuery, Tuple{Pair{String,Int64}})) == String[]
+    @test _dynamic_calls_kw(QB._get_or_create!, (QB.SQLObjectQuery, Tuple{Pair{String,Int64}})) == String[]
+  end
+
+  # What: `update_or_create`'s run per engine (`_run_update_or_create`) and the sentinel it reads on PostgreSQL.
+  # Expected: no dynamic call on SQLite and MySQL (the reads decoded as they are read, the binds and the formatter at
+  #   their types, the closure's result asserted); on PostgreSQL only the stand-in pool's arm (the old read, by design)
+  #   is dynamic, and `_created_flag` makes no dynamic call.
+  # Why: `Tables.rowtable` on a driver result, `|>` through an untyped formatter, destructuring `run_in_transaction`'s
+  #   untyped result and `false == 1` were walls in the trimmed `update_or_create` (#1599 layer 7, #1694).
+  @testset "update_or_create runs at concrete types on every engine (#1599 layer 7, #1694)" begin
+    QB = PormG.QueryBuilder
+    rest = (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, String)
+    tail = (String, Vector{String}, Symbol)
+    @test _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.SQLiteConnectionPool, rest..., QB.SQLiteParameterizedQuery, tail...)) == String[]
+    @test _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.MySQLConnectionPool, rest..., QB.MySQLParameterizedQuery, tail...)) == String[]
+    # MySQL's reads and its zero-key check (found by the Trim workflow's MySQL job: `iszero(::Int64)`; the probe then
+    # found the local closure the reads went through, called dynamically and with a `kwcall`).
+    @test _dynamic_calls(QB._writes_zero_key, (PormG.OrderedCollections.OrderedDict{String,Any}, PormG.Models.ModelType, String)) == String[]
+    @test _dynamic_calls(QB._mysql_target_rows, (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, Vector{String},
+                                                 String, PormG.ConnectionPool.MySQLConnectionPool, QB._FieldRowDecoder, String, Bool)) == String[]
+    pg = _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, rest..., QB.PgParameterizedQuery, tail...))
+    @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
+    @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

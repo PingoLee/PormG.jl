@@ -125,6 +125,9 @@ function (@main)(args::Vector{String})::Cint
     delete_step() || return Cint(8)
     # `bulk_insert` of two Monaco races, read back (#1694, #1614, `../tools/writes.jl`).
     bulk_step(circuitid) || return Cint(9)
+    # The upsert-shaped writes, each read back typed and undone (#1694, `../tools/writes.jl`).
+    bulk_update_step(circuitid) || return Cint(15)
+    update_or_create_step(circuitid) || return Cint(16)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
     fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)

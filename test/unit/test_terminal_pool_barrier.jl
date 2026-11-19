@@ -138,6 +138,8 @@ end
                   ("build_helpers.jl", "_with_m2m_connection") => 2,
                   ("deletion.jl", "should_check_related_existence") => 1,
                   ("execution_write.jl", "insert") => 1,
+                  # #1599 layer 7 (#1694): `update_or_create`'s RETURNING arm, `insert`'s shape (decodes on PormG's own pool).
+                  ("execution_write.jl", "_run_update_or_create") => 1,
                   ("types.jl", "DeletionCollector") => 1)
   @test reads == reviewed
   reads == reviewed || @info ".connections reads (reviewed → now)" reviewed reads
@@ -162,7 +164,9 @@ const _TPB_REVIEWED_BOXES = Dict(
   # calls them, `topological_sort`'s visit is a function, `_collector_predicate`'s alias a `RefValue{String}`.
   # #1599 layer 7 (#1694) removed three of bulk_insert's: the insert loop's chunk accumulator no longer reassigns
   # `columns`, its collector `parameters` is no closure's capture, and `returning_sql` is assigned once.
-  "execution_bulk.jl" => 4,    # _bulk_insert_frame (1: `allocate_pk`); _bulk_update (3)
+  # #1599 layer 7 (#1694) removed _bulk_update's three: the chunk loop's `columns`/`rows` are its own locals now, and
+  # the collector it forks from is a `RefValue{ParamCollector}`.
+  "execution_bulk.jl" => 1,    # _bulk_insert_frame (1: `allocate_pk`)
   "execution_read.jl" => 1,    # a closure in _filters_name_alias (`mkey`); #1698 removed the `hit` box (a RefValue now)
   "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
                                # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed)

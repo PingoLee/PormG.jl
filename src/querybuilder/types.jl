@@ -1739,6 +1739,17 @@ function _copy_alias_joins(m::OrderedCollections.OrderedDict{String,AliasJoin}):
   return out
 end
 
+# #1599 layer 7, #1694: the insert map of a copied query. Every handler a read or a bulk writer copies has an empty one
+# (only `create`/`get_or_create`/`update_or_create` fill it, on their own object), and `deepcopy` walked an
+# `OrderedDict`'s fields generically, each field a call a trimmed image has no code for: the trimmed `bulk_update`
+# stopped at `deepcopy_internal(::Vector{Int32}, …)`, the map's `slots`. An empty map is a fresh empty map, which
+# iterates, compares and grows as the copy did; a filled one is deep-copied as before.
+function _copy_insert(d::OrderedCollections.OrderedDict{String,Any})::OrderedCollections.OrderedDict{String,Any}
+  isempty(d) && return OrderedCollections.OrderedDict{String,Any}()
+  return _copy_insert_other(d)
+end
+@noinline _copy_insert_other(d::OrderedCollections.OrderedDict{String,Any})::OrderedCollections.OrderedDict{String,Any} = deepcopy(d)
+
 # #1698: the query's own slot, element by element through its walk. The recursive `FilterType` fields
 # keep `Base.deepcopy(::Vector{FilterType})` (#1684 is the typed clone).
 Base.deepcopy(filter::Vector{FilterNode}) = FilterNode[with_filter_node(deepcopy, f) for f in filter]
@@ -1749,7 +1760,7 @@ function Base.deepcopy(obj::SQLObjectQuery)
       connect_key=obj.connect_key,
       values=deepcopy(obj.values),
       filter=deepcopy(obj.filter),
-      insert=deepcopy(obj.insert),
+      insert=_copy_insert(obj.insert),   # #1599 layer 7: an empty map without the generic walk
       limit=obj.limit,
       offset=obj.offset,
       order=deepcopy(_order_terms(obj)),   # the slot (#1599 slice C)

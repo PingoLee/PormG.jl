@@ -22,6 +22,8 @@ function (@main)(args::Vector{String})::Cint
     delete_step() || return Cint(8)
     bulk_step(1) || return Cint(9)   # the Monaco circuit `prep.jl` seeds first
     bulk_refused_step() || return Cint(12)
+    bulk_update_step(1) || return Cint(15)        # the upsert-shaped writes (`tools/writes.jl`, #1694)
+    update_or_create_step(1) || return Cint(16)
     elapsed_step(t0)
     return Cint(0)
 end

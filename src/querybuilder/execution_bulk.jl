@@ -1148,8 +1148,34 @@ function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
 
   isempty(dynamic_filters) && return nothing
 
+  # #1599 layer 7, #1694: one match column of integers or of text, the key a `bulk_update` by id or by a code has, is
+  # checked by its values themselves: a one-element tuple and its element are equal and hash alike, so the same rows
+  # are duplicates, and the first duplicate is reported by the same two rows. The tuple of a run-time length, its hash
+  # and the comprehension of untyped columns were calls a trimmed image has no code for (`_array_for_inner`). Any other
+  # key (several columns, another type) is checked as before.
+  key_columns = AbstractVector[_bulk_column(df, mapping[field]) for field in dynamic_filters]
+  if length(key_columns) == 1
+    only_column = key_columns[1]
+    only_column isa Vector{Int64} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
+    only_column isa Vector{String} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
+  end
+  return _ensure_unique_bulk_update_keys_other(df, key_columns, dynamic_filters)
+end
+function _ensure_unique_bulk_update_key(column::Vector{T}, row_count::Int, dynamic_filters::Vector{String}) where {T}
+  seen_keys = Dict{T, Int}()
+  for index in 1:row_count
+    key = column[index]
+    if haskey(seen_keys, key)
+      filters_text = join(dynamic_filters, ", ")
+      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))
+    end
+    seen_keys[key] = index
+  end
+  return nothing
+end
+@noinline function _ensure_unique_bulk_update_keys_other(df::_BulkFrame, key_columns::Vector{AbstractVector},
+                                                         dynamic_filters::Vector{String})
   seen_keys = Dict{Tuple, Int}()
-  key_columns = [_bulk_column(df, mapping[field]) for field in dynamic_filters]
   for index in 1:df.row_count
     key = Tuple(column[index] for column in key_columns)
     if haskey(seen_keys, key)
@@ -1159,7 +1185,6 @@ function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
     end
     seen_keys[key] = index
   end
-
   return nothing
 end
 
@@ -3093,7 +3118,7 @@ bulk_update(objct, df,
     filters  = ["category_id" => 172100])    # constant: only this category
 ```
 """
-function bulk_update(objct::SQLObjectHandler, @nospecialize(src);
+function bulk_update(objct::SQLObjectHandler, src;
     columns=nothing,
     match_on=nothing,
     filters=nothing,
@@ -3111,7 +3136,7 @@ bulk_update(model::PormGModel, @nospecialize(src); kwargs...) = bulk_update(mode
 bulk_update(@nospecialize(src); kwargs...) = (_refuse_non_table(src, "bulk_update"); objct -> bulk_update(objct, src; kwargs...))
 bulk_update(objct::SQLObjectHandler; kwargs...) = (df) -> bulk_update(objct, df; kwargs...)
 
-function _bulk_update(objct::SQLObjectHandler, @nospecialize(src),
+function _bulk_update(objct::SQLObjectHandler, src,
   columns::Vector{Union{String, Pair{String, String}}},
   match_on::Vector{String},
   filters::Vector{Union{String, Pair{String, <:Any}}},
@@ -3136,163 +3161,189 @@ function _bulk_update(objct::SQLObjectHandler, @nospecialize(src),
     _reject_unsafe_bulk_update_shape(work.object)
 
     df = _bulk_frame(src, "bulk_update")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
-
-    # If no rows then nothing to do
-    if df.row_count == 0
-      @warn("Warning in bulk_update, the table is empty")
-      # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
-      return show_query === :execute ? _bulk_result(0) : nothing
-    end
-
-    # Prepare columns and the frame using centralized helpers
-    mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
-
-    # Resolve row-matching keys (match_on) and static predicates (filters).
-    pks = [field for field in model.field_names if model.fields[field].primary_key]
-    dinanic_filters, static_filters =
-      _resolve_bulk_update_keys!(df, model, mapping, fields_df, match_on, filters, pks)
-
-    _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
-
-    # An UPDATE has no projection. A plain `values()` left on the handler would still be rendered by
-    # build() into the `:select` bucket — the bucket every chunk binds its rows into — so it is
-    # dropped here rather than misbound (aggregates were already refused above).
-    empty!(work.object.values)
-    for filter in static_filters
-      work.filter(filter)
-    end
-    # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
-    # `mutation`: a membership subquery over this model's own table is read through a derived table on
-    # MySQL, which refuses a subquery on the table an UPDATE writes (error 1093, #1130 phase 3a).
-    instruction = build(work.object, connection=connection, semi_join=true, mutation=true)
-
-    # Build a list of row value strings by applying each model field formatter.
-    rows = String[]
-    # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
-    deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
-    # set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
-
-    # Security: Build safe SET clause with quoted identifiers
-    safe_set_parts = []
-    for field in fields_df
-      if !(field in deny_fields)
-        # @pormg_debug
-        # SET target uses the physical column (db_column) and is quoted escape-only like any physical
-        # name; the source.* reference and the VALUES/CTE source column list stay the FIELD name (#50)
-        # and are therefore ALIASES — they name columns of a derived table PormG invents here, not
-        # anything that exists in the schema — so they keep the fail-closed `quote_identifier` (#394).
-        # No cast here on either backend: on PostgreSQL the `source` columns are already typed by
-        # their `unnest($n::<type>[])` arrays (#672).
-        quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
-        quoted_source_field = quote_identifier(field, connection)
-        # The one exception (#28): an array column's `source` column is the text of its literal, so it
-        # is cast back to the column's array type here — see `_pg_bulk_source_cast`.
-        source_cast = _bulk_binds_column_arrays(connection) ? _pg_bulk_source_cast(model.fields[field], connection) : ""
-        push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
-      end
-    end
-
-    # Security: Create parameterized query.
-    # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
-    # the `$1…$k` numbering already rendered into `instruction._where`. It is the fixed prefix of
-    # every chunk's statement and is never written after this point: each chunk binds its rows into
-    # its own fork (#73), so a row that throws mid-chunk discards only that local collector. On
-    # PostgreSQL a chunk's rows are its column arrays, bound after the prefix as `$k+1…` (#672).
-    base_parameters = instruction.parameters
-    joined_columns = unique(vcat(fields_df, dinanic_filters))
-
-    # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
-    # limit (#84). On SQLite and MySQL each row binds one param per set column *and* per match key
-    # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
-    # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
-    effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
-      base_parameters.parameter_count, :bulk_update)
-    effective_chunk < chunk_size &&
-      @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
-
-    # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
-    # SQLite and MySQL bind each cell as they go and collect `(?, ?, …)` row tuples, for SQLite's VALUES
-    # CTE and MySQL's `VALUES ROW(…)` derived table (`_values_row_prefix`).
-    pg_arrays = _bulk_binds_column_arrays(connection)
-    casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
-    new_columns() = [Any[] for _ in joined_columns]
-
-    # Resolved once per column, not once per cell (#704), as in `bulk_insert`: the field-name half of
-    # `validate_field_data` for the SET columns (the only ones validated — match keys and static
-    # filters are skipped, since they are not written), and every source column by position. The
-    # `joined_*` vectors stay in `joined_columns` order, which the row source and `casts` follow.
-    set_fields = [field for field in fields_df if !(field in deny_fields)]
-    set_metas = [_validate_field_name(model, field, "bulk_update"; allow_primary_key = false) for field in set_fields]
-    set_sources = [_bulk_column(df, mapping[field]) for field in set_fields]
-    joined_metas = [model.fields[field] for field in joined_columns]
-    joined_sources = [_bulk_column(df, mapping[field]) for field in joined_columns]
-
-    results = []
-    # A chunk's rows bind into the :select context (the row source)
-    new_chunk_parameters() = (p = _fork_parameters(base_parameters); set_context!(p, :select); p)
-    update_loop = () -> begin
-      count::Integer = 0
-      total::Integer = df.row_count
-      rows = String[]
-      columns = new_columns()
-      chunk_parameters = new_chunk_parameters()
-      for index in 1:total
-        try
-          # Validation checks consistent with single update(), on the SET columns only
-          for (j, field) in enumerate(set_fields)
-            _validate_bulk_cell(model, field, set_metas[j], set_sources[j][index], "bulk_update", index)
-          end
-
-          # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
-          cells = [_format_bulk_cell(model, field, joined_metas[j], joined_sources[j][index], "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
-          if pg_arrays
-            for j in 1:min(length(columns), length(cells))   # as in `bulk_insert` (#1599 layer 7)
-              push!(columns[j], _pg_array_element_at(cells[j]))
-            end
-          else
-            push!(rows, "($(join([add_parameter!(chunk_parameters, cell) for cell in cells], ", ")))")
-          end
-        catch e
-          _depuration_values_bulk_insert(fields_df, mapping, model, df, index; op = "bulk_update")
-          e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
-          throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
-                                  op = "bulk_update", model = model.name, row = index))   # the type, never `$(e)` (#971)
-        end
-        count += 1
-        if count == effective_chunk || index == total
-          source_sql = pg_arrays ? _pg_unnest_source!(chunk_parameters, columns, casts) :
-                                   "VALUES " * join(_values_row_prefix(connection) .* rows, ", ")
-          res = _bulk_update(model, settings, connection, joined_columns, source_sql, String.(safe_set_parts), dinanic_filters, show_query, instruction, chunk_parameters)
-          push!(results, res)
-          count = 0
-          rows = String[]
-          columns = new_columns()
-          chunk_parameters = new_chunk_parameters()
-        end
-      end
-    end
-
-    # Wrap the whole chunk loop in one transaction on BOTH backends so a mid-chunk
-    # failure rolls back every already-flushed chunk (#85). This mirrors bulk_insert
-    # (`:749`) and bulk_copy (`:873`); a prior `!(connection isa PormGPostgres)` term
-    # here routed SQLite to the bare loop, leaving chunks 1…K-1 committed on a chunk-K
-    # failure. Skip the wrap only for dry-runs (`show_query !== :execute`) or when an
-    # outer transaction is already open (`has_active_tx`, to avoid a nested BEGIN).
-    has_active_tx = transaction_connection_for(settings) !== nothing
-    if show_query !== :execute || has_active_tx
-      update_loop()
-    else
-      run_in_transaction(update_loop, settings)
-    end
-
-    if show_query !== :execute
-      return length(results) == 1 ? results[1] : results
-    end
-
-    # Executed, each chunk returned its matched-row count (#670).
-    return _bulk_result(sum(results; init = 0))
-
+    return _bulk_update_frame(work, model, settings, connection, df, columns, match_on, filters, show_query, chunk_size)
   end
+end
+
+# #1599 layer 7, #1694: everything `bulk_update` does once its frame is built, compiled once for every kind of table,
+# as the whole call was under `@nospecialize(src)`. The source is read at its own type above (the checks and the frame,
+# in the order they ran), as `bulk_insert` reads it since #1814: over an unspecialized source the frame's Tables.jl calls
+# had no compiled target in a trimmed image (`_bulk_frame(::Vector{NamedTuple{…}}, ::String)`).
+function _bulk_update_frame(work::SQLObjectHandler, model::PormGModel, settings, connection, df::_BulkFrame,
+  columns::Vector{Union{String, Pair{String, String}}}, match_on::Vector{String},
+  filters::Vector{Union{String, Pair{String, <:Any}}}, show_query::Symbol, chunk_size::Integer)
+
+  # If no rows then nothing to do
+  if df.row_count == 0
+    @warn("Warning in bulk_update, the table is empty")
+    # Executed: zero rows, in the executed shape (#670). A dry run has no statement to return, as before.
+    return show_query === :execute ? _bulk_result(0) : nothing
+  end
+
+  # Prepare columns and the frame using centralized helpers
+  mapping, fields_df, pk_exist, pk_field = _prepare_bulk_df!(df, model, columns, :update, settings)
+
+  # Resolve row-matching keys (match_on) and static predicates (filters).
+  pks = [field for field in model.field_names if model.fields[field].primary_key]
+  dinanic_filters, static_filters =
+    _resolve_bulk_update_keys!(df, model, mapping, fields_df, match_on, filters, pks)
+
+  _ensure_unique_bulk_update_keys!(df, mapping, dinanic_filters)
+
+  # An UPDATE has no projection. A plain `values()` left on the handler would still be rendered by
+  # build() into the `:select` bucket — the bucket every chunk binds its rows into — so it is
+  # dropped here rather than misbound (aggregates were already refused above).
+  empty!(work.object.values)
+  for filter in static_filters
+    work.filter(filter)
+  end
+  # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
+  # `mutation`: a membership subquery over this model's own table is read through a derived table on
+  # MySQL, which refuses a subquery on the table an UPDATE writes (error 1093, #1130 phase 3a).
+  instruction = build(work.object, connection=connection, semi_join=true, mutation=true)
+
+  # Build a list of row value strings by applying each model field formatter.
+  rows = String[]
+  # deny_fields = vcat(pks, dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
+  deny_fields = vcat(dinanic_filters, [filter.first for filter in static_filters]) |> unique # colect all keys that are not allowed/need to update
+  # set_columns = join([ "$(field) = source.$(field)::$(model.fields[field].type |> lowercase)" for field in fields_df if !(field in deny_fields) ], ", ")
+
+  # Security: Build safe SET clause with quoted identifiers
+  safe_set_parts = String[]   # #1599 layer 7: the SET parts are text, and `String.(…)` over an untyped vector was dynamic
+  for field in fields_df
+    if !(field in deny_fields)
+      # @pormg_debug
+      # SET target uses the physical column (db_column) and is quoted escape-only like any physical
+      # name; the source.* reference and the VALUES/CTE source column list stay the FIELD name (#50)
+      # and are therefore ALIASES — they name columns of a derived table PormG invents here, not
+      # anything that exists in the schema — so they keep the fail-closed `quote_identifier` (#394).
+      # No cast here on either backend: on PostgreSQL the `source` columns are already typed by
+      # their `unnest($n::<type>[])` arrays (#672).
+      quoted_field = safe_column_identifier(Models.field_db_column(model.fields[field], field), connection)
+      quoted_source_field = quote_identifier(field, connection)
+      # The one exception (#28): an array column's `source` column is the text of its literal, so it
+      # is cast back to the column's array type here — see `_pg_bulk_source_cast`.
+      source_cast = _bulk_binds_column_arrays(connection) ? _pg_bulk_source_cast(model.fields[field], connection) : ""
+      push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
+    end
+  end
+
+  # Security: Create parameterized query.
+  # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL
+  # the `$1…$k` numbering already rendered into `instruction._where`. It is the fixed prefix of
+  # every chunk's statement and is never written after this point: each chunk binds its rows into
+  # its own fork (#73), so a row that throws mid-chunk discards only that local collector. On
+  # PostgreSQL a chunk's rows are its column arrays, bound after the prefix as `$k+1…` (#672).
+  base_parameters = instruction.parameters
+  joined_columns = unique(vcat(fields_df, dinanic_filters))
+
+  # Cap the chunk so `fixed + effective_chunk × ncols` stays under the backend's bind-parameter
+  # limit (#84). On SQLite and MySQL each row binds one param per set column *and* per match key
+  # (joined_columns); the static-filter WHERE params in `base_parameters` are re-included on every
+  # chunk, so they are the per-statement fixed overhead. On PostgreSQL a row binds nothing (#672).
+  effective_chunk = _bulk_chunk_rows(connection, chunk_size, length(joined_columns),
+    base_parameters.parameter_count, :bulk_update)
+  effective_chunk < chunk_size &&
+    @debug "bulk_update: capped chunk_size $chunk_size → $effective_chunk to respect the backend bind-parameter limit" model = model.name
+
+  # PostgreSQL collects each chunk as one array per joined column and binds them at flush (#672);
+  # SQLite and MySQL bind each cell as they go and collect `(?, ?, …)` row tuples, for SQLite's VALUES
+  # CTE and MySQL's `VALUES ROW(…)` derived table (`_values_row_prefix`).
+  pg_arrays = _bulk_binds_column_arrays(connection)
+  casts = pg_arrays ? [_pg_bulk_param_type(model.fields[field], connection) for field in joined_columns] : String[]
+  new_columns() = [Any[] for _ in joined_columns]
+
+  # Resolved once per column, not once per cell (#704), as in `bulk_insert`: the field-name half of
+  # `validate_field_data` for the SET columns (the only ones validated — match keys and static
+  # filters are skipped, since they are not written), and every source column by position. The
+  # `joined_*` vectors stay in `joined_columns` order, which the row source and `casts` follow.
+  set_fields = [field for field in fields_df if !(field in deny_fields)]
+  # #1599 layer 7, #1694: each vector at a declared element type, as `bulk_insert`'s (#1814). An untyped comprehension's
+  # vector took its element type from its values at run time, and the chunk loop's closure, which captures them, was a
+  # type a trimmed image could not name (`_array_for_inner(::DataType, …)`). Same elements, in the same order.
+  set_metas = Models.AnyField[_validate_field_name(model, field, "bulk_update"; allow_primary_key = false) for field in set_fields]
+  set_sources = AbstractVector[_bulk_column(df, mapping[field]) for field in set_fields]
+  joined_metas = Models.AnyField[model.fields[field] for field in joined_columns]
+  joined_sources = AbstractVector[_bulk_column(df, mapping[field]) for field in joined_columns]
+
+  results = []
+  # A chunk's rows bind into the :select context (the row source)
+  # The collector the chunks fork from, at the connection's own collector type (#1599 layer 7, `_engine_collector`): a
+  # closure's type is made from its captured values' types, and `base_parameters` is one of three collectors, so
+  # capturing it left the loop's type open; held as the union, every bind in the loop compiled for all three collectors.
+  # Narrowed here, after `base_parameters.parameter_count` was read, so a missing collector raises where it did.
+  chunk_base = _engine_collector(connection, base_parameters)
+  new_chunk_parameters() = (p = _fork_parameters(chunk_base); set_context!(p, :select); p)
+  update_loop = () -> begin
+    count::Integer = 0
+    total::Integer = df.row_count
+    chunk_rows = String[]   # not `rows`: an outer local, which assigning here boxed (#1599 layer 7)
+    chunk_columns = new_columns()   # not `columns`: the name of an argument, which assigning here boxed (#1599 layer 7)
+    chunk_parameters = new_chunk_parameters()
+    for index in 1:total
+      try
+        # Validation checks consistent with single update(), on the SET columns only
+        for (j, field) in enumerate(set_fields)
+          _validate_bulk_cell(model, field, set_metas[j], _bulk_cell(set_sources[j], index), "bulk_update", index)
+        end
+
+        # Format the whole row before keeping any of it, so the PostgreSQL columns never go ragged.
+        cells = Any[_format_bulk_cell(model, field, joined_metas[j], _bulk_cell(joined_sources[j], index), "bulk_update", index; conn = connection) for (j, field) in enumerate(joined_columns)]
+        if pg_arrays
+          for j in 1:min(length(chunk_columns), length(cells))   # as in `bulk_insert` (#1599 layer 7)
+            push!(chunk_columns[j], _pg_array_element_at(cells[j]))
+          end
+        else
+          # A loop through the typed bind, as `bulk_insert`'s (#1599 layer 7): the comprehension's closure captured the
+          # chunk's collector, one of three types, so the closure's type, and the call into it, were decided at run time.
+          placeholders = String[]
+          for cell in cells
+            push!(placeholders, _bind_written_value!(chunk_parameters, cell)::String)
+          end
+          push!(chunk_rows, "($(join(placeholders, ", ")))")
+        end
+      catch e
+        _depuration_values_bulk_insert(fields_df, mapping, model, df, index; op = "bulk_update")
+        e isa PormGError && rethrow()   # keep the taxonomy type; a value refusal already names its row (the depuration pass above, or `_validate_bulk_cell` / `_format_bulk_cell`, #875)
+        throw(InvalidValueError("The row failed validation or formatting ($(typeof(e))).", :other;
+                                op = "bulk_update", model = model.name, row = index))   # the type, never `$(e)` (#971)
+      end
+      count += 1
+      if count == effective_chunk || index == total
+        source_sql = pg_arrays ? _pg_unnest_source!(chunk_parameters, chunk_columns, casts) :
+                                 "VALUES " * join(_values_row_prefix(connection) .* chunk_rows, ", ")
+        res = _bulk_update(model, settings, connection, joined_columns, source_sql, copy(safe_set_parts), dinanic_filters, show_query, instruction, chunk_parameters)
+        push!(results, res)
+        count = 0
+        chunk_rows = String[]
+        chunk_columns = new_columns()
+        chunk_parameters = new_chunk_parameters()
+      end
+    end
+  end
+
+  # Wrap the whole chunk loop in one transaction on BOTH backends so a mid-chunk
+  # failure rolls back every already-flushed chunk (#85). This mirrors bulk_insert
+  # (`:749`) and bulk_copy (`:873`); a prior `!(connection isa PormGPostgres)` term
+  # here routed SQLite to the bare loop, leaving chunks 1…K-1 committed on a chunk-K
+  # failure. Skip the wrap only for dry-runs (`show_query !== :execute`) or when an
+  # outer transaction is already open (`has_active_tx`, to avoid a nested BEGIN).
+  has_active_tx = transaction_connection_for(settings) !== nothing
+  if show_query !== :execute || has_active_tx
+    update_loop()
+  else
+    run_in_transaction(update_loop, settings)
+  end
+
+  if show_query !== :execute
+    return length(results) == 1 ? results[1] : results
+  end
+
+  # Executed, each chunk returned its matched-row count (#670).
+  # The total at `Int` through `_bulk_result_at`, as `bulk_insert`'s (#1599 layer 7): `sum` over the untyped results was
+  # untyped, and `_bulk_result` on it a dynamic call.
+  return _bulk_result_at(_bulk_count_total(results), nothing)
+
 end
 
 function _bulk_update(model::PormGModel,

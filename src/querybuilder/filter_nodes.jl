@@ -660,15 +660,32 @@ _guarded_format(@nospecialize(formatter), @nospecialize(values), operator::Abstr
 # outside the convention. Falling through to the bare function name was the first cut and it put
 # "is the type format_yyyy_mm" — an internal symbol — in a sentence a user reads; truthful and
 # unreadable are not the same bar. `yyyy-mm` is what that formatter actually demands.
-function _formatter_type_label(formatter)::String
+#
+# #1599 layer 5: the formatter is taken unspecialized (callers hold it as `Function`), and its name is read at concrete
+# types (`_formatter_name`): specialized on it, the call had no compiled target in a trimmed image, and `nameof` over an
+# abstract `Function` dispatched at run time (`F("round") + 1 == 19`, a value compared with an expression).
+function _formatter_type_label(@nospecialize(formatter))::String
   # #1130: MySQL's `DurationField` formatter (a BIGINT of microseconds) demands what SQLite's does.
   formatter === Dialect._format_mysql_duration && return "duration"
-  n = string(nameof(formatter))
+  n = string(_formatter_name(formatter))
   m = match(r"^format_(.+)_sql$", n)
   m === nothing || return replace(m.captures[1], '_' => ' ')
   m2 = match(r"^format_(.+)$", n)
   return m2 === nothing ? n : replace(m2.captures[1], '_' => '-')
 end
+
+# `nameof(formatter)`: for a plain generic function (a singleton type, as every `format_*_sql` is), the name of its
+# type, which is what `nameof(::Function)` reads, here through typed field reads. Anything else (a functor such as
+# `ArrayFormatter`, which defines its own `nameof`, a closure that captures, an intrinsic) through `nameof` itself,
+# behind `@noinline`.
+@noinline function _formatter_name(@nospecialize(f))::Symbol
+  if f isa Function && !(f isa Core.IntrinsicFunction)
+    T = typeof(f)::DataType
+    isdefined(T, :instance) && !(f isa Models.ArrayFormatter) && return (T.name::Core.TypeName).singletonname::Symbol
+  end
+  return _formatter_name_other(f)
+end
+@noinline _formatter_name_other(@nospecialize(f))::Symbol = nameof(f)
 
 # #576: message labels for a site whose column is a TRANSFORM rather than a field. The transform
 # ladder has an `FObject`, which carries neither a `.type` nor the `field_name` local the `BETWEEN`
@@ -976,17 +993,25 @@ end
 #
 # #1528: every column-RHS filter ends here, once its right has rendered, so a JSON key (or a value
 # carrying one) on the right is refused here, once, as in the expression spelling.
-function _render_column_rhs(column::AbstractString, v::SQLTypeOper, rhs, instruc::SQLInstruction)::String
+#
+# #1599 layer 5: `rhs` is taken unspecialized, since a right side's render can answer untyped (an `OuterRef` renders
+# against the abstract outer instruction); specialized on it, the call had no compiled target in a trimmed image (the
+# read stopped at `"year__@gt" => F("round") + 2000`). The pattern arm binds through `_render_predicate_any`, the same
+# call at the value's type, and a `String` right side is joined at its type; any other value as before.
+function _render_column_rhs(column::AbstractString, v::SQLTypeOper, @nospecialize(rhs), instruc::SQLInstruction)::String
   # Every caller reaches here with a node on the right (a column expression, a subquery, a CTE column).
   rhs_node = _oper_value_node(v)
   rhs_node === nothing || _refuse_json_key_right_operand(rhs_node, instruc)
   operator = v.operator
   operator in VERBATIM_PATTERN_OPERATORS &&
-    return _render_predicate(column, operator, rhs, instruc)
+    return _render_predicate_any(column, operator, rhs, instruc, false)
   operator in ("=", ">", "<", ">=", "<=", "<>", "!=") ||
     throw(FilterError("Invalid filter operator: $(operator) does not take a column expression."))
-  return string(column, " ", operator, " ", rhs)
+  rhs isa String && return string(column, " ", operator, " ", rhs)
+  return _column_rhs_text_other(column, operator, rhs)
 end
+@noinline _column_rhs_text_other(column::AbstractString, operator::AbstractString, @nospecialize(rhs))::String =
+  string(column, " ", operator, " ", rhs)
 
 # #894 — the milliseconds a SQLite `DurationField` filter compares, or `nothing` for the text
 # comparison every other filter makes. Ordering lookups only (`@gt`/`@gte`/`@lt`/`@lte`/`@range`/
@@ -1364,6 +1389,25 @@ format_pattern_number_sql(value::AbstractFloat) = string(Models.format_number_sq
 format_pattern_number_sql(value) = format_pattern_text_sql(value)
 _lookup_formatter(field::PormGField, operator::AbstractString) = _lookup_formatter(field.formatter, operator)
 
+# A column right side rendered as a comparison's right (`_on_join_right`), at its concrete node type (#1599 layer 5). A
+# closure over the four-member union had no concrete type, so the call into `_on_join_right` had no compiled target
+# in a trimmed image: the read stopped at `"year__@gt" => F("round") + 2000`. Each arm binds its own typed local
+# before the closure captures it (a captured variable keeps the type it was declared with).
+function _column_rhs_sql(rhs_ref::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}, instruc::SQLInstruction)
+  if rhs_ref isa FExpression
+    fx = rhs_ref::FExpression
+    return _on_join_right(() -> _get_filter_query(fx, instruc), instruc)
+  elseif rhs_ref isa OuterRefObject
+    outer = rhs_ref::OuterRefObject
+    return _on_join_right(() -> _get_filter_query(outer, instruc), instruc)
+  elseif rhs_ref isa CTEReference
+    cte = rhs_ref::CTEReference
+    return _on_join_right(() -> _get_filter_query(cte, instruc), instruc)
+  end
+  joined = rhs_ref::JoinedReference
+  return _on_join_right(() -> _get_filter_query(joined, instruc), instruc)
+end
+
 # #1310: an ordering pair (`"date__@gt" => F("meta__round")`, `"meta__d__@range" => […]`) is checked
 # as its `F` spelling is (`_checking_unnamed_temporal`, `expression_render.jl`), after both sides render.
 function _get_filter_query(v::SQLTypeOper, instruc::SQLInstruction)
@@ -1551,7 +1595,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # F expressions are safe since they reference model fields; a CTE handle (#444) is the same
     # thing scoped to a CTE — `filter("raceid" => CTE("r91", "raceid"))` is a column comparison,
     # never a bound value.
-    placeholders = _on_join_right(() -> _get_filter_query(rhs_ref, instruc), instruc)
+    placeholders = _column_rhs_sql(rhs_ref, instruc)
     _refuse_duration_mismatch(v, instruc)
     return _render_column_rhs(column, v, placeholders, instruc)
   elseif isa(value_node, SQLTypeFunction)

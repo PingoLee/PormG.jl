@@ -343,8 +343,9 @@ end
                q.values("resultid", "driverid__code"); q)
     @test occursin("(\"Tb_1\".\"number\" > ABS(\"Tb\".\"grid\"))", _jcr_sql(build()))
 
+    # The render's body is positional since #1599 layer 5 (the keyword method forwards to it), so the mutant is too.
     unmarked() = @eval JCR_QB function _render_operand_typed(operand::FObject, field_name::Any, operation::String,
-                                                             instruc::SQLInstruction; left_kind::TemporalKind = nothing)
+                                                             instruc::SQLInstruction, left_kind::TemporalKind)
         return _render_function_operand_typed(operand, instruc)
     end
     _jcr_with_mutant(unmarked, JCR_QB._render_operand_typed) do

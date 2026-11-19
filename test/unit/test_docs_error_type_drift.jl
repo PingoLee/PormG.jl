@@ -185,6 +185,11 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # rows are materialized before the ON clauses render. Raised rather than emitted, because the
     # emitted form is an unwritten join carrying the predicate — #973 itself.
     "src/querybuilder/join_conditions.jl" => 1,  # a join condition added a join while rendering — internal invariant
+    # #1599 layer 5: the function rule ladders are generated from the method table when the file loads, and a rule
+    # method on a shape the generator cannot read (a `Union` of `Val`s) is refused there rather than left out of the
+    # ladder to answer `:unknown`. Raised at package load, by PormG's own source: no query, and so no consumer, can
+    # reach it — it fails the precompile of the change that adds such a method.
+    "src/querybuilder/functions.jl" => 1,  # a rule method the by-name ladder cannot read — load-time invariant
     "src/ConnectionPool.jl"             => 1,  # `error("validation failed")` inside atomic()'s DOCSTRING example
 )
 

@@ -345,8 +345,12 @@ const _TEXT_OUTPUT_FUNCTIONS = ("LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "REP
 # `"YYYY-MM"` label. The range belongs to the part, not to an expression computed from it: `hour + 1`
 # reaches 24, and `Coalesce("ts__@month", 0)` is 0 for a NULL date. Such an expression keeps the
 # family (a number, a text) and drops the range.
-_unranged(f) = f in Models.PERIOD_FORMATTERS ? Models.format_number_sql :
-               f === Models.format_yyyy_mm   ? Models.format_text_sql : f
+#
+# #1599 layer 5: `f` is a formatter held as `Function` (a field's or a node's slot), so the body takes it unspecialized,
+# and the period formatters are matched by `===` (no formatter type defines `==`, so it is what `in`'s `==` answered):
+# specialized on `f`, the call had no compiled target in a trimmed image (`F("round") + 2000`).
+_unranged(@nospecialize(f)) = any(p -> p === f, Models.PERIOD_FORMATTERS) ? Models.format_number_sql :
+                              f === Models.format_yyyy_mm ? Models.format_text_sql : f
 
 # #1034 step 4 — the formatter a value compared with this expression must satisfy, or `nothing` when
 # its type cannot be named. Only a type that is KNOWN is returned — see `_having_alias_formatter`.
@@ -386,7 +390,7 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
     end
     return nothing
   end
-  formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
+  formatter = _kind_formatter_at(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   return name in ("SUM", "AVG") ? Models.format_number_sql : nothing   # an operand the walk cannot type
 end
@@ -395,7 +399,7 @@ end
 # comparison is a boolean, which the walk names.
 function _expression_formatter(p::FExpression, instruc::SQLInstruction)
   p.operation === nothing && return _expression_formatter(p.column, instruc)
-  formatter = _kind_formatter(_expression_kind(p, instruc), instruc)
+  formatter = _kind_formatter_at(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
   # formatter. See `_unranged`. Only what the walk does not type reaches here (a JSON key lookup).
@@ -576,11 +580,34 @@ end
 # A raw value is a literal — a string too, not a path (`_case_kind`) — so it is wrapped as one.
 function _case_values(p::FObject)
   values = Any[]
-  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
-    branch isa SQLTypeFunction && branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+  # #1599 layer 5: the branches at the column's concrete type (a `Case` holds a `Vector{FObject}` or one `FObject`);
+  # over the untyped column the iteration dispatched at run time. Any other column takes the old loop.
+  col = p.column
+  if col isa Vector{FObject}
+    for branch in col
+      branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+    end
+  elseif col isa FObject
+    col.function_name == "WHEN" && push!(values, get(col.kwargs, "then", nothing))
+  else
+    _case_values_other!(values, col)
   end
   push!(values, get(p.kwargs, "else", nothing))
-  return Any[v isa Union{SQLObject,SQLType} ? v : SQLText(v) for v in values if !_is_null_literal(v isa SQLText ? v.field : v)]
+  # #1599 layer 5: a loop, not a comprehension: the comprehension's closures were called on each untyped value, a run-time
+  # dispatch a trimmed image had no target for (`Case(When(…, then = 6), default = 100)`). The same vector, in order.
+  out = Any[]
+  for v in values
+    _is_null_literal(v isa SQLText ? v.field : v) && continue
+    push!(out, v isa Union{SQLObject,SQLType} ? v : SQLText(v))
+  end
+  return out
+end
+
+@noinline function _case_values_other!(values::Vector{Any}, @nospecialize(column))
+  for branch in (column isa AbstractVector ? column : (column,))
+    branch isa SQLTypeFunction && branch.function_name == "WHEN" && push!(values, get(branch.kwargs, "then", nothing))
+  end
+  return values
 end
 
 # #1200 — a value that is one of several operands' (`Coalesce`, `Greatest`, `Least`, `NullIf`, a `Case`
@@ -621,16 +648,21 @@ end
 # whatever the untyped one is. `(class, what, literal)` names each side by its type and its label, never
 # a value, and says whether it is a literal. No departure table is read; the walk's kinds are the
 # engine's own, so a cast the engine renders as text (a uuid cast on SQLite) is text there.
-_temporal_mix_class(::CDate) = :date
-_temporal_mix_class(k::CDateTime) = k.with_timezone ? :timestamptz : :timestamp
-_temporal_mix_class(::CTime) = :time
-_temporal_mix_class(::CInterval) = :interval
-_temporal_mix_class(::Union{CText,CVarChar}) = :text
-_temporal_mix_class(::Union{CInt16,CInt32,CInt64,CFloat64,CDecimal}) = :number
-_temporal_mix_class(::CUUID) = :uuid
-_temporal_mix_class(::CBool) = :bool
-_temporal_mix_class(::CJSON) = :json
-_temporal_mix_class(::Any) = nothing
+# #1599 layer 5: one method, the kind unspecialized and tested with `isa` (the caller holds the abstract `CanonicalType`
+# `_infer_kind` answers; the ten methods this replaces had no compileable signature for it: the trimmed read stopped at
+# `_temporal_mix_class(::CInt64)` on a `Case` value). The same class for every kind.
+function _temporal_mix_class(@nospecialize(k))::Union{Symbol,Nothing}
+  k isa CDate && return :date
+  k isa CDateTime && return (k.with_timezone ? :timestamptz : :timestamp)
+  k isa CTime && return :time
+  k isa CInterval && return :interval
+  k isa Union{CText,CVarChar} && return :text
+  k isa Union{CInt16,CInt32,CInt64,CFloat64,CDecimal} && return :number
+  k isa CUUID && return :uuid
+  k isa CBool && return :bool
+  k isa CJSON && return :json
+  return nothing
+end
 const _TEMPORAL_MIX_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE", "LAG", "LEAD")
 
 # The pairs of classes that are a mix: any two that differ (#1200, #1327, #1321), except a UUID beside
@@ -661,7 +693,7 @@ function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction
   sides = Tuple{Symbol,String,Bool}[]
   for value in _temporal_mix_values(p)
     # #1386: a key lookup is the key's value, of the data's type (`CJSONValue`, #1458): no class.
-    class = _temporal_mix_class(_infer_kind(value, instruc, _AllKinds()))
+    class = _temporal_mix_class(_infer_kind_any(value, instruc, _AllKinds()))
     class === nothing && continue
     side = (class, _temporal_mix_label(value), value isa SQLText)
     for seen in sides
@@ -878,7 +910,7 @@ function _cte_textless_record(p::CTEReference, instruc::SQLInstruction)::Union{T
   side = _cte_division(p, instruc, :quotient)
   side === nothing || return (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
   occursin("__", p.path) && return nothing
-  k = _infer_kind(p, instruc, _MeaningKinds())
+  k = _infer_kind_any(p, instruc, _MeaningKinds())
   tag = k isa CDateTime ? :timestamp : k isa CInterval ? :interval : k isa CFloat64 ? :float :
         k isa CDecimal && _cte_decimal_places(p, k, instruc) != 0 ? :decimal : nothing
   tag === nothing && return nothing
@@ -1321,7 +1353,7 @@ function _interval_operand(operand, instruc::SQLInstruction)
   side = _concat_textless_operand(operand, instruc)
   side !== nothing && side[1] === :interval && return side
   if side === nothing || side[1] === :numeric
-    _infer_kind(operand, instruc, _MeaningKinds()) isa CInterval &&
+    _infer_kind_any(operand, instruc, _MeaningKinds()) isa CInterval &&
       return (:interval, side === nothing ? "an interval expression" : side[2])
   end
   return nothing
@@ -1336,7 +1368,7 @@ function _temporal_number_operand(operand, instruc::SQLInstruction)
   side = _interval_operand(operand, instruc)
   side === nothing || return side
   kind = operand isa Union{Dates.TimeType,ZonedDateTime} ? literal_canonical_kind(operand) :
-         _infer_kind(operand, instruc, _MeaningKinds())
+         _infer_kind_any(operand, instruc, _MeaningKinds())
   tag = kind isa CDate ? :date : kind isa CTime ? :time : kind isa CDateTime ? :timestamp : nothing
   tag === nothing && return nothing
   literal = operand isa SQLText ? operand.field : operand
@@ -1350,7 +1382,7 @@ end
 # `:decimal`, the kinds a `:date` departure row lists; `nothing` for anything else, a boolean
 # included. Read under `_MeaningKinds`, so a computed number is what its call means.
 function _number_operand(operand, instruc::SQLInstruction)
-  kind = _infer_kind(operand, instruc, _MeaningKinds())
+  kind = _infer_kind_any(operand, instruc, _MeaningKinds())
   tag = kind isa Union{CInt16,CInt32,CInt64} ? :integer : kind isa CFloat64 ? :float :
         kind isa CDecimal ? :decimal : nothing
   tag === nothing && return nothing
@@ -1517,7 +1549,7 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
     # division row of phase 4) — refused where the engine fact says such a sum departs
     # (`_untyped_sum_departs`), whether or not a `bigint` can be seen inside it. A sum of TEMPORAL
     # arithmetic is no such sum: the walk types it since #1034 step 5a, an interval, no integer quotient.
-    side = name == "SUM" && _infer_kind(operand, instruc, _AllKinds()) === nothing ?
+    side = name == "SUM" && _infer_kind_any(operand, instruc, _AllKinds()) === nothing ?
            (:numeric_whole_division, "a value PormG cannot type") : nothing
     side === nothing && (side = _whole_numeric_operand(operand, instruc))
     side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
@@ -1563,7 +1595,7 @@ function _integer_transform(p::Union{FObject,WindowFunction})::Bool
   p.function_name in _INTEGER_TRANSFORMS && return true
   p.function_name == "EXTRACT" || return false
   part = get(p.kwargs, "part", nothing)
-  return part isa AbstractString && Dialect.extract_part(part) in _INTEGER_EXTRACT_PARTS
+  return part isa AbstractString && _extract_part_at(part) in _INTEGER_EXTRACT_PARTS
 end
 
 # #1457, #1552 — the parts that are a decimal on every engine that has them, and SQLite has none of
@@ -1586,10 +1618,10 @@ function _decimal_extract_kind(p::Union{FObject,WindowFunction}, instruc::SQLIns
   p.function_name == "EXTRACT" || return nothing
   part = get(p.kwargs, "part", nothing)
   part isa AbstractString || return nothing
-  up = Dialect.extract_part(part)
+  up = _extract_part_at(part)
   up in ("EPOCH", "MILLISECONDS") && return CDecimal(nothing, nothing)
   up == "MICROSECONDS" && return CDecimal(nothing, 0)
-  up == "JULIAN" && return CDecimal(nothing, _infer_kind(p.column, instruc, policy) isa CDate ? 0 : nothing)
+  up == "JULIAN" && return CDecimal(nothing, _infer_kind_any(p.column, instruc, policy) isa CDate ? 0 : nothing)
   return nothing
 end
 function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)

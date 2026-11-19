@@ -135,6 +135,26 @@ end
 # result was idempotent, but a node the caller still holds must not change under them (#508).
 _fresh_operands(c::AbstractVector) = copy(c)
 _fresh_operands(c) = c
+# `_check_function(_fresh_operands(column))` for a function's column, held untyped, at its concrete type (#1599 layer
+# 5). Over the untyped column both calls dispatched at run time, and a trimmed image had no target for them: the read
+# stopped at `_fresh_operands(::Vector{String})` building `"date__@year" => 2008`. One arm per column a function
+# commonly holds (a list copied, as `_fresh_operands` copies one); any other value takes the old calls behind
+# `@noinline`.
+@noinline function _check_operands_at(@nospecialize(c))
+  c isa String && return _check_function(c)
+  c isa Vector{String} && return _check_function(copy(c))
+  c isa Vector{Any} && return _check_function(copy(c))
+  c isa SQLField && return _check_function(c)
+  c isa FExpression && return _check_function(c)
+  c isa FObject && return _check_function(c)
+  # A `When`'s condition, a `Q`/`Qor` condition, a `Case`'s `When`s.
+  c isa OperObject && return _check_function(c)
+  c isa QObject && return _check_function(c)
+  c isa QorObject && return _check_function(c)
+  c isa Vector{FObject} && return _check_function(copy(c))
+  return _check_operands_other(c)
+end
+@noinline _check_operands_other(@nospecialize(c)) = _check_function(_fresh_operands(c))
 
 # #863 — the walk covers every slot an expression can hide in, not only `column`. It used to stop
 # there, and `values(...)` was the only caller, so a transform (`"ts__@date"`) inside a function in
@@ -160,11 +180,15 @@ function _walk_kwargs(kwargs::Dict{String,Any})
   return out
 end
 
+# #1599 layer 5: built with the positional constructor, the column asserted to the field's declared type (what the
+# keyword constructor converts it to; `_check_function` answers a value of it): the keyword call over the untyped
+# column had no concrete `NamedTuple`, so it dispatched at run time (`"date__@year" => 2008`). The same fields, in the
+# same order.
 function _check_function(f::FObject)
-  return FObject(function_name=f.function_name, column=_check_function(_fresh_operands(f.column)),
-                 aggregate=f.aggregate, formatter=f.formatter, _as=f._as,
-                 kwargs=_walk_kwargs(f.kwargs))
+  return FObject(f.function_name, _check_operands_at(f.column)::_FObjectColumn, f.aggregate, f.formatter, f._as,
+                 _walk_kwargs(f.kwargs))
 end
+const _FObjectColumn = fieldtype(FObject, :column)
 # The spec is rebuilt only when a partition entry is an expression to walk; otherwise `over` stays
 # shared and the built node is byte-identical to before #863. A rebuilt spec is a FRESH one (the
 # `_retag_cte_string(::WindowFunction)` shape, ctes.jl): the caller's spec may be shared across two
@@ -177,7 +201,7 @@ function _walk_window_spec(over::WindowSpec)
 end
 function _check_function(f::WindowFunction)
   return WindowFunction(function_name=f.function_name,
-                        column=f.column === nothing ? nothing : _check_function(_fresh_operands(f.column)),
+                        column=f.column === nothing ? nothing : _check_operands_at(f.column),
                         over=_walk_window_spec(f.over), aggregate=f.aggregate, formatter=f.formatter,
                         _as=f._as, kwargs=_walk_kwargs(f.kwargs))
 end
@@ -192,8 +216,12 @@ function _check_function(f::SQLTypeOper)
   # Through the slot's accessors (#1599 round 10): `_walk_slot`'s test, asked of the node view.
   node = _oper_value_node(f)
   values = node isa Union{SQLTypeFunction,FExpression} ? _check_function(node) : _oper_literal(f)
-  return OperObject(operator=f.operator, values=values, column=_check_function(_oper_column(f)))
+  # #1599 layer 5: positional, `values` and the column asserted to the fields' declared types (what the keyword
+  # constructor converts them to), as `_check_function(::FObject)` is built: the keyword call over untyped values had no
+  # concrete `NamedTuple` (a `When` condition, `Case(When("round__@lt" => 10, …))`). The same fields, in the same order.
+  return OperObject(f.operator, values::_OperValues, _check_function(_oper_column(f))::ColumnPart)
 end
+const _OperValues = fieldtype(OperObject, :values)
 function _check_function(f::Union{SQLText,SQLField})
   return f
 end

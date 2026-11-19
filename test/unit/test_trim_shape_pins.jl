@@ -5910,6 +5910,234 @@ end
     @test length(open_arm) == 2 && occursin("_pormg_lower(", open_arm[1]) && occursin("sqlreturn", open_arm[2])
   end
 
+  # What: the condition walk (`_each_condition_leaf`), which every projection and filter value is asked through (an
+  #   alias, an aggregate, a window), and its vector arm (`_each_condition_leaf_in`).
+  # Expected: the node argument is unspecialized (bit 2), no dynamic call in the walk but the vector arm's open
+  #   `foreach`, and that one call only (the vectors it names are static).
+  # Why: specialized on the node, each recursive call into an `Any` slot had no compiled target: the trimmed read
+  #   stopped at `_each_condition_leaf(…, ::Int64, …)` on `"year__@gt" => F("round") + 2000` (#1599 layer 5).
+  @testset "the condition walk recurses at one compiled body (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    m = only(methods(QB._each_condition_leaf, (Function, Any, Int)))
+    @test m.nospecialize & 0b10 == 0b10
+    @test _dynamic_calls(QB._each_condition_leaf, (typeof(identity), Any)) == String[]
+    walk = _dynamic_calls(QB._each_condition_leaf, (typeof(identity), Any, Int))
+    @test isempty(walk) || all(s -> occursin("foreach", s), walk)
+    inner = _dynamic_calls(QB._each_condition_leaf_in, (typeof(identity), Any, Int))
+    @test length(inner) == 1 && occursin("foreach", only(inner))
+  end
+
+  # What: a column right side of a filter (`"year__@gt" => F("round") + 2000`, a CTE or joined column, an `OuterRef`),
+  #   rendered through `_column_rhs_sql` and joined by `_render_column_rhs`.
+  # Expected: `_render_filter_oper` calls neither `_on_join_right` nor `_render_column_rhs` dynamically; neither helper
+  #   makes a dynamic call; `_render_column_rhs`'s right side is unspecialized (bit 3).
+  # Why: a closure over the right side's four-member union had no concrete type, and the right side's render answers
+  #   untyped for an `OuterRef`: the trimmed read stopped at `_on_join_right(::var"#…"{…, FExpression}, …)` (#1599 layer 5).
+  @testset "a column right side renders at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    calls = _dynamic_calls(QB._render_filter_oper, (QB.OperObject, QB.InstructionObject))
+    @test !any(s -> occursin("_on_join_right", s) || occursin("_render_column_rhs", s), calls)
+    U = Union{QB.FExpression,QB.OuterRefObject,QB.CTEReference,QB.JoinedReference}
+    @test _dynamic_calls(QB._column_rhs_sql, (U, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._render_column_rhs, (String, QB.OperObject, Any, QB.InstructionObject)) == String[]
+    @test only(methods(QB._render_column_rhs)).nospecialize & 0b100 == 0b100
+  end
+
+  # What: an expression's left side (`_render_left_typed` → `_set_update_query_left_at` → `_set_update_query_left`).
+  # Expected: no dynamic call to `_set_update_query_left` from `_render_left_typed`, none in the walk, and none in the
+  #   callee at `String` (a column, the left side of `F("round") + 2000`).
+  # Why: the left side arrives unspecialized, so the call dispatched at run time: the trimmed read stopped at
+  #   `_set_update_query_left(::String, ::String, …)` (#1599 layer 5).
+  @testset "an expression's left side renders at its type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test !any(s -> occursin("_set_update_query_left", s),
+               _dynamic_calls(QB._render_left_typed, (Any, String, QB.InstructionObject)))
+    @test _dynamic_calls(QB._set_update_query_left_at, (Any, String, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._set_update_query_left, (String, String, QB.InstructionObject)) == String[]
+  end
+
+  # What: an expression's right operand (`_render_operand_typed_at` / `_set_update_query_operand_at` → the positional
+  #   bodies), and their ON-clause re-entry (`_render_operand_on_join`, `_set_update_query_operand_on_join`).
+  # Expected: no dynamic call in either walk; none in the positional bodies at an `Int64` operand and a column or an
+  #   expression on the left; the ON-clause re-entry calls `_on_join_right` behind `Base.inferencebarrier` (a source pin:
+  #   that call is dynamic by design, so a static one cannot nest `_with_render_scope` in itself).
+  # Why: the sides are untyped `FExpression` slots and `left_kind` is the `TemporalKind` union: the trimmed read stopped at
+  #   the keyword calls into both bodies, and, once those were static, at an "unresolved invoke" of
+  #   `_render_operand_typed(::Int64, …)`, a frame in the `_with_render_scope` recursion (#1711's class) (#1599 layer 5).
+  @testset "an expression's right operand renders at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._render_operand_typed_at, (Any, Any, String, QB.InstructionObject, Any)) == String[]
+    @test _dynamic_calls(QB._set_update_query_operand_at, (Any, Any, String, QB.InstructionObject, Any)) == String[]
+    # (`!==` is a call too with inlining off, the coverage lesson of #1816; it is no dispatch.)
+    for L in (String, QB.FExpression)
+      calls = filter(s -> !occursin(" !== ", s), _dynamic_calls(QB._set_update_query_operand, (Int64, L, String, QB.InstructionObject, Nothing)))
+      @test (L, calls) == (L, String[])
+    end
+    # The ON-clause branch's result is converted to the declared return type, the one call left (as in `_render_left_typed`).
+    @test all(s -> occursin("Base.convert(Tuple{String", s),
+              _dynamic_calls(QB._render_operand_typed, (Int64, String, String, QB.InstructionObject, Nothing)))
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_render.jl"), String)
+    @test count("Base.inferencebarrier(_on_join_right)", src) == 2
+    @test !occursin("_on_join_right(() -> _render_operand_typed(", src) && !occursin("_on_join_right(() -> _set_update_query_operand(", src)
+  end
+
+  # What: an operand's bind (`_add_typed_parameter!`, `_add_formatted_parameter!`) and the formatter family it reads
+  #   (`_unranged`), the label a refusal names (`_formatter_type_label`, `_formatter_name`), a kind's numeric rank
+  #   (`_numeric_rank`), and a function's column render (`_get_select_query_at`).
+  # Expected: no dynamic call in any of them (`_unranged`, `_formatter_type_label`, `_formatter_name` and
+  #   `_numeric_rank` take their argument unspecialized: one method each).
+  # Why: each was a run-time dispatch on the trimmed read of `F("round") + 2000`, `F("round") + 1 == 19` and
+  #   `Extract("date", "month") == 11`: the `sql_type` keyword's union, a `Function`-typed formatter, the abstract
+  #   `CanonicalType`, a function's untyped column (#1599 layer 5).
+  @testset "an expression's bind, kind and column render at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._add_typed_parameter!, (QB.InstructionObject, Int64, Union{Nothing,String})) == String[]
+    @test _dynamic_calls(QB._add_formatted_parameter!, (QB.InstructionObject, Any, Union{Nothing,String})) == String[]
+    for f in (QB._unranged, QB._formatter_type_label, QB._formatter_name, QB._numeric_rank)
+      @test (nameof(f), length(methods(f)), _dynamic_calls(f, (Any,))) == (nameof(f), 1, String[])
+    end
+    @test _dynamic_calls(QB._get_select_query_at, (Any, QB.InstructionObject, Union{Nothing,String})) == String[]
+  end
+
+  # What: the uncast-JSON-key refusal over an arithmetic node's two sides and over a comparison's right operand
+  #   (`_refuse_uncast_json_key`, `_refuse_json_key_right_operand`), and the carrier probe's walk (`_json_number_side_at`)
+  #   with the probe's own recursion into an `FExpression` or an `SQLField`.
+  # Expected: no dynamic call in the tuple and single-operand refusals, the walk, or the probe at `FExpression`/`SQLField`;
+  #   the walk names every method of the probe (a method added later without an arm fails here).
+  # Why: every arithmetic node and comparison asks this after it renders, over untyped sides: the trimmed read stopped at
+  #   `_refuse_uncast_json_key(_JSONKeyArithmetic, ::Tuple{String,Int64}, …)` and `_json_number_side(::Int64, …)` (#1599 layer 5).
+  @testset "the uncast-JSON-key refusal asks its probe at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._refuse_uncast_json_key, (QB._JSONKeyArithmetic, Tuple, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._json_number_side_at, (Any, QB.InstructionObject)) == String[]
+    for T in (QB.FExpression, QB.SQLField)
+      @test (T, _dynamic_calls(QB._json_number_side, (T, QB.InstructionObject))) == (T, String[])
+    end
+    # Every method's operand type has its arm (by source: a small method is inlined into the walk, so no `invoke` shows it).
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "json_key_refusal.jl"), String)
+    walk = src[findfirst("function _json_number_side_at(", src).start:end]
+    walk = walk[1:findfirst("\nend", walk).start]
+    for m in methods(QB._json_number_side)
+      P = m.sig.parameters[2]
+      P === Any && continue
+      for T in Base.uniontypes(P)
+        @test (T, occursin("x isa $(nameof(T)) && return _json_number_side(x, instruc)", walk)) == (T, true)
+      end
+    end
+  end
+
+  # What: a date part's name read from a node (`_extract_part_at`), and the values a node's `kwargs` hold compared with a
+  #   string (`_kwarg_is`).
+  # Expected: no dynamic call in either, and none in `_temporal_row_of` (the `Extract` arm: the part's row and name).
+  # Why: `Dialect.extract_part` over the untyped part, the `lowercase` of its answer, and `==` over an untyped value
+  #   dispatched at run time: `Extract("date", "month") == 11` and `"date__@year" => 2008` stopped there (#1599 layer 5).
+  @testset "a node's part and keyword values are read at their types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._extract_part_at, (Any,)) == String[]
+    @test _dynamic_calls(QB._kwarg_is, (Dict{String,Any}, String, String)) == String[]
+    @test all(s -> occursin("\"YYYY-MM\"", s), _dynamic_calls(QB._temporal_row_of, (QB.FObject,)))
+  end
+
+  # What: an expression's kind (`_expression_kind`), and the readers that took `_infer_kind` on an untyped value: they
+  #   call the walk (`_infer_kind_any`) now; and the kind classifiers asked of an abstract kind (`_temporal_hint`,
+  #   `_temporal_mix_class`, `_kind_formatter_at`).
+  # Expected: `_expression_kind` is one unspecialized method with no dynamic call; no `_infer_kind(` call outside its
+  #   methods and the walk but the one open arm (`_agreeing_kind_other`), by source; the classifiers make none.
+  # Why: a function's untyped column and an abstract `CanonicalType` reached them from every function render:
+  #   `_expression_kind(::String, …)`, `_temporal_hint(::CDate)`, `_infer_kind(::SQLText, …)`,
+  #   `_temporal_mix_class(::CInt64)` and `_kind_formatter(::CInt64, …)` each stopped the trimmed read (#1599 layer 5).
+  @testset "an expression's kind is read through the walks (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    m = only(methods(QB._expression_kind))
+    @test m.nospecialize & 0b1 == 0b1
+    @test _dynamic_calls(QB._expression_kind, (Any, QB.InstructionObject)) == String[]
+    for (f, tt) in ((QB._temporal_hint, (Any,)), (QB._temporal_mix_class, (Any,)), (QB._kind_formatter_at, (Any, QB.InstructionObject)))
+      @test (nameof(f), _dynamic_calls(f, tt)) == (nameof(f), String[])
+    end
+    @test length(methods(QB._temporal_hint)) == 1 && length(methods(QB._temporal_mix_class)) == 1
+    direct = String[]
+    for f in readdir(joinpath(pkgdir(PormG), "src", "querybuilder"); join = true)
+      for (i, line) in enumerate(eachline(f))
+        occursin(r"(?<![A-Za-z_])_infer_kind\(", line) || continue
+        occursin(r"_infer_kind\((p|x)?::|function _infer_kind|x isa .* && return _infer_kind\(x", line) && continue
+        occursin(r"^\s*#", line) && continue
+        push!(direct, string(basename(f), ":", i))
+      end
+    end
+    @test length(direct) == 1 && startswith(only(direct), "expression_kind.jl")
+  end
+
+  # What: a function's render: its column handed to the renderer ladder (`_function_sql`), its options read
+  #   (`Dialect.FnOptions`), its rules by name (`_result_rule_by_name`, `_operand_domain_by_name`), its column rendered
+  #   (`_get_select_query_at`), and a `Case`'s branches (`_render_case_branches_at`).
+  # Expected: no dynamic call in any; the rule ladders name every rule a `Val` method states.
+  # Why: a column held untyped, an option read as an abstract `AbstractString`, a `Val` built from a name at run time:
+  #   each stopped the trimmed read of `Extract("date", "month") == 11` or a `Case` (#1599 layer 5).
+  @testset "a function renders at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._function_sql, (String, Any, Dict{String,Any}, QB._SQLEngine)) == String[]
+    @test _dynamic_calls(PormG.Dialect.FnOptions, (Dict{String,Any},)) == String[]
+    for (f, rule) in ((QB._result_rule_by_name, QB._result_rule), (QB._operand_domain_by_name, QB._operand_domain))
+      @test (nameof(f), _dynamic_calls(f, (String,))) == (nameof(f), String[])
+      for m in methods(rule)
+        P = Base.unwrap_unionall(m.sig).parameters
+        (length(P) == 2 && P[2] isa DataType && P[2] <: Val && length(P[2].parameters) == 1) || continue
+        n = String(P[2].parameters[1])
+        @test (n, f(n)) == (n, rule(Val(Symbol(n))))
+      end
+    end
+    @test _dynamic_calls(QB._render_case_branches_at, (Any, QB.InstructionObject, Union{Nothing,String})) == String[]
+  end
+
+  # What: a filter's construction over a function (`_check_function` on an `FObject` and an `OperObject`, through the
+  #   column walk `_check_operands_at`) and the error a pair raises (`_in_pair`).
+  # Expected: no dynamic call in any of them; `_in_pair`'s error argument is unspecialized.
+  # Why: `_fresh_operands` and `_check_function` over an untyped column, and the keyword constructors over untyped
+  #   values, dispatched at run time; `_in_pair` specialized on the caught error raised its own `MethodError`, which
+  #   replaced the one being reported (`"date__@year" => 2008`, `Case(When(…))`) (#1599 layer 5).
+  @testset "a filter over a function is built at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._check_operands_at, (Any,)) == String[]
+    @test _dynamic_calls(QB._check_function, (QB.FObject,)) == String[]
+    @test _dynamic_calls(QB._check_function, (QB.OperObject,)) == String[]
+    @test only(methods(QB._in_pair)).nospecialize & 0b1 == 0b1
+    @test _dynamic_calls(QB._in_pair, (Any, String)) == String[]
+  end
+
+  # What: the sargable rewrite of a date bucket (`"date__@year" => 2008`): its field, its binds (`_bucket_bind`,
+  #   `_add_parameter_at`) and its bounds (`_bucket_bounds_at`).
+  # Expected: no dynamic call in the rewrite or its helpers.
+  # Why: the field came back untyped from the resolvers, the binds went through a closure over a union, and the bounds
+  #   helpers were called on the untyped value: each dispatched at run time (#1599 layer 5).
+  @testset "a date bucket's sargable rewrite runs at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._render_sargable_date_range, (QB.OperObject, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._bucket_bind, (QB.InstructionObject, PormG.Models.AnyField, Any, Any)) == String[]
+    @test _dynamic_calls(QB._add_parameter_at, (QB.InstructionObject, Any)) == String[]
+    @test _dynamic_calls(QB._bucket_bounds_at, (typeof(QB._year_bucket_bounds), Any, Bool)) == String[]
+  end
+
+  # What: a `Case`'s kind and values (`_case_kind`, `_case_then_values`, `_case_values`, `_agreeing_kind`), a null
+  #   literal's test (`_is_null_literal`), a branch value's bind type (`_infer_parameter_sql_type`), and the JSON probe
+  #   over a function's values (`_json_number_side(::FObject)`).
+  # Expected: no dynamic call in the `Case` readers or `_is_null_literal` (its open arm's `==` over a non-`String` text
+  #   excepted); `_is_null_literal` and `_infer_parameter_sql_type` take their value unspecialized; the probe iterates no
+  #   untyped value.
+  # Why: each read a `Case`'s untyped column or values, a run-time dispatch the trimmed read stopped at in turn
+  #   (#1599 layer 5).
+  @testset "a Case is read at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    for P in (QB._AllKinds, QB._MeaningKinds)
+      @test (P, _dynamic_calls(QB._case_kind, (QB.FObject, QB.InstructionObject, P))) == (P, String[])
+      @test (P, _dynamic_calls(QB._agreeing_kind, (QB.FObject, QB.InstructionObject, P))) == (P, String[])
+    end
+    @test _dynamic_calls(QB._case_then_values, (Any,)) == String[]
+    @test _dynamic_calls(QB._case_values, (QB.FObject,)) == String[]
+    @test all(s -> occursin("== \"NULL\"", s), _dynamic_calls(QB._is_null_literal, (Any,)))
+    @test only(methods(QB._is_null_literal)).nospecialize & 0b1 == 0b1
+    @test !any(s -> occursin("iterate", s), _dynamic_calls(QB._json_number_side, (QB.FObject, QB.InstructionObject)))
+  end
+
   # What: the Postgres.jl extension's wire text for a bound membership list (`_wire_text`), which PostgreSQL binds as
   #   one array (`"name__@in" => [...]` renders `= ANY($1)`).
   # Expected: a static `invoke` of `Postgres._param` at `Vector{String}` and at `Vector{Float64}`, as at `Vector{Int64}`,
@@ -5931,6 +6159,20 @@ end
       @test (L, Tuple{typeof(Postgres._param), L} in invoked) == (L, true)
     end
     @test _dynamic_calls(pgx._wire_text, (Any,)) == String[]
+  end
+
+  # What: the MySQL declared-output check (`_mysql_declared_output`), which every `Case`, `Coalesce`, `Greatest`, `Least`,
+  #   `NullIf` and `Cast` render asks on an engine that stores an interval as its count or casts to no boolean (MySQL).
+  # Expected: no dynamic `collect`, `any` or `all` over the operand kinds; the kinds walk itself makes no dynamic call.
+  #   (What stays dynamic, `isempty`/`_declared_kind` over an untyped declared type, is after the early return for an
+  #   undeclared node.)
+  # Why: the filtered comprehension built `Iterators.Filter` at run time: the trimmed MySQL binary stopped at
+  #   `"round__@gte" => Case(…)` with `MethodError`, missed `UnionAll` (#1599 layer 5, Trim run 44290558739).
+  @testset "the MySQL declared-output check reads its operand kinds at one type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    calls = _dynamic_calls(QB._mysql_declared_output, (QB.FObject, QB.InstructionObject))
+    @test !any(s -> occursin(r"collect|Filter|\.any\(|\.all\(", s), calls)
+    @test _dynamic_calls(QB._non_null_operand_kinds, (Any, QB.InstructionObject)) == String[]
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

@@ -56,13 +56,17 @@ struct CJSONValue <: CanonicalType end
 _json_key_value(field, instruc::SQLInstruction, key) =
   field isa Models.sJSONField && memo_json_lookup(instruc, key)
 
+# #1599 layer 5: `x` is taken unspecialized and asked through `_infer_kind_any`, which names every `_infer_kind` method
+# (the pins file compares the two): its callers hand it a node's untyped slot (a function's column, an operand), and
+# specialized on it the call had no compiled target in a trimmed image (`Extract("date", "month") == 11`).
 """
     _expression_kind(x, instruc) -> Union{CanonicalType, Nothing}
 
 Every type PormG can name for the expression `x`, on `instruc`'s engine, or `nothing` when it names
 none. Read after `x` renders. See the policies above.
 """
-_expression_kind(x, instruc::SQLInstruction)::Union{CanonicalType,Nothing} = _infer_kind(x, instruc, _AllKinds())
+_expression_kind(@nospecialize(x), instruc::SQLInstruction)::Union{CanonicalType,Nothing} =
+  _infer_kind_any(x, instruc, _AllKinds())::Union{CanonicalType,Nothing}   # every `_infer_kind` method answers one
 
 # ── The walk ─────────────────────────────────────────────────────────────────────────────────────────
 function _infer_kind(p::String, instruc::SQLInstruction, policy::_EveryKind)
@@ -197,7 +201,7 @@ function _operation_kind(p::FExpression, instruc::SQLInstruction, policy::_Every
 end
 _arithmetic_side_kind(x::Integer, ::SQLInstruction, policy::_EveryKind) = x isa Bool ? nothing : _literal_kind(x, policy)
 _arithmetic_side_kind(x::Union{AbstractFloat,Decimals.Decimal}, ::SQLInstruction, policy::_EveryKind) = _literal_kind(x, policy)
-_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind(x, instruc, policy)
+_arithmetic_side_kind(x, instruc::SQLInstruction, policy::_EveryKind) = _infer_kind_any(x, instruc, policy)
 # `_arithmetic_side_kind(x, instruc, policy)` for a side a caller holds untyped (#1599 layer 5): an
 # `FExpression` operand, a factor. The literal arms are `_literal_kind`'s answers for the two methods above
 # (a `Bool` has none, any other integer is `CInt64`, a decimal a width-less `CDecimal`, any other float
@@ -348,7 +352,7 @@ end
 function _render_side_kind(@nospecialize(x), instruc::SQLInstruction; right::Bool = false)::Union{CanonicalType,Nothing}
   x isa FExpression && return _memo_kind(() -> _temporal_arith_kind(x, instruc), x, instruc, :render)
   if x isa FObject
-    walked = _infer_kind(x, instruc, _AllKinds())
+    walked = _infer_kind_any(x, instruc, _AllKinds())
     walked isa CInterval && return walked   # #1583: with the calendar part it may hold
     # #1307: so is a date or a timestamp, the side of the date-shift arms (`_temporal_result_kind`).
     walked isa Union{CDate,CDateTime} && return walked
@@ -555,6 +559,30 @@ _kind_formatter(::CArray, ::SQLInstruction) = nothing
 _kind_formatter(k::CanonicalType, instruc::SQLInstruction) =
   instruc.connection === nothing ? nothing : value_formatter(k, instruc.connection)
 _kind_formatter(::Nothing, ::SQLInstruction) = nothing
+# `_kind_formatter(k, instruc)` for a kind typed by the abstract `CanonicalType` (what `_expression_kind` answers), at
+# the kind's concrete type (#1599 layer 5): over the abstract kind the call dispatched at run time, and a trimmed image
+# had no target for it (`Case(When(…), default = 0) == 1`). One arm per kind; anything else takes the old call behind
+# `@noinline`, so its answer, or its `MethodError`, is the one `_kind_formatter` gives.
+@noinline function _kind_formatter_at(@nospecialize(k), instruc::SQLInstruction)
+  k === nothing && return _kind_formatter(k, instruc)
+  k isa CBool && return _kind_formatter(k, instruc)
+  k isa CInt16 && return _kind_formatter(k, instruc)
+  k isa CInt32 && return _kind_formatter(k, instruc)
+  k isa CInt64 && return _kind_formatter(k, instruc)
+  k isa CFloat64 && return _kind_formatter(k, instruc)
+  k isa CText && return _kind_formatter(k, instruc)
+  k isa CVarChar && return _kind_formatter(k, instruc)
+  k isa CArray && return _kind_formatter(k, instruc)
+  k isa CDecimal && return _kind_formatter(k, instruc)
+  k isa CDate && return _kind_formatter(k, instruc)
+  k isa CDateTime && return _kind_formatter(k, instruc)
+  k isa CTime && return _kind_formatter(k, instruc)
+  k isa CInterval && return _kind_formatter(k, instruc)
+  k isa CUUID && return _kind_formatter(k, instruc)
+  k isa CJSON && return _kind_formatter(k, instruc)
+  return _kind_formatter_other(k, instruc)
+end
+@noinline _kind_formatter_other(@nospecialize(k), instruc::SQLInstruction) = _kind_formatter(k, instruc)
 # The family a field and a kind agree on: every integer width is one, and so is every text, every
 # decimal width and both timestamps; any other kind is its own.
 _kind_family(::Union{CInt16,CInt32,CInt64}) = CInt64
@@ -606,8 +634,8 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   # that has them (`_decimal_extract_kind`).
   decimal = _decimal_extract_kind(p, instruc, policy)
   decimal === nothing || return decimal
-  rule === :operand && return _with_window_default(p, _infer_kind(p.column, instruc, policy), instruc, policy)
-  rule === :first_operand && return _infer_kind(first(p.column), instruc, policy)
+  rule === :operand && return _with_window_default(p, _infer_kind_any(p.column, instruc, policy), instruc, policy)
+  rule === :first_operand && return _infer_kind_any(first(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
   rule in (:promoting, :numeric) && return _number_kind(p, rule, instruc, policy)
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
@@ -620,7 +648,7 @@ _infer_function_kind(::Any, ::SQLInstruction, ::_EveryKind) = nothing
 # "interval")` is still that many months. The declaration names the type; the operand names the months.
 function _declared_calendar(kind, p::FObject, instruc::SQLInstruction, policy::_EveryKind)
   kind isa CInterval || return kind
-  carried = p.function_name == "CASE" ? _case_kind(p, instruc, policy) : _infer_kind(_first_operand(p), instruc, policy)
+  carried = p.function_name == "CASE" ? _case_kind(p, instruc, policy) : _infer_kind_any(_first_operand(p), instruc, policy)
   return carried isa CInterval && carried.calendar ? carried : kind
 end
 
@@ -636,7 +664,7 @@ function _with_window_default(p, kind, instruc::SQLInstruction, policy::_EveryKi
   # A NULL default is never the value (`lag(int4, int, NULL)` is an `int4`): skipped, as `_agreeing_kind`
   # skips a NULL operand.
   _is_null_literal(literal) && return kind
-  k = literal isa Union{SQLObject,SQLType} ? _infer_kind(literal, instruc, policy) : _literal_kind(literal, policy)
+  k = literal isa Union{SQLObject,SQLType} ? _infer_kind_any(literal, instruc, policy) : _literal_kind(literal, policy)
   return k === nothing ? nothing : _unify_kinds(kind, k, policy)
 end
 
@@ -658,7 +686,7 @@ over that integer, not over `(x)::numeric`. Their `_computed_kind` methods answe
 operand, so the SQL and the walk agree by construction. Read after the operand renders.
 """
 function _integer_operand_kind(p::SQLTypeFunction, instruc::SQLInstruction)
-  k = _infer_kind(_first_operand(p), instruc, _AllKinds())
+  k = _infer_kind_any(_first_operand(p), instruc, _AllKinds())
   return k isa Union{CInt16,CInt32,CInt64} ? k : nothing
 end
 
@@ -672,7 +700,7 @@ widens that sum to `numeric`, so `Dialect.SUM` renders it `::bigint` there (#114
 `bigint` already. Read after the operand renders.
 """
 _sums_bigint(p::SQLTypeFunction, instruc::SQLInstruction) =
-  _infer_kind(_first_operand(p), instruc, _AllKinds()) isa CInt64
+  _infer_kind_any(_first_operand(p), instruc, _AllKinds()) isa CInt64
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
 _first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
@@ -726,10 +754,38 @@ end
 # would run text through a date parser (`Coalesce("note", Date(…))`). A NULL literal is skipped: it is
 # never the value. A declared `output_field` never reaches here: `_infer_function_kind` answers it
 # first, as the cast it renders (#852).
+#
+# #1599 layer 5: the operands read at the column's concrete type and each kind through `_infer_kind_any` (the walk over an
+# untyped value); over the untyped column the iteration and the calls dispatched at run time. Any other list takes the
+# old loop, behind `@noinline`.
 function _agreeing_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
+  col = p.column
+  col isa Vector{Any} && return _agreeing_kind_of(col, instruc, policy)
+  col isa Vector{FObject} && return _agreeing_kind_of(col, instruc, policy)
+  col isa AbstractVector && return _agreeing_kind_other(col, instruc, policy)
+  return _agreeing_kind_one(col, instruc, policy)
+end
+# The loop below over one operand: a NULL literal is no value (`nothing`); otherwise its kind.
+function _agreeing_kind_one(@nospecialize(operand), instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
+  _is_null_literal(operand isa SQLText ? operand.field : operand) && return nothing
+  return _infer_kind_any(operand, instruc, policy)::Union{CanonicalType,Nothing}
+end
+function _agreeing_kind_of(operands::Union{Vector{Any},Vector{FObject}}, instruc::SQLInstruction,
+                           policy::_EveryKind)::Union{CanonicalType,Nothing}
   kind = nothing
-  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+  for operand in operands
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue   # the #812 `Case` rule
+    k = _infer_kind_any(operand, instruc, policy)
+    k === nothing && return nothing
+    kind = kind === nothing ? k : _unify_kinds(kind, k, policy)
+    kind === nothing && return nothing
+  end
+  return kind
+end
+@noinline function _agreeing_kind_other(@nospecialize(operands), instruc::SQLInstruction, policy::_EveryKind)::Union{CanonicalType,Nothing}
+  kind = nothing
+  for operand in operands
+    _is_null_literal(operand isa SQLText ? operand.field : operand) && continue
     k = _infer_kind(operand, instruc, policy)
     k === nothing && return nothing
     kind = kind === nothing ? k : _unify_kinds(kind, k, policy)
@@ -766,12 +822,11 @@ end
 # places a literal needs (`projection_types.jl`).
 _kind_scale(k::CDecimal) = k.scale
 _kind_scale(::Union{CInt16,CInt32,CInt64}) = 0
-_numeric_rank(::CInt16) = 0
-_numeric_rank(::CInt32) = 1
-_numeric_rank(::CInt64) = 2
-_numeric_rank(::CDecimal) = 3
-_numeric_rank(::CFloat64) = 4
-_numeric_rank(::Any) = nothing
+# #1599 layer 5: one method, the kind unspecialized and tested with `isa`. Its callers hold a kind typed by the abstract
+# `CanonicalType`, which is no compileable signature, so a call into the six methods this replaces dispatched at run
+# time: the trimmed read stopped at `_numeric_rank(::CInt32)` on `F("round") + 2000`. The same rank for every kind.
+_numeric_rank(@nospecialize(k))::Union{Int,Nothing} =
+  k isa CInt16 ? 0 : k isa CInt32 ? 1 : k isa CInt64 ? 2 : k isa CDecimal ? 3 : k isa CFloat64 ? 4 : nothing
 
 # A computed number's kind on the engine, from its rule and its (first) operand's kind `k` — the
 # engine-dependent results #1034 asks to state once, as data. What `Dialect` renders decides:
@@ -818,7 +873,7 @@ _mysql_number_kind(::Any) = nothing
 # the declaration alone (`_declaration_instruction`) has no engine, so nothing is computed there.
 _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_AllKinds) =
   instruc.connection === nothing ? nothing :
-  _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind(_first_operand(p), instruc, policy), instruc.connection)
+  _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind_any(_first_operand(p), instruc, policy), instruc.connection)
 function _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_MeaningKinds)
   operands = p.column isa AbstractVector ? p.column : (p.column,)
   return _output_kind(Val(Symbol(p.function_name)), rule, [_arithmetic_side_kind(o, instruc, policy) for o in operands])
@@ -901,7 +956,7 @@ function _read_kind(x, instruc::SQLInstruction; rendered = nothing)::Union{Nothi
     k = _read_kind(x.column, instruc)
     return _unapplied_window_default(x, k, instruc) ? _computed_meaning(k) : k
   end
-  return _read_view(_infer_kind(x, instruc, _MeaningKinds()), x, instruc)
+  return _read_view(_infer_kind_any(x, instruc, _MeaningKinds()), x, instruc)
 end
 
 # #1599 round 8, row 31: store a projection's kind into `projection_kinds` with the kind at its concrete
@@ -1004,7 +1059,7 @@ function _declared_stored_decimal(x, instruc::SQLInstruction)
   (k isa CDecimal && k.precision !== nothing) || return nothing
   for operand in (x.column isa AbstractVector ? x.column : (x.column,))
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue
-    _infer_kind(operand, instruc, _AllKinds()) == k || return nothing
+    _infer_kind_any(operand, instruc, _AllKinds()) == k || return nothing
   end
   return k
 end
@@ -1108,24 +1163,52 @@ _without_numeric_read(k) = _numeric_view(k) === nothing ? k : nothing
 
 # A `Case` with no `output_field`: its value is a branch's, so it has the kind its `then` values and
 # its default agree on. A branch value that is a string is a literal, not a path (#965).
+#
+# #1599 layer 5: the branches are read at the column's concrete type (`_case_then_values`) and each value's kind through
+# the walks over an untyped value (`_infer_kind_any`, `_literal_kind_any`, which the pins file compares with the calls
+# they replace): over the untyped column and values the calls dispatched at run time (`Case(When(…), default = …)`).
 function _case_kind(p::FObject, instruc::SQLInstruction, policy::_EveryKind)
-  values = Any[]
-  for branch in (p.column isa AbstractVector ? p.column : (p.column,))
-    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return nothing
-    push!(values, get(branch.kwargs, "then", nothing))
-  end
+  values = _case_then_values(p.column)
+  values === nothing && return nothing
   push!(values, get(p.kwargs, "else", nothing))
   kind = nothing
   for value in values
     literal = value isa SQLText ? value.field : value
     _is_null_literal(literal) && continue
-    k = value isa Union{SQLObject,SQLType} && !(value isa SQLText) ? _infer_kind(value, instruc, policy) :
-        _literal_kind(literal, policy)
+    k = value isa Union{SQLObject,SQLType} && !(value isa SQLText) ? _infer_kind_any(value, instruc, policy) :
+        _literal_kind_any(literal, policy)
     k === nothing && return nothing
     kind = kind === nothing ? k : _unify_kinds(kind, k, policy)
     kind === nothing && return nothing
   end
   return kind
+end
+
+# The `then` value of each branch of a `Case`'s column, or `nothing` when a branch is not a `When` (the loop
+# `_case_kind` made over `p.column isa AbstractVector ? p.column : (p.column,)`). A `Case` holds a `Vector{FObject}` or one
+# `FObject`, read at its type; any other column takes the old loop, behind `@noinline`.
+function _case_then_values(@nospecialize(column))::Union{Nothing,Vector{Any}}
+  values = Any[]
+  if column isa Vector{FObject}
+    for branch in column
+      branch.function_name == "WHEN" || return nothing
+      push!(values, get(branch.kwargs, "then", nothing))
+    end
+    return values
+  elseif column isa FObject
+    column.function_name == "WHEN" || return nothing
+    push!(values, get(column.kwargs, "then", nothing))
+    return values
+  end
+  return _case_then_values_other(column)
+end
+@noinline function _case_then_values_other(@nospecialize(column))::Union{Nothing,Vector{Any}}
+  values = Any[]
+  for branch in (column isa AbstractVector ? column : (column,))
+    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || return nothing
+    push!(values, get(branch.kwargs, "then", nothing))
+  end
+  return values
 end
 
 # #824 — the kind of a CTE column. The body is built before the outer query (`build_cte_clause`

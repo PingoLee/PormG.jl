@@ -353,7 +353,7 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
 
   # The bucket gate runs BEFORE the column is resolved: resolving a joined path renders its join,
   # and a non-bucket transform (`@month`, `@quarter`, …) must never reach that.
-  bucket = if fobj.function_name == "EXTRACT_DATE" && get(fobj.kwargs, "format", nothing) == "YYYY-MM"
+  bucket = if fobj.function_name == "EXTRACT_DATE" && _kwarg_is(fobj.kwargs, "format", "YYYY-MM")
     :yyyy_mm
   elseif fobj.function_name == "DATE"
     # #562: `@date` used to be a `ToChar(x, "YYYY-MM-DD")`, i.e. an `EXTRACT_DATE` node carrying the
@@ -362,14 +362,17 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
     # `DateField` the rewrite DROPS the transform entirely, so a stale marker here does not render
     # wrong SQL — it silently stops rewriting, the #376 failure mode.
     :date
-  elseif fobj.function_name == "EXTRACT" && get(fobj.kwargs, "part", nothing) == "YEAR"
+  elseif fobj.function_name == "EXTRACT" && _kwarg_is(fobj.kwargs, "part", "YEAR")
     :year
   else
     return nothing
   end
 
-  f_meta, column_sql = _resolve_bucket_column(raw_field, instruc)
-  f_meta === nothing && return nothing
+  f_meta_any, column_sql = _resolve_bucket_column(raw_field, instruc)
+  f_meta_any === nothing && return nothing
+  # #1599 layer 5: a field of the closed set (the model's fields, or the memo's `memo_field`), which the tuple the
+  # resolvers return widened to `Any`; asserted, so `bind` captures a typed local and reads its slots statically.
+  f_meta = f_meta_any::Models.AnyField
   _is_date_field(f_meta) || return nothing                          # DATE only, not TIMESTAMP(TZ)
 
   # #576: this rewrite runs AHEAD of every branch in `_get_filter_query`, so for `@date` / `@yyyy_mm`
@@ -377,12 +380,13 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   # value, and it was the leak nobody had named. `raw_field` is the spelling the user wrote (a
   # String, or a `CTEReference`/`JoinedReference` that prints as one) and `f_meta` is the terminal
   # field, so both message labels are real here rather than synthesised.
-  bind(x) = add_parameter!(instruc, _guarded_format(f_meta.formatter, x, "=", raw_field, f_meta.type))
+  # #1599 layer 5: a function, not a local closure: the closure captured `raw_field`'s three-member union, so its type was
+  # built at run time and each call to it dispatched (`_bucket_bind`).
 
   if bucket == :date
     # Same granularity as the column: no range, operator unchanged — just drop the to_char.
     # This `bind` is the only one handed the RAW value; the range arms below bind computed `Date`s.
-    return string(column_sql, " ", v.operator, " ", bind(values))
+    return string(column_sql, " ", v.operator, " ", _bucket_bind(instruc, f_meta, raw_field, values))
   end
 
   # Both helpers refuse a value with an `InvalidValueError` carrying the reason alone — their own
@@ -396,8 +400,8 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   # not parse. The value's shape is checked either way.
   bounds = try
     ranged = v.operator == "="
-    bucket == :yyyy_mm ? _yyyy_mm_bucket_bounds(values; ranged = ranged) :
-                         _year_bucket_bounds(values; ranged = ranged)
+    bucket == :yyyy_mm ? _bucket_bounds_at(_yyyy_mm_bucket_bounds, values, ranged) :
+                         _bucket_bounds_at(_year_bucket_bounds, values, ranged)
   catch e
     _locate_filter_refusal(e, raw_field, f_meta.type)
   end
@@ -405,18 +409,42 @@ function _render_sargable_date_range(v::SQLTypeOper, instruc::SQLInstruction)::U
   first_of_period, next_period = bounds
 
   if v.operator == ">="
-    return string(column_sql, " >= ", bind(first_of_period))
+    return string(column_sql, " >= ", _bucket_bind(instruc, f_meta, raw_field, first_of_period))
   elseif v.operator == ">"
-    return string(column_sql, " >= ", bind(next_period))
+    return string(column_sql, " >= ", _bucket_bind(instruc, f_meta, raw_field, next_period))
   elseif v.operator == "<="
-    return string(column_sql, " < ", bind(next_period))
+    return string(column_sql, " < ", _bucket_bind(instruc, f_meta, raw_field, next_period))
   elseif v.operator == "<"
-    return string(column_sql, " < ", bind(first_of_period))
+    return string(column_sql, " < ", _bucket_bind(instruc, f_meta, raw_field, first_of_period))
   else # "="
-    p1, p2 = bind(first_of_period), bind(next_period)
+    p1, p2 = _bucket_bind(instruc, f_meta, raw_field, first_of_period), _bucket_bind(instruc, f_meta, raw_field, next_period)
     return string("(", column_sql, " >= ", p1, " AND ", column_sql, " < ", p2, ")")
   end
 end
+
+# A date-bucket value bound through the field's own formatter, guarded as every filter value is (#576).
+_bucket_bind(instruc::SQLInstruction, @nospecialize(f_meta::Models.AnyField), @nospecialize(raw_field), @nospecialize(x)) =
+  _add_parameter_at(instruc, _guarded_format(f_meta.formatter, x, "=", raw_field, f_meta.type))
+
+# `add_parameter!(instruc, v)` for a formatted value, untyped, at its concrete type (#1599 layer 5): one arm per type a
+# date-bucket bind formats to, each the same call; any other value takes it behind `@noinline`. Over the untyped value
+# the call dispatched at run time (the sargable rewrite of `"date__@year" => 2008`).
+@noinline function _add_parameter_at(instruc::SQLInstruction, @nospecialize(v))
+  v isa String && return add_parameter!(instruc, v)
+  v isa Int64 && return add_parameter!(instruc, v)
+  v isa Dates.Date && return add_parameter!(instruc, v)
+  return _add_parameter_other(instruc, v)
+end
+@noinline _add_parameter_other(instruc::SQLInstruction, @nospecialize(v)) = add_parameter!(instruc, v)
+
+# `f(value; ranged)` for a bucket's bounds (`_year_bucket_bounds`, `_yyyy_mm_bucket_bounds`) with the value read untyped
+# from the filter (#1599 layer 5): an integer year and a `"YYYY-MM"` label at their types; anything else at run time.
+@noinline function _bucket_bounds_at(f::F, @nospecialize(value), ranged::Bool) where {F<:Function}
+  value isa Int64 && return f(value; ranged = ranged)
+  value isa String && return f(value; ranged = ranged)
+  return _bucket_bounds_other(f, value, ranged)
+end
+@noinline _bucket_bounds_other(f::F, @nospecialize(value), ranged::Bool) where {F<:Function} = f(value; ranged = ranged)
 
 # Terminal field metadata + rendered SQL for the column a date-bucket comparison targets, or
 # `(nothing, "")` to fall through to the existing rendering.

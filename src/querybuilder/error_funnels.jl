@@ -158,8 +158,16 @@ end
 # Only for a `msg`-only `PormGError`. An `InvalidValueError` carries its location as data and is
 # located by its own funnels (#971); anything else is a bug, kept as it was, backtrace included.
 # `nothing` tells the call site to `rethrow()`.
-function _in_pair(e, pair::AbstractString)
-  e isa PormGError && fieldnames(typeof(e)) == (:msg,) || return nothing
+#
+# #1599 layer 5: the caught error is taken unspecialized (it arrives untyped from a `catch`), and anything but a PormG
+# error answers `nothing` at once, so the caller rethrows it as it is. Specialized on the error, the call had no compiled
+# target in a trimmed image and its `MethodError` replaced the one being reported (`"date__@year" => 2008`).
+function _in_pair(@nospecialize(e), pair::AbstractString)
+  e isa PormGError || return nothing
+  return _in_pair_refusal(e, pair)
+end
+@noinline function _in_pair_refusal(@nospecialize(e), pair::AbstractString)
+  fieldnames(typeof(e)) == (:msg,) || return nothing
   # `e.msg` is a PormG refusal already held to #971; `pair` is the key or alias the caller wrote.
   return typeof(e)(string(e.msg, " — in ", pair))   # refusal-value-ok: no bound value, see above
 end

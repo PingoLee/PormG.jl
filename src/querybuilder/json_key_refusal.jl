@@ -60,12 +60,12 @@ _json_key_lookup_operand(::Any, ::SQLInstruction) = false
 # (`_record_cte_division!`, `_record_cte_json_key!` in `ctes.jl`) and a `Subquery`'s
 # (`_subquery_projection_json_key`, `projection_types.jl`) — because the outer query reads the record
 # back here, where the body is no longer in hand. The guard test lists them.
-_json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side(p.field, instruc)
+_json_number_side(p::SQLField, instruc::SQLInstruction) = _json_number_side_at(p.field, instruc)
 function _json_number_side(p::FExpression, instruc::SQLInstruction)
-  p.operation === nothing && return _json_number_side(p.field_name, instruc)
+  p.operation === nothing && return _json_number_side_at(p.field_name, instruc)
   p.operation in ("+", "-", "*") || return nothing
-  side = _json_number_side(p.field_name, instruc)
-  side === nothing && (side = _json_number_side(p.operand, instruc))
+  side = _json_number_side_at(p.field_name, instruc)
+  side === nothing && (side = _json_number_side_at(p.operand, instruc))
   return side === nothing ? nothing : ("arithmetic over $(side[1])", side[2])
 end
 _json_number_side(p::Union{String,JoinedReference}, instruc::SQLInstruction) =
@@ -85,7 +85,7 @@ end
 # it), so `Coalesce(OuterRef("payload__n"), 0) / 2` inside a `Subquery` carries the outer key.
 _json_number_side(p::OuterRefObject, instruc::SQLInstruction) =
   instruc.outer === nothing ? nothing :
-  (side = _json_number_side(p.field_name, instruc.outer); side === nothing ? nothing :
+  (side = _json_number_side_at(p.field_name, instruc.outer); side === nothing ? nothing :
    ("$(side[1]) of the outer query (an `OuterRef`)", side[2]))
 # #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
 function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
@@ -97,29 +97,62 @@ function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruc
   name = p.function_name
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
   declared isa AbstractString && !isempty(declared) && return nothing
-  if _undeclared_case(p)
-    values = _case_values(p)
+  # #1599 layer 5: the values are walked at each branch's own type (`_json_values_side`); one variable over a
+  # `Vector{Any}`, a one-tuple and the untyped column was `Any`, and its iteration dispatched at run time: the trimmed
+  # read stopped at `iterate(::Vector{Any})` on a `Case` compared with a column (`"round__@gte" => Case(…)`).
+  side = if _undeclared_case(p)
+    _json_values_side(_case_values(p), instruc)
   else
     rule = _result_rule(p)
     rule in _OPERAND_TYPED_RULES || return nothing   # `SUM` is `:promoting`
-    values = rule === :first_operand ? (_first_operand(p),) : p.column isa AbstractVector ? p.column : (p.column,)
+    rule === :first_operand ? _json_number_side_at(_first_operand(p), instruc) :
+      p.column isa AbstractVector ? _json_values_side_other(p.column, instruc) : _json_number_side_at(p.column, instruc)
   end
-  for value in values
-    side = _json_number_side(value, instruc)
-    side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
-  end
+  side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
   # A `Lag`/`Lead` `default` is the value on the rows it applies to, as `_textless_number` reads it.
   if p isa WindowFunction
     default = get(p.kwargs, "default", nothing)
     literal = default isa SQLText ? default.field : default
     if !(literal === nothing || literal isa AbstractString || _is_null_literal(literal))
-      side = _json_number_side(default, instruc)
+      side = _json_number_side_at(default, instruc)
       side === nothing || return ("`$(name)(…)` over $(side[1])", side[2])
     end
   end
   return nothing
 end
 _json_number_side(::Any, ::SQLInstruction) = nothing
+# The first value of `values` that carries a key, as the probe answers it, or `nothing`; in order. (One value is the
+# probe's answer itself, which is what a one-element loop gives.)
+function _json_values_side(values::Vector{Any}, instruc::SQLInstruction)
+  for value in values
+    side = _json_number_side_at(value, instruc)
+    side === nothing || return side
+  end
+  return nothing
+end
+@noinline function _json_values_side_other(@nospecialize(values), instruc::SQLInstruction)
+  for value in values
+    side = _json_number_side_at(value, instruc)
+    side === nothing || return side
+  end
+  return nothing
+end
+# `_json_number_side(x, instruc)` for an operand held untyped (an `FExpression`'s slots), at its concrete type (#1599
+# layer 5). Over an untyped operand the call dispatched at run time among the methods above, and a trimmed image had
+# no target for it. One arm per method; anything else is no carrier (`::Any`), as before. The methods' own recursion into
+# their untyped slots goes through it too.
+@noinline function _json_number_side_at(@nospecialize(x), instruc::SQLInstruction)
+  x isa String && return _json_number_side(x, instruc)
+  x isa FExpression && return _json_number_side(x, instruc)
+  x isa SQLField && return _json_number_side(x, instruc)
+  x isa FObject && return _json_number_side(x, instruc)
+  x isa WindowFunction && return _json_number_side(x, instruc)
+  x isa CTEReference && return _json_number_side(x, instruc)
+  x isa JoinedReference && return _json_number_side(x, instruc)
+  x isa OuterRefObject && return _json_number_side(x, instruc)
+  x isa SubqueryObject && return _json_number_side(x, instruc)
+  return nothing
+end
 
 # ---------------------------------------------------------------------------------------------------
 # The positions — where a value needs a type
@@ -279,22 +312,30 @@ _json_key_refusal(p::_JSONKeyColumnRHS) = FilterError(
 # Probe `operand` and raise `position`'s refusal when it carries an uncast key. Read after the operand
 # renders, so a joined path's column is resolved (#568's order). A tuple of operands is probed in order
 # and the first that carries a key is the one named (arithmetic's left, then its right).
-function _refuse_uncast_json_key(position::_JSONKeyPosition, operand, instruc::SQLInstruction)
+# #1599 layer 5: the operand is taken unspecialized and asked at its type (`_json_number_side_at`, which names every
+# method): callers hand it an `FExpression`'s untyped slot, and specialized on it the call had no compiled target in a
+# trimmed image (`F("round") + 1 == 19`).
+function _refuse_uncast_json_key(position::_JSONKeyPosition, @nospecialize(operand), instruc::SQLInstruction)
   _json_key_position_applies(position) || return nothing
-  side = _json_number_side(operand, instruc)
+  side = _json_number_side_at(operand, instruc)
   side === nothing || throw(_json_key_refusal(position, side))
   return nothing
 end
 # #1528: the right operand of a comparison, once it has rendered. A String is a column only when it is a
-# field path (`_set_update_query_operand`'s rule); any other String is a bound text value.
-function _refuse_json_key_right_operand(operand, instruc::SQLInstruction)
+# field path (`_set_update_query_operand`'s rule); any other String is a bound text value. (#1599 layer 5: the operand
+# unspecialized, a `String` tested at its type first.)
+function _refuse_json_key_right_operand(@nospecialize(operand), instruc::SQLInstruction)
+  operand isa String && !_is_field_path(operand, instruc) && return nothing
   operand isa AbstractString && !_is_field_path(String(operand), instruc) && return nothing
   return _refuse_uncast_json_key(_JSONKeyRightOperand(), operand, instruc)
 end
-function _refuse_uncast_json_key(position::_JSONKeyPosition, operands::Tuple, instruc::SQLInstruction)
+# #1599 layer 5: the tuple is taken unspecialized (an arithmetic node's two untyped sides, `(v.field_name, v.operand)`),
+# each element read by the builtin `getfield` and asked at its type (`_json_number_side_at`), in order. Specialized on
+# the tuple's type, the call had no compiled target in a trimmed image (`F("round") + 2000`).
+function _refuse_uncast_json_key(position::_JSONKeyPosition, @nospecialize(operands::Tuple), instruc::SQLInstruction)
   _json_key_position_applies(position) || return nothing
-  for operand in operands
-    side = _json_number_side(operand, instruc)
+  for i in 1:nfields(operands)
+    side = _json_number_side_at(getfield(operands, i), instruc)
     side === nothing || throw(_json_key_refusal(position, side))
   end
   return nothing

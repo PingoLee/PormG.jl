@@ -792,7 +792,7 @@ _case_value_field(v, field::String, instruct::SQLInstruction) =
 # they keep a foreign key's target and a declared width, and `_meant_column_field` reconciles their
 # answer with the walk's afterwards, as it did.
 function _walked_field(x, field::String, instruct::SQLInstruction, refuse, reason)
-  kind = _infer_kind(x, instruct, _MeaningKinds())
+  kind = _infer_kind_any(x, instruct, _MeaningKinds())
   typed = kind === nothing ? nothing : _kind_field(kind)
   typed === nothing && refuse(field, reason())
   return typed
@@ -814,7 +814,7 @@ function _f_expression_field(v::FExpression, field::String, instruct::SQLInstruc
   end
   # #1460: arithmetic whose value is not a number (a date shifted, an interval, a comparison) is the
   # type the walk names it, before its operands are asked as numbers: `F("date") + Day(1)` is a date.
-  meant = _infer_kind(v, instruct, _MeaningKinds())
+  meant = _infer_kind_any(v, instruct, _MeaningKinds())
   walked = meant === nothing ? nothing : _kind_field(meant)
   walked !== nothing && _numeric_rank(meant) === nothing && return walked
   # The operands as numbers. Where the walk names the value, an operand the number rule cannot type
@@ -1193,7 +1193,7 @@ end
 # no meaning, or a kind no field spells. Its refusals stand: it still runs first.
 function _meant_column_field(typed::PormGField, source, path, instruct::SQLInstruction)::PormGField
   path === nothing || return typed
-  meant = _infer_kind(source, instruct, _MeaningKinds())
+  meant = _infer_kind_any(source, instruct, _MeaningKinds())
   meant === nothing && return typed
   _kind_family(meant) === _kind_family(_field_kind(typed)) && return typed
   return something(_kind_field(meant), typed)

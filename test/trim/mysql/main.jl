@@ -1,5 +1,5 @@
 # The juliac --trim entry of the fixture's MySQL variant (#1599, #1614): `../main.jl`'s app with MySQL.jl
-# in place of SQLite — boot, one typed read, the comparison filters, order_by and lookups (`../tools/reads.jl`), the single-row
+# in place of SQLite — boot, one typed read, the comparison filters, order_by, lookups and expression comparisons (`../tools/reads.jl`), the single-row
 # write (`../tools/writes.jl`: create, read back, update, delete), a `bulk_insert` of two rows and one statement
 # the server refuses (`../tools/failing.jl`).
 #   JIT:  julia --project=test/trim/mysql test/trim/mysql/main.jl
@@ -110,10 +110,11 @@ function (@main)(args::Vector{String})::Cint
         failed("boot", e); return Cint(1)
     end
     query_step() || return Cint(3)
-    # The comparison filters, `order_by` and the other lookups (#1599 layer 5, `../tools/reads.jl`), on the two seeded races.
+    # The comparison filters, `order_by`, the other lookups and the expression comparisons (#1599 layer 5, `../tools/reads.jl`), on the two seeded races.
     compare_step() || return Cint(10)
     order_step() || return Cint(11)
     lookup_step() || return Cint(13)
+    expr_step() || return Cint(14)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()

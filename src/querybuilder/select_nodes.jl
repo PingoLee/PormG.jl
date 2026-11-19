@@ -384,7 +384,11 @@ end
 # Type-checked before any `==`: that slot also takes a column expression, and `==` on an
 # `FExpression` or `JoinedReference` builds a predicate node, not a `Bool` (#541) — `val == "NULL"`
 # on `then = F("points")` raised `TypeError: non-boolean (FExpression)` before any SQL existed.
-_is_null_literal(x) = x isa Missing || x === nothing || (x isa AbstractString && x == "NULL")
+# #1599 layer 5: the value unspecialized (its callers hold a node's untyped slot: a `Case` branch, an operand), the
+# text compared at `String` first; specialized on the value, the call had no compiled target in a trimmed image
+# (`_is_null_literal(::Int64)` on a `Case` value). The same answer for every value.
+_is_null_literal(@nospecialize(x)) = x isa Missing || x === nothing ||
+                                     (x isa String ? x == "NULL" : (x isa AbstractString && x == "NULL"))
 
 function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{Nothing,String}=nothing)
   if _is_null_literal(value)
@@ -506,6 +510,27 @@ function _null_skipping_operands(v::SQLTypeFunction, instruc::SQLInstruction)
              for k in 1:length(cols)]
 end
 
+# `_get_select_query(column, instruc; _as)` for a function's column, held untyped (`v.column`, or SQLite's rotations of
+# it), with the keyword at a concrete type (#1599 layer 5). Over the untyped column the keyword call dispatched at run
+# time, and a trimmed image had no target for it: the read stopped at `kwcall((_as = nothing,), _get_select_query,
+# ::String, …)` on `Extract("date", "month") == 11`. A column name, the leaf, is the same call at its type. A nested
+# node (a function, an expression, a list) renders through this render again, so a static call to it is a frame in that
+# recursion, which a trimmed image cannot compile (the #1711 class, measured: an "unresolved invoke" of the walk
+# itself); it keeps the old call, behind `@noinline`.
+function _get_select_query_at(@nospecialize(column), instruc::SQLInstruction, _as::Union{Nothing,String})
+  if column isa String
+    _as === nothing && return _get_select_query(column, instruc; _as = nothing)
+    return _get_select_query(column, instruc; _as = _as::String)
+  elseif column isa OperObject
+    # A `When`'s condition (`Case(When("round__@lt" => 10, then = 1), …)`).
+    _as === nothing && return _get_select_query(column, instruc; _as = nothing)
+    return _get_select_query(column, instruc; _as = _as::String)
+  end
+  return _get_select_query_other(column, instruc, _as)
+end
+@noinline _get_select_query_other(@nospecialize(column), instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _get_select_query(column, instruc, _as=_as)
+
 # #1028 — one operand rendered exactly as `_get_select_query` renders it — the same SQL, the same
 # binds, in the same order — with the kind that render computed: `(sql, kind)`. Only two shapes keep a
 # kind: `F` arithmetic (`_set_update_query_typed` is what `_get_select_query(::SQLTypeF)` renders
@@ -544,6 +569,22 @@ _render_case_branches(col::AbstractVector, instruc::SQLInstruction; _as::Union{N
   Any[_render_case_branch(b, instruc; _as = _as) for b in col]
 _render_case_branches(col, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
   _render_case_branch(col, instruc; _as = _as)
+# `_render_case_branches(column, instruc; _as)` for a `Case`'s column, held untyped, at its concrete type and with the
+# keyword at a concrete type (#1599 layer 5): a `Case` holds one `When` (`FObject`) or a `Vector{FObject}`. Over the
+# untyped column the keyword call dispatched at run time (`Case(When("name" => …, then = 6), default = 100)`); any
+# other column takes it behind `@noinline`.
+function _render_case_branches_at(@nospecialize(col), instruc::SQLInstruction, _as::Union{Nothing,String})
+  if col isa FObject
+    _as === nothing && return _render_case_branches(col, instruc; _as = nothing)
+    return _render_case_branches(col, instruc; _as = _as::String)
+  elseif col isa Vector{FObject}
+    _as === nothing && return _render_case_branches(col, instruc; _as = nothing)
+    return _render_case_branches(col, instruc; _as = _as::String)
+  end
+  return _render_case_branches_other(col, instruc, _as)
+end
+@noinline _render_case_branches_other(@nospecialize(col), instruc::SQLInstruction, _as::Union{Nothing,String}) =
+  _render_case_branches(col, instruc; _as = _as)
 
 # #31: the full-text nodes, at the one site every function renders through as a value. On SQLite each
 # is refused here, naming the outermost one the caller wrote, before any operand binds. A
@@ -674,11 +715,11 @@ end
 # The temporal kind a date function's operand has, from the type walk (a column, a literal, an
 # expression), for the engines that spell a part by it (MySQL's date arms in `Dialect`); `nothing` when
 # the walk names no date or time.
-_temporal_hint(::CDate) = :date
-_temporal_hint(::CDateTime) = :datetime
-_temporal_hint(::CTime) = :time
-_temporal_hint(::CInterval) = :interval
-_temporal_hint(::Any) = nothing
+# #1599 layer 5: one method, the kind unspecialized and tested with `isa` (its caller holds the abstract
+# `CanonicalType` `_expression_kind` answers, no compileable signature for the five methods this replaces: the trimmed
+# read stopped at `_temporal_hint(::CDate)` on `Extract("date", "month") == 11`). The same hint for every kind.
+_temporal_hint(@nospecialize(k))::Union{Symbol,Nothing} =
+  k isa CDate ? :date : k isa CDateTime ? :datetime : k isa CTime ? :time : k isa CInterval ? :interval : nothing
 
 # Refuses a date/time node over a model field its part cannot read, naming both (#1070: by the part's
 # row, so a public `Extract` is checked exactly as the `__@` transform that builds it). Fails OPEN,
@@ -873,10 +914,19 @@ end
 @noinline _nth_value_open(@nospecialize(column), @nospecialize(n), over_sql::String, @nospecialize(conn)) =
   Dialect.NTH_VALUE(column, n, over_sql, conn)
 
-function _function_sql(name::AbstractString, column, kwargs::Dict{String,Any}, @nospecialize(conn::_SQLEngine))
+# #1599 layer 5: the rendered column is taken unspecialized (the render holds it untyped) and handed to the renderer
+# ladder at the two shapes it has, the SQL text of one operand (`String`) and a multi-operand function's list
+# (`Vector{Any}`); anything else takes the ladder at run time, behind `@noinline`. Specialized on the column, the call
+# had no compiled target in a trimmed image (`Extract("date", "month") == 11`).
+function _function_sql(name::AbstractString, @nospecialize(column), kwargs::Dict{String,Any}, @nospecialize(conn::_SQLEngine))
   name == "SUBSTR" && return Dialect.SUBSTR(column::Vector{Any}, conn)
-  return _dialect_function_sql(name, column, Dialect.FnOptions(kwargs), conn)
+  opts = Dialect.FnOptions(kwargs)
+  column isa String && return _dialect_function_sql(name, column, opts, conn)
+  column isa Vector{Any} && return _dialect_function_sql(name, column, opts, conn)
+  return _dialect_function_sql_other(name, column, opts, conn)
 end
+@noinline _dialect_function_sql_other(name::AbstractString, @nospecialize(column), opts::Dialect.FnOptions,
+                                      @nospecialize(conn::_SQLEngine)) = _dialect_function_sql(name, column, opts, conn)
 
 # #1611 — the renderer by its name, as one branch per name, generated at definition time. It was
 # `getfield(Dialect, Symbol(name))(…)`: a binding looked up by a name at run time, which a static
@@ -999,7 +1049,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       end
     end
   elseif v.function_name == "CASE"
-    resolved_column = _render_case_branches(v.column, instruc; _as = _as)
+    resolved_column = _render_case_branches_at(v.column, instruc, _as)
   elseif v.function_name in ("SEARCH_RANK", "SEARCH_HEADLINE") || _is_combined_fts(v)
     # #31: in text order — the vector or document, then the query, then the headline's options.
     # #1021: a sum of vectors renders its two halves the same way, left to right.
@@ -1008,7 +1058,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     # #1304: `Concat`, `LPad`/`RPad` and the declared casts render here too. They kept the kind their
     # operands' render computed, for the checks below, until #1034 step 5a/5c made the walk name the
     # same kinds (the render and the walk share one rule since step 5b) — the checks read the walk.
-    resolved_column = _get_select_query(_null_skipping_operands(v, instruc), instruc, _as=_as)
+    resolved_column = _get_select_query_at(_null_skipping_operands(v, instruc), instruc, _as)
   end
   # #942: the half of the `When` condition check construction could not do. Read after the condition
   # renders, so a joined path's field memo exists for `_expression_formatter` to find.
@@ -1219,7 +1269,11 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
       if isa(deferred_val, Union{SQLObject,SQLType})
         resolved_kwargs[key] = _get_select_query(deferred_val, instruc)
       else
-        resolved_kwargs[key] = add_parameter!(instruc, deferred_val; sql_type=_deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc))
+        # #1599 layer 5: the value bound at its type (`_add_formatted_parameter!`, the same call); over the untyped value
+        # and `sql_type` the keyword call dispatched at run time (`Case(When(…, then = 6), default = 100)`).
+        st = _deferred_kwarg_sql_type(v, key, resolved_kwargs, instruc)
+        resolved_kwargs[key] = st isa Union{Nothing,String} ? _add_formatted_parameter!(instruc, deferred_val, st) :
+                               add_parameter!(instruc, deferred_val; sql_type=st)
       end
     end
   end
@@ -1342,6 +1396,22 @@ end
 # Where the engine casts to no boolean type (`_normalizes_boolean_cast`, MySQL): a boolean target over
 # booleans or integers is `((x) <> 0)`, NULL kept, as PostgreSQL's `integer::boolean` reads it; over any
 # other value refused, since what MySQL would make of it (a text's leading digits) is no boolean.
+# #1599 layer 5: the kinds of the operands that are not a NULL literal, read only through `isa` (`any`/`all` below),
+# so the vector's element type is no answer. A filtered comprehension over the `Vector{Any}` every caller hands it
+# built `Iterators.Filter(closure, ::Vector{Any})` at run time, a `UnionAll` call a trimmed image had no code for: the
+# MySQL binary stopped there at `"round__@gte" => Case(…)` (this check runs where the engine stores an interval as
+# its count or casts to no boolean, MySQL). Any other container takes the open arm, the comprehension as before.
+function _non_null_operand_kinds(@nospecialize(values), instruc::SQLInstruction)::Vector{Union{CanonicalType,Nothing}}
+  values isa Vector{Any} || return _non_null_operand_kinds_other(values, instruc)
+  kinds = Union{CanonicalType,Nothing}[]
+  for x in values
+    _is_null_operand(x) || push!(kinds, _expression_kind(x, instruc))
+  end
+  return kinds
+end
+@noinline _non_null_operand_kinds_other(@nospecialize(values), instruc::SQLInstruction)::Vector{Union{CanonicalType,Nothing}} =
+  [_expression_kind(x, instruc) for x in values if !_is_null_operand(x)]
+
 const _ONE_OF_FUNCTIONS = ("COALESCE", "GREATEST", "LEAST", "NULLIF", "CASE")
 const _ONE_OF_NAMES = Dict("COALESCE" => "Coalesce", "GREATEST" => "Greatest", "LEAST" => "Least",
                            "NULLIF" => "NullIf", "CASE" => "Case")
@@ -1355,7 +1425,7 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   # wrote checks its operands, and names itself.
   haskey(v.kwargs, "rotation_of") && return nothing
   values = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : Any[v.column]
-  kinds = [_expression_kind(x, instruc) for x in values if !_is_null_operand(x)]
+  kinds = _non_null_operand_kinds(values, instruc)
   engine = _backend_name(conn)
   interval = units && any(k -> k isa CInterval, kinds)
   label() = v.function_name == "CAST" || _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v)) ?

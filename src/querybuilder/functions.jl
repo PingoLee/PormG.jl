@@ -127,7 +127,7 @@ _aggregate_refusal(fn::String, y) =
 # `test/unit/test_expression_kind_rules.jl` fails instead: every name a constructor builds must state
 # its rule here, `:unknown` included, so a new function cannot be typed in one reader and forgotten in
 # another.
-_result_rule(p::SQLTypeFunction) = _result_rule(Val(Symbol(p.function_name)))
+_result_rule(p::SQLTypeFunction) = _result_rule_by_name(p.function_name)   # #1599 layer 5: the ladder at this file's end
 _result_rule(::Val) = :unknown
 
 # #1324 — WHICH OPERANDS A NUMBER FUNCTION MEANS, stated beside its constructor as its `_result_rule`
@@ -138,7 +138,7 @@ _result_rule(::Val) = :unknown
 # MySQL on the count of microseconds. A tuple of `:number` and `:interval`; asked of every function
 # whose rule is `:promoting` or `:numeric` (`_check_operand_domain`), and
 # `test/unit/test_expression_kind_rules.jl` fails on one that does not state it.
-_operand_domain(p::SQLTypeFunction) = _operand_domain(Val(Symbol(p.function_name)))
+_operand_domain(p::SQLTypeFunction) = _operand_domain_by_name(p.function_name)   # #1599 layer 5: the ladder at this file's end
 _operand_domain(::Val) = nothing
 # The rules whose value is a number with its operands' type, or one of its operands' own values: one
 # boolean, float or decimal operand makes the result one, so any operand decides.
@@ -1093,13 +1093,32 @@ const _TEMPORAL_FUNCTION_ROWS = Dict{String,_TemporalRow}(
 # a caller writes it (`hour`, `isodow`), or the node's own name. `nothing` for a node that is no date
 # part. `ToChar` is checked only for the `"YYYY-MM"` mask `@yyyy_mm` builds: `to_char` also formats a
 # number on PostgreSQL, so an arbitrary mask says nothing about its operand's type.
+# `Dialect.extract_part(part)` for a part read untyped from a node's `kwargs` (#1599 layer 5): `Extract` stores
+# `String(part)`, which is the same call at its type; any other value takes it behind `@noinline`. `extract_part`
+# returns a `String` whenever it returns (the part uppercased, or as given). Over the untyped part the call, and the
+# `lowercase` of its answer, dispatched at run time: the trimmed read stopped there on `Extract("date", "month") == 11`.
+# `get(kwargs, key, nothing) == value` with the stored value read at its type (#1599 layer 5): a `String` compared at its
+# type, `nothing` is `false` (what `nothing == value` answers), anything else through `==` at run time, as before (a
+# `missing` still answers `missing`). Over the untyped value `==` dispatched at run time, and a trimmed image had no
+# target for it: the read stopped at `==(::String, ::String)` in the sargable rewrite of `"date__@year" => 2008`.
+function _kwarg_is(kwargs::Dict{String,Any}, key::String, value::String)
+  v = get(kwargs, key, nothing)
+  v isa String && return v == value
+  v === nothing && return false
+  return _kwarg_is_other(v, value)
+end
+@noinline _kwarg_is_other(@nospecialize(v), value::String) = v == value
+
+_extract_part_at(@nospecialize(part))::String = part isa String ? Dialect.extract_part(part) : _extract_part_other(part)
+@noinline _extract_part_other(@nospecialize(part))::String = Dialect.extract_part(part)
+
 function _temporal_row_of(v::FObject)
   name = v.function_name
   if name == "EXTRACT"
-    up = Dialect.extract_part(v.kwargs["part"])
+    up = _extract_part_at(v.kwargs["part"])
     return _EXTRACT_PART_ROWS[up], lowercase(up)
   elseif name == "EXTRACT_DATE"
-    get(v.kwargs, "format", nothing) == "YYYY-MM" || return nothing
+    _kwarg_is(v.kwargs, "format", "YYYY-MM") || return nothing
     return _temporal_row(_CALENDAR_READS, Models.format_yyyy_mm), "yyyy_mm"
   end
   row = get(_TEMPORAL_FUNCTION_ROWS, name, nothing)
@@ -2341,5 +2360,35 @@ function ISNULL(v::AbstractString, value::Bool; expression::Bool = false)
     return string(v, " IS NULL")
   else
     return string(v, " IS NOT NULL")
+  end
+end
+
+# #1599 layer 5 — a function's rules by its name, as one branch per name, generated here, after the last rule. They were
+# `_result_rule(Val(Symbol(name)))`: a type built from a name at run time, a dispatch a trimmed image had no target for
+# (the read stopped at `_operand_domain(::Val{:EXTRACT})` on `Extract("date", "month") == 11`). The names are exactly
+# those with a `Val` method above, read from the method table when this file loads (#1611's shape for `Dialect`), so a
+# rule stated beside a new constructor is reached with no list to keep. A name with no method here gets the fallback
+# method's answer (`:unknown`, `nothing`), through a `Val` no rule names, so the call stays static: the name `EXTRACT`
+# states no operand domain, and the run-time `Val` was the wall. As for `Dialect`'s ladder, the list is a snapshot of
+# this load: a rule added later in the session (under Revise) is seen once the package is reloaded. A method on any other
+# shape (a `Union` of `Val`s, a second argument) is refused here, when the package loads, rather than left out of the
+# ladder to answer the fallback's `:unknown` at run time; the two methods every rule has, the fallback on `::Val` and
+# the entry point on `::SQLTypeFunction`, are the only others.
+for (rule, ladder) in ((:_result_rule, :_result_rule_by_name), (:_operand_domain, :_operand_domain_by_name))
+  stated = String[]
+  for m in methods(getglobal(@__MODULE__, rule))
+    P = Base.unwrap_unionall(m.sig).parameters
+    V = length(P) == 2 ? P[2] : nothing
+    if V isa DataType && V <: Val && length(V.parameters) == 1 && V.parameters[1] isa Symbol
+      push!(stated, String(V.parameters[1]))
+    elseif !(V === Val || V === SQLTypeFunction)
+      error("#1599: `$(rule)` has a method on `$(m.sig)`, which its by-name ladder cannot read; state the rule on one `Val{:NAME}`")
+    end
+  end
+  arms = [:(name == $n && return $rule($(Val(Symbol(n))))) for n in sort!(stated)]
+  @eval function $ladder(name::AbstractString)
+    $(arms...)
+    Symbol(name)   # what `Val(Symbol(name))` raised for a name no `Symbol` can be (a NUL inside), raised here too
+    return $rule($(Val(:_pormg_no_stated_rule)))
   end
 end

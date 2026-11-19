@@ -1,5 +1,6 @@
 # The read steps every fixture binary runs after its first typed read (#1599 layer 5): comparison filters on a date
-# and on an integer, an `order_by` each way and the other common lookups, each checked by its typed result. Included by the SQLite steps
+# and on an integer, an `order_by` each way, the other common lookups and comparisons against an expression, each checked by its typed
+# result. Included by the SQLite steps
 # (`../steps.jl`) and by each server variant's `main.jl`, after each defines `M`, `RaceRow`, `say` and `failed`, so
 # every binary prints the same lines for the same step. They run before any write, on the two races every `prep.jl`
 # seeds: the 2008 Monaco Grand Prix (round 6, 2008-05-25) and the 2008 Brazilian Grand Prix (round 18, 2008-11-02).
@@ -75,5 +76,43 @@ end
 function lookup_line(lookup::String, rows::Vector{RaceRow}, expected::String)::Bool
     names = race_names(rows)
     say("lookup", string(lookup, " ", length(rows), " rows: ", isempty(names) ? "none" : names))
+    return names == expected
+end
+
+using PormG.Functions: Case, When, Extract
+
+# Comparisons against expressions (#1599 layer 5): an `F` with arithmetic on the right side of a lookup and on the
+# left side of a comparison, a function over a column (`Extract` of the date's month, and the `@year` transform, which
+# the render rewrites into a range on the column), and a `Case`/`When` on each side. Each picks out its own rows from
+# the two seeded races, and its typed result is checked against them. Exit code 14 when a read raises or returns
+# other rows.
+function expr_step()::Bool
+    try
+        ok = true
+        ok &= expr_line("year__@gt F(round) + 2000",
+                        M.Race.objects.filter("year__@gt" => F("round") + 2000).list(RaceRow), "Monaco Grand Prix")
+        ok &= expr_line("F(round) + 1 == 19", M.Race.objects.filter(F("round") + 1 == 19).list(RaceRow),
+                        "Brazilian Grand Prix")
+        ok &= expr_line("Extract(date, month) == 11",
+                        M.Race.objects.filter(Extract("date", "month") == 11).list(RaceRow), "Brazilian Grand Prix")
+        ok &= expr_line("date__@year", M.Race.objects.filter("date__@year" => 2008).order_by("date").list(RaceRow),
+                        "Monaco Grand Prix, Brazilian Grand Prix")
+        ok &= expr_line("round__@gte Case",
+                        M.Race.objects.filter("round__@gte" =>
+                            Case(When("name" => "Monaco Grand Prix", then = 6), default = 100)).list(RaceRow),
+                        "Monaco Grand Prix")
+        ok &= expr_line("Case == 1",
+                        M.Race.objects.filter(Case(When("round__@lt" => 10, then = 1), default = 0) == 1).list(RaceRow),
+                        "Monaco Grand Prix")
+        return ok
+    catch e
+        failed("expr", e); return false
+    end
+end
+
+# One expression comparison's line, `<label> <n> rows: <names>`, and whether its rows are the `expected` names.
+function expr_line(label::String, rows::Vector{RaceRow}, expected::String)::Bool
+    names = race_names(rows)
+    say("expr", string(label, " ", length(rows), " rows: ", isempty(names) ? "none" : names))
     return names == expected
 end

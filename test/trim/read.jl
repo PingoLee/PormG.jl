@@ -1,5 +1,5 @@
 # The read-only juliac --trim entry of the fixture app (#1599): boot, one typed read, two comparison filters,
-# an order_by each way and the other common lookups (`tools/reads.jl`), no write.
+# an order_by each way, the other common lookups and comparisons against an expression (`tools/reads.jl`), no write.
 # `main.jl` without its write steps (the refused creates, the write, the update and the delete); this
 # binary returns rows (#1788), and the `Trim (juliac)` workflow builds and runs it (README.md).
 #   JIT:  julia --project=test/trim test/trim/read.jl <run dir>
@@ -19,6 +19,7 @@ function (@main)(args::Vector{String})::Cint
     compare_step() || return Cint(10)
     order_step() || return Cint(11)
     lookup_step() || return Cint(13)
+    expr_step() || return Cint(14)
     tasks && (reap_step() || return Cint(4))
     tasks && (close_step() || return Cint(5))
     elapsed_step(t0)

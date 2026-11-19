@@ -321,7 +321,9 @@ _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::S
 #
 
 # select
-function _infer_parameter_sql_type(value, instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
+# #1599 layer 5: the value unspecialized (callers hold a keyword's untyped value, a `Case` branch's `then`); the body
+# only tests it with `isa`. Specialized on it, the call had no compiled target in a trimmed image.
+function _infer_parameter_sql_type(@nospecialize(value), instruc::SQLInstruction; fallback::Union{Nothing,String}=nothing)
   _casts_bind_parameters(instruc.connection) || return nothing
   # #1175: a zoned literal reaches a declared type (a `Case` `output_field`) through its instant.
   # Cast straight to `date`, PostgreSQL would read the offset text's wall-clock date instead.
@@ -404,7 +406,7 @@ function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruct
     literal = !(then isa Union{SQLObject,SQLType}) || then isa SQLText
     raw = then isa SQLText ? then.field : then
     _is_null_literal(raw) && continue
-    k = literal ? _literal_kind(raw, _AllKinds()) : _infer_kind(then, instruc, _AllKinds())
+    k = literal ? _literal_kind(raw, _AllKinds()) : _infer_kind_any(then, instruc, _AllKinds())
     k === nothing && return nothing
     kind = _unify_kinds(kind, k, _AllKinds())
     kind === nothing && return nothing

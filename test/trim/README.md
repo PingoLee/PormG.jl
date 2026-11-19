@@ -412,6 +412,59 @@ not, as for the SQLite job. Neither variant commits a `Manifest.toml`, so each r
 MySQL.jl or Postgres.jl that PormG's `[compat]` admits: as for SQLite, a red nightly with no PormG change
 may be a driver release, and the `Instantiate the fixture` step prints the versions.
 
+## Running the server variants locally
+
+`tools/runner.jl` runs a command with the `PORMG_TRIM_*` variables pointed at a local server, taking the
+server's host, port, user and password from an integration configuration folder: `test/integration/db_my`
+for MySQL, `test/integration/db_2` for PostgreSQL. It loads the folder in place with
+`PormG.Configuration.load` (environment `dev`, as the integration suite does; `--env=` picks another), so
+the folder's `connection.yml` is read by PormG and never copied, and it sets the variables in the child
+process's environment only. The database is `pormg_trim` (`--database=` names another; it must contain
+`trim`), which the integration account must be able to use: the fixture's database, never the suite's. It
+prints `runner	<host>:<port>/<database>` and the child's exit code, never the user or the password, and
+exits with the child's code. It runs in the integration environment, which carries both drivers:
+
+```
+julia --project=test/integration test/trim/tools/runner.jl db_my -- <command...>
+```
+
+`db_my` and `db_2` name this checkout's folders. The `connection.yml` files are gitignored, so in a git
+worktree pass the main checkout's folder as a path instead
+(`…/PormG.jl/test/integration/db_my`).
+
+The folder must set `host:` (a name or an IPv4 address: the runner connects over TCP, as the fixture's URL
+does) and `password:`, or the runner refuses it. It exits with the child's code, `128 + n` when signal `n`
+killed the child, and 127 when the command could not be started.
+
+The MySQL variant, from the repository root, after building `build-mysql/main` as above:
+
+```
+trim_my() { julia --project=test/integration test/trim/tools/runner.jl db_my -- "$@"; }
+trim_my julia --project=test/trim/mysql test/trim/mysql/prep.jl   # PormG's DDL and the two races
+trim_my julia --project=test/trim/mysql test/trim/mysql/main.jl   # the JIT control
+trim_my julia --project=test/trim/mysql test/trim/mysql/prep.jl   # the two races again
+sudo mysql -e "FLUSH PRIVILEGES"                                 # empty caching_sha2_password's cache, as CI does
+trim_my build-mysql/main                                         # the trimmed binary
+```
+
+`prep.jl` and the JIT control log in, which fills `caching_sha2_password`'s cache, so without the flush the
+binary takes the cached fast path and never runs the full authentication CI's job checks. The flush needs the
+`RELOAD` privilege; an account without it still runs every step, on the fast path.
+
+The PostgreSQL variant, after building `build-postgres/main`:
+
+```
+trim_pg() { julia --project=test/integration test/trim/tools/runner.jl db_2 -- "$@"; }
+trim_pg julia --project=test/trim/postgres test/trim/postgres/prep.jl
+trim_pg julia --project=test/trim/postgres test/trim/postgres/main.jl
+trim_pg julia --project=test/trim/postgres test/trim/postgres/prep.jl
+trim_pg build-postgres/main
+```
+
+Each binary run starts from `prep.jl`'s two races, as the JIT control does, so the binary prints the JIT
+control's lines. Only the written rows' ids differ: `prep.jl` does not reset the server's sequences (see the
+MySQL variant).
+
 ## Reading the build log
 
 Two scripts in `tools/` count the verifier's rows in a `build.log` saved through `tee`. They need only

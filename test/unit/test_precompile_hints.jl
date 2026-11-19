@@ -358,3 +358,67 @@ println("_mysql_cell_at Int64 Vector{Int32}\t",
     @test filter(l -> !endswith(l, "\ttrue"), lines) == String[]
   end
 end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLite bulk writes and update_or_create: their pipelines are in the extension's image (#1694)
+# Since #1814 and #1821 the pipeline past a bulk write's source (`_bulk_update_frame`, `_bulk_update`)
+# is compiled once for every table type, and `update_or_create`'s statement runner (`_run_update_or_create`)
+# once for every model. With no workload calling them, a session's first `bulk_update` compiled them at run time: about
+# 4 s with SQLite the only driver, and about 1.2 s for a first `update_or_create`. A first `bulk_insert`
+# from a `Vector` of `NamedTuple`s compiled Tables.jl's row-to-column fill (`DataAPI.defaultarray`, a
+# root compiled at run time on the base) for each column type, about 0.3 s. These compile inside the
+# write, so a `--trace-compile` run would not print most of them (roots only): this asks the method
+# table, as the MySQL check above does. In a fresh process that has only loaded PormG and SQLite and
+# called nothing, each instance must hold a code instance valid in this world with native code. Without
+# the extension workload's bulk writes none of them exists there. The first line says whether the
+# extension loaded at all: a workload step that throws makes Julia skip it, and every other line would
+# then be `false` without the cause. Skipped under code coverage, which
+# does not use the package images' native code; CI runs this file alone without it.
+# ─────────────────────────────────────────────────────────────────────────────
+const _SQLITE_BULK_IMAGE_1694 = raw"""
+using PormG, SQLite
+const QB = PormG.QueryBuilder
+const CP = PormG.ConnectionPool
+const Dates, DataAPI = QB.Dates, QB.Tables.DataAPI
+const Model, Settings = PormG.Models.ModelType, PormG.Kernel.Settings
+function native(f, sig)
+  for m in methods(f), mi in Base.specializations(m)
+    mi isa Core.MethodInstance && mi.specTypes == Tuple{Core.Typeof(f), sig...} || continue
+    isdefined(mi, :cache) || return false
+    ci = mi.cache
+    return ci.max_world == typemax(UInt) && ci.invoke != C_NULL
+  end
+  return false
+end
+println("PormGSQLiteExt loaded\t", Base.get_extension(PormG, :PormGSQLiteExt) !== nothing)
+println("_bulk_update_frame\t", native(QB._bulk_update_frame, (QB.ObjectHandler, Model, Settings, CP.SQLiteConnectionPool,
+  QB._BulkFrame, Vector{Union{Pair{String, String}, String}}, Vector{String}, Vector{Union{String, Pair{String}}}, Symbol, Int64)))
+println("_bulk_update\t", native(QB._bulk_update, (Model, Settings, CP.SQLiteConnectionPool, Vector{String}, String,
+  Vector{String}, Vector{String}, Symbol, QB.InstructionObject, QB.SQLiteParameterizedQuery)))
+println("_resolve_bulk_update_keys!\t", native(QB._resolve_bulk_update_keys!, (QB._BulkFrame, Model, Dict{String, String},
+  Vector{String}, Vector{String}, Vector{Union{String, Pair{String}}}, Vector{String})))
+println("_ensure_unique_bulk_update_key Int64\t", native(QB._ensure_unique_bulk_update_key, (Vector{Int64}, Int64, Vector{String})))
+println("_run_update_or_create\t", native(QB._run_update_or_create, (CP.SQLiteConnectionPool, Settings, QB.SQLObjectQuery,
+  Model, String, QB.SQLiteParameterizedQuery, String, Vector{String}, Symbol)))
+println("DataAPI.defaultarray String\t", native(DataAPI.defaultarray, (Type{String}, Int64)))
+println("DataAPI.defaultarray Date\t", native(DataAPI.defaultarray, (Type{Dates.Date}, Int64)))
+"""
+
+@testset "SQLite bulk writes and update_or_create: the pipelines are in the extension's image (#1694)" begin
+  if Base.JLOptions().code_coverage != 0
+    @test_skip "the check needs the package images' native code, which coverage turns off"
+  else
+    script = tempname() * ".jl"
+    write(script, _SQLITE_BULK_IMAGE_1694)
+    out, err = IOBuffer(), IOBuffer()
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script`
+    ok = success(pipeline(cmd; stdout = out, stderr = err))
+    rm(script; force = true)
+    # The child's stderr is printed on a failure: a precompile or load error is otherwise invisible.
+    @test ok || (@info "the image check's process failed" stderr = String(take!(err)); false)
+    lines = filter(!isempty, split(String(take!(out)), '\n'))
+    @test length(lines) == 8
+    # Printed on a failure, so the red run names each instance the image does not carry.
+    @test filter(l -> !endswith(l, "\ttrue"), lines) == String[]
+  end
+end

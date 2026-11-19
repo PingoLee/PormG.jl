@@ -904,6 +904,21 @@ end
         Constructor.objects.get_or_create("name" => "Williams"; defaults = Pair{String, Any}["constructorid" => 2])
         Driver.objects.get_or_create("driverid" => 3;
           defaults = Pair{String, Any}["forename" => "Lewis", "surname" => "Hamilton", "dob" => PormG.Dates.Date(1985, 1, 7)])
+        # The bulk writes from a `Vector` of `NamedTuple`s, and `update_or_create` on a miss and then a hit (#1694).
+        # Since #1814 and #1821 a bulk write's pipeline past its source is compiled once for every table type, and
+        # `update_or_create`'s statement runner once for every model, so these calls pay an application's first
+        # ones on its own models (test/unit/test_precompile_hints.jl pins it). Measured with SQLite the only driver,
+        # each first call in a fresh process: `bulk_insert` 0.44 → 0.11 s, `bulk_update` 4.1 → 0.11 s,
+        # `update_or_create` 1.19 → 0.01 s; this extension's precompile +7 s, its image +5.2 MB, `using PormG,
+        # SQLite` +0.02 s. With a second driver loaded none of the three gains: their first calls cost 8–29 s there,
+        # on the base too.
+        QB.bulk_insert(Race.objects, [(raceid = 2, year = 1989, name = "Japanese Grand Prix", date = PormG.Dates.Date(1989, 10, 22))])
+        QB.bulk_update(Result.objects, [(resultid = 1, points = 10.0), (resultid = 2, points = 7.0)];
+                       columns = ["points"], match_on = ["resultid"])
+        for _ in 1:2
+          Driver.objects.update_or_create("driverid" => 4;
+            defaults = Pair{String, Any}["forename" => "Nigel", "surname" => "Mansell", "dob" => PormG.Dates.Date(1953, 8, 8)])
+        end
 
         # ── Reads: every list() format, over a plain and a joined projection ──
         Driver.objects.filter("surname" => "Senna").list()

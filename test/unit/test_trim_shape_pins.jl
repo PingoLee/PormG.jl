@@ -2729,6 +2729,37 @@ end
     @test !occursin("fetch(settings, read_back[1])", ew_src)
   end
 
+  # What: the untyped read (#1599 layer 6): the decoder that carries each projection's read parser to `fetch`
+  #   (`QueryBuilder._ProjectionRowDecoder`), its fetch (`_fetch_projection_rows`), and the SQLite extension's
+  #   `backend_execute_rows` method, shared with the insert's read-back, that steps the statement into the rows.
+  # Expected: the decoder is a concrete type with concrete fields; none of these makes a dynamic call; the rows
+  #   infer `Vector{Dict{Symbol,Any}}`; `_list_raw` reads through them and no longer builds its rows after `fetch`.
+  # Why: `_list_raw` handed `fetch`'s result, typed `Any`, to `_rows_from_result`, whose SQLite method walks a
+  #   `NamedTuple` per row whose type the statement decides; a trimmed image has no code for it.
+  #   `test/integration/test_untyped_read_equivalence_1599.jl` holds the equivalence against the old read.
+  @testset "the untyped read is decoded on SQLite's worker at concrete types (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    CP = PormG.ConnectionPool
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    has = isdefined(QB, :_ProjectionRowDecoder) && isdefined(QB, :_fetch_projection_rows)
+    @test has
+    if has
+      D = QB._ProjectionRowDecoder
+      @test isconcretetype(D) && all(isconcretetype, fieldtypes(D))
+      @test isempty(_dynamic_calls(QB._ProjectionRowDecoder, (QB.InstructionObject, CP.SQLiteConnectionPool)))
+      for P in (Nothing, QB.SQLiteParameterizedQuery)
+        @test (P, _dynamic_calls(QB._fetch_projection_rows, (PormG.Kernel.Settings, String, P, D))) == (P, String[])
+        @test only(Base.return_types(QB._fetch_projection_rows, (PormG.Kernel.Settings, String, P, D))) ==
+              Vector{Dict{Symbol, Any}}
+      end
+      @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, D)))
+      @test isempty(_dynamic_calls(X._sqlite_field_rows_into, (SQLite.Query{false}, D)))
+    end
+    er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
+    @test occursin("_fetch_projection_rows(settings, rendered.sql, rendered.instruction.parameters, decoder)", er_src)
+    @test !occursin("return _rows_from_result(result, _projection_parsers(built, connection))", er_src)
+  end
+
   # What: the full entry's `update` and `delete` (#1599 layer 7, #1694, after the write completed): the walls
   #   each verb hits in a trimmed image, one per commit. `update`'s query copy (`_mutation_copy`).
   # Expected: `update` builds from a shallow copy of the caller's query with `values` emptied and `filter` and

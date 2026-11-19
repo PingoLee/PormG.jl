@@ -431,7 +431,7 @@ end
 # trimmed image has no code for. Each cell is read by its storage class, as `_sqlite_value` reads it, and
 # handed at that type to its field's parser; the Dict holds `Any`, so storing it is static.
 function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::String, params,
-                                    decode::PormG.QueryBuilder._FieldRowDecoder)
+                                    decode::PormG.QueryBuilder._DictRowDecoder)
   resolved = params isa PormGSQLiteParam ? params.parameters : params
   try
     return _sqlite_with_retry(() -> _sqlite_field_rows(conn, sql, resolved, decode))::Vector{Dict{Symbol,Any}}
@@ -442,7 +442,7 @@ function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::Str
 end
 
 function _sqlite_field_rows(conn::SQLite.DB, sql::String, params,
-                            decode::PormG.QueryBuilder._FieldRowDecoder)::Vector{Dict{Symbol,Any}}
+                            decode::PormG.QueryBuilder._DictRowDecoder)::Vector{Dict{Symbol,Any}}
   stmt = SQLite.Stmt(conn, sql; register = false)
   try
     q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
@@ -452,12 +452,12 @@ function _sqlite_field_rows(conn::SQLite.DB, sql::String, params,
     SQLite.DBInterface.close!(stmt)
   end
 end
-@noinline _sqlite_field_rows_into_open(@nospecialize(q), decode::PormG.QueryBuilder._FieldRowDecoder) =
+@noinline _sqlite_field_rows_into_open(@nospecialize(q), decode::PormG.QueryBuilder._DictRowDecoder) =
   _sqlite_field_rows_into(q, decode)::Vector{Dict{Symbol,Any}}
 
 # The rows, stepped as `_sqlite_rows_into` steps them; an error raised while building a row (a parser's
 # refusal) is recorded on the decoder and the walk stops, so `fetch` raises it as it was raised.
-function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._FieldRowDecoder)::Vector{Dict{Symbol,Any}}
+function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._DictRowDecoder)::Vector{Dict{Symbol,Any}}
   handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
   names = q.names   # a `Vector{Symbol}` (see `_sqlite_rows_into`)
   fkeys = Symbol[QB._field_key(decode, n) for n in names]
@@ -466,7 +466,7 @@ function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._FieldRowDecoder)
   next = iterate(q)
   while next !== nothing
     row = try
-      dict = Dict{Symbol,Any}()
+      dict = QB._new_row(decode, length(fkeys))
       for c in eachindex(fkeys)
         dict[fkeys[c]] = _sqlite_field_cell(handle, c, parsers[c])
       end

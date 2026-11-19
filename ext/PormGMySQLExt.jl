@@ -595,13 +595,17 @@ end
 # generic call read the result through `Tables.rowtable`, whose row type is decided at run time, and a trimmed image
 # had no code for it (the MySQL entry's `create` stopped at `Tables.rowcount`). The same keys and values: the
 # columns hold the cells `Tables.rowtable` read. A parser's refusal raises here, as it did there.
-function (d::PormG.QueryBuilder._FieldRowDecoder)(result::MySQLResult)::Vector{Dict{Symbol,Any}}
+# One method per decoder, not one over their union: the untyped read's decoder has a generic method of its own
+# (`_rows_from_result`), and a union method would be ambiguous with it.
+(d::PormG.QueryBuilder._FieldRowDecoder)(result::MySQLResult) = _mysql_dict_rows(d, result)
+(d::PormG.QueryBuilder._ProjectionRowDecoder)(result::MySQLResult) = _mysql_dict_rows(d, result)
+function _mysql_dict_rows(d::PormG.QueryBuilder._DictRowDecoder, result::MySQLResult)::Vector{Dict{Symbol,Any}}
   QB = PormG.QueryBuilder
   fkeys = Symbol[QB._field_key(d, Symbol(n)) for n in result.names]
   parsers = PormG.ReadParser[QB._field_parser(d, k) for k in fkeys]
   out = Dict{Symbol,Any}[]
   for i in 1:result.nrows
-    dict = Dict{Symbol,Any}()
+    dict = QB._new_row(d, length(fkeys))
     for j in eachindex(fkeys)
       dict[fkeys[j]] = _mysql_parsed(result.columns[j], i, parsers[j])
     end

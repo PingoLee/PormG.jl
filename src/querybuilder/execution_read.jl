@@ -1429,23 +1429,90 @@ function _projection_parsers(built::SQLInstruction, connection)::Union{Nothing,D
   return parsers
 end
 
-function _list_raw(q::SQLObjectHandler)
-  return _execute_select(q) do result, built, connection
-    # #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
-    # plain column.
-    #
-    # What this replaces (`_sqlite_datetime_aliases`) had four gates, ALL of which had to pass: the
-    # projection had to be an `SQLTypeField`, its `.field` had to be a plain `String`, that string had
-    # to contain no `__`, and the field had to be an `sDateTimeField`. So the coercion set was exactly
-    # "bare, unjoined, primary-model `DateTimeField` columns" — every expression alias, every joined
-    # column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
-    # text, while PostgreSQL's driver delivered typed values for all of them.
-    #
-    # The parser selection lives in `_projection_parsers` (above), shared with the Tables.jl source
-    # since #582 so the row and tabular terminals coerce the same columns.
-    return _rows_from_result(result, _projection_parsers(built, connection))
+# #1599 layer 6 — the untyped read's rows, decoded where the driver's result is concrete, as the typed read's
+# (`_RowDecoder`) and the write read-back's (`_FieldRowDecoder`) are. The rows were built after `fetch` returned,
+# from a result typed `Any`: SQLite's `NamedTuple` per statement and `Tables.columntable` over a server's result,
+# whose types the statement decides at run time, so a trimmed image had no code for `first()`, `list()` or a
+# `values(...)` read.
+#
+# The rows are the ones `_rows_from_result` builds, unchanged: each column keyed by its own name, in column
+# order, in a `Dict{Symbol,Any}` sized to the column count before it is filled (so its key iteration order is
+# the same), and each projection's cell through the parser `_projection_parsers` selects, applied as the
+# concrete `ReadParser` it is derived from. On SQLite the worker steps the statement straight into these rows,
+# and a MySQL or Postgres.jl result is read by its extension at its concrete type, through the same walks the
+# write read-back uses. Any other result (LibPQ's, a stand-in pool's) is read by `_rows_from_result` itself, the
+# column-wise read #1073 measured for LibPQ, with `functions`, the `Dict{Symbol,Function}` it always took.
+#
+# `failure` carries an error raised while building a row on SQLite's worker (a parser's refusal) back to
+# `fetch`, which raises it as it was raised, as when the rows were parsed after `fetch` returned.
+struct _ProjectionRowDecoder
+  parsers::Dict{Symbol,ReadParser}                  # a projection's read parser, for one that has one
+  functions::Dict{Symbol,Function}   # the same parsers as `_projection_parsers` returns them (none: empty)
+  failure::Base.RefValue{Union{Nothing,Exception}}
+end
+
+function _ProjectionRowDecoder(built::SQLInstruction, connection)
+  parsers = Dict{Symbol,ReadParser}()
+  functions = Dict{Symbol,Function}()
+  for (name, kind) in built.projection_kinds   # `_projection_parsers`' walk, in its order
+    parser = read_parser(kind, connection, name)   # #1110: a parser that raises names the projection
+    has_parser(parser) || continue
+    parsers[name] = parser
+    functions[name] = _as_function(parser)::Function   # `value_parser`, which is derived from it
+  end
+  return _ProjectionRowDecoder(parsers, functions, Base.RefValue{Union{Nothing,Exception}}(nothing))
+end
+
+# A result the extensions do not decode themselves: `_rows_from_result`, as before (`nothing` where no projection
+# has a parser, as `_projection_parsers` returns it).
+(d::_ProjectionRowDecoder)(result)::Vector{Dict{Symbol,Any}} =
+  _rows_from_result(result, isempty(d.functions) ? nothing : d.functions)
+
+function decode_on_worker(d::_ProjectionRowDecoder, result)::Vector{Dict{Symbol,Any}}
+  try
+    return d(result)
+  catch e
+    (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement
+    d.failure[] = e
+    return Dict{Symbol,Any}[]
   end
 end
+function decoded_on_worker(d::_ProjectionRowDecoder, result)
+  f = d.failure[]
+  f === nothing || throw(f)
+  return result::Vector{Dict{Symbol,Any}}
+end
+
+# #564 — COERCE BY WHAT EACH PROJECTION EVALUATES TO, not by whether its alias happens to name a
+# plain column.
+#
+# What this replaces (`_sqlite_datetime_aliases`) had four gates, ALL of which had to pass: the
+# projection had to be an `SQLTypeField`, its `.field` had to be a plain `String`, that string had
+# to contain no `__`, and the field had to be an `sDateTimeField`. So the coercion set was exactly
+# "bare, unjoined, primary-model `DateTimeField` columns" — every expression alias, every joined
+# column, and every `DateField`/`TimeField`/`DurationField` fell outside it and came back as raw
+# text, while PostgreSQL's driver delivered typed values for all of them.
+#
+# The parser selection is `_projection_parsers`' (above), shared with the Tables.jl source since #582 so
+# the row and tabular terminals coerce the same columns; the decoder carries it to `fetch` (#1599 layer 6).
+# `_execute_select`'s body, with the decoder handed to `fetch`.
+function _list_raw(q::SQLObjectHandler)::Vector{Dict{Symbol,Any}}
+  return _with_connection(q) do settings, connection, conn_key
+    rendered = _render_select(q, connection=connection, show_query=:execute)
+    _refuse_lock_outside_transaction(q, rendered.instruction)
+    decoder = _ProjectionRowDecoder(rendered.instruction, connection)
+    return _fetch_projection_rows(settings, rendered.sql, rendered.instruction.parameters, decoder)
+  end
+end
+
+# The statement's parameters at their concrete collector type, as `_fetch_rows` hands them (typed_read.jl).
+function _fetch_projection_rows(settings, sql::String, params::Union{Nothing,ParamCollector},
+                                decoder::_ProjectionRowDecoder)::Vector{Dict{Symbol,Any}}
+  params === nothing && return fetch(settings, sql; params = nothing, _decode = decoder)::Vector{Dict{Symbol,Any}}
+  return with_collector(_fetch_projection_rows_on, params, settings, sql, decoder)::Vector{Dict{Symbol,Any}}
+end
+_fetch_projection_rows_on(params, settings, sql::String, decoder::_ProjectionRowDecoder) =
+  fetch(settings, sql; params = params, _decode = decoder)::Vector{Dict{Symbol,Any}}
 
 # #1073 — a driver result as `Dict{Symbol,Any}` rows, read COLUMN-WISE, the way `DataFrame(query)`
 # reads it. This used to be `Tables.rowtable(result)` and a `Dict` per row, and on LibPQ the row walk

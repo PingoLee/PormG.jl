@@ -80,6 +80,19 @@ end
 _field_key(d::_FieldRowDecoder, column::Symbol)::Symbol = isempty(d.rev) ? column : get(d.rev, String(column), column)
 _field_parser(d::_FieldRowDecoder, key::Symbol)::ReadParser = get(d.parsers, key, NO_READ_PARSER)
 
+# The untyped read's decoder (`_ProjectionRowDecoder`, execution_read.jl, #1599 layer 6) is read by the same
+# extension walks: a column keys the row by its own name, and its parser is its projection's.
+_field_key(::_ProjectionRowDecoder, column::Symbol)::Symbol = column
+_field_parser(d::_ProjectionRowDecoder, key::Symbol)::ReadParser = get(d.parsers, key, NO_READ_PARSER)
+
+# A new row for `ncols` cells. The untyped read's is sized first, as `_rows_from_result` sizes it, so a row with
+# the same keys iterates them in the same order; the write read-back's is not, as it never was.
+_new_row(::_FieldRowDecoder, ncols::Int) = Dict{Symbol,Any}()
+_new_row(::_ProjectionRowDecoder, ncols::Int) = sizehint!(Dict{Symbol,Any}(), ncols)
+
+# The two field-keyed `Dict` decoders the extensions read a concrete result into (#1599 layers 6 and 7).
+const _DictRowDecoder = Union{_FieldRowDecoder,_ProjectionRowDecoder}
+
 # A materialized result the extensions do not decode themselves (LibPQ's, a stand-in pool's; MySQL and Postgres.jl
 # have their own methods, #1614): its rows, each through the keys and parsers above.
 function (d::_FieldRowDecoder)(result)::Vector{Dict{Symbol,Any}}

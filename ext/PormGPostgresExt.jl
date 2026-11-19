@@ -810,7 +810,11 @@ end
 # The decoder's generic call read the result through `Tables.rowtable`, whose row type is decided at run time,
 # and a trimmed image had no code for it (the Postgres.jl entry's `create` stopped there). The same keys and
 # values: Postgres.jl's rows hold the cells `Tables.rowtable` read. A parser's refusal raises here, as it did there.
-function (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result)::Vector{Dict{Symbol,Any}}
+# One method per decoder, not one over their union: the untyped read's decoder has a generic method of its own
+# (`_rows_from_result`), and a union method would be ambiguous with it.
+(d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result) = _pg_dict_rows(d, result)
+(d::PormG.QueryBuilder._ProjectionRowDecoder)(result::Postgres.Result) = _pg_dict_rows(d, result)
+function _pg_dict_rows(d::PormG.QueryBuilder._DictRowDecoder, result::Postgres.Result)::Vector{Dict{Symbol,Any}}
   QB = PormG.QueryBuilder
   names = result.names
   fkeys = Symbol[QB._field_key(d, Symbol(n)) for n in names]
@@ -818,7 +822,7 @@ function (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result)::Vect
   out = Dict{Symbol,Any}[]
   for row in result.rows
     data = getfield(row, :data)
-    dict = Dict{Symbol,Any}()
+    dict = QB._new_row(d, length(fkeys))
     for j in eachindex(fkeys)
       dict[fkeys[j]] = _pg_parsed(data[j], parsers[j])
     end

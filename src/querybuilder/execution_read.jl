@@ -1765,7 +1765,17 @@ function list(objct::SQLObjectHandler, ::Val{F}; kwargs...) where F
   throw(QueryBuildError("Unknown list format :$F. Expected :row, :dict, or :json."))
 end
 
-list(objct::SQLObjectHandler, format::Symbol; kwargs...) = list(objct, Val(format); kwargs...)
+# #1599 layer 6: the three formats PormG defines are called at their `Val` type. `q.list()` hands its format as a
+# run-time `Symbol` (`:row` by default), and `Val(format)` built from it made the keyword call a run-time dispatch,
+# which a `juliac --trim` image had no code for. Any other format takes that call as before, behind a barrier: the
+# `Val{F}` fallback's `QueryBuildError`, or a method defined for it.
+function list(objct::SQLObjectHandler, format::Symbol; kwargs...)
+  format === :row && return list(objct, Val(:row); kwargs...)
+  format === :dict && return list(objct, Val(:dict); kwargs...)
+  format === :json && return list(objct, Val(:json); kwargs...)
+  return _list_other_format(objct, format; kwargs...)
+end
+@noinline _list_other_format(objct::SQLObjectHandler, format::Symbol; kwargs...) = list(objct, Val(format); kwargs...)
 list(objct::SQLObjectHandler; kwargs...) = list(objct, Val(:row); kwargs...)
 
 """

@@ -2760,6 +2760,18 @@ end
     @test !occursin("return _rows_from_result(result, _projection_parsers(built, connection))", er_src)
   end
 
+  # What: `list(q, format::Symbol)` (#1599 layer 6), which `q.list()` and `q.list(:dict)` reach with the format as a
+  #   run-time `Symbol`.
+  # Expected: the keyword body makes no dynamic call: `:row`, `:dict` and `:json` call their `Val` methods
+  #   statically, and any other format goes to `_list_other_format`, the barrier that keeps the old dispatch.
+  # Why: `list(objct, Val(format); kwargs...)` built the `Val` at run time, and the trimmed `list()` raised
+  #   `MethodError` on that keyword call (`Core.kwcall(…, list, ObjectHandler, Val{:row})`).
+  @testset "list(q, format) calls the format's method statically (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_list_other_format)
+    @test isempty(_dynamic_calls_kw(QB.list, (QB.ObjectHandler, Symbol)))   # the concrete handler a terminal holds
+  end
+
   # What: `first()` and `last()` on the untyped read (#1599 layer 6): the step that takes the first of their rows.
   # Expected: `_first_of` takes the untyped read's rows, untyped, without a dynamic call.
   # Why: `_first`'s rows come from `_list_owned`, whose result depends on `show_query`; a trimmed image compiles the

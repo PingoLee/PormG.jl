@@ -92,3 +92,25 @@ end
     one = M.Race.objects.filter("year" => 2008).order_by("round").first()
     @test _ur_differences(old[1:1], Dict{Symbol,Any}[getfield(one, :_data)]) == String[]
 end
+
+@testset "get_or_create's reads decode the row _row_to_field_keyed_dict built (#1599 layer 6)" begin
+    # Expected SQL: `SELECT * FROM race WHERE raceid = ? LIMIT 1` (the lookup's locking read, without `FOR SHARE`) and
+    # the read-back's `SELECT <declared columns> …`, each run twice. Why: `get_or_create` read these rows through
+    # `Tables.rowtable` and `_row_to_field_keyed_dict`, which a trimmed image has no code for; the decoder must give
+    # the same row: the same keys in the same iteration order (sized as the old `Dict` was), values and types.
+    rid = first(M.Race.objects.filter("year" => 2008).order_by("round").values("raceid").list(:dict))[:raceid]
+    _UR_QB._with_connection(M.Race.objects) do settings, connection, _
+        real_obj = _UR_QB.SQLObjectQuery(model = M.Race)
+        real_obj.insert["raceid"] = rid
+        table = _UR_QB.safe_table_identifier(PormG.Models.model_table_name(M.Race), connection)
+        for head in (_UR_QB._FOUND_ROW_HEAD, "SELECT $(_UR_QB._returned_columns(M.Race, connection, table))")
+            sql, params = _UR_QB._select_by_target(head, real_obj, M.Race, ["raceid"], table, connection)
+            old = _UR_QB._row_to_field_keyed_dict(first(_UR_QB.Tables.rowtable(_UR_QB.fetch(settings, sql, params))),
+                                                  M.Race, connection)
+            sql2, params2 = _UR_QB._select_by_target(head, real_obj, M.Race, ["raceid"], table, connection)
+            new = _UR_QB._read_back_rows(settings, sql2, params2, _UR_QB._FieldRowDecoder(M.Race, connection; sized = true))
+            @test length(new) == 1
+            @test _ur_differences([old], new) == String[]
+        end
+    end
+end

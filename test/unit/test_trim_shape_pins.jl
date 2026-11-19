@@ -2813,6 +2813,28 @@ end
     end
   end
 
+  # What: `get_or_create`'s lookup values (#1599 layer 6), captured from the insert before any marshalling.
+  # Expected: filled key by key into a `Dict{String,Any}`; no `f => real_obj.insert[f]` generator is left.
+  # Why: the generator built a `Pair{String,T}` with `T` known only at run time; the trimmed `get_or_create` raised
+  #   `MethodError` calling `Pair` (a `UnionAll`) with `(String, Int64)`.
+  @testset "get_or_create captures its lookup values at their types (#1599 layer 6)" begin
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test !occursin("Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)", ew_src)
+    @test occursin("target_values[f] = real_obj.insert[f]", ew_src)
+    # The hit's lookup filter: each pair built at its value's type, behind the walk.
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_filter_lookup!) && !occursin("    q.filter(f => v)\n  end\n  return q", ew_src)
+    isdefined(QB, :_filter_lookup!) &&
+      @test isempty(_dynamic_calls(QB._filter_lookup!, (QB.ObjectHandler, String, Any)))
+    # The miss's parameters: a variable of the closure's own, not the boxed `parameters` the show branch also assigns.
+    @test occursin("miss_params = get_parameter(connection)", ew_src) && occursin("miss_sql = build_insert(miss_params)", ew_src)
+    # The lookup's locking and read-back reads: decoded as read, into rows sized as `_row_to_field_keyed_dict` sized them.
+    @test occursin("rows = _read_back_rows(settings, sql, params, _FieldRowDecoder(model, connection; sized = true))", ew_src)
+    @test !occursin("lock = lock)...) |> Tables.rowtable", ew_src)
+    @test fieldtype(QB._FieldRowDecoder, :sized) === Bool
+    @test !occursin("      parameters = get_parameter(connection)\n      insert_sql = build_insert(parameters)\n      return _create_on_miss", ew_src)
+  end
+
   # What: `first()` and `last()` on the untyped read (#1599 layer 6): the step that takes the first of their rows.
   # Expected: `_first_of` takes the untyped read's rows, untyped, without a dynamic call.
   # Why: `_first`'s rows come from `_list_owned`, whose result depends on `show_query`; a trimmed image compiles the

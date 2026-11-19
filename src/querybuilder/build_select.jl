@@ -737,8 +737,10 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # `SQLOrder(SQLField(x, "v"))`), so an interval with no millisecond form would sort its text on
       # SQLite, as its alias did. Refused the same way, naming the term's label and the CTE spelling;
       # render first, then type.
+      # #1599 layer 6: the walk's result asserted `Bool` (every `_interval_ms_candidate` method returns one), so `!` is
+      # not a run-time dispatch on the walk's untyped open arm, which the trimmed untyped `list()` stopped at.
       if _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) &&
-         !_with_field_part_open(_interval_ms_candidate, order_node) &&
+         !(_with_field_part_open(_interval_ms_candidate, order_node)::Bool) &&
          _with_field_part_open(_expression_kind, order_node, instruc) isa CInterval
         label = v_field_copy._as
         throw(label isa AbstractString ? _unordered_interval_alias_error("`order_by`", label) :

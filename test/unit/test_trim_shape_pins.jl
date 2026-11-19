@@ -2796,6 +2796,23 @@ end
     end
   end
 
+  # What: the ORDER BY render's check for an interval with no millisecond form (#1599 layer 6), which negates the
+  #   `_interval_ms_candidate` walk's answer.
+  # Expected: the walk's answer is asserted `Bool` before `!`; every `_interval_ms_candidate` method returns a `Bool`.
+  # Why: the walk's open arm is untyped, so `!` was a run-time dispatch (`!(::Bool)` with no compiled target), and the
+  #   trimmed untyped `list()` with an `order_by` raised `MethodError` there.
+  @testset "the ORDER BY interval check negates a Bool (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    bs_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+    @test occursin("!(_with_field_part_open(_interval_ms_candidate, order_node)::Bool)", bs_src)
+    @test !occursin(r"!_with_field_part_open\(_interval_ms_candidate, order_node\)", bs_src)
+    # The leaves infer `Bool`; `SQLField`'s and `FObject`'s recurse into an untyped slot, so they infer `Any` and return
+    # what a leaf returns.
+    for N in (String, QB.FExpression, QB.JoinedReference, QB.CTEReference, QB.SubqueryObject)
+      @test (N, Base.return_types(QB._interval_ms_candidate, (N,))) == (N, Any[Bool])
+    end
+  end
+
   # What: `first()` and `last()` on the untyped read (#1599 layer 6): the step that takes the first of their rows.
   # Expected: `_first_of` takes the untyped read's rows, untyped, without a dynamic call.
   # Why: `_first`'s rows come from `_list_owned`, whose result depends on `show_query`; a trimmed image compiles the

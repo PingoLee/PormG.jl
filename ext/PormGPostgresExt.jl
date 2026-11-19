@@ -814,6 +814,22 @@ end
 # (`_rows_from_result`), and a union method would be ambiguous with it.
 (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result) = _pg_dict_rows(d, result)
 (d::PormG.QueryBuilder._ProjectionRowDecoder)(result::Postgres.Result) = _pg_dict_rows(d, result)
+# The untyped read's rows (#1599 layer 6), filled column by column as `_rows_from_result` filled them from
+# `Tables.columntable`: each row sized to the column count first, so its keys iterate in the same order, and a
+# parser that raises on two cells raises on the one the old fill reached first (the first column, then its first row).
+function _pg_dict_rows(d::PormG.QueryBuilder._ProjectionRowDecoder, result::Postgres.Result)::Vector{Dict{Symbol,Any}}
+  QB = PormG.QueryBuilder
+  names = Symbol[Symbol(n) for n in result.names]
+  nrows = length(result.rows)
+  rows = Dict{Symbol,Any}[sizehint!(Dict{Symbol,Any}(), length(names)) for _ in 1:nrows]
+  for j in eachindex(names)
+    parser = QB._field_parser(d, names[j])
+    for i in 1:nrows
+      rows[i][names[j]] = _pg_parsed(getfield(result.rows[i], :data)[j], parser)
+    end
+  end
+  return rows
+end
 function _pg_dict_rows(d::PormG.QueryBuilder._DictRowDecoder, result::Postgres.Result)::Vector{Dict{Symbol,Any}}
   QB = PormG.QueryBuilder
   names = result.names

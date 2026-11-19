@@ -457,6 +457,34 @@ end
 
 # The rows, stepped as `_sqlite_rows_into` steps them; an error raised while building a row (a parser's
 # refusal) is recorded on the decoder and the walk stops, so `fetch` raises it as it was raised.
+# The untyped read's rows (#1599 layer 6), as `_rows_from_result` built them from the materialized rows: every row
+# stepped first, each cell read as `_sqlite_rowtable` reads it (`_sqlite_value`) into a `Dict` sized to the column
+# count, so a cell read or a step that raises does so inside the statement, as before; then the parsers, row by row
+# in the parser map's order, which is `_projection_parsers`' map's order (the same keys inserted in the same order).
+# A parser's error is recorded and raised by `fetch` unwrapped, as when it ran after `fetch` returned.
+function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._ProjectionRowDecoder)::Vector{Dict{Symbol,Any}}
+  handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
+  names = q.names   # a `Vector{Symbol}` (see `_sqlite_rows_into`)
+  out = Dict{Symbol,Any}[]
+  next = iterate(q)
+  while next !== nothing
+    row = sizehint!(Dict{Symbol,Any}(), length(names))
+    for c in eachindex(names)
+      row[names[c]] = _sqlite_value(handle, c)
+    end
+    push!(out, row)
+    next = iterate(q, next[2])
+  end
+  try
+    for row in out, (name, parser) in decode.parsers
+      haskey(row, name) && (row[name] = parser(row[name]))
+    end
+  catch e
+    (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement
+    decode.failure[] = e
+  end
+  return out
+end
 function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._DictRowDecoder)::Vector{Dict{Symbol,Any}}
   handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
   names = q.names   # a `Vector{Symbol}` (see `_sqlite_rows_into`)

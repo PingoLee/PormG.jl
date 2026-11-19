@@ -477,7 +477,7 @@ function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._ProjectionRowDec
   end
   try
     for row in out, (name, parser) in decode.parsers
-      haskey(row, name) && (row[name] = parser(row[name]))
+      haskey(row, name) && (row[name] = _sqlite_parse_value(parser, row[name]))
     end
   catch e
     (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement
@@ -521,6 +521,16 @@ end
   return _sqlite_field_blob(parser, SQLite.sqlitevalue(Any, handle, col))
 end
 @noinline _sqlite_field_blob(parser::PormG.ReadParser, @nospecialize(v)) = parser(v)
+
+# A cell `_sqlite_value` read, parsed at the type it was read as (its storage class's), so the parser is a static
+# call; a BLOB is SQLite.jl's own read, so it goes through `_sqlite_field_blob`.
+@inline function _sqlite_parse_value(parser::PormG.ReadParser, @nospecialize(v))
+  v isa Missing && return parser(v)
+  v isa Int64 && return parser(v)
+  v isa Float64 && return parser(v)
+  v isa String && return parser(v)
+  return _sqlite_field_blob(parser, v)
+end
 
 # How many rows a statement returns (`exists()`, #1599 layer 7, #1694): the statement lifecycle, retry and lock
 # release of `backend_execute`, the rows stepped and counted. Each cell is read as `_sqlite_rowtable` reads it

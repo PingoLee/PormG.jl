@@ -1,5 +1,10 @@
 # julia -t auto --project=test/integration test/integration/test_untyped_read_equivalence_1599.jl
+# PORMG_POSTGRES_DRIVER=Postgres julia -t auto --project=test/integration test/integration/test_untyped_read_equivalence_1599.jl
+# PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_untyped_read_equivalence_1599.jl
 # PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/test_untyped_read_equivalence_1599.jl
+#
+# On LibPQ the untyped read keeps `_rows_from_result` (the decoder's generic method), so the new walks are exercised by
+# the SQLite, Postgres.jl and MySQL runs.
 
 if !isdefined(Main, :PormG)
     include("common_setup.jl")

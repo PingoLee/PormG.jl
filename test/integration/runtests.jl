@@ -31,6 +31,7 @@ include("common_bulk_scratch_setup.jl")
     # ── Phase 2: Behavioral Tests (reads, filters, expressions) ──────
     @testset "Selection and Filters"        begin include("test_selection.jl")          end # TODO: split this into multiple files (selection, filters, expressions)
     @testset "PormGRow and get()"           begin include("test_row_and_get.jl")        end
+    @testset "Untyped read decode (#1599 layer 6)" begin include("test_untyped_read_equivalence_1599.jl") end
     @testset "show_query = :struct Read-back (#1632)" begin include("test_show_query_struct_readback.jl") end
     @testset "Handler Semantics (#199)"     begin include("test_handler_semantics.jl")  end
     @testset "PormGRow Mutation"            begin include("test_row_mutation.jl")       end

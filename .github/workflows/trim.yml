@@ -47,13 +47,23 @@ env:
   # The row the read-only entry prints, as its JIT control does (test/trim/prep.jl seeds it).
   TRIM_EXPECTED_ROW: "step\trow\t1 2008 Monaco Grand Prix 2008-05-25"
   # The read steps every entry runs after its first read (test/trim/tools/reads.jl, #1599 layer 5): a comparison
-  # filter on a date and on an integer, and an order_by each way, over the two races every prep.jl seeds. One
-  # line per row; each job checks that its binary prints all four.
+  # filter on a date and on an integer, an order_by each way, and the other common lookups (`__@gt`, `__@lte`,
+  # `__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains`, `__@contains`), over the
+  # two races every prep.jl seeds. One line per lookup or order; each job checks that its binary prints every one.
   TRIM_READ_LINES: |-
     step\tcompare\tdate__@gte 1 rows: Brazilian Grand Prix
     step\tcompare\tround__@lt 1 rows: Monaco Grand Prix
     step\torder\tdate: Monaco Grand Prix, Brazilian Grand Prix
     step\torder\t-date: Brazilian Grand Prix, Monaco Grand Prix
+    step\tlookup\tround__@gt 1 rows: Brazilian Grand Prix
+    step\tlookup\tround__@lte 1 rows: Monaco Grand Prix
+    step\tlookup\tdate__@range 1 rows: Monaco Grand Prix
+    step\tlookup\tround__@in 1 rows: Monaco Grand Prix
+    step\tlookup\tname__@in 1 rows: Brazilian Grand Prix
+    step\tlookup\tdate__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+    step\tlookup\tdate__@isnull true 0 rows: none
+    step\tlookup\tname__@icontains 1 rows: Brazilian Grand Prix
+    step\tlookup\tname__@contains 1 rows: Monaco Grand Prix
 
 jobs:
   read-only:
@@ -98,7 +108,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 124 = timed out)"
+            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 124 = timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -219,7 +229,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
@@ -356,7 +366,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -495,7 +505,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then

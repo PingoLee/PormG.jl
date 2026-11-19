@@ -4262,26 +4262,26 @@ _pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:inet}, column::Abs
 _pattern_text_operand(@nospecialize(conn::PormGMySQL), ::Val{:cidr}, column::AbstractString)::String =
   throw(_capability_error_at(conn, :network_types, "A pattern lookup on a cidr column"))
 
-function contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function contains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function contains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function contains(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function contains(conn::PormGAbstractType, column::AbstractString, value)
+function contains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function icontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function icontains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
-function icontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function icontains(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF registered per-connection in PormGSQLiteExt (#78), so case
   # folding matches PostgreSQL ILIKE; case_sensitive_like=ON makes LIKE exact on the folded text.
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function icontains(conn::PormGAbstractType, column::AbstractString, value)
+function icontains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
@@ -4289,44 +4289,44 @@ end
 # #634: case-insensitive equality. `=` over folded text, not `ILIKE` without wildcards: the value binds
 # verbatim (VERBATIM_PATTERN_OPERATORS), so `ILIKE` would read a user's literal `%` or `_` as a
 # wildcard. `LOWER(col)` is also the expression a functional index on `lower(col)` serves.
-function iexact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function iexact(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "LOWER($(column)) = LOWER($(value))"
 end
-function iexact(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function iexact(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF (#78) — SQLite's own LOWER folds ASCII only, so `É` would
   # not equal `é` here while it does on PostgreSQL.
   return "pormg_lower($(column)) = pormg_lower($(value))"
 end
-function iexact(conn::PormGAbstractType, column::AbstractString, value)
+function iexact(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iunaccent_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function iunaccent_contains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   # Uses the IMMUTABLE wrapper (see Configuration._install_immutable_unaccent!) so the
   # expression can be backed by a functional/pg_trgm index on large tables.
   return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
-function iunaccent_contains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function iunaccent_contains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_capability_error(conn, :unaccent, "The iunaccent_contains lookup"))
   return nothing
 end
-function iunaccent_contains(conn::PormGAbstractType, column::AbstractString, value)
+function iunaccent_contains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iunaccent_exact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function iunaccent_exact(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   # Accent- and case-insensitive equality. Uses the IMMUTABLE wrapper (see
   # Configuration._install_immutable_unaccent!) so it can be backed by a functional
   # index on LOWER(public.immutable_unaccent(column)).
   return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
 end
-function iunaccent_exact(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function iunaccent_exact(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_capability_error(conn, :unaccent, "The iunaccent_exact lookup"))
   return nothing
 end
-function iunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
+function iunaccent_exact(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
@@ -4461,72 +4461,72 @@ _regex_capability_error(conn, op::AbstractString) =
                     * "pattern would be PCRE, which disagrees with POSIX syntax on backreferences, lazy "
                     * "quantifiers and lookaround.")
 
-function regex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function regex(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ~ $(value)"
 end
-function regex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function regex(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_regex_capability_error(conn, "regex"))
   return nothing
 end
-function regex(conn::PormGAbstractType, column::AbstractString, value)
+function regex(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function iregex(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ~* $(value)"
 end
-function iregex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function iregex(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_regex_capability_error(conn, "iregex"))
   return nothing
 end
-function iregex(conn::PormGAbstractType, column::AbstractString, value)
+function iregex(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function startswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function startswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function startswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function startswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function startswith(conn::PormGAbstractType, column::AbstractString, value)
+function startswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function istartswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function istartswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
-function istartswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function istartswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # Unicode-aware case folding via the pormg_lower UDF (#78) — see icontains above.
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function istartswith(conn::PormGAbstractType, column::AbstractString, value)
+function istartswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function endswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function endswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function endswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function endswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   return "$(column) LIKE $(value)$(_like_escape_clause())"
 end
-function endswith(conn::PormGAbstractType, column::AbstractString, value)
+function endswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function iendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function iendswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ILIKE $(value)$(_like_escape_clause())"
 end
-function iendswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function iendswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # Unicode-aware case folding via the pormg_lower UDF (#78) — see icontains above.
   return "pormg_lower($(column)) LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function iendswith(conn::PormGAbstractType, column::AbstractString, value)
+function iendswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
@@ -4539,134 +4539,134 @@ end
 # @ne / @nin. The unaccent twins stay PostgreSQL-only, mirroring their positive form.
 # ------------------------------------------------------------------------------
 
-function ncontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function ncontains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function ncontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function ncontains(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function ncontains(conn::PormGAbstractType, column::AbstractString, value)
+function ncontains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nicontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function nicontains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
 end
-function nicontains(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function nicontains(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors icontains.
   return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function nicontains(conn::PormGAbstractType, column::AbstractString, value)
+function nicontains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
 # #634: the negated twin of `iexact`; verbatim like it, so no wildcard reaches the `<>`.
-function niexact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function niexact(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "LOWER($(column)) <> LOWER($(value))"
 end
-function niexact(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function niexact(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF (#78); `<>` over folded text mirrors iexact.
   return "pormg_lower($(column)) <> pormg_lower($(value))"
 end
-function niexact(conn::PormGAbstractType, column::AbstractString, value)
+function niexact(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function niunaccent_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function niunaccent_contains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
-function niunaccent_contains(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function niunaccent_contains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_capability_error(conn, :unaccent, "The niunaccent_contains lookup"))
   return nothing
 end
-function niunaccent_contains(conn::PormGAbstractType, column::AbstractString, value)
+function niunaccent_contains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function niunaccent_exact(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function niunaccent_exact(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
 end
-function niunaccent_exact(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function niunaccent_exact(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_capability_error(conn, :unaccent, "The niunaccent_exact lookup"))
   return nothing
 end
-function niunaccent_exact(conn::PormGAbstractType, column::AbstractString, value)
+function niunaccent_exact(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
 # #635: the negated regex twins — PostgreSQL only, like their positive forms above. A NULL column
 # yields UNKNOWN (row excluded), consistent with every other negated lookup.
-function nregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function nregex(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) !~ $(value)"
 end
-function nregex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function nregex(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_regex_capability_error(conn, "nregex"))
   return nothing
 end
-function nregex(conn::PormGAbstractType, column::AbstractString, value)
+function nregex(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function niregex(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function niregex(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) !~* $(value)"
 end
-function niregex(conn::PormGBackend, column::AbstractString, value::AbstractString)
+function niregex(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
   throw(_regex_capability_error(conn, "niregex"))
   return nothing
 end
-function niregex(conn::PormGAbstractType, column::AbstractString, value)
+function niregex(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nstartswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function nstartswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nstartswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function nstartswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nstartswith(conn::PormGAbstractType, column::AbstractString, value)
+function nstartswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nistartswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function nistartswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
 end
-function nistartswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function nistartswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors istartswith.
   return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function nistartswith(conn::PormGAbstractType, column::AbstractString, value)
+function nistartswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function nendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function nendswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nendswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function nendswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT LIKE $(value)$(_like_escape_clause())"
 end
-function nendswith(conn::PormGAbstractType, column::AbstractString, value)
+function nendswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
 
-function niendswith(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function niendswith(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) NOT ILIKE $(value)$(_like_escape_clause())"
 end
-function niendswith(conn::PormGSQLite, column::AbstractString, value::AbstractString)::String
+function niendswith(@nospecialize(conn::PormGSQLite), column::AbstractString, value::AbstractString)::String
   # pormg_lower = Unicode-aware LOWER UDF (#78); NOT LIKE over folded text mirrors iendswith.
   return "pormg_lower($(column)) NOT LIKE pormg_lower($(value))$(_like_escape_clause())"
 end
-function niendswith(conn::PormGAbstractType, column::AbstractString, value)
+function niendswith(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(InvalidValueError("The value must be a String"))
   return nothing
 end
@@ -4686,21 +4686,21 @@ _mysql_like(column, value, negated::Bool) =
 _mysql_ilike(column, value, negated::Bool) =
   "LOWER($(column)) $(negated ? "NOT LIKE" : "LIKE") LOWER($(value))$(_MYSQL_LIKE_ESCAPE)"
 
-contains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
-startswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
-endswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
-ncontains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
-nstartswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
-nendswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
-icontains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
-istartswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
-iendswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
-nicontains(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
-nistartswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
-niendswith(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
+contains(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
+startswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
+endswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, false)
+ncontains(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
+nstartswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
+nendswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_like(column, value, true)
+icontains(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
+istartswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
+iendswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, false)
+nicontains(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
+nistartswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
+niendswith(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = _mysql_ilike(column, value, true)
 # #634's verbatim equality: `=` over folded text, so a user's `%` or `_` stays a character.
-iexact(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = "LOWER($(column)) = LOWER($(value))"
-niexact(conn::PormGMySQL, column::AbstractString, value::AbstractString)::String = "LOWER($(column)) <> LOWER($(value))"
+iexact(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = "LOWER($(column)) = LOWER($(value))"
+niexact(@nospecialize(conn::PormGMySQL), column::AbstractString, value::AbstractString)::String = "LOWER($(column)) <> LOWER($(value))"
 
 # ==============================================================================
 # MIGRATION HISTORY TABLE DDL

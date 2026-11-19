@@ -123,7 +123,19 @@ const PINNED_NAMES = _NamePin[
   (name = "SQLite.DB",                          status = :documented, reader = "PormG.backend_execute, _create_sqlite_connection, …"),
   (name = "SQLite.Stmt",                        status = :documented, reader = "_sqlite_execute_materialized, _sqlite_decode_rows (its `register` keyword: PINNED_KEYWORDS)"),
   (name = "SQLite.execute",                     status = :documented, reader = "PormG.backend_is_alive, _create_sqlite_connection"),
-  (name = "SQLite.register",                    status = :documented, reader = "_create_sqlite_connection"),
+  (name = "SQLite.register",                    status = :documented, reader = "_create_sqlite_connection (`pormg_lpad`, `pormg_rpad`)"),
+  # #1599 layer 5: `pormg_lower` is registered with a callback compiled at its types (`_register_pormg_lower!`), which
+  # reads its value and returns its result as SQLite.jl's own scalar callback does, and reports a failure as its
+  # `udf_error` does (1.10 and later; that name is not read, since the 1.6.1 floor has none).
+  (name = "SQLite.C.sqlite3_create_function_v2", status = :internal,  reader = "_register_pormg_lower!"),
+  (name = "SQLite.C.SQLITE_UTF8",               status = :internal,   reader = "_register_pormg_lower!"),
+  (name = "SQLite.C.SQLITE_DETERMINISTIC",      status = :internal,   reader = "_register_pormg_lower!"),
+  (name = "SQLite.C.SQLITE_OK",                 status = :internal,   reader = "_register_pormg_lower!"),
+  (name = "SQLite.sqliteerror",                 status = :internal,   reader = "_register_pormg_lower!"),
+  (name = "SQLite.sqlvalue",                    status = :internal,   reader = "_pormg_lower_callback"),
+  (name = "SQLite.sqlreturn",                   status = :documented, reader = "_pormg_lower_return"),
+  (name = "SQLite.C.sqlite3_result_error",      status = :internal,   reader = "_pormg_udf_error"),
+  (name = "SQLite.C.sqlite3_result_error_nomem", status = :internal,  reader = "_pormg_udf_error"),
   (name = "SQLite.C.sqlite3_interrupt",         status = :internal,   reader = "PormG.backend_cancel_query!"),
   (name = "SQLite.C.sqlite3_libversion_number", status = :internal,   reader = "PormG.backend_sqlite_version"),
   # #1605: the typed read steps the statement and reads each cell by its storage class, as SQLite.jl's
@@ -222,7 +234,7 @@ const PINNED_FIELDS = _FieldPin[
   # `:lock` (read by `_release_leaked_db_lock!`, #1521) is not pinned: SQLite.jl added it in 1.9.0, and
   # the floor (1.6.1) has none, which the extension checks with `hasfield`. The #1521 testset in
   # test_connection_pool_liveness.jl reads it whenever it exists, so a rename still fails there.
-  (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!"),
+  (type = SQLite.DB, fields = [:handle], status = :internal, reader = "PormG.backend_cancel_query!, _register_pormg_lower!"),
   (type = SQLite.Query, fields = [:stmt, :names], status = :internal, reader = "_sqlite_rows_into (#1605)"),
   # #1599: the materialization reads the cursor's declared column types for a result with no rows, the
   # element type `Tables.rowtable` takes from the schema then (`Tables.schema(::Query)` returns them).

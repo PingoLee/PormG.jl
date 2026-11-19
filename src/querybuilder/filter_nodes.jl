@@ -462,6 +462,53 @@ function _format_filter_value(@nospecialize(formatter), @nospecialize(values), o
   ranged = operator in _RANGE_CHECKED_OPERATORS
   (operator in _ITERABLE_LOOKUP_OPERATORS && values isa AbstractArray) ||
     return _format_literal_value(formatter, values, ranged)
+  return _format_list_value(formatter, values, ranged)
+end
+
+# A membership or range list at its concrete type (#1599 layer 5). Over the untyped list, `isempty` and the
+# comprehension's iteration dispatched at run time, and a trimmed image had nothing compiled for the list it met:
+# the read stopped at `__@range` over a `Vector{Date}`. One arm per list a filter commonly holds, each the same two
+# steps at that type (`_format_list_at`); any other list takes them behind `@noinline` (`_format_list_other`).
+@noinline function _format_list_value(@nospecialize(formatter), @nospecialize(values), ranged::Bool)
+  values isa Vector{String} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Int64} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Float64} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Dates.Date} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Dates.DateTime} && return _format_list_at(formatter, values, ranged)
+  values isa Vector{Any} && return _format_list_at(formatter, values, ranged)
+  return _format_list_other(formatter, values, ranged)
+end
+function _format_list_at(@nospecialize(formatter), values::Vector, ranged::Bool)
+  isempty(values) && return _format_empty_list(formatter, values, ranged)
+  out = Vector{Any}(undef, length(values))
+  for i in eachindex(values)   # in order, so the first value a formatter refuses is the one reported
+    out[i] = _format_literal_value(formatter, values[i], ranged)
+  end
+  return _formatted_list(out)
+end
+
+# The vector the comprehension `[_format_literal_value(…) for v in values]` gave, from its formatted values. Its
+# element type is not inferred, so `collect` took the first value's type and widened it (`promote_typejoin`) at
+# each value of another type, through calls a trimmed image has no code for. A list whose values are all one of the
+# types a column formatter returns is that type's vector, which is what the widening gave; any other list takes
+# the same widening, behind `@noinline` (`_formatted_list_other`).
+@noinline function _formatted_list(out::Vector{Any})
+  all(x -> x isa String, out) && return _narrowed_list(String, out)
+  all(x -> x isa Int64, out) && return _narrowed_list(Int64, out)
+  all(x -> x isa Float64, out) && return _narrowed_list(Float64, out)
+  return _formatted_list_other(out)
+end
+function _narrowed_list(::Type{T}, out::Vector{Any}) where {T}
+  r = Vector{T}(undef, length(out))
+  for i in eachindex(out)
+    r[i] = out[i]::T
+  end
+  return r
+end
+@noinline _formatted_list_other(out::Vector{Any}) = collect(Base.Generator(identity, out))
+
+# A list of a type `_format_list_value` does not name: the old two steps, at run time.
+@noinline function _format_list_other(@nospecialize(formatter), @nospecialize(values), ranged::Bool)
   isempty(values) && return _format_empty_list(formatter, values, ranged)
   return [_format_literal_value(formatter, v, ranged) for v in values]
 end
@@ -797,6 +844,20 @@ end
 end
 @noinline _bind_formatted_other(instruc::SQLInstruction, @nospecialize(value), contains::Bool, operator::AbstractString) =
   add_parameter!(instruc, value; contains = contains, operator = operator)
+
+# `_bind_predicate_value` for a `BETWEEN` operand pair at its concrete type (#1599 layer 5). The WHERE range
+# arm formats the pair untyped (`_format_filter_value`'s comprehension takes its element type from the
+# values), so the call dispatched at run time, and a trimmed image had no compiled target for it: the read
+# stopped at `__@range`. One arm per vector a column formatter returns for a pair, each the same call at
+# that type; any other value takes the old call behind `@noinline` (`_bind_range_other`).
+@noinline function _bind_range_value(instruc::SQLInstruction, operator::AbstractString, @nospecialize(formatted))
+  formatted isa Vector{String} && return _bind_predicate_value(instruc, operator, formatted)
+  formatted isa Vector{Int64} && return _bind_predicate_value(instruc, operator, formatted)
+  formatted isa Vector{Float64} && return _bind_predicate_value(instruc, operator, formatted)
+  return _bind_range_other(instruc, operator, formatted)
+end
+@noinline _bind_range_other(instruc::SQLInstruction, operator::AbstractString, @nospecialize(formatted)) =
+  _bind_predicate_value(instruc, operator, formatted)
 
 # #972: the binding half of the three transform arms of `_get_filter_query(::SQLTypeOper, …)`.
 #
@@ -1139,7 +1200,11 @@ const _PATTERN_REFUSED_KINDS = (:array, :tsvector, :inexact_number, :timestamp, 
 # surrogate, which `_set_field_from_sql_function` types `IntegerField` for every `Count`/`Sum` and as
 # the operand for an `Avg`, so a CTE's `Avg("grid")` — a numeric — would read as an integer's digits
 # on PostgreSQL.
-function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQLInstruction)
+#
+# #1599 layer 5: `operand_field` is `_operand_field`'s `Union{Nothing,AnyField}` and `alias` the column slot's union,
+# so the body takes both unspecialized (specialized on them the call had no compiled target: the trimmed read
+# stopped at `name__@icontains`), and the field's kind is read through `_operand_field_kind`.
+function _pattern_operand_kind(v::SQLTypeOper, @nospecialize(operand_field), @nospecialize(alias), instruc::SQLInstruction)
   col = _oper_column(v)
   col isa CTEReference && return _expression_kind(col, instruc)
   key = col isa SQLField ? memo_key(col) : nothing
@@ -1153,10 +1218,31 @@ function _pattern_operand_kind(v::SQLTypeOper, operand_field, alias, instruc::SQ
              for k in keys(instruc.object.ctes) if startswith(name, k * "__")]
     return !isempty(kinds) && allequal(kinds) ? first(kinds) : nothing
   end
-  operand_field !== nothing && return _field_kind(operand_field)
-  alias !== nothing && return _having_alias_kind(memo_key(:base, alias), instruc)
+  operand_field !== nothing && return _operand_field_kind(operand_field)
+  # `_alias_filter_key` returns a slot it has tested `isa String`, re-read, so inference sees the slot's union.
+  alias !== nothing && return _having_alias_kind(memo_key(:base, alias::String), instruc)
   return _expression_kind(col, instruc)
 end
+
+# `_field_kind(field)` at the field's concrete type (#1599 layer 5). `_field_kind` has a method per argument type
+# (a field, anything else), and a call over the field union dispatched at run time. One arm per column a pattern
+# lookup commonly reads, each the same call at that type; any other field takes it behind `@noinline`.
+@noinline function _operand_field_kind(@nospecialize(f))::Union{CanonicalType,Nothing}
+  f isa Models.sCharField && return _field_kind(f)
+  f isa Models.sTextField && return _field_kind(f)
+  f isa Models.sSlugField && return _field_kind(f)
+  f isa Models.sEmailField && return _field_kind(f)
+  f isa Models.sURLField && return _field_kind(f)
+  f isa Models.sIntegerField && return _field_kind(f)
+  f isa Models.sBigIntegerField && return _field_kind(f)
+  f isa Models.sIDField && return _field_kind(f)
+  f isa Models.sForeignKey && return _field_kind(f)
+  f isa Models.sDateField && return _field_kind(f)
+  f isa Models.sDateTimeField && return _field_kind(f)
+  f isa Models.sUUIDField && return _field_kind(f)
+  return _operand_field_kind_other(f)
+end
+@noinline _operand_field_kind_other(@nospecialize(f))::Union{CanonicalType,Nothing} = _field_kind(f)
 
 # The label a refused pattern lookup names: the path the user wrote, where the operand has one.
 # `_filter_path_label` asks `memo_key`, which has no method for every operand (an `F` expression).
@@ -1310,6 +1396,13 @@ end
   x isa SubString{String} && return _filter_value_node(x)
   x isa Union{Int64, Int32, Float64, Bool, Nothing, Missing, Dates.Date, Dates.DateTime, Dates.Time,
               TimeZones.ZonedDateTime, Decimals.Decimal, UUIDs.UUID} && return x
+  # #1599 layer 5: a membership or range list, handed to its method at its type (the trimmed read's `__@range`
+  # over a `Vector{Date}` stopped at the open arm's call).
+  x isa Vector{String} && return _filter_value_node(x)
+  x isa Vector{Int64} && return _filter_value_node(x)
+  x isa Vector{Float64} && return _filter_value_node(x)
+  x isa Vector{Dates.Date} && return _filter_value_node(x)
+  x isa Vector{Dates.DateTime} && return _filter_value_node(x)
   return _literal_value_node_other(x)
 end
 @noinline _literal_value_node_other(@nospecialize(x)) = _filter_value_node(x)
@@ -1630,10 +1723,15 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
       range_field, range_label = _operand_field(v, instruc)
       if range_field === nothing && alias_key !== nothing
         placeholders = _bind_alias_value(v, alias_key, instruc)   # #1381
+      elseif range_field === nothing
+        placeholders = _bind_range_value(instruc, v.operator, _oper_literal(v))
       else
-        formatted = range_field === nothing ? _oper_literal(v) :
-          _guarded_format(range_field.formatter, _oper_literal(v), v.operator, range_label, range_field.type)
-        placeholders = _bind_predicate_value(instruc, v.operator, formatted)
+        # #1599 layer 5: the field asserted out of `_operand_field`'s `Union{Nothing,AnyField}`. Over that
+        # union its two slot reads were dynamic `getproperty` calls, the `__@range` wall of a trimmed read;
+        # the formatted pair is bound at its type (`_bind_range_value`).
+        rf = range_field::Models.AnyField
+        formatted = _guarded_format(rf.formatter, _oper_literal(v), v.operator, range_label, rf.type)
+        placeholders = _bind_range_value(instruc, v.operator, formatted)
       end
     elseif haskey(instruc.object.model.fields, col.field)
       # Does this operator take `%` decoration? `add_parameter!` then routes the value through

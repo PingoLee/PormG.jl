@@ -915,6 +915,10 @@ _wire_text(@nospecialize(v))::Union{String, Missing} =
   v isa DateTime ? Postgres._param(v) :
   v isa Decimals.Decimal ? Postgres._param(v) :
   v isa Vector{Int} ? Postgres._param(v) :
+  # #1599 layer 5: a membership list binds as one array (`= ANY($1)`): `name__@in` binds a `Vector{String}` (a date
+  # list too, as its text), a float list a `Vector{Float64}`.
+  v isa Vector{String} ? Postgres._param(v) :
+  v isa Vector{Float64} ? Postgres._param(v) :
   v isa Vector{Any} ? _wire_array(v) :
   _wire_text_other(v)
 @noinline _wire_text_other(@nospecialize(v))::Union{String, Missing} = Postgres._param(v)

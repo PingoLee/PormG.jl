@@ -1,5 +1,5 @@
 # The read steps every fixture binary runs after its first typed read (#1599 layer 5): comparison filters on a date
-# and on an integer, and an `order_by` each way, each checked by its typed result. Included by the SQLite steps
+# and on an integer, an `order_by` each way and the other common lookups, each checked by its typed result. Included by the SQLite steps
 # (`../steps.jl`) and by each server variant's `main.jl`, after each defines `M`, `RaceRow`, `say` and `failed`, so
 # every binary prints the same lines for the same step. They run before any write, on the two races every `prep.jl`
 # seeds: the 2008 Monaco Grand Prix (round 6, 2008-05-25) and the 2008 Brazilian Grand Prix (round 18, 2008-11-02).
@@ -35,4 +35,45 @@ function order_step()::Bool
     catch e
         failed("order", e); return false
     end
+end
+
+# The other common filter lookups (#1599 layer 5): the two comparisons `compare_step` leaves out (`__@gt`, `__@lte`),
+# a range of dates, a membership over integers and over text, a NULL test each way and a text match each way. Each
+# picks out its own rows from the two seeded races, and its typed result is checked against them. Exit code 13 when
+# a read raises or returns other rows.
+function lookup_step()::Bool
+    try
+        ok = true
+        ok &= lookup_line("round__@gt", M.Race.objects.filter("round__@gt" => 10).list(RaceRow),
+                          "Brazilian Grand Prix")
+        ok &= lookup_line("round__@lte", M.Race.objects.filter("round__@lte" => 6).list(RaceRow),
+                          "Monaco Grand Prix")
+        ok &= lookup_line("date__@range",
+                          M.Race.objects.filter("date__@range" => [Date(2008, 5, 1), Date(2008, 6, 30)]).list(RaceRow),
+                          "Monaco Grand Prix")
+        ok &= lookup_line("round__@in", M.Race.objects.filter("round__@in" => [6, 7]).list(RaceRow),
+                          "Monaco Grand Prix")
+        ok &= lookup_line("name__@in",
+                          M.Race.objects.filter("name__@in" => ["Brazilian Grand Prix"]).list(RaceRow),
+                          "Brazilian Grand Prix")
+        ok &= lookup_line("date__@isnull false",
+                          M.Race.objects.filter("date__@isnull" => false).order_by("date").list(RaceRow),
+                          "Monaco Grand Prix, Brazilian Grand Prix")
+        ok &= lookup_line("date__@isnull true", M.Race.objects.filter("date__@isnull" => true).list(RaceRow), "")
+        ok &= lookup_line("name__@icontains", M.Race.objects.filter("name__@icontains" => "brazil").list(RaceRow),
+                          "Brazilian Grand Prix")
+        ok &= lookup_line("name__@contains", M.Race.objects.filter("name__@contains" => "Monaco").list(RaceRow),
+                          "Monaco Grand Prix")
+        return ok
+    catch e
+        failed("lookup", e); return false
+    end
+end
+
+# One lookup's line, `<lookup> <n> rows: <names>` (`none` for no rows, so no line ends in a space), and whether its
+# rows are the `expected` names.
+function lookup_line(lookup::String, rows::Vector{RaceRow}, expected::String)::Bool
+    names = race_names(rows)
+    say("lookup", string(lookup, " ", length(rows), " rows: ", isempty(names) ? "none" : names))
+    return names == expected
 end

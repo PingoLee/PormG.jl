@@ -7,8 +7,9 @@ What it does (`main.jl`): boot with the connection built in code (`register_conn
 `Models.set_models(models; key)`, #1606 — no `connection.yml` is read), two creates PormG refuses
 before any SQL (a date string that is not a calendar date, and a `Bool` for a text column; each prints
 the refusal's type and message), the read steps of `tools/reads.jl` (a comparison filter on a date and on an
-integer, `date__@gte` and `round__@lt`, and an `order_by` each way, over the two races `prep.jl` seeds; #1599
-layer 5), one `Race.objects.create` that leaves the three auto-filled fields
+integer, `date__@gte` and `round__@lt`, an `order_by` each way, and the other common lookups: `__@gt`, `__@lte`,
+`__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains` and `__@contains`, over the
+two races `prep.jl` seeds; #1599 layer 5), one `Race.objects.create` that leaves the three auto-filled fields
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
@@ -24,7 +25,7 @@ back on the SQLite worker, and its typed read then returns both rows, the one it
 `update` sets that row's `round` and its `delete` removes it, each shown by the read after it; its
 `bulk_insert` writes two rows, the three auto-filled fields included, and the typed read sees both. It
 prints the JIT control's lines and exits 0. The read-only entry's binary returns its row (#1788), and the
-rows its comparison filters and its `order_by` pick out, in order. The
+rows its comparison filters, its `order_by` and its other lookups pick out, in order. The
 `Trim (juliac)` workflow checks that both binaries still do (see "The read-only entry and its CI job"
 and "The full entry's CI job" below).
 
@@ -67,8 +68,8 @@ time, which `main` prints with the function it missed.
 ## The read-only entry and its CI job
 
 `read.jl` is `main.jl` without the write: boot, the typed read, then the read steps. Since #1788 its trimmed
-binary prints the row its JIT control prints, and since #1599's layer-5 slice the rows of its comparison filters
-and its `order_by`; it exits 0:
+binary prints the row its JIT control prints, and since #1599's layer-5 slices the rows of its comparison filters,
+its `order_by` and its other lookups; it exits 0:
 
 ```
 step	main	entered
@@ -80,6 +81,15 @@ step	compare	date__@gte 1 rows: Brazilian Grand Prix
 step	compare	round__@lt 1 rows: Monaco Grand Prix
 step	order	date: Monaco Grand Prix, Brazilian Grand Prix
 step	order	-date: Brazilian Grand Prix, Monaco Grand Prix
+step	lookup	round__@gt 1 rows: Brazilian Grand Prix
+step	lookup	round__@lte 1 rows: Monaco Grand Prix
+step	lookup	date__@range 1 rows: Monaco Grand Prix
+step	lookup	round__@in 1 rows: Monaco Grand Prix
+step	lookup	name__@in 1 rows: Brazilian Grand Prix
+step	lookup	date__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	lookup	date__@isnull true 0 rows: none
+step	lookup	name__@icontains 1 rows: Brazilian Grand Prix
+step	lookup	name__@contains 1 rows: Monaco Grand Prix
 step	elapsed_ms	1
 ```
 
@@ -96,8 +106,8 @@ cd .. && julia --project=test/trim test/trim/prep.jl run && build/read run
 ```
 
 The two entries `include` the same `steps.jl`, so a step prints the same line in both binaries and
-fails with the same exit code (1 boot, 2 write, 3 read, 10 a comparison filter, 11 an `order_by`, each when it
-raises or does not return the rows it picks out; `main.jl` exits 6 when a create it expects
+fails with the same exit code (1 boot, 2 write, 3 read, 10 a comparison filter, 11 an `order_by`, 13 one of the
+other lookups, each when it raises or does not return the rows it picks out; `main.jl` exits 6 when a create it expects
 PormG to refuse is not refused with an `InvalidValueError`, 7 when its update and 8 when its delete
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
@@ -126,7 +136,7 @@ It is a separate run, not part of the default one, because it adds about 20 s.
 
 **The workflow** (`.github/workflows/trim.yml`, named `Trim (juliac)`) builds this entry with the
 Julia and JuliaC versions above, runs the binary under a 300 s timeout, and fails unless it exits 0
-and prints the `row` line and the four read-step lines above (`TRIM_READ_LINES` in the workflow). It then makes the `tasks` run, which fails unless it exits 0 with
+and prints the `row` line and the read-step lines above (`TRIM_READ_LINES` in the workflow). It then makes the `tasks` run, which fails unless it exits 0 with
 both its lines. The timeout is there because a task body the image never compiled
 dies silently, so a broken binary hangs rather than crashes (#1788). The verifier's rows are
 reported, never checked: the step lines of both runs, `rows.py` and `classify.py --layers` go to the
@@ -151,6 +161,15 @@ step	compare	date__@gte 1 rows: Brazilian Grand Prix
 step	compare	round__@lt 1 rows: Monaco Grand Prix
 step	order	date: Monaco Grand Prix, Brazilian Grand Prix
 step	order	-date: Brazilian Grand Prix, Monaco Grand Prix
+step	lookup	round__@gt 1 rows: Brazilian Grand Prix
+step	lookup	round__@lte 1 rows: Monaco Grand Prix
+step	lookup	date__@range 1 rows: Monaco Grand Prix
+step	lookup	round__@in 1 rows: Monaco Grand Prix
+step	lookup	name__@in 1 rows: Brazilian Grand Prix
+step	lookup	date__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	lookup	date__@isnull true 0 rows: none
+step	lookup	name__@icontains 1 rows: Brazilian Grand Prix
+step	lookup	name__@contains 1 rows: Monaco Grand Prix
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -164,7 +183,7 @@ step	bulk_refused	0 rows written; 1 Monaco races
 
 On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
-filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 124
+filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 124
 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
@@ -235,6 +254,15 @@ step	compare	date__@gte 1 rows: Brazilian Grand Prix
 step	compare	round__@lt 1 rows: Monaco Grand Prix
 step	order	date: Monaco Grand Prix, Brazilian Grand Prix
 step	order	-date: Brazilian Grand Prix, Monaco Grand Prix
+step	lookup	round__@gt 1 rows: Brazilian Grand Prix
+step	lookup	round__@lte 1 rows: Monaco Grand Prix
+step	lookup	date__@range 1 rows: Monaco Grand Prix
+step	lookup	round__@in 1 rows: Monaco Grand Prix
+step	lookup	name__@in 1 rows: Brazilian Grand Prix
+step	lookup	date__@isnull false 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	lookup	date__@isnull true 0 rows: none
+step	lookup	name__@icontains 1 rows: Brazilian Grand Prix
+step	lookup	name__@contains 1 rows: Monaco Grand Prix
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -341,7 +369,7 @@ Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` 
 `prep.jl`, runs the JIT control, builds the binary with the pinned Julia and JuliaC, and runs it under
 `timeout -k 10 300`. Before the MySQL run the job flushes the server's privileges, which empties
 `caching_sha2_password`'s cache: `prep.jl` and the JIT control logged in already, and without the flush the
-binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line and the four read-step lines, prints the write's
+binary would take the fast path and never run the full authentication a fresh server asks for. It fails unless the binary exits 0, prints the `row` line and the read-step lines, prints the write's
 `write ok`, `query 2 rows`, `update 1 rows; round 7`, `delete 1 rows; 1 left` and `bulk 2 rows; 2 read back` lines (the written row's id is
 not checked: the JIT control used one), and its `fail` step prints
 `threw StatementError` with the server's own SQLSTATE (`42S02` on MySQL, `42P01` on PostgreSQL), the

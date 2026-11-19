@@ -27,8 +27,13 @@ else is untested in a trimmed binary, even where it compiles.
 
   The same read with a comparison filter on a date or an integer (`filter("date__@gte" => Date(2008, 6, 1))`,
   `filter("round__@lt" => 10)`), and with `order_by("date")` or `order_by("-date")`, has run on the three
-  drivers too (#1599). The other comparison lookups (`__@gt`, `__@lte`, `__@range`) take the same render and
-  have not run.
+  drivers too (#1599), and so have the other common lookups: `__@gt`, `__@lte`, a range of dates
+  (`"date__@range" => [Date(2008, 5, 1), Date(2008, 6, 30)]`), a membership list of integers or of text
+  (`"round__@in" => [6, 7]`, `"name__@in" => ["Brazilian Grand Prix"]`), `__@isnull` each way, and a text match
+  (`"name__@icontains" => "brazil"`, `"name__@contains" => "Monaco"`). A list of another element type than
+  `String`, `Int64`, `Float64`, `Date` or `DateTime` takes the same path through one call a trimmed binary may
+  have no code for; so does a pattern lookup over a column of a kind other than text, an integer, a date, a
+  timestamp or a UUID.
 
   The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
   nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)

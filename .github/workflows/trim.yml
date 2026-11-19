@@ -72,6 +72,8 @@ env:
     step\texpr\tdate__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
     step\texpr\tround__@gte Case 1 rows: Monaco Grand Prix
     step\texpr\tCase == 1 1 rows: Monaco Grand Prix
+    step\tuntyped\tfirst Monaco Grand Prix round 6 date 2008-05-25
+    step\tuntyped\tlist 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 
 jobs:
   read-only:
@@ -96,7 +98,8 @@ jobs:
       - name: JIT control
         run: |
           julia --project=test/trim test/trim/prep.jl run-jit
-          julia --project=test/trim test/trim/read.jl run-jit
+          mkdir -p build
+          julia --project=test/trim test/trim/read.jl run-jit | tee build/jit.txt   # its untyped-read lines are the binary's reference
           julia --project=test/trim test/trim/prep.jl run-jit-tasks
           julia --project=test/trim test/trim/read.jl run-jit-tasks tasks
       - name: Build the trimmed binary
@@ -116,7 +119,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 124 = timed out)"
+            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 17 untyped read, 124 = timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -129,6 +132,8 @@ jobs:
               exit 1
             fi
           done <<< "$TRIM_READ_LINES"
+          # The untyped read (#1599 layer 6): its lines name each cell's type, checked against the JIT control's.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 4
       - name: Run the pool's long-lived tasks in the trimmed binary
         # The reaper and the deferred close (#1599 layer 2): the `tasks` run adds two steps, about 20 s,
         # that fail with exit 4 or 5 when the task never ran. Runs even when the read above failed.
@@ -219,7 +224,8 @@ jobs:
       - name: JIT control
         run: |
           julia --project=test/trim test/trim/prep.jl run-jit
-          julia --project=test/trim test/trim/main.jl run-jit
+          mkdir -p build
+          julia --project=test/trim test/trim/main.jl run-jit | tee build/jit.txt   # its untyped-read lines are the binary's reference
       - name: Build the trimmed binary
         id: build
         run: |
@@ -237,7 +243,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
@@ -267,6 +273,8 @@ jobs:
               missing=1
             fi
           done
+          # The untyped read and get_or_create (#1599 layer 6), against the JIT control's lines.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 5 || missing=1
           refused=$(grep -c "$(printf '^step\trefused\tInvalidValueError: ')" build/run.txt || true)
           if [ "$refused" -ne 2 ]; then
             echo "::error::the trimmed write binary printed $refused refusal lines, expected 2"
@@ -357,7 +365,8 @@ jobs:
       - name: Seed the database and run the JIT control
         run: |
           julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/prep.jl
-          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/main.jl
+          mkdir -p build
+          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/main.jl | tee build/jit.txt   # the untyped-read reference
       - name: Build the trimmed binary
         id: build
         run: |
@@ -378,7 +387,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -392,6 +401,8 @@ jobs:
               exit 1
             fi
           done <<< "$TRIM_READ_LINES"
+          # The untyped read and get_or_create (#1599 layer 6), against the JIT control's lines.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 5
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete, then a bulk_insert of two rows read back (#1694). The written row's id
           # is not checked: the JIT control used one.
@@ -500,7 +511,8 @@ jobs:
       - name: Seed the database and run the JIT control
         run: |
           julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/prep.jl
-          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/main.jl
+          mkdir -p build
+          julia --project=test/trim/$TRIM_VARIANT test/trim/$TRIM_VARIANT/main.jl | tee build/jit.txt   # the untyped-read reference
       - name: Build the trimmed binary
         id: build
         run: |
@@ -517,7 +529,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -531,6 +543,8 @@ jobs:
               exit 1
             fi
           done <<< "$TRIM_READ_LINES"
+          # The untyped read and get_or_create (#1599 layer 6), against the JIT control's lines.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 5
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete, then a bulk_insert of two rows read back (#1694). The written row's id
           # is not checked: the JIT control used one.

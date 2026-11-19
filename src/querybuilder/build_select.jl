@@ -485,6 +485,13 @@ _orders_as_sqlite_interval(::Any, ::SQLInstruction) = false
 get_order_query(object::SQLObject, instruc::SQLInstruction) =
   (with_order_terms(_render_order_terms, object, object, instruc); nothing)
 
+# #1599 layer 6: an ORDER BY term's interval form, and its NULL flag, rendered in `scope` with the term at its
+# member's type (`_with_field_part_open` hands it over), so the closure each builds has a concrete type.
+_interval_operand_scoped(node, instruc, scope::RenderScope) =
+  _with_render_scope(() -> _render_interval_operand(node, instruc), instruc, scope)
+_interval_ms_flag_scoped(node, instruc, scope::RenderScope) =
+  _with_render_scope(() -> first(_render_interval_ms(node, instruc)), instruc, scope)
+
 function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::SQLInstruction)
   from_columns = nothing   # #1130: the FROM tables' column names, read on the first term that needs them
   for v in terms
@@ -715,8 +722,11 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # ORDER BY prints the milliseconds. Not a `Value` literal: one constant orders nothing, and its
       # millisecond form would change the text the #76 guard matches against its projection.
       if _interval_as_ms(instruc.connection) && !(order_node isa SQLText) && _with_field_part_open(_interval_ms_candidate, order_node)
-        text, ms, _ = _with_render_scope(() -> _render_interval_operand(order_node, instruc), instruc;
-                                 group_key = groups_term)
+        # #1599 layer 6: the term rendered at its member's type (`_interval_operand_scoped`, above). A closure over
+        # `order_node`, a union of the slot's members, had a type with an unbound parameter, and a trimmed image
+        # had no code for the call that took it (the untyped `list()` with an `order_by` stopped here).
+        text, ms, _ = _with_field_part_open(_interval_operand_scoped, order_node, instruc,
+                                            _with_scope(instruc.scope; group_key = groups_term))
         v_field_copy.field = text
         ms === nothing || (order_expr = ms; interval_node = order_node)
       else
@@ -727,8 +737,10 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # `SQLOrder(SQLField(x, "v"))`), so an interval with no millisecond form would sort its text on
       # SQLite, as its alias did. Refused the same way, naming the term's label and the CTE spelling;
       # render first, then type.
+      # #1599 layer 6: the walk's result asserted `Bool` (every `_interval_ms_candidate` method returns one), so `!` is
+      # not a run-time dispatch on the walk's untyped open arm, which the trimmed untyped `list()` stopped at.
       if _interval_as_ms(instruc.connection) && !_stores_interval_as_units(instruc.connection) &&
-         !_with_field_part_open(_interval_ms_candidate, order_node) &&
+         !(_with_field_part_open(_interval_ms_candidate, order_node)::Bool) &&
          _with_field_part_open(_expression_kind, order_node, instruc) isa CInterval
         label = v_field_copy._as
         throw(label isa AbstractString ? _unordered_interval_alias_error("`order_by`", label) :
@@ -755,8 +767,8 @@ function _render_order_terms(terms::AbstractVector, object::SQLObject, instruc::
       # #1313: a term's expression is rendered again for its flag, as an alias's projection is. Its
       # GROUP BY copy holds the first render's values (`order_params`), so this one is the flag's alone.
       interval_node === nothing ||
-        (null_flag = _with_render_scope(() -> first(_render_interval_ms(interval_node, instruc)), instruc;
-                                group_key = groups_term))
+        (null_flag = _with_field_part_open(_interval_ms_flag_scoped, interval_node, instruc,
+                                           _with_scope(instruc.scope; group_key = groups_term)))   # #1599 layer 6: as above
     end
     # #1130: the flag of a term printed as its alias, where a table the query reads has a column of
     # that name. Inside an expression MySQL, and SQLite before 3.30, read the name as that column

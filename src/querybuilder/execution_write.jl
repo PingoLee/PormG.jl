@@ -55,9 +55,12 @@ struct _FieldRowDecoder
   rev::Dict{String,Symbol}           # a column → its field's name; empty when no field sets `db_column`
   parsers::Dict{Symbol,ReadParser}   # a field's read parser, for a field that has one
   failure::Base.RefValue{Union{Nothing,Exception}}
+  sized::Bool   # each row sized to its column count first, as `_row_to_field_keyed_dict` sizes it (#1599 layer 6)
 end
 
-function _FieldRowDecoder(model::PormGModel, connection)
+# `sized`: `get_or_create`'s reads (#1599 layer 6) replace `_row_to_field_keyed_dict`, whose `Dict` was sized before
+# it was filled, so a row with the same keys iterates them in the same order; the insert's read-back never was.
+function _FieldRowDecoder(model::PormGModel, connection; sized::Bool = false)
   # Each field read by its key (`model.fields[k]`, typed by the dict's value type), not out of the dict's pairs:
   # under the oldest OrderedCollections the floor admits, the pair's field was inferred untyped, and each call on
   # it was a run-time dispatch (CI's floor-resolve job). The same fields, in the same order.
@@ -72,7 +75,7 @@ function _FieldRowDecoder(model::PormGModel, connection)
     kind = _field_read_kind(model.fields[fname])   # #965: a boolean reads as a `Bool` on SQLite too
     kind === nothing || (parsers[Symbol(fname)] = read_parser(kind, connection, fname))   # #1110: a raise names it
   end
-  return _FieldRowDecoder(rev, parsers, Base.RefValue{Union{Nothing,Exception}}(nothing))
+  return _FieldRowDecoder(rev, parsers, Base.RefValue{Union{Nothing,Exception}}(nothing), sized)
 end
 
 # The key a result column gives the row, and the parser of the field it names (none for a column that is no
@@ -80,12 +83,25 @@ end
 _field_key(d::_FieldRowDecoder, column::Symbol)::Symbol = isempty(d.rev) ? column : get(d.rev, String(column), column)
 _field_parser(d::_FieldRowDecoder, key::Symbol)::ReadParser = get(d.parsers, key, NO_READ_PARSER)
 
+# The untyped read's decoder (`_ProjectionRowDecoder`, execution_read.jl, #1599 layer 6) is read by the same
+# extension walks: a column keys the row by its own name, and its parser is its projection's.
+_field_key(::_ProjectionRowDecoder, column::Symbol)::Symbol = column
+_field_parser(d::_ProjectionRowDecoder, key::Symbol)::ReadParser = get(d.parsers, key, NO_READ_PARSER)
+
+# A new row for `ncols` cells. The untyped read's is sized first, as `_rows_from_result` sizes it, so a row with
+# the same keys iterates them in the same order; the write read-back's is not, as it never was.
+_new_row(d::_FieldRowDecoder, ncols::Int) = d.sized ? sizehint!(Dict{Symbol,Any}(), ncols) : Dict{Symbol,Any}()
+_new_row(::_ProjectionRowDecoder, ncols::Int) = sizehint!(Dict{Symbol,Any}(), ncols)
+
+# The two field-keyed `Dict` decoders the extensions read a concrete result into (#1599 layers 6 and 7).
+const _DictRowDecoder = Union{_FieldRowDecoder,_ProjectionRowDecoder}
+
 # A materialized result the extensions do not decode themselves (LibPQ's, a stand-in pool's; MySQL and Postgres.jl
 # have their own methods, #1614): its rows, each through the keys and parsers above.
 function (d::_FieldRowDecoder)(result)::Vector{Dict{Symbol,Any}}
   out = Dict{Symbol,Any}[]
   for row in Tables.rowtable(result)
-    dict = Dict{Symbol,Any}()
+    dict = _new_row(d, length(row))
     for (k, v) in pairs(row)
       key = _field_key(d, Symbol(k))
       dict[key] = _field_parser(d, key)(v)
@@ -788,10 +804,25 @@ function _get_or_create_lookup(model::PormGModel, target_fields::Vector{String},
     if v isa _CollectionValue && _is_json_field(model.fields[f])
       v = Models.format_json_sql(v)
     end
-    q.filter(f => v)
+    _filter_lookup!(q, f, v)
   end
   return q
 end
+
+# One lookup filter, its pair built at the value's type (#1599 layer 6). `f => v` over the untyped `v` read out of
+# `target_values` built a `Pair` whose type is known only at run time, and the trimmed `get_or_create` (its hit,
+# through the untyped `first()`) raised `MethodError` there. One arm per type a lookup value commonly is, each the
+# same `f => v` it was; any other value takes the call as before.
+@noinline function _filter_lookup!(q::SQLObjectHandler, f::String, @nospecialize(v))
+  v isa Int64 && return (q.filter(f => v); nothing)
+  v isa String && return (q.filter(f => v); nothing)
+  v isa Float64 && return (q.filter(f => v); nothing)
+  v isa Bool && return (q.filter(f => v); nothing)
+  v isa Dates.Date && return (q.filter(f => v); nothing)
+  v isa Dates.DateTime && return (q.filter(f => v); nothing)
+  return _filter_lookup_other!(q, f, v)
+end
+@noinline _filter_lookup_other!(q::SQLObjectHandler, f::String, @nospecialize(v)) = (q.filter(f => v); nothing)
 
 # Django-style get_or_create (#208): match-or-insert with NO update on a hit. This is Django's own
 # algorithm — get() FIRST, and only on a miss build+run the INSERT — so that columns beyond the
@@ -810,7 +841,12 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
     !settings.change_data && throw(_write_not_allowed("get_or_create", conn_key))
 
     # Capture the raw lookup values BEFORE any INSERT marshalling mutates real_obj.insert.
-    target_values = Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)
+    # #1599 layer 6: filled key by key, sized as the generator form sized it. `f => real_obj.insert[f]` built a
+    # `Pair` whose value type is known only at run time, which a trimmed image had no code for.
+    target_values = sizehint!(Dict{String,Any}(), length(target_fields))
+    for f in target_fields
+      target_values[f] = real_obj.insert[f]
+    end
 
     # A collection lookup value would be refused by the INSERT on a miss, but a hit never builds one:
     # `fetch_by_target` hands it to `filter()`, which raises `FilterError` instead. Refuse it here, the
@@ -836,9 +872,12 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       lock || readback || return _get_or_create_lookup(model, target_fields, target_values).first()
       table = safe_table_identifier(Models.model_table_name(model), connection)
       head = readback ? "SELECT $(_returned_columns(model, connection, table))" : _FOUND_ROW_HEAD
-      rows = fetch(settings, _select_by_target(head, real_obj, model, target_fields, table, connection;
-                                               lock = lock)...) |> Tables.rowtable
-      isempty(rows) ? nothing : _owned_row(_row_to_field_keyed_dict(rows[1], model, connection), model)
+      # #1599 layer 6: decoded as it is read, into the rows `_row_to_field_keyed_dict` built (`sized`). Through
+      # `Tables.rowtable` the row type was decided at run time, and the trimmed `get_or_create` stopped there.
+      sql, params = _select_by_target(head, real_obj, model, target_fields, table, connection; lock = lock)
+      _decodes_on_fetch(settings) || return _found_row_undecoded(settings, sql, params, model, connection)
+      rows = _read_back_rows(settings, sql, params, _FieldRowDecoder(model, connection; sized = true))
+      isempty(rows) ? nothing : _owned_row(rows[1], model)
     end
 
     # Build the `INSERT ... ON CONFLICT (target) DO NOTHING` a MISS would run. `_prepare_row_insert!`
@@ -881,9 +920,13 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
       existing !== nothing && return (existing, false)
 
       # Miss → create, guarded against a concurrent insert of the same key (`_create_on_miss`).
-      parameters = get_parameter(connection)
-      insert_sql = build_insert(parameters)
-      return _create_on_miss(connection, settings, model, insert_sql, parameters, fetch_by_target, target_fields)
+      # #1599 layer 6: names of their own. Assigned here and in the `show_query` branch above, `parameters` and
+      # `insert_sql` were each one variable captured and reassigned, so Julia boxed them, every read of them was
+      # untyped, and the trimmed `get_or_create`'s miss raised `MethodError` calling `build_insert` and then
+      # `_create_on_miss` on them.
+      miss_params = get_parameter(connection)
+      miss_sql = build_insert(miss_params)
+      return _create_on_miss(connection, settings, model, miss_sql, miss_params, fetch_by_target, target_fields)
     end
 
     # SQLite: serialize get + insert + read-back so `created` is correct and the create race-guard
@@ -895,18 +938,39 @@ function _get_or_create(objct::SQLObject; target_fields::Vector{String}, show_qu
   end
 end
 
+# get_or_create's lookup read as it was before #1599 layer 6, for a pool `_decodes_on_fetch` does not list (a test
+# double with its own `fetch`): the result's rows, the first one keyed by field. Behind `@noinline`: the result's
+# type is the pool's own.
+@noinline function _found_row_undecoded(settings, sql::String, params, model::PormGModel, connection)
+  rows = fetch(settings, sql, params) |> Tables.rowtable
+  return isempty(rows) ? nothing : _owned_row(_row_to_field_keyed_dict(rows[1], model, connection), model)
+end
+
 # get_or_create's miss: run `insert_sql` and return `(PormGRow, created)`, one method per engine.
 function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql, parameters, fetch_by_target,
                          target_fields)
   exec_sql = insert_sql * " RETURNING $(_returned_columns(model, connection));"
-  result = try
-    fetch(settings, exec_sql, parameters)
-  catch e
-    _rethrow_conflict_target_error(e, model, target_fields)
+  # #1599 layer 6: PormG's own pool decodes the returned row as it is read, into the row `_row_to_field_keyed_dict`
+  # built (`sized`), as `create`'s `RETURNING` does; `Tables.rowtable` decided its type at run time, and the trimmed
+  # Postgres.jl `get_or_create` stopped there on a miss. Any other pool (a test double whose `fetch` may take no
+  # `_decode`) reads as before.
+  dict = if _decodes_on_fetch(settings)
+    returned = try
+      fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection; sized = true))::Vector{Dict{Symbol,Any}}
+    catch e
+      _rethrow_conflict_target_error(e, model, target_fields)
+    end
+    isempty(returned) ? nothing : returned[1]
+  else
+    result = try
+      fetch(settings, exec_sql, parameters)
+    catch e
+      _rethrow_conflict_target_error(e, model, target_fields)
+    end
+    rows = Tables.rowtable(result)
+    isempty(rows) ? nothing : _row_to_field_keyed_dict(Base.first(rows), model, connection)
   end
-  rows = Tables.rowtable(result)
-  if !isempty(rows)
-    dict = _row_to_field_keyed_dict(Base.first(rows), model, connection)
+  if dict !== nothing
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
     # this write supplied an explicit primary key.
     return (_owned_row(dict, model), true)

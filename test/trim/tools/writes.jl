@@ -135,3 +135,23 @@ function update_or_create_step(circuitid::Int)::Bool
         failed("update_or_create", e); return false
     end
 end
+
+const UPSERT_GOC_ID = 9_000_003
+
+# `get_or_create` (exit code 18): `UPSERT_GOC_ID` is a miss, so the first call inserts it (`created` true); the second
+# finds it (`created` false) through the untyped `first()` (#1599 layer 6) and returns the row it found, whose `round`
+# is the one the first call wrote; then deleted, so the database is left as it was.
+function get_or_create_step(circuitid::Int)::Bool
+    try
+        defaults = ["year" => 2014, "round" => 6, "circuitid" => circuitid, "name" => "Monaco Grand Prix",
+                    "date" => Date(2014, 5, 25)]
+        miss = M.Race.objects.get_or_create("raceid" => UPSERT_GOC_ID; defaults = defaults)::Tuple{PormGRow, Bool}
+        hit = M.Race.objects.get_or_create("raceid" => UPSERT_GOC_ID; defaults = defaults)::Tuple{PormGRow, Bool}
+        say("get_or_create", string("first created ", miss[2], "; second created ", hit[2], "; round ",
+                                    cell_text(hit[1][:round]), "; ", row_types(hit[1])))
+        removed = first(M.Race.objects.filter("raceid" => UPSERT_GOC_ID).delete()::Tuple{Int, Dict{String, Integer}})
+        return miss[2] && !hit[2] && cell_text(hit[1][:round]) == "6" && removed == 1
+    catch e
+        failed("get_or_create", e); return false
+    end
+end

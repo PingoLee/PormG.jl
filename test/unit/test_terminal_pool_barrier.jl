@@ -126,6 +126,8 @@ end
 #   - deletion.jl `should_check_related_existence` (1): whether the settings' pool is live;
 #   - execution_write.jl `insert` (1): whether the pool its RETURNING `fetch` goes through is PormG's own
 #     PostgreSQL pool, which decodes the row as it is read, or a test double, which reads it as before (#1614);
+#   - execution_read.jl `_decodes_on_fetch` (1): whether the untyped read and get_or_create's reads go through PormG's
+#     own pool, which decodes the rows as it reads them, or a test double, which reads them as before (#1599 layer 6);
 #   - types.jl `DeletionCollector` (1): the collector's `connection` slot, the settings' pool.
 #   A `getfield(…, :connections)` would bypass the dot form, so it is refused anywhere.
 # Why: `delete`'s reads take the settings' pool even when `connection =` overrides it, and
@@ -140,6 +142,9 @@ end
                   ("execution_write.jl", "insert") => 1,
                   # #1599 layer 7 (#1694): `update_or_create`'s RETURNING arm, `insert`'s shape (decodes on PormG's own pool).
                   ("execution_write.jl", "_run_update_or_create") => 1,
+                  # #1599 layer 6: `_decodes_on_fetch`, whether the untyped read and get_or_create's reads hand `fetch`
+                  # a decoder (PormG's own pools) or read as before (a test double).
+                  ("execution_read.jl", "_decodes_on_fetch") => 1,
                   ("types.jl", "DeletionCollector") => 1)
   @test reads == reviewed
   reads == reviewed || @info ".connections reads (reviewed → now)" reviewed reads
@@ -159,7 +164,8 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 const _TPB_REVIEWED_BOXES = Dict(
   "build_query.jl" => 1,       # _check_mixed_grouping; #1599 layer 5 removed build_row_join_sql_text's (`keyed`)
-  "build_select.jl" => 1,      # get_order_query; #1711 removed get_select_query's (`local kind` in its render closure)
+  # #1711 removed build_select.jl's get_select_query box (`local kind` in its render closure); #1599 layer 6 removed
+  # get_order_query's (the interval form's closures render at the term's member type).
   # #1599 layer 7 (#1694) removed `deletion.jl`'s four: `plan`/`run_plan` are defined before the closure that
   # calls them, `topological_sort`'s visit is a function, `_collector_predicate`'s alias a `RefValue{String}`.
   # #1599 layer 7 (#1694) removed three of bulk_insert's: the insert loop's chunk accumulator no longer reassigns
@@ -168,8 +174,9 @@ const _TPB_REVIEWED_BOXES = Dict(
   # the collector it forks from is a `RefValue{ParamCollector}`.
   "execution_bulk.jl" => 1,    # _bulk_insert_frame (1: `allocate_pk`)
   "execution_read.jl" => 1,    # a closure in _filters_name_alias (`mkey`); #1698 removed the `hit` box (a RefValue now)
-  "execution_write.jl" => 5,   # _get_or_create's body (2); _run_update_or_create (2); _refuse_update_non_number
-                               # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed)
+  "execution_write.jl" => 3,   # _run_update_or_create (2); _refuse_update_non_number
+                               # (insert's body: 6 → 5 with #1697, its thunk's `result` renamed; #1599 layer 6
+                               # removed _get_or_create's two: the miss's `parameters`/`insert_sql` have names of their own)
   "expression_render.jl" => 1, # _refuse_unnamed_temporal
   "join_conditions.jl" => 1,   # _bind_cjoin_on_conditions!; #1599 layer 5 removed _join_scope's (`parent` bound once)
   # #1599 layer 5 removed `filter_nodes.jl`'s (`_format_filter_value`, the formatter bound once) and

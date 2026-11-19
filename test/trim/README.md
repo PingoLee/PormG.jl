@@ -10,7 +10,8 @@ the refusal's type and message), the read steps of `tools/reads.jl` (a compariso
 integer, `date__@gte` and `round__@lt`, an `order_by` each way, and the other common lookups: `__@gt`, `__@lte`,
 `__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains` and `__@contains`, and the
 comparisons against an expression: an `F` with arithmetic on each side, `Extract`, the `@year` transform and a
-`Case`/`When` on each side, over the two races `prep.jl` seeds; #1599 layer 5), one `Race.objects.create` that leaves the three auto-filled fields
+`Case`/`When` on each side, over the two races `prep.jl` seeds; #1599 layer 5, then the untyped read: `first()` and
+`list()` with no type and a `values(...)` projection, each line naming every cell's type; #1599 layer 6), one `Race.objects.create` that leaves the three auto-filled fields
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
@@ -18,7 +19,8 @@ each checked by a typed read after it, then a `bulk_insert` of two races from a 
 `NamedTuple`s, read back typed, and last a `bulk_insert` whose second row validation refuses (a date that is
 not a calendar date), which prints the refusal's type and message and checks that no row was written, then a
 `bulk_update` of two bulk-inserted races matched on `raceid` and an `update_or_create` that inserts one explicit id
-and then updates it, each read back typed and undone (#1694). Each step prints one line. The read-only entry, `read.jl`, runs
+and then updates it, each read back typed and undone (#1694), and a `get_or_create` that inserts one explicit id
+and then finds it through the untyped `first()` (#1599 layer 6), then deletes it. Each step prints one line. The read-only entry, `read.jl`, runs
 the same boot, read and read steps without the writes; the steps both entries share are in `steps.jl`, and the
 ones the server variants share too are in `tools/reads.jl` and `tools/writes.jl`.
 
@@ -100,6 +102,10 @@ step	expr	Extract(date, month) == 11 1 rows: Brazilian Grand Prix
 step	expr	date__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	expr	round__@gte Case 1 rows: Monaco Grand Prix
 step	expr	Case == 1 1 rows: Monaco Grand Prix
+step	untyped	first Monaco Grand Prix round 6 date 2008-05-25
+step	untyped	first types year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
+step	untyped	list 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	untyped	values 1 rows: round::Int64, name::String; Monaco Grand Prix 6
 step	elapsed_ms	1
 ```
 
@@ -122,8 +128,8 @@ PormG to refuse is not refused with an `InvalidValueError`, 7 when its update an
 raises or the read after it does not show the change, and 9 when its `bulk_insert` raises, counts other
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
 refused with an `InvalidValueError` or writes a row, 15 when its `bulk_update` and 16 when its `update_or_create`
-raises, the read after it does not show the change, or the delete that undoes it does not remove its rows). `get_or_create` has no step: on a hit it reads its row through
-the untyped `first()`, whose rows a trimmed image cannot read.
+raises, the read after it does not show the change, or the delete that undoes it does not remove its rows). 17 when an untyped read raises or returns other rows, 18 when
+`get_or_create` raises, does not insert and then find its row, or the delete after it does not remove it.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -148,7 +154,9 @@ It is a separate run, not part of the default one, because it adds about 20 s.
 
 **The workflow** (`.github/workflows/trim.yml`, named `Trim (juliac)`) builds this entry with the
 Julia and JuliaC versions above, runs the binary under a 300 s timeout, and fails unless it exits 0
-and prints the `row` line and the read-step lines above (`TRIM_READ_LINES` in the workflow). It then makes the `tasks` run, which fails unless it exits 0 with
+and prints the `row` line and the read-step lines above (`TRIM_READ_LINES` in the workflow). The untyped read's
+lines name each cell's type, which is each engine's own, so every job checks them, and `get_or_create`'s, against
+the lines its own JIT control printed (`tools/same_lines.sh`). It then makes the `tasks` run, which fails unless it exits 0 with
 both its lines. The timeout is there because a task body the image never compiled
 dies silently, so a broken binary hangs rather than crashes (#1788). The verifier's rows are
 reported, never checked: the step lines of both runs, `rows.py` and `classify.py --layers` go to the
@@ -199,12 +207,13 @@ step	bulk_refused	InvalidValueError: Error in bulk_insert, row 2 for model race,
 step	bulk_refused	0 rows written; 1 Monaco races
 step	bulk_update	2 rows; rounds 7, 8
 step	update_or_create	first created true; second created false; round 7
+step	get_or_create	first created true; second created false; round 6; year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 ```
 
-On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
+The `untyped` lines sit after the `expr` lines. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
-`bulk_update`, 16 `update_or_create`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -289,6 +298,10 @@ step	expr	Extract(date, month) == 11 1 rows: Brazilian Grand Prix
 step	expr	date__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	expr	round__@gte Case 1 rows: Monaco Grand Prix
 step	expr	Case == 1 1 rows: Monaco Grand Prix
+step	untyped	first Monaco Grand Prix round 6 date 2008-05-25
+step	untyped	first types year::Int32, round::Int32, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
+step	untyped	list 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	untyped	values 1 rows: round::Int32, name::String; Monaco Grand Prix 6
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -298,9 +311,11 @@ step	delete	1 rows; 1 left
 step	bulk	2 rows; 2 read back
 step	bulk_update	2 rows; rounds 7, 8
 step	update_or_create	first created true; second created false; round 7
+step	get_or_create	first created true; second created false; round 6; year::Int32, round::Int32, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 ```
 
-The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables
+The untyped lines name each cell's type, which is the engine's own: MySQL and PostgreSQL read `year` and
+`round` as `Int32` where SQLite reads `Int64`. The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables
 without resetting the server's sequence, and the JIT control's own write uses an id, so a binary run after the
 JIT control (as the CI jobs run it) or a later run prints higher ones; the write reads Monaco's id first for the
 same reason.

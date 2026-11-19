@@ -16,6 +16,7 @@ function (@main)(args::Vector{String})::Cint
     order_step() || return Cint(11)
     lookup_step() || return Cint(13)
     expr_step() || return Cint(14)
+    untyped_step() || return Cint(17)   # the untyped read, before the write (#1599 layer 6)
     write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)
@@ -24,6 +25,7 @@ function (@main)(args::Vector{String})::Cint
     bulk_refused_step() || return Cint(12)
     bulk_update_step(1) || return Cint(15)        # the upsert-shaped writes (`tools/writes.jl`, #1694)
     update_or_create_step(1) || return Cint(16)
+    get_or_create_step(1) || return Cint(18)
     elapsed_step(t0)
     return Cint(0)
 end

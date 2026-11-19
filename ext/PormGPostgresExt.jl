@@ -810,7 +810,27 @@ end
 # The decoder's generic call read the result through `Tables.rowtable`, whose row type is decided at run time,
 # and a trimmed image had no code for it (the Postgres.jl entry's `create` stopped there). The same keys and
 # values: Postgres.jl's rows hold the cells `Tables.rowtable` read. A parser's refusal raises here, as it did there.
-function (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result)::Vector{Dict{Symbol,Any}}
+# One method per decoder, not one over their union: the untyped read's decoder has a generic method of its own
+# (`_rows_from_result`), and a union method would be ambiguous with it.
+(d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result) = _pg_dict_rows(d, result)
+(d::PormG.QueryBuilder._ProjectionRowDecoder)(result::Postgres.Result) = _pg_dict_rows(d, result)
+# The untyped read's rows (#1599 layer 6), filled column by column as `_rows_from_result` filled them from
+# `Tables.columntable`: each row sized to the column count first, so its keys iterate in the same order, and a
+# parser that raises on two cells raises on the one the old fill reached first (the first column, then its first row).
+function _pg_dict_rows(d::PormG.QueryBuilder._ProjectionRowDecoder, result::Postgres.Result)::Vector{Dict{Symbol,Any}}
+  QB = PormG.QueryBuilder
+  names = Symbol[Symbol(n) for n in result.names]
+  nrows = length(result.rows)
+  rows = Dict{Symbol,Any}[sizehint!(Dict{Symbol,Any}(), length(names)) for _ in 1:nrows]
+  for j in eachindex(names)
+    parser = QB._field_parser(d, names[j])
+    for i in 1:nrows
+      rows[i][names[j]] = _pg_parsed(getfield(result.rows[i], :data)[j], parser)
+    end
+  end
+  return rows
+end
+function _pg_dict_rows(d::PormG.QueryBuilder._DictRowDecoder, result::Postgres.Result)::Vector{Dict{Symbol,Any}}
   QB = PormG.QueryBuilder
   names = result.names
   fkeys = Symbol[QB._field_key(d, Symbol(n)) for n in names]
@@ -818,7 +838,7 @@ function (d::PormG.QueryBuilder._FieldRowDecoder)(result::Postgres.Result)::Vect
   out = Dict{Symbol,Any}[]
   for row in result.rows
     data = getfield(row, :data)
-    dict = Dict{Symbol,Any}()
+    dict = QB._new_row(d, length(fkeys))
     for j in eachindex(fkeys)
       dict[fkeys[j]] = _pg_parsed(data[j], parsers[j])
     end

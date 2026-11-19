@@ -222,6 +222,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Typed read: list(T) / first(T) / get(T) (#1352)" include("unit/test_typed_read_1352.jl")
     @testset "getproperty overloads infer for a literal name (#1615)" include("unit/test_getproperty_inference_1615.jl")
     @testset "Typed read decodes where the result is concrete (#1605)" include("unit/test_typed_read_decoder_1605.jl")
+    @testset "Untyped read keeps the old rows and error order (#1599 layer 6)" include("unit/test_untyped_read_order_1599.jl")
     @testset "A projection is copied one level, per concrete type (#1612)" include("unit/test_projection_copy_1612.jl")
     @testset "Function renderer options are typed and refuse a wrong type (#1610)" include("unit/test_fn_options_1610.jl")
     @testset "Names chosen at run time dispatch through generated branches (#1611)" include("unit/test_named_dispatch_1611.jl")

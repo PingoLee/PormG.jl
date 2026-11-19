@@ -595,13 +595,32 @@ end
 # generic call read the result through `Tables.rowtable`, whose row type is decided at run time, and a trimmed image
 # had no code for it (the MySQL entry's `create` stopped at `Tables.rowcount`). The same keys and values: the
 # columns hold the cells `Tables.rowtable` read. A parser's refusal raises here, as it did there.
-function (d::PormG.QueryBuilder._FieldRowDecoder)(result::MySQLResult)::Vector{Dict{Symbol,Any}}
+# One method per decoder, not one over their union: the untyped read's decoder has a generic method of its own
+# (`_rows_from_result`), and a union method would be ambiguous with it.
+(d::PormG.QueryBuilder._FieldRowDecoder)(result::MySQLResult) = _mysql_dict_rows(d, result)
+(d::PormG.QueryBuilder._ProjectionRowDecoder)(result::MySQLResult) = _mysql_dict_rows(d, result)
+# The untyped read's rows (#1599 layer 6), filled column by column as `_rows_from_result` filled them from
+# `Tables.columntable`: each row sized to the column count first, so its keys iterate in the same order, and a
+# parser that raises on two cells raises on the one the old fill reached first (the first column, then its first row).
+function _mysql_dict_rows(d::PormG.QueryBuilder._ProjectionRowDecoder, result::MySQLResult)::Vector{Dict{Symbol,Any}}
+  QB = PormG.QueryBuilder
+  names = Symbol[Symbol(n) for n in result.names]
+  rows = Dict{Symbol,Any}[sizehint!(Dict{Symbol,Any}(), length(names)) for _ in 1:result.nrows]
+  for j in eachindex(names)
+    parser = QB._field_parser(d, names[j])
+    for i in 1:result.nrows
+      rows[i][names[j]] = _mysql_parsed(result.columns[j], i, parser)
+    end
+  end
+  return rows
+end
+function _mysql_dict_rows(d::PormG.QueryBuilder._DictRowDecoder, result::MySQLResult)::Vector{Dict{Symbol,Any}}
   QB = PormG.QueryBuilder
   fkeys = Symbol[QB._field_key(d, Symbol(n)) for n in result.names]
   parsers = PormG.ReadParser[QB._field_parser(d, k) for k in fkeys]
   out = Dict{Symbol,Any}[]
   for i in 1:result.nrows
-    dict = Dict{Symbol,Any}()
+    dict = QB._new_row(d, length(fkeys))
     for j in eachindex(fkeys)
       dict[fkeys[j]] = _mysql_parsed(result.columns[j], i, parsers[j])
     end

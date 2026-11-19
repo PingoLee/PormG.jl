@@ -431,7 +431,7 @@ end
 # trimmed image has no code for. Each cell is read by its storage class, as `_sqlite_value` reads it, and
 # handed at that type to its field's parser; the Dict holds `Any`, so storing it is static.
 function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::String, params,
-                                    decode::PormG.QueryBuilder._FieldRowDecoder)
+                                    decode::PormG.QueryBuilder._DictRowDecoder)
   resolved = params isa PormGSQLiteParam ? params.parameters : params
   try
     return _sqlite_with_retry(() -> _sqlite_field_rows(conn, sql, resolved, decode))::Vector{Dict{Symbol,Any}}
@@ -442,7 +442,7 @@ function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::Str
 end
 
 function _sqlite_field_rows(conn::SQLite.DB, sql::String, params,
-                            decode::PormG.QueryBuilder._FieldRowDecoder)::Vector{Dict{Symbol,Any}}
+                            decode::PormG.QueryBuilder._DictRowDecoder)::Vector{Dict{Symbol,Any}}
   stmt = SQLite.Stmt(conn, sql; register = false)
   try
     q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
@@ -452,12 +452,40 @@ function _sqlite_field_rows(conn::SQLite.DB, sql::String, params,
     SQLite.DBInterface.close!(stmt)
   end
 end
-@noinline _sqlite_field_rows_into_open(@nospecialize(q), decode::PormG.QueryBuilder._FieldRowDecoder) =
+@noinline _sqlite_field_rows_into_open(@nospecialize(q), decode::PormG.QueryBuilder._DictRowDecoder) =
   _sqlite_field_rows_into(q, decode)::Vector{Dict{Symbol,Any}}
 
 # The rows, stepped as `_sqlite_rows_into` steps them; an error raised while building a row (a parser's
 # refusal) is recorded on the decoder and the walk stops, so `fetch` raises it as it was raised.
-function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._FieldRowDecoder)::Vector{Dict{Symbol,Any}}
+# The untyped read's rows (#1599 layer 6), as `_rows_from_result` built them from the materialized rows: every row
+# stepped first, each cell read as `_sqlite_rowtable` reads it (`_sqlite_value`) into a `Dict` sized to the column
+# count, so a cell read or a step that raises does so inside the statement, as before; then the parsers, row by row
+# in the parser map's order, which is `_projection_parsers`' map's order (the same keys inserted in the same order).
+# A parser's error is recorded and raised by `fetch` unwrapped, as when it ran after `fetch` returned.
+function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._ProjectionRowDecoder)::Vector{Dict{Symbol,Any}}
+  handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
+  names = q.names   # a `Vector{Symbol}` (see `_sqlite_rows_into`)
+  out = Dict{Symbol,Any}[]
+  next = iterate(q)
+  while next !== nothing
+    row = sizehint!(Dict{Symbol,Any}(), length(names))
+    for c in eachindex(names)
+      row[names[c]] = _sqlite_value(handle, c)
+    end
+    push!(out, row)
+    next = iterate(q, next[2])
+  end
+  try
+    for row in out, (name, parser) in decode.parsers
+      haskey(row, name) && (row[name] = _sqlite_parse_value(parser, row[name]))
+    end
+  catch e
+    (e isa InterruptException || !(e isa Exception)) && rethrow()   # a Ctrl-C stops the statement
+    decode.failure[] = e
+  end
+  return out
+end
+function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._DictRowDecoder)::Vector{Dict{Symbol,Any}}
   handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
   names = q.names   # a `Vector{Symbol}` (see `_sqlite_rows_into`)
   fkeys = Symbol[QB._field_key(decode, n) for n in names]
@@ -466,7 +494,7 @@ function _sqlite_field_rows_into(q, decode::PormG.QueryBuilder._FieldRowDecoder)
   next = iterate(q)
   while next !== nothing
     row = try
-      dict = Dict{Symbol,Any}()
+      dict = QB._new_row(decode, length(fkeys))
       for c in eachindex(fkeys)
         dict[fkeys[c]] = _sqlite_field_cell(handle, c, parsers[c])
       end
@@ -493,6 +521,16 @@ end
   return _sqlite_field_blob(parser, SQLite.sqlitevalue(Any, handle, col))
 end
 @noinline _sqlite_field_blob(parser::PormG.ReadParser, @nospecialize(v)) = parser(v)
+
+# A cell `_sqlite_value` read, parsed at the type it was read as (its storage class's), so the parser is a static
+# call; a BLOB is SQLite.jl's own read, so it goes through `_sqlite_field_blob`.
+@inline function _sqlite_parse_value(parser::PormG.ReadParser, @nospecialize(v))
+  v isa Missing && return parser(v)
+  v isa Int64 && return parser(v)
+  v isa Float64 && return parser(v)
+  v isa String && return parser(v)
+  return _sqlite_field_blob(parser, v)
+end
 
 # How many rows a statement returns (`exists()`, #1599 layer 7, #1694): the statement lifecycle, retry and lock
 # release of `backend_execute`, the rows stepped and counted. Each cell is read as `_sqlite_rowtable` reads it

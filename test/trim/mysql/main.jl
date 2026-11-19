@@ -115,6 +115,7 @@ function (@main)(args::Vector{String})::Cint
     order_step() || return Cint(11)
     lookup_step() || return Cint(13)
     expr_step() || return Cint(14)
+    untyped_step() || return Cint(17)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()
@@ -128,6 +129,7 @@ function (@main)(args::Vector{String})::Cint
     # The upsert-shaped writes, each read back typed and undone (#1694, `../tools/writes.jl`).
     bulk_update_step(circuitid) || return Cint(15)
     update_or_create_step(circuitid) || return Cint(16)
+    get_or_create_step(circuitid) || return Cint(18)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
     fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)

@@ -58,6 +58,7 @@ import PormG: backend_postgres_parameter_limit   # PostgreSQL: the driver's bind
 # undoes a backend's stored text instead of naming one itself; `CDateTime` is the key it asks with.
 import PormG: value_parser, value_formatter, sql_canonicalize, field_canonical_kind
 import PormG: read_parser, ReadParser, NO_READ_PARSER   # #1605: the concrete slot 3 the typed read decodes with
+import PormG: has_parser, _as_function   # #1599 layer 6: the untyped read's decoder selects as `_projection_parsers` does
 import PormG: decode_on_worker, decoded_on_worker   # #1605: record, then raise, a row-building error on the SQLite worker
 # #1632 — slot 4: the Julia type a read delivers, which `show_query = :struct` writes into a struct.
 import PormG: julia_type, _JULIA_TYPE_ENGINES
@@ -82,6 +83,7 @@ import PormG.ConnectionPool: _finalize_with, _with_transaction_with, _with_tx_co
 # which a bare `e isa InterruptException` test cannot (every driver error crosses `_as_database_error`).
 import PormG.ConnectionPool: _await_abandoned
 import PormG.ConnectionPool: PostgresConnectionPool   # #1614: `create`'s RETURNING decodes on PormG's own pool only
+import PormG.ConnectionPool: SQLiteConnectionPool, MySQLConnectionPool   # #1599 layer 6: `_decodes_on_fetch`, the untyped read decodes on PormG's own pools only
 # #951: one NUL predicate and one reason for the write path and the execution funnels alike.
 import PormG.ConnectionPool: _contains_nul, NUL_REFUSAL_REASON
 import PormG.Configuration: with_tx_context, ensure_transaction_scope, transaction_connection_for,

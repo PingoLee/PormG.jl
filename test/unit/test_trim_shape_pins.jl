@@ -2729,6 +2729,126 @@ end
     @test !occursin("fetch(settings, read_back[1])", ew_src)
   end
 
+  # What: the untyped read (#1599 layer 6): the decoder that carries each projection's read parser to `fetch`
+  #   (`QueryBuilder._ProjectionRowDecoder`), its fetch (`_fetch_projection_rows`), and the SQLite extension's
+  #   `backend_execute_rows` method, shared with the insert's read-back, that steps the statement into the rows.
+  # Expected: the decoder is a concrete type with concrete fields; none of these makes a dynamic call; the rows
+  #   infer `Vector{Dict{Symbol,Any}}`; `_list_raw` reads through them and no longer builds its rows after `fetch`.
+  # Why: `_list_raw` handed `fetch`'s result, typed `Any`, to `_rows_from_result`, whose SQLite method walks a
+  #   `NamedTuple` per row whose type the statement decides; a trimmed image has no code for it.
+  #   `test/integration/test_untyped_read_equivalence_1599.jl` holds the equivalence against the old read.
+  @testset "the untyped read is decoded on SQLite's worker at concrete types (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    CP = PormG.ConnectionPool
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    has = isdefined(QB, :_ProjectionRowDecoder) && isdefined(QB, :_fetch_projection_rows)
+    @test has
+    if has
+      D = QB._ProjectionRowDecoder
+      @test isconcretetype(D) && all(isconcretetype, fieldtypes(D))
+      @test isempty(_dynamic_calls(QB._ProjectionRowDecoder, (QB.InstructionObject, CP.SQLiteConnectionPool)))
+      for P in (Nothing, QB.SQLiteParameterizedQuery)
+        @test (P, _dynamic_calls(QB._fetch_projection_rows, (PormG.Kernel.Settings, String, P, D))) == (P, String[])
+        @test only(Base.return_types(QB._fetch_projection_rows, (PormG.Kernel.Settings, String, P, D))) ==
+              Vector{Dict{Symbol, Any}}
+      end
+      @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, D)))
+      @test isempty(_dynamic_calls(X._sqlite_field_rows_into, (SQLite.Query{false}, D)))
+    end
+    er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
+    @test occursin("_fetch_projection_rows(settings, rendered.sql, rendered.instruction.parameters, decoder)", er_src)
+    @test !occursin("return _rows_from_result(result, _projection_parsers(built, connection))", er_src)
+  end
+
+  # What: `list(q, format::Symbol)` (#1599 layer 6), which `q.list()` and `q.list(:dict)` reach with the format as a
+  #   run-time `Symbol`.
+  # Expected: the keyword body makes no dynamic call: `:row`, `:dict` and `:json` call their `Val` methods
+  #   statically, and any other format goes to `_list_other_format`, the barrier that keeps the old dispatch.
+  # Why: `list(objct, Val(format); kwargs...)` built the `Val` at run time, and the trimmed `list()` raised
+  #   `MethodError` on that keyword call (`Core.kwcall(…, list, ObjectHandler, Val{:row})`).
+  @testset "list(q, format) calls the format's method statically (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_list_other_format)
+    @test isempty(_dynamic_calls_kw(QB.list, (QB.ObjectHandler, Symbol)))   # the concrete handler a terminal holds
+  end
+
+  # What: an ORDER BY term rendered in its interval form (#1599 layer 6): the term's operand and its NULL flag, each
+  #   rendered in the term's render scope.
+  # Expected: each is rendered through `_with_field_part_open`, with the term at its member's type, by a helper that
+  #   builds its closure over that concrete node and makes no dynamic call; no closure over the term's union-typed
+  #   slot is left at either site.
+  # Why: the closure over `order_node` (and `interval_node`) had a type with an unbound parameter, and the verifier
+  #   could not resolve the call that took it; the trimmed untyped `list()` with an `order_by` raised
+  #   `MissingCodeError` there, first in the keyword form and then in the positional one.
+  @testset "the ORDER BY interval form is rendered at the term's member type (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    bs_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+    @test occursin("_with_field_part_open(_interval_operand_scoped, order_node, instruc,", bs_src)
+    @test occursin("_with_field_part_open(_interval_ms_flag_scoped, interval_node, instruc,", bs_src)
+    @test !occursin("() -> _render_interval_operand(order_node, instruc)", bs_src)
+    @test !occursin("() -> first(_render_interval_ms(interval_node, instruc))", bs_src)
+    has = isdefined(QB, :_interval_operand_scoped) && isdefined(QB, :_interval_ms_flag_scoped)
+    @test has
+    if has
+      for f in (QB._interval_operand_scoped, QB._interval_ms_flag_scoped), N in (String, QB.FObject)
+        @test (f, N, _dynamic_calls(f, (N, QB.InstructionObject, QB.RenderScope))) == (f, N, String[])
+      end
+    end
+  end
+
+  # What: the ORDER BY render's check for an interval with no millisecond form (#1599 layer 6), which negates the
+  #   `_interval_ms_candidate` walk's answer.
+  # Expected: the walk's answer is asserted `Bool` before `!`; every `_interval_ms_candidate` method returns a `Bool`.
+  # Why: the walk's open arm is untyped, so `!` was a run-time dispatch (`!(::Bool)` with no compiled target), and the
+  #   trimmed untyped `list()` with an `order_by` raised `MethodError` there.
+  @testset "the ORDER BY interval check negates a Bool (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    bs_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+    @test occursin("!(_with_field_part_open(_interval_ms_candidate, order_node)::Bool)", bs_src)
+    @test !occursin(r"!_with_field_part_open\(_interval_ms_candidate, order_node\)", bs_src)
+    # The leaves infer `Bool`; `SQLField`'s and `FObject`'s recurse into an untyped slot, so they infer `Any` and return
+    # what a leaf returns.
+    for N in (String, QB.FExpression, QB.JoinedReference, QB.CTEReference, QB.SubqueryObject)
+      @test (N, Base.return_types(QB._interval_ms_candidate, (N,))) == (N, Any[Bool])
+    end
+  end
+
+  # What: `get_or_create`'s lookup values (#1599 layer 6), captured from the insert before any marshalling.
+  # Expected: filled key by key into a `Dict{String,Any}`; no `f => real_obj.insert[f]` generator is left.
+  # Why: the generator built a `Pair{String,T}` with `T` known only at run time; the trimmed `get_or_create` raised
+  #   `MethodError` calling `Pair` (a `UnionAll`) with `(String, Int64)`.
+  @testset "get_or_create captures its lookup values at their types (#1599 layer 6)" begin
+    ew_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_write.jl"), String)
+    @test !occursin("Dict{String,Any}(f => real_obj.insert[f] for f in target_fields)", ew_src)
+    @test occursin("target_values[f] = real_obj.insert[f]", ew_src)
+    # The hit's lookup filter: each pair built at its value's type, behind the walk.
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_filter_lookup!) && !occursin("    q.filter(f => v)\n  end\n  return q", ew_src)
+    isdefined(QB, :_filter_lookup!) &&
+      @test isempty(_dynamic_calls(QB._filter_lookup!, (QB.ObjectHandler, String, Any)))
+    # The miss's parameters: a variable of the closure's own, not the boxed `parameters` the show branch also assigns.
+    @test occursin("miss_params = get_parameter(connection)", ew_src) && occursin("miss_sql = build_insert(miss_params)", ew_src)
+    # The lookup's locking and read-back reads: decoded as read, into rows sized as `_row_to_field_keyed_dict` sized them.
+    @test occursin("rows = _read_back_rows(settings, sql, params, _FieldRowDecoder(model, connection; sized = true))", ew_src)
+    @test !occursin("lock = lock)...) |> Tables.rowtable", ew_src)
+    @test fieldtype(QB._FieldRowDecoder, :sized) === Bool
+    # PostgreSQL's miss: PormG's own pool decodes its `RETURNING` row as it is read (the trimmed Postgres.jl job stopped
+    # at `Tables.rowtable` there); another pool keeps the old read.
+    @test occursin("fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection; sized = true))", ew_src)
+    @test !occursin("      parameters = get_parameter(connection)\n      insert_sql = build_insert(parameters)\n      return _create_on_miss", ew_src)
+  end
+
+  # What: `first()` and `last()` on the untyped read (#1599 layer 6): the step that takes the first of their rows.
+  # Expected: `_first_of` takes the untyped read's rows, untyped, without a dynamic call.
+  # Why: `_first`'s rows come from `_list_owned`, whose result depends on `show_query`; a trimmed image compiles the
+  #   keyword body for any `show_query`, where the rows are untyped, and the trimmed `first()` raised
+  #   `MissingCodeError` at `isempty(::Vector{PormGRow})` inside `_first` until the rows were asserted at their type.
+  @testset "first() and last() take the untyped rows at their type (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_first_of)
+    isdefined(QB, :_first_of) && @test isempty(_dynamic_calls(QB._first_of, (Any, Val{:row})))
+  end
+
   # What: the full entry's `update` and `delete` (#1599 layer 7, #1694, after the write completed): the walls
   #   each verb hits in a trimmed image, one per commit. `update`'s query copy (`_mutation_copy`).
   # Expected: `update` builds from a shallow copy of the caller's query with `values` emptied and `filter` and
@@ -4303,12 +4423,12 @@ end
       # `_read_kind(original)` over a `FieldPart`) went when `_read_kind` declared its answer (#1599 round 8,
       # row 31).
       "get_select_query" => (0, 0),
-      # the ORDER BY term's interval render (`_render_interval_operand`): its closure captures
-      # `order_node`, a `FieldPart`, so the scope call is left unresolved (not attributed further; a
-      # `let` rebinding changes nothing). The term's plain render walks `order_node` before its closure
-      # is built, behind a `@noinline` barrier (`_render_order_term`, #1698 phase 2), so its scope calls
-      # are not in this function's code. The body is `_render_order_terms` since #1599 slice C.
-      "_render_order_terms" => (1, 0),
+      # the ORDER BY term's render: none left. Its interval render's closure captured `order_node`, a
+      # `FieldPart`, and its scope call was left unresolved until the term went to `_with_field_part_open`
+      # and a helper that builds the closure over the member (#1599 layer 6, `_interval_operand_scoped`).
+      # The term's plain render walks `order_node` behind a `@noinline` barrier (`_render_order_term`,
+      # #1698 phase 2). The body is `_render_order_terms` since #1599 slice C.
+      "_render_order_terms" => (0, 0),
     )
     for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
                      (QB._render_order_terms, (QB.OrderTermView, QB.SQLObjectQuery, QB.InstructionObject)))

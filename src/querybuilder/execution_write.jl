@@ -941,14 +941,27 @@ end
 function _create_on_miss(connection::PormGPostgres, settings, model, insert_sql, parameters, fetch_by_target,
                          target_fields)
   exec_sql = insert_sql * " RETURNING $(_returned_columns(model, connection));"
-  result = try
-    fetch(settings, exec_sql, parameters)
-  catch e
-    _rethrow_conflict_target_error(e, model, target_fields)
+  # #1599 layer 6: PormG's own pool decodes the returned row as it is read, into the row `_row_to_field_keyed_dict`
+  # built (`sized`), as `create`'s `RETURNING` does; `Tables.rowtable` decided its type at run time, and the trimmed
+  # Postgres.jl `get_or_create` stopped there on a miss. Any other pool (a test double whose `fetch` may take no
+  # `_decode`) reads as before.
+  dict = if settings.connections isa PostgresConnectionPool
+    returned = try
+      fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection; sized = true))::Vector{Dict{Symbol,Any}}
+    catch e
+      _rethrow_conflict_target_error(e, model, target_fields)
+    end
+    isempty(returned) ? nothing : returned[1]
+  else
+    result = try
+      fetch(settings, exec_sql, parameters)
+    catch e
+      _rethrow_conflict_target_error(e, model, target_fields)
+    end
+    rows = Tables.rowtable(result)
+    isempty(rows) ? nothing : _row_to_field_keyed_dict(Base.first(rows), model, connection)
   end
-  rows = Tables.rowtable(result)
-  if !isempty(rows)
-    dict = _row_to_field_keyed_dict(Base.first(rows), model, connection)
+  if dict !== nothing
     # No automatic sequence resync here (#358) — call resync_sequences(Model) explicitly if
     # this write supplied an explicit primary key.
     return (_owned_row(dict, model), true)

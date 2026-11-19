@@ -2832,6 +2832,9 @@ end
     @test occursin("rows = _read_back_rows(settings, sql, params, _FieldRowDecoder(model, connection; sized = true))", ew_src)
     @test !occursin("lock = lock)...) |> Tables.rowtable", ew_src)
     @test fieldtype(QB._FieldRowDecoder, :sized) === Bool
+    # PostgreSQL's miss: PormG's own pool decodes its `RETURNING` row as it is read (the trimmed Postgres.jl job stopped
+    # at `Tables.rowtable` there); another pool keeps the old read.
+    @test occursin("fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection; sized = true))", ew_src)
     @test !occursin("      parameters = get_parameter(connection)\n      insert_sql = build_insert(parameters)\n      return _create_on_miss", ew_src)
   end
 

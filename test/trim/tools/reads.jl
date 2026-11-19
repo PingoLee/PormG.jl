@@ -116,3 +116,47 @@ function expr_line(label::String, rows::Vector{RaceRow}, expected::String)::Bool
     say("expr", string(label, " ", length(rows), " rows: ", isempty(names) ? "none" : names))
     return names == expected
 end
+
+# The untyped read (#1599 layer 6): `first()` and `list()` with no type, and a `values(...)` projection, return
+# `PormGRow`s holding a `Dict{Symbol,Any}` whose cell types the statement decides. Each line shows the cells it checks
+# and, for `first()` and the projection, every key in the row's own iteration order with its value's type, so a binary
+# whose rows differ from the JIT control's in a key, its order or a type prints a different line. Exit code 17 when a
+# read raises or returns other rows. The results are asserted at the types the untyped terminals return
+# (`Union{Nothing,PormGRow}`, `Vector{PormGRow}`), as code in a trimmed image reads them: the terminals pick their
+# return by `show_query`, so the caller does not infer it.
+function untyped_step()::Bool
+    try
+        row = M.Race.objects.filter("name" => "Monaco Grand Prix").first()::Union{Nothing, PormGRow}
+        row === nothing && (say("untyped", "first none"); return false)
+        say("untyped", string("first ", cell_text(row[:name]), " round ", cell_text(row[:round]), " date ",
+                              cell_text(row[:date])))
+        say("untyped", string("first types ", row_types(row)))
+        rows = M.Race.objects.order_by("date").list()::Vector{PormGRow}
+        names = join([cell_text(r[:name]) for r in rows], ", ")
+        say("untyped", string("list ", length(rows), " rows: ", names))
+        vals = M.Race.objects.filter("round__@lt" => 10).values("name", "round").list()::Vector{PormGRow}
+        say("untyped", string("values ", length(vals), " rows: ", isempty(vals) ? "none" : row_types(vals[1]),
+                              isempty(vals) ? "" : string("; ", cell_text(vals[1][:name]), " ", cell_text(vals[1][:round]))))
+        return cell_text(row[:name]) == "Monaco Grand Prix" && cell_text(row[:round]) == "6" &&
+               names == "Monaco Grand Prix, Brazilian Grand Prix" &&
+               length(vals) == 1 && cell_text(vals[1][:name]) == "Monaco Grand Prix"
+    catch e
+        failed("untyped", e); return false
+    end
+end
+
+# A cell of an untyped row as text: its value for the types the steps check, its type's name otherwise. Every call is
+# made at a concrete type, so the fixture's own code adds no dynamic call to the read it measures.
+function cell_text(@nospecialize(v))::String
+    v isa String && return v
+    v isa Int64 && return string(v)
+    v isa Int32 && return string(v)
+    v isa Date && return string(v)
+    v isa Missing && return "missing"
+    return string("<", type_name(v), ">")
+end
+
+type_name(@nospecialize(v))::String = String((typeof(v)::DataType).name.name)
+
+# A row's keys in its own iteration order, each with its value's type: `name::String, round::Int64`.
+row_types(row::PormGRow)::String = join([string(k, "::", type_name(v)) for (k, v) in pairs(row)], ", ")

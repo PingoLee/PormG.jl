@@ -20,6 +20,7 @@ function (@main)(args::Vector{String})::Cint
     order_step() || return Cint(11)
     lookup_step() || return Cint(13)
     expr_step() || return Cint(14)
+    untyped_step() || return Cint(17)
     tasks && (reap_step() || return Cint(4))
     tasks && (close_step() || return Cint(5))
     elapsed_step(t0)

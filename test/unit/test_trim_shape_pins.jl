@@ -2760,6 +2760,17 @@ end
     @test !occursin("return _rows_from_result(result, _projection_parsers(built, connection))", er_src)
   end
 
+  # What: `first()` and `last()` on the untyped read (#1599 layer 6): the step that takes the first of their rows.
+  # Expected: `_first_of` takes the untyped read's rows, untyped, without a dynamic call.
+  # Why: `_first`'s rows come from `_list_owned`, whose result depends on `show_query`; a trimmed image compiles the
+  #   keyword body for any `show_query`, where the rows are untyped, and the trimmed `first()` raised
+  #   `MissingCodeError` at `isempty(::Vector{PormGRow})` inside `_first` until the rows were asserted at their type.
+  @testset "first() and last() take the untyped rows at their type (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_first_of)
+    isdefined(QB, :_first_of) && @test isempty(_dynamic_calls(QB._first_of, (Any, Val{:row})))
+  end
+
   # What: the full entry's `update` and `delete` (#1599 layer 7, #1694, after the write completed): the walls
   #   each verb hits in a trimmed image, one per commit. `update`'s query copy (`_mutation_copy`).
   # Expected: `update` builds from a shallow copy of the caller's query with `values` emptied and `filter` and

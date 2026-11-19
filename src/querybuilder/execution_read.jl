@@ -1799,8 +1799,15 @@ Base.@constprop :aggressive function _first(objct::SQLObjectHandler, format; sho
   if show_query !== :execute
     return res
   end
-  return isempty(res) ? nothing : res[1]
+  return _first_of(res, format)
 end
+# The first of a terminal's rows, or `nothing` (`first()`, `last()`). #1599 layer 6: `res` comes from a call whose
+# result depends on `show_query`, so where the keyword body is compiled for any `Symbol` (a `juliac --trim` image),
+# `res` is untyped there and `isempty(res)` was a run-time dispatch the image had no code for. The untyped read's rows
+# are asserted at their type first; a typed read's rows (`first(T)`) take the generic method, as before.
+_first_of(@nospecialize(res), ::Val{:row}) = (rows = res::Vector{PormGRow}; isempty(rows) ? nothing : rows[1])
+_first_of(res, format) = isempty(res) ? nothing : res[1]
+
 # NOTE (#200): the curried `first(; kwargs...) = (objct) -> first(objct; kwargs...)` form
 # was removed — a zero-positional method on Base.first with no PormG type is type piracy.
 # `q.first(...)`, `first(q; kw...)` and `q |> first` are unaffected. See the piracy guard in
@@ -1870,7 +1877,7 @@ Base.@constprop :aggressive function _last(objct::SQLObjectHandler, format; show
   if show_query !== :execute
     return res
   end
-  return isempty(res) ? nothing : res[1]
+  return _first_of(res, format)
 end
 
 # Shared body for earliest()/latest(): apply the (already-oriented) ordering fields, take one row,

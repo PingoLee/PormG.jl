@@ -2772,6 +2772,30 @@ end
     @test isempty(_dynamic_calls_kw(QB.list, (QB.ObjectHandler, Symbol)))   # the concrete handler a terminal holds
   end
 
+  # What: an ORDER BY term rendered in its interval form (#1599 layer 6): the term's operand and its NULL flag, each
+  #   rendered in the term's render scope.
+  # Expected: each is rendered through `_with_field_part_open`, with the term at its member's type, by a helper that
+  #   builds its closure over that concrete node and makes no dynamic call; no closure over the term's union-typed
+  #   slot is left at either site.
+  # Why: the closure over `order_node` (and `interval_node`) had a type with an unbound parameter, and the verifier
+  #   could not resolve the call that took it; the trimmed untyped `list()` with an `order_by` raised
+  #   `MissingCodeError` there, first in the keyword form and then in the positional one.
+  @testset "the ORDER BY interval form is rendered at the term's member type (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    bs_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "build_select.jl"), String)
+    @test occursin("_with_field_part_open(_interval_operand_scoped, order_node, instruc,", bs_src)
+    @test occursin("_with_field_part_open(_interval_ms_flag_scoped, interval_node, instruc,", bs_src)
+    @test !occursin("() -> _render_interval_operand(order_node, instruc)", bs_src)
+    @test !occursin("() -> first(_render_interval_ms(interval_node, instruc))", bs_src)
+    has = isdefined(QB, :_interval_operand_scoped) && isdefined(QB, :_interval_ms_flag_scoped)
+    @test has
+    if has
+      for f in (QB._interval_operand_scoped, QB._interval_ms_flag_scoped), N in (String, QB.FObject)
+        @test (f, N, _dynamic_calls(f, (N, QB.InstructionObject, QB.RenderScope))) == (f, N, String[])
+      end
+    end
+  end
+
   # What: `first()` and `last()` on the untyped read (#1599 layer 6): the step that takes the first of their rows.
   # Expected: `_first_of` takes the untyped read's rows, untyped, without a dynamic call.
   # Why: `_first`'s rows come from `_list_owned`, whose result depends on `show_query`; a trimmed image compiles the
@@ -4357,12 +4381,12 @@ end
       # `_read_kind(original)` over a `FieldPart`) went when `_read_kind` declared its answer (#1599 round 8,
       # row 31).
       "get_select_query" => (0, 0),
-      # the ORDER BY term's interval render (`_render_interval_operand`): its closure captures
-      # `order_node`, a `FieldPart`, so the scope call is left unresolved (not attributed further; a
-      # `let` rebinding changes nothing). The term's plain render walks `order_node` before its closure
-      # is built, behind a `@noinline` barrier (`_render_order_term`, #1698 phase 2), so its scope calls
-      # are not in this function's code. The body is `_render_order_terms` since #1599 slice C.
-      "_render_order_terms" => (1, 0),
+      # the ORDER BY term's render: none left. Its interval render's closure captured `order_node`, a
+      # `FieldPart`, and its scope call was left unresolved until the term went to `_with_field_part_open`
+      # and a helper that builds the closure over the member (#1599 layer 6, `_interval_operand_scoped`).
+      # The term's plain render walks `order_node` behind a `@noinline` barrier (`_render_order_term`,
+      # #1698 phase 2). The body is `_render_order_terms` since #1599 slice C.
+      "_render_order_terms" => (0, 0),
     )
     for (f, sig) in ((QB.get_select_query, (Vector{QB.ProjectionNode}, QB.InstructionObject)),
                      (QB._render_order_terms, (QB.OrderTermView, QB.SQLObjectQuery, QB.InstructionObject)))

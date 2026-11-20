@@ -12,6 +12,7 @@
 # at boot, and the read raises `PoolConnectError` under the JIT. Against a server seeded by `prep.jl`, the
 # read returns the Monaco race. Each step prints one line to `Core.stdout`, as in ../main.jl.
 using PormG, MySQL, Dates
+include(joinpath(@__DIR__, "..", "tools", "upstream_roots.jl"))
 # The render's run-time re-entry into a nested node finds code only where the build rooted it (#1599 layer 5).
 for (f, t) in PormG.QueryBuilder._trim_render_roots(); Base.Experimental.entrypoint(f, t); end
 

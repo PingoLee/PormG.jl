@@ -61,10 +61,10 @@ end
   # Expected: `_json_number_side(` appears outside `json_key_refusal.jl` only in the record writers
   # (two in `ctes.jl`, one in `projection_types.jl`). Why: a consumer that probes on its own decides
   # its own refusal, which is how the rule drifted one position at a time (#1531). A probe handed to a walk
-  # (`_with_field_part_open(_json_number_side, …)`, #1599 layer 5) is a call too, so both spellings count.
+  # (`_with_field_part_open(_json_number_side, …)`, #1599 layer 5) is a call too, so every use of the name counts.
   hits = Dict{String,Int}()
   for (rel, _, line) in _jkr_code_lines()
-    n = count(r"_json_number_side[(,]", line)
+    n = count(r"\b_json_number_side\b", line)
     n > 0 && (hits[rel] = get(hits, rel, 0) + n)
   end
   @test hits == Dict(joinpath("querybuilder", "ctes.jl") => 2,               # _record_cte_division!, _record_cte_json_key!

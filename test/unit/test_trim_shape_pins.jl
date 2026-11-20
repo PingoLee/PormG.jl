@@ -6525,6 +6525,14 @@ end
       @test (P, length(roots)) == (P, length(QB._trim_render_roots()) + 9)
       for (f, T) in roots
         @test (P, T, length(methods(f, Tuple{T...}))) == (P, T, 1)
+        # `Core.kwcall` has one method for any `NamedTuple`, so a keyword root is also checked against its target: one
+        # method for the positional arguments, declaring every keyword the root names.
+        f === Core.kwcall || continue
+        target = T[2].instance
+        m = only(methods(target, Tuple{T[3:end]...}))
+        @test (P, nameof(target), any(k -> endswith(string(k), "..."), Base.kwarg_decl(m))) == (P, nameof(target), false)
+        declared = Set(Base.kwarg_decl(m))
+        @test (P, nameof(target), setdiff(fieldnames(T[1]), declared)) == (P, nameof(target), Symbol[])
       end
     end
   end

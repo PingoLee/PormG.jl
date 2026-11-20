@@ -25,7 +25,7 @@
 using Test
 isdefined(Main, :SQLite) || include(joinpath(@__DIR__, "..", "load_drivers.jl"))
 using PormG
-using PormG.QueryBuilder: F, Case, When, Sum, Count, Max, Min, Upper, Coalesce, Value, Subquery, OuterRef, Q
+using PormG.QueryBuilder: F, Case, When, Sum, Count, Max, Min, Upper, Coalesce, Value, Subquery, OuterRef, Q, Cast
 using PormG.Kernel: CanonicalType
 
 const _RSQ_QB = PormG.QueryBuilder
@@ -48,6 +48,7 @@ Rsq_circuit::Models.ModelType = Models.Model("rsq_circuit",
   country   = Models.CharField(max_length = 80),
   lat       = Models.FloatField(null = true),
   alt       = Models.DecimalField(max_digits = 10, decimal_places = 2, null = true),
+  meta      = Models.JSONField(null = true),
 )
 Rsq_race::Models.ModelType = Models.Model("rsq_race",
   raceid    = Models.IDField(),
@@ -131,6 +132,31 @@ function _old_whole_numeric_fn(p, instruc)
   return nothing
 end
 
+# `_function_held_temporal` as it was: its operands gathered by splatting the untyped column.
+function _old_function_held_temporal(p, instruc)
+  rule = _RSQ_QB._result_rule(p)
+  if p isa _RSQ_QB.FObject && rule in (:declared, :one_of)
+    declared = _RSQ_QB._declared_cast(p)
+    declared isa AbstractString && !isempty(declared) && return nothing
+  end
+  operands = Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
+  default = p isa _RSQ_QB.WindowFunction ? get(p.kwargs, "default", nothing) : nothing
+  default === nothing || push!(operands, default isa AbstractString ? _RSQ_QB.SQLText(default) : default)
+  rule in (:operand, :promoting, :one_of) && return _RSQ_QB._first_held(operands, instruc)
+  rule === :first_operand && return _RSQ_QB._held_temporal(first(operands), instruc)
+  rule === :declared && p isa _RSQ_QB.FObject && p.function_name == "CASE" && return _RSQ_QB._first_held(_RSQ_QB._case_values(p), instruc)
+  return nothing
+end
+
+# A caller's own projection node and function types: PormG reads their slots as it did, through its open arms.
+struct RsqOwnFunction <: PormG.Kernel.SQLTypeFunction
+  function_name::String
+  aggregate::Bool
+end
+mutable struct RsqOwnField <: PormG.Kernel.SQLTypeField
+  field::Any
+end
+
 # The subquery readers as they were: the reader called on the projected expression's untyped field.
 function _old_sub_read(reader, h, inner, empty)
   vals = h.object.values
@@ -164,7 +190,7 @@ _old_projection_is_aggregate(v)::Bool =
 # instruction then holds, and every `Ref` the callback filled.
 function _rsq_scalar_run(conn, h, mk)
   outer = _rsq_outer(conn)
-  refs = (Base.RefValue{Any}(nothing), Base.RefValue{Any}(nothing), Base.RefValue{Any}(nothing),
+  refs = (Base.RefValue{Any}(nothing), Base.RefValue{Union{Nothing,Tuple{Symbol,String}}}(nothing), Base.RefValue{Any}(nothing),
           Base.RefValue{Union{Nothing,Tuple{String,String}}}(nothing), Base.RefValue{Any}(nothing), Base.RefValue{Bool}(false),
           Base.RefValue{Dict{Symbol,CanonicalType}}(Dict{Symbol,CanonicalType}()))
   sql = _RSQ_QB.query(h; table_alias = outer.table_alias, connection = outer.connection, parameters = outer.parameters,
@@ -184,7 +210,13 @@ end
 _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), "n" => Max(F("circuitid") + 1),
                          "n" => Upper("name"), "n" => Coalesce("name", "country"), "n" => Max("lat"), "n" => Sum("lat"),
                          "n" => Max("alt"), "n" => Min("alt"), "n" => Max(Upper("name")),
-                         "n" => Case(When("country" => "Monaco", then = 1), default = 0), "n" => Value("x")]
+                         "n" => Case(When("country" => "Monaco", then = 1), default = 0), "n" => Value("x"),
+                         # a slot each: a whole number a division splits, an uncast JSON key, a declaration an engine
+                         # leaves to the read path, a float's text
+                         "n" => Max(PormG.QueryBuilder.Floor("circuitid")), "n" => Sum("circuitid"), "n" => Max(F("circuitid") / 2),
+                         "n" => Sum(Value(nothing)), "n" => Sum(Case(When("country" => "Monaco", then = Value(nothing)), default = Value(nothing))),
+                         "n" => "meta__n", "n" => Cast("circuitid", "numeric(2,0)"), "n" => Cast("alt", "numeric(6,2)"),
+                         "n" => Coalesce("lat", 0)]
 
 @testset "Subquery reads in a trimmed build answer as before (#1599 layer 5)" begin
 
@@ -195,6 +227,7 @@ _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), 
   #   called dispatched at run time on the projected expression (the trimmed `Subquery(… Max("name"))` stopped at
   #   `_concat_textless_operand(::FObject, …)`).
   @testset "_ScalarSubqueryBuilt fills what the closure filled" begin
+    filled = falses(7)   # each `Ref` holds something other than its empty value for some shape, or its check is vacuous
     for conn in _RSQ_CONNS, (i, p) in enumerate(_rsq_projections()), correlated in (true, false)
       qs = correlated ? _RSQ_CIRCUIT.objects.filter("circuitid" => OuterRef("circuitid")) :
                         _RSQ_CIRCUIT.objects.filter("country" => "Brazil")
@@ -203,7 +236,13 @@ _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), 
       new = _rsq_outcome(() -> _rsq_scalar_run(conn, h, (h, refs...) -> _RSQ_QB._ScalarSubqueryBuilt(h, refs...)))
       @test (typeof(conn), i, correlated, new) == (typeof(conn), i, correlated, old)
       @test old[1] === :value   # each shape builds: a raise on both sides would compare equal and test nothing
+      if new[1] === :value
+        for (s, v) in enumerate(new[2][3:9])
+          filled[s] |= !(v === nothing || v === false || (v isa AbstractDict && isempty(v)))
+        end
+      end
     end
+    @test filled == trues(7)
   end
 
   # What: `__@in` a queryset's nested build with the callable struct, against the closure it replaces.
@@ -249,8 +288,7 @@ _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), 
   #   `_function_held_temporal` and `_whole_numeric_operand`), against the splat into `Any[…]` it replaces; and the
   #   readers over every function, `_whole_numeric_operand` and `_textless_number`'s weighing against old copies.
   # Expected: the same elements, by identity and in order, in a `Vector{Any}`, for one operand of each node type and for
-  #   a list of each element type; the two readers, whose only change is that gathering, return on every engine (what
-  #   they return is pinned by the textless and temporal suites).
+  #   a list of each element type; the readers answer what their old copies answered, on every engine.
   # Why: splatting the untyped column into `Any[…]` dispatched at run time, and the trimmed `Subquery(… Max("name"))`
   #   stopped at `getindex(::Type, ::String)`.
   @testset "a function's operands are gathered as the splat gathered them" begin
@@ -262,7 +300,7 @@ _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), 
       new = _RSQ_QB._append_operands!(Any[], c)
       @test (i, typeof(new), length(new), all(map(===, new, old))) == (i, Vector{Any}, length(old), true)
     end
-    fns = Any[Max("name"), Max("lap"), Max("date"), Coalesce("lap", "lap"), Coalesce("name", "round"), Coalesce(F("round"), 0),
+    fns = Any[Max("name"), Max("lap"), Max("date"), Coalesce("date", "date"), PormG.QueryBuilder.Lag("date"), Coalesce("lap", "lap"), Coalesce("name", "round"), Coalesce(F("round"), 0),
               Upper("name"), Sum("round"), Max(F("round") / 2), Max(F("round") / 2.0), Coalesce(Sum("round") / 2, 1.5),
               Max(Coalesce(F("round") / 2, 0)), PormG.QueryBuilder.Lag("round"),
               PormG.QueryBuilder.Lag("lap"; default = 3.5), PormG.QueryBuilder.Lag("round"; default = 3.5),
@@ -274,6 +312,8 @@ _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), 
         r = _rsq_outcome(() -> reader(p, instruc))
         @test (typeof(conn), i, nameof(reader), r[1]) == (typeof(conn), i, nameof(reader), :value)
       end
+      @test (typeof(conn), i, _rsq_outcome(() -> _RSQ_QB._function_held_temporal(p, instruc))) ==
+            (typeof(conn), i, _rsq_outcome(() -> _old_function_held_temporal(p, instruc)))
       @test (typeof(conn), i, _rsq_outcome(() -> _RSQ_QB._whole_numeric_operand(p, instruc))) ==
             (typeof(conn), i, _rsq_outcome(() -> _old_whole_numeric_fn(p, instruc)))
       # The operands' weighing, against the generator: the functions whose rule weighs their operands (a declared
@@ -312,14 +352,16 @@ _rsq_projections() = Any["name", "n" => Max("name"), "n" => Count("circuitid"), 
   end
 
   # What: the multi-row warning's aggregate test, against its `hasproperty` form.
-  # Expected: the same answer for every node shape a projection holds.
+  # Expected: the same answer for every node shape a projection holds, a caller's own node and function types included.
   # Why: `hasproperty`/`getproperty` over the abstract member dispatched at run time in a trimmed `Subquery(...)`'s
   #   multi-row warning.
   @testset "the multi-row warning's aggregate test answers as before" begin
     nodes = Any[only(_RSQ_RACE.objects.values(p).object.values)
                 for p in Any["name", "n" => Max("name"), "n" => Count("raceid"), "n" => Upper("name"), "n" => F("round") + 1,
                              "n" => PormG.QueryBuilder.Lag("round"), "n" => PormG.QueryBuilder.Rank(), "n" => Value("x")]]
-    append!(nodes, Any["name", 7, nothing, Max("name")])
+    append!(nodes, Any["name", 7, nothing, Max("name"),
+                       _RSQ_QB.SQLField(RsqOwnFunction("MYAGG", true)), _RSQ_QB.SQLField(RsqOwnFunction("MYFN", false)),
+                       RsqOwnField(RsqOwnFunction("MYAGG", true)), RsqOwnField(Max("name")), RsqOwnField("name")])
     for (i, v) in enumerate(nodes)
       @test (i, _RSQ_QB._projection_is_aggregate(v)) == (i, _old_projection_is_aggregate(v))
     end

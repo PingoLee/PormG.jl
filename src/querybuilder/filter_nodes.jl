@@ -37,7 +37,7 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   # one clause-ordered run in the ambient bucket.
   nested_mark = nested_parameter_mark(instruc)
   inner_formatter = Ref{Any}(nothing)
-  inner_textless = Ref{Any}(nothing)
+  inner_textless = Base.RefValue{Union{Nothing,Tuple{Symbol,String}}}(nothing)   # `_concat_textless_operand`'s declared result
   inner_whole_numeric = Ref{Any}(nothing)
   inner_json_key = Base.RefValue{Union{Nothing,Tuple{String,String}}}(nothing)   # #1346: typed, unlike its older neighbours
   inner_kind = Ref{Any}(nothing)
@@ -79,7 +79,7 @@ end
 struct _ScalarSubqueryBuilt{H<:SQLObjectHandler} <: Function
   handler::H
   formatter::Base.RefValue{Any}
-  textless::Base.RefValue{Any}
+  textless::Base.RefValue{Union{Nothing,Tuple{Symbol,String}}}
   whole_numeric::Base.RefValue{Any}
   json_key::Base.RefValue{Union{Nothing,Tuple{String,String}}}
   kind::Base.RefValue{Any}

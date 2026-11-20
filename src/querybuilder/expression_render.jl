@@ -1020,6 +1020,27 @@ function _render_interval_operand(node, instruc::SQLInstruction;
   return sql, ms, interval
 end
 
+# The run-time calls a function's render makes over its column, held untyped (`_render_function_body`'s
+# `_render_interval_operand(v.column, …; _as)`, `_get_select_query_at`'s open arm, and its option loop's
+# `_get_select_query(val, instruc)` for a `When`'s `then`), as the signatures a trimmed build roots with
+# `Base.Experimental.entrypoint`, so each call finds code (#1599 layer 5). `Abs(F("round") - 10)` stopped at
+# `kwcall((_as = "d",), _render_interval_operand, ::FExpression, …)`, `Sum("round")` at the column name's. They stay
+# run-time calls: a static call over the column (an `isa` walk, a column name included, since `"date__@year"` renders
+# a function too) closes the render's recursion, which inference limits, and a limited cycle keeps no code for any of
+# its frames (`Core.MissingCodeError` on reads that ran before, measured on this slice). A root is inferred on its
+# own, outside that cycle.
+_trim_render_roots() = (
+  Tuple((Core.kwcall, (NamedTuple{(:_as,),Tuple{A}}, typeof(f), N, InstructionObject))
+        for f in (_get_select_query, _render_interval_operand) for N in (String, SQLText, SQLField, FExpression, FObject)
+        for A in (Nothing, String))...,
+  # A `When`'s `then`/`else` held in its options (`_render_function_body`'s keyword loop: `then = F("round")`).
+  Tuple((_get_select_query, (N, InstructionObject)) for N in (FExpression, FObject))...,
+  # A `Case`'s branch in an aliased projection (`values("c" => Case(When(…, then = F("round")), default = 0))`): reached
+  # from inside the function's own render, so its inference ran in that render's limited cycle.
+  Tuple((Core.kwcall, (NamedTuple{(:_as,),Tuple{A}}, typeof(_render_case_branch), FObject, InstructionObject))
+        for A in (Nothing, String))...,
+)
+
 # #894 — whether a projection's source can have a millisecond form, decided WITHOUT rendering it. The
 # caller already knows the projection is an interval (its recorded kind is `CInterval`); this rules
 # out only the shapes `_render_interval_ms` would hand back as text anyway, so their ORDER BY and
@@ -1032,12 +1053,12 @@ _interval_ms_candidate(r::CTEReference) = _is_bare_column(r)   # #1285: ordering
 _interval_ms_candidate(::SubqueryObject) = true                 # #1287: its text, parsed once
 function _interval_ms_candidate(p::FObject)
   if p.function_name in _INTERVAL_MS_AGGREGATES
-    return !(p.column isa AbstractVector) && _interval_ms_candidate(p.column)
+    return !(p.column isa AbstractVector) && _interval_ms_candidate_at(p.column)
   elseif p.function_name in _INTERVAL_MS_VARIADIC
     # A declared `output_field` is a cast (#852) the milliseconds would have to go through: keep it.
     declared = get(p.kwargs, "output_field", nothing)
     return p.column isa AbstractVector && (declared === nothing || declared == "") &&
-           all(x -> _is_null_operand(x) || _interval_ms_candidate(x), p.column)
+           all(x -> _is_null_operand(x) || _interval_ms_candidate_at(x), p.column)
   end
   return false
 end
@@ -1046,6 +1067,21 @@ end
 # answers (`_stores_interval_as_units`).
 _interval_ms_candidate(p::SQLText) = _duration_literal_units(p.field, 1_000_000) !== nothing   # #907
 _interval_ms_candidate(::Any) = false
+# `_interval_ms_candidate(c)` for a function's column held untyped (#1599 layer 5): one arm per method above, each
+# call static; anything else is the `::Any` method's `false`. Over the untyped column the call dispatched at run time,
+# and the trimmed `Sum("round")` stopped at `_interval_ms_candidate(::String)`. `test_read_functions_trim_1599.jl`
+# checks the walk against the methods.
+function _interval_ms_candidate_at(@nospecialize(c))::Bool
+  c isa String && return _interval_ms_candidate(c)
+  c isa FExpression && return _interval_ms_candidate(c)
+  c isa SQLField && return _interval_ms_candidate(c)
+  c isa SQLText && return _interval_ms_candidate(c)
+  c isa FObject && return _interval_ms_candidate(c)
+  c isa JoinedReference && return _interval_ms_candidate(c)
+  c isa CTEReference && return _interval_ms_candidate(c)
+  c isa SubqueryObject && return _interval_ms_candidate(c)
+  return false
+end
 
 # #907 — a duration literal's exact number of `unit`s (nanoseconds per unit, `_interval_unit_ns`), or
 # `nothing`: a value that is not a duration, a month or a year (no fixed length), or one with a

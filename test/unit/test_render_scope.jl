@@ -76,10 +76,11 @@ const RSCOPE_WRITE = r"\.scope\s*=(?!=)|set(field|property)!\s*\([^,]+,\s*:scope
 # another write added to `types.jl` is still caught. Two methods, not one shared body (#1728): a shared
 # helper would be re-entered across the clause/render boundary again, which #1728 removes there.
 # `_with_render_scope` has a second method, taking a scope its caller built (#1599 layer 5): two more.
+# `_render_function_body_row` is the aggregate's row phase without a closure (#1599 layer 5): two more.
 const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc.scope = prev",
-                            "instruc.scope = scope"])
+                            "instruc.scope = scope", "instruc.scope = _with_scope(prev; phase = :row)"])
 
-@testset "RenderScope: only with_scope and _with_render_scope write the scope (#932, #1728)" begin
+@testset "RenderScope: only with_scope, _with_render_scope and _render_function_body_row write the scope (#932, #1728)" begin
     offenders = Tuple{String,Int,String}[]
     allowed_hits = 0
     for dir in (joinpath(RSCOPE_REPO_ROOT, "src"), joinpath(RSCOPE_REPO_ROOT, "ext"))
@@ -99,8 +100,8 @@ const RSCOPE_ALLOWED = Set(["instruc.scope = _with_scope(prev; kw...)", "instruc
                "the previous scope is restored." offenders
     @test isempty(offenders)
     # The allow-list must still match the real code: if either method is rewritten, the pinned
-    # expressions stop matching and this scan would pass vacuously. Two writes in each of the three methods.
-    @test allowed_hits == 6
+    # expressions stop matching and this scan would pass vacuously. Two writes in each of the four methods.
+    @test allowed_hits == 8
 end
 
 @testset "RenderScope: the retired flags stay retired (#932)" begin

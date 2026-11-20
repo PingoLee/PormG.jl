@@ -1040,6 +1040,34 @@ _trim_render_roots() = (
   Tuple((Core.kwcall, (NamedTuple{(:_as,),Tuple{A}}, typeof(_render_case_branch), FObject, InstructionObject))
         for A in (Nothing, String))...,
 )
+# The nested builds a scalar `Subquery`, `__@in` a queryset and `Exists` open from inside the render, for a pool type
+# `P` (their keyword calls carry the pool and its parameter collector): `query()` with each `built` callback
+# (`filter_nodes.jl`) and `Exists`' `build()`, with and without a CTE state. Reached from inside the function's render,
+# their inference ran in its limited cycle (#1599 layer 5).
+function _trim_render_roots(::Type{P}) where {P<:_SQLEngine}
+  Q = Base.promote_op(get_parameter, P)
+  sub = (Core.kwcall, (NamedTuple{(:table_alias, :connection, :parameters, :outer, :built),
+                                  Tuple{SQLTbAlias, P, Q, InstructionObject, _ScalarSubqueryBuilt{ObjectHandler}}},
+                       typeof(query), ObjectHandler))
+  mem = (Core.kwcall, (NamedTuple{(:table_alias, :connection, :parameters, :outer, :semi_join, :built),
+                                  Tuple{SQLTbAlias, P, Q, InstructionObject, Bool, _MembershipBuilt{ObjectHandler}}},
+                       typeof(query), ObjectHandler))
+  exists = Tuple((Core.kwcall, (NamedTuple{(:table_alias, :connection, :parameters, :outer, :cte_state, :semi_join, :declared_paths),
+                                           Tuple{SQLTbAlias, P, Q, InstructionObject, C, Bool, Vector{String}}},
+                                typeof(build), SQLObjectQuery))
+                 for C in (Nothing, Dict{String,CTEState}))
+  # `query()`'s own keyword call into `_render_select`, with each callback.
+  render = Tuple((Core.kwcall, (NamedTuple{(:table_alias, :connection, :parameters, :outer, :show_query, :built, :semi_join, :cte_body, :cte_body_correlated),
+                                           Tuple{SQLTbAlias, P, Q, InstructionObject, Symbol, B, Bool, String, Bool}},
+                                typeof(_render_select), ObjectHandler))
+                 for B in (_ScalarSubqueryBuilt{ObjectHandler}, _MembershipBuilt{ObjectHandler}))
+  # `Exists`' own render and the WHERE node that holds it, reached from inside the render the same way.
+  exists_nodes = ((_build_exists_query, (ObjectHandler, InstructionObject)), (_where_node!, (ExistsObject, InstructionObject)))
+  # `Exists`' own WITH clause (`build_cte_clause(…; correlated = true)`).
+  cte = (Core.kwcall, (NamedTuple{(:correlated,), Tuple{Bool}}, typeof(build_cte_clause),
+                       OrderedCollections.OrderedDict{String,CTEDict}, P, Q, SQLTbAlias))
+  return (_trim_render_roots()..., sub, mem, exists..., render..., exists_nodes..., cte)
+end
 
 # #894 — whether a projection's source can have a millisecond form, decided WITHOUT rendering it. The
 # caller already knows the projection is an interval (its recorded kind is `CInterval`); this rules

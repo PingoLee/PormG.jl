@@ -1571,9 +1571,16 @@ end
 # (`["CTEVAL", "INNERVAL", "A"]` against a text order of `A, CTEVAL, INNERVAL`); `test_nested_cte_guard.jl`
 # pins every shape in text order on PostgreSQL, SQLite and MySQL.
 
-_projection_is_aggregate(v)::Bool =
-  v isa SQLTypeField && v.field isa SQLTypeFunction &&
-  hasproperty(v.field, :aggregate) && getproperty(v.field, :aggregate) === true
+# #1599 layer 5: the field read at the concrete node types (`SQLField` is the only `SQLTypeField`; `FObject` and
+# `WindowFunction` the only `SQLTypeFunction`s, each with an `aggregate` field); `hasproperty`/`getproperty` over the
+# abstract field dispatched at run time in a trimmed `Subquery(...)`'s multi-row warning.
+function _projection_is_aggregate(v)::Bool
+  v isa SQLField || return false
+  f = v.field
+  f isa FObject && return f.aggregate === true
+  f isa WindowFunction && return f.aggregate === true
+  return false
+end
 
 # Soft heads-up: a non-aggregate scalar subquery with no LIMIT may match >1 row and error at the DB.
 function _warn_if_possible_multirow(handler::SQLObjectHandler)

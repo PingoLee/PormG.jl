@@ -2978,3 +2978,28 @@ mutable struct DeletionCollector{T}
     skip_self_cascade
   )
 end
+
+# An `OuterRef`'s column rendered in the outer statement (#985, #1002), under the `:outer_ref` introducer and, inside an
+# ON clause, the join's right side, as `_with_render_scope(() -> _on_join_right(() -> _get_filter_query(column, instruc),
+# instruc), instruc; introducer = :outer_ref)` rendered it, with no closure (#1599 layer 5): through the helpers each
+# closure re-entered them from inside the render's own scopes, calls inference limits, and the trimmed
+# `Exists(… OuterRef("circuitid") …)` stopped in type inference of `_on_join_right`. The same scopes in the same order,
+# each restored on the way out.
+function _render_outer_ref_column(column::String, instruc::InstructionObject)
+  prev = instruc.scope
+  instruc.scope = _with_scope(prev; introducer = :outer_ref)
+  try
+    side = _join_side_change(instruc, :right)
+    side === nothing && return _get_filter_query(column, instruc)
+    prev2 = instruc.scope
+    instruc.scope = _with_scope(prev2; join_side = side)
+    try
+      return _get_filter_query(column, instruc)
+    finally
+      instruc.scope = prev2
+    end
+  finally
+    instruc.scope = prev
+  end
+end
+

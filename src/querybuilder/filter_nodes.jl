@@ -19,7 +19,7 @@ end
 function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::String
   # #1624: rendered as it is, with no copy — the build writes nothing into the handler it renders. It
   # used to copy here because `query()` wrote the parameters and the projection kinds back into it.
-  handler = v.query
+  handler = v.query::ObjectHandler   # #1599 layer 5: the one concrete handler type, so the calls on it are static
 
   # Exactly one projected column (reuse the @in one-column rule).
   labels = _subquery_projection_labels(handler)
@@ -48,13 +48,8 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
                     connection=instruc.connection,
                     parameters=instruc.parameters,
                     outer=instruc,
-                    built = inner -> (inner_formatter[] = _subquery_projection_formatter(handler, inner);
-                                      inner_textless[] = _subquery_projection_textless(handler, inner);
-                                      inner_whole_numeric[] = _subquery_projection_whole_numeric(handler, inner);
-                                      inner_json_key[] = _subquery_projection_json_key(handler, inner);
-                                      inner_kind[] = _subquery_projection_kind(handler, inner);
-                                      inner_unapplied[] = _subquery_projection_unapplied(handler, inner);
-                                      inner_projection_kinds[] = inner.projection_kinds))
+                    built = _ScalarSubqueryBuilt(handler, inner_formatter, inner_textless, inner_whole_numeric,
+                                                 inner_json_key, inner_kind, inner_unapplied, inner_projection_kinds))
   reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
   # #888: the inner build typed its one column (its instruction's `projection_kinds`, read through the
   # `built` window above), so the value this text returns has that kind. File it under the node the
@@ -75,6 +70,36 @@ function _render_scalar_subquery(v::SubqueryObject, instruc::SQLInstruction)::St
   _record_subquery_unapplied!(instruc, v, inner_unapplied[])
   return string("(", inner_sql, ")")
 end
+
+# #1599 layer 5 — the `built` callbacks a scalar `Subquery` and `__@in` a queryset hand their nested `query()`, as
+# callable structs rather than closures: the same reads into the same `Ref`s, in the same order. A closure's type is
+# anonymous, so the nested build's keyword call, which inference limits inside the render's recursion and a trimmed
+# image then has no code for (the trimmed `"circuitid__@in" => queryset` stopped there), could not be named to be
+# rooted; a struct's can (`_trim_render_roots(P)`).
+struct _ScalarSubqueryBuilt{H<:SQLObjectHandler} <: Function
+  handler::H
+  formatter::Base.RefValue{Any}
+  textless::Base.RefValue{Any}
+  whole_numeric::Base.RefValue{Any}
+  json_key::Base.RefValue{Union{Nothing,Tuple{String,String}}}
+  kind::Base.RefValue{Any}
+  unapplied::Base.RefValue{Bool}
+  projection_kinds::Base.RefValue{Dict{Symbol,CanonicalType}}
+end
+function (b::_ScalarSubqueryBuilt)(inner)
+  b.formatter[] = _subquery_projection_formatter(b.handler, inner)
+  b.textless[] = _subquery_projection_textless(b.handler, inner)
+  b.whole_numeric[] = _subquery_projection_whole_numeric(b.handler, inner)
+  b.json_key[] = _subquery_projection_json_key(b.handler, inner)
+  b.kind[] = _subquery_projection_kind(b.handler, inner)
+  b.unapplied[] = _subquery_projection_unapplied(b.handler, inner)
+  return b.projection_kinds[] = inner.projection_kinds
+end
+struct _MembershipBuilt{H<:SQLObjectHandler} <: Function
+  rhs::H
+  kind::Base.RefValue{Any}
+end
+(b::_MembershipBuilt)(inner) = (b.kind[] = _subquery_projection_kind(b.rhs, inner))
 
 function _resolve_outer_ref_field_name(ref::OuterRefObject, outer::SQLInstruction)::String
   if ref.field_name == "pk"
@@ -112,8 +137,11 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
   # `q.object.ctes`), and `build()` resolves `<cte>__col` through that. Its values bind under a scoped
   # `:cte` bucket, so the run detached below lifts them first — where the `WITH` text sits (#432).
   # Until #1523 this renderer emitted no `WITH`, and `Exists` refused such a subquery (#433).
+  # #1599 layer 5: both results asserted at their declared types: the calls take the instruction's abstract slots, so
+  # they dispatch, and an untyped result made every later call on `instruction` dispatch too (the trimmed
+  # `Exists(…)` stopped at `_refuse_degenerate_probe`).
   with_clause, cte_state = build_cte_clause(q.object.ctes, instruc.connection, instruc.parameters, instruc.table_alias;
-                                           correlated = true)
+                                           correlated = true)::Tuple{String,Union{Nothing,Dict{String,CTEState}}}
   instruction = build(
     q.object,
     table_alias=instruc.table_alias,
@@ -125,7 +153,7 @@ function _build_exists_query(subquery::SQLObjectHandler, instruc::SQLInstruction
     # them. A projection cleared above still declares its joins.
     semi_join = offset == 0,
     declared_paths = keep_values ? String[] : _projected_paths(subquery.object.values),
-  )
+  )::InstructionObject
   _refuse_degenerate_probe(instruction, keep_values, "Exists(...)")
   # Bound before the run is detached, so the OFFSET value travels with the rest of this subquery's
   # values — under `:limit`, the last role, which is where its text sits inside the parentheses.
@@ -304,13 +332,16 @@ function _outer_ref_unresolved_label(field_name::AbstractString, cte_name::Abstr
 end
 function _get_filter_query(v::OuterRefObject, instruc::SQLInstruction)
   instruc.outer === nothing && throw(QueryBuildError(_outer_ref_unresolved_label(v.field_name, instruc.cte_body, instruc.cte_body_correlated)))
-  outer = instruc.outer
+  # #1599 layer 5: at the one concrete instruction type (the slot is typed by the abstract `SQLInstruction`), so the
+  # resolution and the scoped render below are static; over the abstract type each dispatched at run time, and the
+  # trimmed `Exists(… OuterRef("circuitid") …)` stopped at `_resolve_outer_ref_field_name`.
+  outer = instruc.outer::InstructionObject
   column = _resolve_outer_ref_field_name(v, outer)
   # #985: an `OuterRef` resolves in the outer statement, so inside an ON clause it is checked there as
   # a right-side column — whichever side of its comparison the subquery sits on (#962's rule). The
   # subquery's own columns render on its own instruction, outside the ON clause's scope.
   # #1002: a `__` path here joins the OUTER query to evaluate a correlation — not a join it asked for.
-  sql = _with_render_scope(() -> _on_join_right(() -> _get_filter_query(column, outer), outer), outer; introducer = :outer_ref)
+  sql = _render_outer_ref_column(column, outer)   # #1599 layer 5: the two scopes closure-free (`types.jl`)
   # #194: this is the ONE place an OuterRef becomes SQL — `_resolve_outer_ref_field_name` has a
   # single caller and `_get_select_query(::OuterRefObject)` delegates straight here — so recording
   # the reference here cannot miss one that renders. Resolving against `outer` is also what makes
@@ -1705,7 +1736,7 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     correlated_before = _lazy_length(instruc.outer_refs)
     placeholders = query(rhs_qs, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
                          semi_join = !_is_sliced(getfield(rhs_qs, :object)),
-                         built = inner -> (inner_kind[] = _subquery_projection_kind(rhs_qs, inner)))
+                         built = _MembershipBuilt(rhs_qs, inner_kind))
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     # Where an interval is its integer (MySQL), membership of an interval column in a queryset of
     # numbers, or of a number in a queryset of intervals, compares a count with microseconds. A column

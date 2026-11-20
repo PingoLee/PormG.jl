@@ -383,11 +383,10 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
     formatter === nothing || return formatter
   end
   if _result_rule(p) in (:operand, :one_of, :first_operand)
-    for operand in (p.column isa AbstractVector ? p.column : (p.column,))
-      formatter = _expression_formatter_at(operand, instruc)
-      # `Max`/`Min` of a part is still that part; a `Coalesce` may be its fallback (`0`, `"n/a"`).
-      formatter === nothing || return name in ("MAX", "MIN") ? formatter : _unranged(formatter)
-    end
+    col = p.column
+    formatter = col isa AbstractVector ? _first_operand_formatter(col, instruc) : _expression_formatter_at(col, instruc)
+    # `Max`/`Min` of a part is still that part; a `Coalesce` may be its fallback (`0`, `"n/a"`).
+    formatter === nothing || return name in ("MAX", "MIN") ? formatter : _unranged(formatter)
     return nothing
   end
   formatter = _kind_formatter_at(_expression_kind(p, instruc), instruc)
@@ -438,6 +437,23 @@ function _expression_formatter_at(@nospecialize(x), instruc::SQLInstruction)
   return nothing
 end
 
+# The first formatter a function's operands name, in order (`_expression_formatter_at` over each), for a column held
+# untyped that is a list of operands (#1599 layer 5). The function's single operand is not wrapped in a tuple to be
+# iterated, as it was: over the untyped column that iteration dispatched at run time, and the trimmed
+# `Subquery(… .values("n" => Max("name")))` stopped at `iterate(::Tuple{String})`. One method for every list, its
+# element types walked by `isa`, so the walk re-enters the formatter with one specialization.
+@noinline function _first_operand_formatter(@nospecialize(col::AbstractVector), instruc::SQLInstruction)
+  if col isa Vector{Any}
+    for o in col; f = _expression_formatter_at(o, instruc); f === nothing || return f; end
+  elseif col isa Vector{String}
+    for o in col; f = _expression_formatter(o, instruc); f === nothing || return f; end
+  elseif col isa Vector{FObject}
+    for o in col; f = _expression_formatter(o, instruc); f === nothing || return f; end
+  else
+    for o in col; f = _expression_formatter_at(o, instruc); f === nothing || return f; end
+  end
+  return nothing
+end
 
 # #965 — whether a value is a boolean only when ALL of its candidate values are: a `Bool` literal, or
 # an expression `_expression_formatter` types as one. A NULL is no value and is skipped; NULLs alone
@@ -580,7 +596,9 @@ end
 # the expression means, and the other answer is still what the value is — an interval cast to a
 # number is still refused on SQLite (#1259). Otherwise the first answer, so a message names what it
 # always named.
-function _division_first(answers, conn)::Union{Tuple{Symbol,String},Nothing}
+# `conn` unspecialized (#1599 layer 5): its slot is a union of the abstract engines, so a call compiled per engine
+# dispatched at run time; one method, read only by the engine fact below.
+function _division_first(answers, @nospecialize(conn))::Union{Tuple{Symbol,String},Nothing}
   found, division = nothing, nothing
   for answer in answers
     answer === nothing && continue
@@ -1614,7 +1632,10 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
   # with an integer and a float branch, a window's fractional `default` — was SQLite's departure until
   # #1150: the walk names it a float, which SQLite now divides as REAL, `_division_sql`.)
   _result_rule(p) in _OPERAND_TYPED_RULES || return nothing
-  for operand in (p.column isa AbstractVector ? p.column : (p.column,))
+  # #1599 layer 5: the operands gathered at the column's type and each read at its member's type; over the untyped
+  # column wrapped as `(p.column,)` the iteration dispatched at run time, and the trimmed `Subquery(… Max("name"))`
+  # stopped at `iterate(::Tuple{String})`.
+  for operand in _append_operands!(Any[], p.column)
     # #1147 step 2: a `Sum` the walk names a `bigint` renders `::bigint` on PostgreSQL
     # (`_sums_bigint`), an integer on both engines. #1157: one the walk names another kind is that
     # kind's sum (a `float8`, a `numeric`), no integer quotient. One it cannot type at all may be a
@@ -1624,7 +1645,7 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
     # arithmetic is no such sum: the walk types it since #1034 step 5a, an interval, no integer quotient.
     side = name == "SUM" && _infer_kind_any(operand, instruc, _AllKinds()) === nothing ?
            (:numeric_whole_division, "a value PormG cannot type") : nothing
-    side === nothing && (side = _whole_numeric_operand(operand, instruc))
+    side === nothing && (side = _with_field_part_open(_whole_numeric_operand, operand, instruc))
     side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
   end
   return nothing
@@ -1731,13 +1752,22 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   # its values too (#1147 step 2, `_with_window_default`): `Lag("number"; default = 3.5)` is a float.
   # `NullIf(a, b)` is `a` (its `:first_operand` rule): PostgreSQL's promotion to `b`'s type is cast
   # back to `a`'s (#1150, `Dialect.NULLIF`), so `NullIf("number", 0.5)` is the integer on both engines.
-  operands = rule === :first_operand ? Any[_first_operand(p)] : Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
+  # #1599 layer 5: the operands gathered at the column's type (`_append_operands!`); splatting the untyped column into
+  # `Any[…]` dispatched at run time, and the trimmed `Subquery(… Max("name"))` stopped at `getindex(::Type, ::String)`.
+  operands = rule === :first_operand ? Any[_first_operand(p)] : _append_operands!(Any[], p.column)
   if p isa WindowFunction
     default = get(p.kwargs, "default", nothing)
     literal = default isa SQLText ? default.field : default
     (literal === nothing || literal isa AbstractString || _is_null_literal(literal)) || push!(operands, default)
   end
-  side = _division_first((_concat_textless_operand(operand, instruc) for operand in operands), instruc.connection)
+  # #1599 layer 5: every operand's answer at its member's type, in order, before they are weighed (`_division_first` asks
+  # every one anyway); a generator over the untyped operands left the weighing to run time, and the trimmed
+  # `Subquery(… Max("name"))` stopped in type inference of `_division_first(::Generator, …)`.
+  answers = Union{Nothing,Tuple{Symbol,String}}[]
+  for operand in operands
+    push!(answers, _with_field_part_open(_concat_textless_operand, operand, instruc))
+  end
+  side = _division_first(answers, instruc.connection)
   return side === nothing ? nothing : (side[1], "`$(name)(…)` over $(side[2])")
 end
 # #1034 — the leaf for a function no rule above answers: a float or a decimal with places, as the walk
@@ -1812,7 +1842,7 @@ function _subquery_projection_textless(handler::SQLObjectHandler, inner::SQLInst
   vals = handler.object.values
   length(vals) == 1 || return nothing
   v = only(vals)
-  return _concat_textless_operand(v isa SQLText ? v : v.field, inner)
+  return _with_field_part_open(_concat_textless_operand, v isa SQLText ? v : v.field, inner)
 end
 function _record_subquery_textless!(instruc::SQLInstruction, p::SubqueryObject, side)
   side isa Tuple{Symbol,String} || return nothing
@@ -1826,14 +1856,14 @@ function _subquery_projection_whole_numeric(handler::SQLObjectHandler, inner::SQ
   vals = handler.object.values
   length(vals) == 1 || return nothing
   v = only(vals)
-  return _whole_numeric_operand(v isa SQLText ? v : v.field, inner)
+  return _with_field_part_open(_whole_numeric_operand, v isa SQLText ? v : v.field, inner)
 end
 # #1482 — and whether the same expression carries an uncast JSON key (`_json_number_side`).
 function _subquery_projection_json_key(handler::SQLObjectHandler, inner::SQLInstruction)
   vals = handler.object.values
   length(vals) == 1 || return nothing
   v = only(vals)
-  return _json_number_side(v isa SQLText ? v : v.field, inner)
+  return _with_field_part_open(_json_number_side, v isa SQLText ? v : v.field, inner)
 end
 function _record_subquery_json_key!(instruc::SQLInstruction, p::SubqueryObject, side)
   side isa Tuple{String,String} || return nothing

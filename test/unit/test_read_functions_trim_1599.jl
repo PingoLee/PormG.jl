@@ -200,6 +200,20 @@ function _old_temporal_mix_values(p)
              if !_RFN_QB._is_null_literal(v isa _RFN_QB.SQLText ? v.field : v)]
 end
 
+# `Round`'s precision checks as they were, inline in `_render_function_body` before this slice.
+function _old_check_round_precision(v, digits, instruc)
+  if digits isa Integer && digits < 0 && !PormG.Dialect._supports_at(instruc.connection, :negative_round_precision)
+    throw(PormG.Dialect._capability_error_at(instruc.connection, :negative_round_precision, "\e[31mRound(…, $(digits))\e[0m",
+      "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
+  end
+  if digits isa Integer && digits != 0
+    divergent = _RFN_QB._scale_divergent_operand(v.column, digits > 0 ? Int(digits) : typemax(Int), instruc)
+    divergent !== nothing && divergent[1] === :text && !_RFN_QB._non_number_operand(v.column, instruc) &&
+      throw(_RFN_QB._round_text_refusal(digits, divergent[2]))
+  end
+  return nothing
+end
+
 function _old_check_operand_domain(p, instruc)
   domain = _RFN_QB._operand_domain(p)
   domain === nothing && return nothing
@@ -321,7 +335,8 @@ const _RFN_KINDS = Any[nothing, CInt16(), CInt32(), CInt64(), CFloat64(), CDecim
   @testset "_expression_formatter_at answers what the methods answered" begin
     operands = Any["round", "name", "lap", "Tb.round", F("round"), F("round") + 1, F("lap") + F("lap"), Abs("round"),
                    Sum("round"), Max("name"), Coalesce("lap", "lap"), Upper("name"), Case(When("round__@lt" => 10, then = 1), default = 0),
-                   PormG.QueryBuilder.Q("round__@lt" => 10), 7, nothing, Any["round"]]
+                   PormG.QueryBuilder.Q("round__@lt" => 10), 7, nothing, Any["round"],
+                   PormG.QueryBuilder.Lag("round"), PormG.QueryBuilder.Rank()]
     for conn in _RFN_CONNS, (i, x) in enumerate(operands)
       instruc = _rfn_instruc(conn)
       old = _rfn_outcome(() -> _RFN_QB._expression_formatter(x, instruc))
@@ -333,8 +348,10 @@ const _RFN_KINDS = Any[nothing, CInt16(), CInt32(), CInt64(), CFloat64(), CDecim
       T = Base.unwrap_unionall(m.sig).parameters[2]
       T === Any && continue
       for U in Base.uniontypes(T)
-        n = string(nameof(U === PormG.Kernel.SQLTypeFunction ? _RFN_QB.FObject : U))
-        @test (n, occursin(n, src)) == (n, true)
+        for C in (U === PormG.Kernel.SQLTypeFunction ? (_RFN_QB.FObject, _RFN_QB.WindowFunction) : (U,))
+          n = string(nameof(C))
+          @test (n, occursin(n, src)) == (n, true)
+        end
       end
     end
   end
@@ -353,7 +370,10 @@ const _RFN_KINDS = Any[nothing, CInt16(), CInt32(), CInt64(), CFloat64(), CDecim
                 Case(When("round__@lt" => 11, then = F("round")), default = 0),
                 PormG.QueryBuilder.Q("round__@lt" => 10), PormG.QueryBuilder.Qor("round__@lt" => 10, "year" => 2008),
                 _RFN_QB.SQLText(3), _RFN_QB.SQLText("3"), 3, 3.0, :a, nothing, missing, Any["round", 1], ["round", "year"],
-                _RFN_QB.CTEReference(name = "c", path = "round"), _RFN_QB.JoinedReference("j", "round", false)]
+                _RFN_QB.CTEReference(name = "c", path = "round"), _RFN_QB.JoinedReference("j", "round", false),
+                # Leaves that spell the encoding's own separators and length prefixes, and an empty one.
+                "", "a,b", "a(b)", "3:abc", "path(5:round)", Coalesce("a,b", "c"), Coalesce("a", "b,c"),
+                _RFN_QB.SQLText("1:x"), _RFN_QB.CTEReference(name = "c,d", path = "e"), _RFN_QB.CTEReference(name = "c", path = "d,e")]
     old = [_rfn_outcome(() -> _old_mixed_node_signature(n)) for n in nodes]
     new = [_rfn_outcome(() -> _RFN_QB._mixed_node_signature(n)) for n in nodes]
     for i in eachindex(nodes)
@@ -405,6 +425,26 @@ const _RFN_KINDS = Any[nothing, CInt16(), CInt32(), CInt64(), CFloat64(), CDecim
     for (i, p) in enumerate(Any[Coalesce("date", "round"), Coalesce(F("round"), 0), Greatest("date", Value(nothing)),
                                 Case(When("round__@lt" => 10, then = F("round")), default = 0), Max("date")])
       @test (i, sprint(show, _RFN_QB._temporal_mix_values(p))) == (i, sprint(show, _old_temporal_mix_values(p)))
+    end
+  end
+
+  # What: `Round`'s precision checks (`_check_round_precision`, `_negative_places`, `_zero_places`, `_places_within`)
+  #   against the inline code they replace, over each precision type `Round` accepts.
+  # Expected: the same answer or refusal (type and text) for an `Int64`, an `Int32`, a `BigInt`, a `Bool`, negative,
+  #   zero and positive, and a non-integer, on each engine.
+  # Why: the comparisons over the untyped precision dispatched at run time (`<(::Int64, ::Int64)` in the trimmed
+  #   `Round(F("round"))`), and the non-`Int64` arms take another path (#1599 layer 5).
+  @testset "Round's precision checks answer as the inline code did" begin
+    precisions = Any[0, 2, -1, Int32(2), Int32(-1), big(2), big(-1), true, false, 2.5, "x", nothing]
+    for conn in _RFN_CONNS, (i, d) in enumerate(precisions), col in Any["score", "name"]
+      instruc = _rfn_instruc(conn)
+      node = _RFN_QB.FObject(function_name = "ROUND", column = col, kwargs = Dict{String,Any}("precision" => d))
+      old = _rfn_outcome(() -> _old_check_round_precision(node, d, instruc))
+      new = _rfn_outcome(() -> _RFN_QB._check_round_precision(node, d, instruc))
+      @test (typeof(conn), i, col, new) == (typeof(conn), i, col, old)
+      @test (i, _RFN_QB._negative_places(d)) == (i, d isa Integer && d < 0)
+      @test (i, _RFN_QB._zero_places(d)) == (i, d isa Integer && d == 0)
+      @test (i, _RFN_QB._places_within(d, 2)) == (i, d isa Integer && 0 < d <= 2)
     end
   end
 

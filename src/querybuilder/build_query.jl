@@ -894,11 +894,13 @@ function _mixed_node_signature(@nospecialize(x), depth::Int = 0)::Union{Nothing,
   depth > 32 && return nothing
   _is_aggregate_call(x) && return nothing   # a grouped projection never holds one
   x isa String && return _sig_node("path", [_sig_leaf(x)])
-  x isa AbstractString && return _sig_node("path", [_sig_leaf(String(x))])
+  x isa AbstractString && return _sig_node("path", [_sig_leaf(String(x)::String)])
   x isa JoinedReference && return _sig_node("joined_ref", [_sig_leaf(x.alias), _sig_leaf(x.path)])
   x isa CTEReference && return _sig_node("cte_ref", [_sig_leaf(x.name), _sig_leaf(x.path)])
-  x isa SQLTypeText && return _sig_node("value", [_sig_leaf(repr(x.field))])
-  x isa SQLTypeField && return _mixed_node_signature(x.field, depth + 1)
+  # The concrete text and field types (the only subtypes of `SQLTypeText`/`SQLTypeField`): a field read at the abstract
+  # type is a run-time read (#1599 layer 5).
+  x isa SQLText && return _sig_node("value", [_sig_leaf(repr(x.field))])
+  x isa SQLField && return _mixed_node_signature(x.field, depth + 1)
   x isa Union{Number,Symbol,Nothing,Missing} && return _sig_node("literal", [_sig_leaf(repr(x))])
   if x isa AbstractVector
     # Each element at the list's concrete type, in this method (a helper specialized per list type and re-entered from
@@ -1066,9 +1068,9 @@ function _each_bare_column_at(f::F, @nospecialize(node), instruc::SQLInstruction
     elseif op isa Union{FExpression,SQLTypeFunction,CTEReference,JoinedReference}
       _each_bare_column_at(f, op, instruc, clause, depth + 1, covered)
     end
-  elseif node isa SQLTypeField
+  elseif node isa SQLField   # the only subtype of `SQLTypeField`: its field read at its type (#1599 layer 5)
     _each_bare_column_at(f, node.field, instruc, clause, depth + 1, covered)
-  elseif node isa SQLTypeOrder
+  elseif node isa SQLOrder   # likewise the only subtype of `SQLTypeOrder`
     _each_bare_column_at(f, with_order_term(_order_term_field, node), instruc, clause, depth + 1, covered)   # #1599 slice C
   elseif node isa OperObject
     # A condition's column is never matched structurally: a transformed one

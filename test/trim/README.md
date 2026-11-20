@@ -224,7 +224,7 @@ step	update_or_create	first created true; second created false; round 7
 step	get_or_create	first created true; second created false; round 6; year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 ```
 
-The `untyped` lines sit between the `expr` and `func` lines. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
+The `func` lines follow the `expr` lines; the `untyped` lines, between them, are checked against the JIT control's. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
 `bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the

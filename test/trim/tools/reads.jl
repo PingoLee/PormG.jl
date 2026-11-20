@@ -201,3 +201,52 @@ function func_step()::Bool
         failed("func", e); return false
     end
 end
+
+using PormG.QueryBuilder: Subquery, Exists, OuterRef
+using PormG.Functions: Max
+
+# The typed row of `subquery_step`'s correlated projection: the race's name and its circuit's, read by a `Subquery`.
+const CircuitNameRow = NamedTuple{(:name, :cn), Tuple{String, String}}
+
+# Subqueries (#1599 layer 5): a membership in a query (`__@in`), an `Exists` correlated with `OuterRef`, a `Subquery`
+# correlated with `OuterRef` as a column, and a `Subquery` on the right of a filter, uncorrelated and correlated (each
+# scalar subquery an aggregate, so it is one row whatever it matches). Each
+# reads into its typed row and is checked against the two seeded races and their circuits. Exit code 20 when a read
+# raises or returns other rows.
+function subquery_step()::Bool
+    try
+        ok = true
+        ok &= sub_line("circuitid__@in query",
+                        M.Race.objects.filter("circuitid__@in" =>
+                            M.Circuit.objects.filter("country" => "Monaco").values("circuitid")).list(RaceRow),
+                        "Monaco Grand Prix")
+        ok &= sub_line("Exists OuterRef",
+                        M.Race.objects.filter(Exists(M.Circuit.objects.filter("circuitid" => OuterRef("circuitid"),
+                                                                              "country" => "Brazil"))).list(RaceRow),
+                        "Brazilian Grand Prix")
+        c = M.Race.objects.values("name", "cn" => Subquery(M.Circuit.objects.filter("circuitid" => OuterRef("circuitid")).
+                                                           values("n" => Max("name")))).order_by("date").list(CircuitNameRow)
+        lc = join([string(x.name, " at ", x.cn) for x in c], ", ")
+        say("subquery", string("Subquery OuterRef column ", length(c), " rows: ", lc))
+        ok &= lc == "Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace"
+        ok &= sub_line("circuitid == Subquery",
+                        M.Race.objects.filter("circuitid" =>
+                            Subquery(M.Circuit.objects.filter("country" => "Brazil").values("m" => Max("circuitid")))).list(RaceRow),
+                        "Brazilian Grand Prix")
+        ok &= sub_line("round == Subquery OuterRef",
+                        M.Race.objects.filter("round" =>
+                            Subquery(M.Race.objects.filter("raceid" => OuterRef("raceid"), "year" => 2008).values("m" => Max("round")))).
+                            order_by("date").list(RaceRow),
+                        "Monaco Grand Prix, Brazilian Grand Prix")
+        return ok
+    catch e
+        failed("subquery", e); return false
+    end
+end
+
+# One subquery read's line, `<label> <n> rows: <names>`, and whether its rows are the `expected` names.
+function sub_line(label::String, rows::Vector{RaceRow}, expected::String)::Bool
+    names = race_names(rows)
+    say("subquery", string(label, " ", length(rows), " rows: ", isempty(names) ? "none" : names))
+    return names == expected
+end

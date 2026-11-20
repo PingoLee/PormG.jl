@@ -13,7 +13,7 @@
 # read returns the Monaco race. Each step prints one line to `Core.stdout`, as in ../main.jl.
 using PormG, MySQL, Dates
 # The render's run-time re-entry into a nested node finds code only where the build rooted it (#1599 layer 5).
-for (f, t) in PormG.QueryBuilder._trim_render_roots(); Base.Experimental.entrypoint(f, t); end
+for (f, t) in PormG.QueryBuilder._trim_render_roots(PormG.ConnectionPool.MySQLConnectionPool); Base.Experimental.entrypoint(f, t); end
 
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
 import .models as M
@@ -119,6 +119,7 @@ function (@main)(args::Vector{String})::Cint
     expr_step() || return Cint(14)
     untyped_step() || return Cint(17)
     func_step() || return Cint(19)
+    subquery_step() || return Cint(20)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()

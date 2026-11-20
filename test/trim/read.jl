@@ -10,7 +10,7 @@
 using TrimF1, PormG, SQLite, Dates
 include("steps.jl")
 # The render's run-time re-entry into a nested node finds code only where the build rooted it (#1599 layer 5).
-for (f, t) in PormG.QueryBuilder._trim_render_roots(); Base.Experimental.entrypoint(f, t); end
+for (f, t) in PormG.QueryBuilder._trim_render_roots(PormG.ConnectionPool.SQLiteConnectionPool); Base.Experimental.entrypoint(f, t); end
 
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
@@ -24,6 +24,7 @@ function (@main)(args::Vector{String})::Cint
     expr_step() || return Cint(14)
     untyped_step() || return Cint(17)
     func_step() || return Cint(19)
+    subquery_step() || return Cint(20)
     tasks && (reap_step() || return Cint(4))
     tasks && (close_step() || return Cint(5))
     elapsed_step(t0)

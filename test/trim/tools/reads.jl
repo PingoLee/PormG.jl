@@ -160,3 +160,44 @@ type_name(@nospecialize(v))::String = String((typeof(v)::DataType).name.name)
 
 # A row's keys in its own iteration order, each with its value's type: `name::String, round::Int64`.
 row_types(row::PormGRow)::String = join([string(k, "::", type_name(v)) for (k, v) in pairs(row)], ", ")
+
+using PormG.Functions: Abs, Round, Upper, Lower, Count, Sum
+
+# The typed rows of `func_step`'s projections: `values(...)` names exactly these fields, in this order (#1352).
+const AbsRow = NamedTuple{(:name, :d, :r), Tuple{String, Int64, Int64}}
+const GroupRow = NamedTuple{(:year, :n, :s), Tuple{Int64, Int64, Int64}}
+const NameRow = NamedTuple{(:name, :u), Tuple{String, String}}
+const CaseRow = NamedTuple{(:name, :c), Tuple{String, Int64}}
+
+# The remaining function shapes (#1599 layer 5): a number function over a column in a projection (`Abs` over an `F`
+# difference, `Round` over the integer column) and in a filter, two aggregates grouped by a column (`Count`, `Sum`), a
+# nested function as a column (`Upper(Lower(...))`), and a `Case` whose `then` is an `F`. Each reads into its typed row
+# and is checked against the two seeded races. Exit code 19 when a read raises or returns other rows.
+function func_step()::Bool
+    try
+        ok = true
+        a = M.Race.objects.values("name", "d" => Abs(F("round") - 10), "r" => Round(F("round"))).order_by("date").list(AbsRow)
+        la = join([string(x.name, " ", x.d, " ", x.r) for x in a], ", ")
+        say("func", string("Abs/Round ", length(a), " rows: ", la))
+        ok &= la == "Monaco Grand Prix 4 6, Brazilian Grand Prix 8 18"
+        f = M.Race.objects.filter(Abs(F("round") - 10) == 4).list(RaceRow)
+        say("func", string("Abs == 4 ", length(f), " rows: ", race_names(f)))
+        ok &= race_names(f) == "Monaco Grand Prix"
+        g = M.Race.objects.values("year", "n" => Count("raceid"), "s" => Sum("round")).list(GroupRow)
+        lg = join([string(x.year, " ", x.n, " ", x.s) for x in g], ", ")
+        say("func", string("Count/Sum ", length(g), " rows: ", lg))
+        ok &= lg == "2008 2 24"
+        u = M.Race.objects.values("name", "u" => Upper(Lower("name"))).order_by("date").list(NameRow)
+        lu = join([x.u for x in u], ", ")
+        say("func", string("Upper(Lower) ", length(u), " rows: ", lu))
+        ok &= lu == "MONACO GRAND PRIX, BRAZILIAN GRAND PRIX"
+        c = M.Race.objects.values("name", "c" => Case(When("round__@lt" => 10, then = F("round")), default = 0)).
+            order_by("date").list(CaseRow)
+        lc = join([string(x.name, " ", x.c) for x in c], ", ")
+        say("func", string("Case then F ", length(c), " rows: ", lc))
+        ok &= lc == "Monaco Grand Prix 6, Brazilian Grand Prix 0"
+        return ok
+    catch e
+        failed("func", e); return false
+    end
+end

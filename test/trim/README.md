@@ -11,7 +11,9 @@ integer, `date__@gte` and `round__@lt`, an `order_by` each way, and the other co
 `__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains` and `__@contains`, and the
 comparisons against an expression: an `F` with arithmetic on each side, `Extract`, the `@year` transform and a
 `Case`/`When` on each side, over the two races `prep.jl` seeds; #1599 layer 5, then the untyped read: `first()` and
-`list()` with no type and a `values(...)` projection, each line naming every cell's type; #1599 layer 6), one `Race.objects.create` that leaves the three auto-filled fields
+`list()` with no type and a `values(...)` projection, each line naming every cell's type; #1599 layer 6, then the function shapes: a number function in a projection and
+in a filter, `Count`/`Sum` grouped by a column, `Upper(Lower(...))` and a `Case` whose `then` is an `F`, each read into
+a typed row; #1599 layer 5), one `Race.objects.create` that leaves the three auto-filled fields
 (`created_at`, `updated_on`, `token`) to the write's default fill, and one
 `Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)`, where `RaceRow` is the struct
 `list(show_query = :struct)` writes (#1632), then an `update` of the row it wrote and a `delete` of it,
@@ -106,6 +108,11 @@ step	untyped	first Monaco Grand Prix round 6 date 2008-05-25
 step	untyped	first types year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 step	untyped	list 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	untyped	values 1 rows: round::Int64, name::String; Monaco Grand Prix 6
+step	func	Abs/Round 2 rows: Monaco Grand Prix 4 6, Brazilian Grand Prix 8 18
+step	func	Abs == 4 1 rows: Monaco Grand Prix
+step	func	Count/Sum 1 rows: 2008 2 24
+step	func	Upper(Lower) 2 rows: MONACO GRAND PRIX, BRAZILIAN GRAND PRIX
+step	func	Case then F 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 0
 step	elapsed_ms	1
 ```
 
@@ -129,7 +136,9 @@ raises or the read after it does not show the change, and 9 when its `bulk_inser
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
 refused with an `InvalidValueError` or writes a row, 15 when its `bulk_update` and 16 when its `update_or_create`
 raises, the read after it does not show the change, or the delete that undoes it does not remove its rows). 17 when an untyped read raises or returns other rows, 18 when
-`get_or_create` raises, does not insert and then find its row, or the delete after it does not remove it.
+`get_or_create` raises, does not insert and then find its row, or the delete after it does not remove it. 19 when a
+function read (a number function, an aggregate, a nested function or a `Case` whose `then` is an `F`) raises or returns
+other rows.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -196,6 +205,11 @@ step	expr	Extract(date, month) == 11 1 rows: Brazilian Grand Prix
 step	expr	date__@year 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	expr	round__@gte Case 1 rows: Monaco Grand Prix
 step	expr	Case == 1 1 rows: Monaco Grand Prix
+step	func	Abs/Round 2 rows: Monaco Grand Prix 4 6, Brazilian Grand Prix 8 18
+step	func	Abs == 4 1 rows: Monaco Grand Prix
+step	func	Count/Sum 1 rows: 2008 2 24
+step	func	Upper(Lower) 2 rows: MONACO GRAND PRIX, BRAZILIAN GRAND PRIX
+step	func	Case then F 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 0
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -210,10 +224,10 @@ step	update_or_create	first created true; second created false; round 7
 step	get_or_create	first created true; second created false; round 6; year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 ```
 
-The `untyped` lines sit after the `expr` lines. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
+The `untyped` lines sit between the `expr` and `func` lines. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
-`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -302,6 +316,11 @@ step	untyped	first Monaco Grand Prix round 6 date 2008-05-25
 step	untyped	first types year::Int32, round::Int32, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 step	untyped	list 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	untyped	values 1 rows: round::Int32, name::String; Monaco Grand Prix 6
+step	func	Abs/Round 2 rows: Monaco Grand Prix 4 6, Brazilian Grand Prix 8 18
+step	func	Abs == 4 1 rows: Monaco Grand Prix
+step	func	Count/Sum 1 rows: 2008 2 24
+step	func	Upper(Lower) 2 rows: MONACO GRAND PRIX, BRAZILIAN GRAND PRIX
+step	func	Case then F 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 0
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25

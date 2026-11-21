@@ -32,6 +32,7 @@ function (@main)(args::Vector{String})::Cint
     bulk_update_step(1) || return Cint(15)        # the upsert-shaped writes (`tools/writes.jl`, #1694)
     update_or_create_step(1) || return Cint(16)
     get_or_create_step(1) || return Cint(18)
+    cascade_step(1) || return Cint(22)  # the cascading delete (`tools/writes.jl`, #1694)
     elapsed_step(t0)
     return Cint(0)
 end

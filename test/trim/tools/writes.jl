@@ -155,3 +155,57 @@ function get_or_create_step(circuitid::Int)::Bool
         failed("get_or_create", e); return false
     end
 end
+
+# The cascading delete (#1694, #1599 layer 7; exit code 22), after the upserts. A race of the step's own (2015) with two
+# pit stops and a driver who debuted in it; deleting the race runs the ORM's collector: the pit stops go with it
+# (`CASCADE`), the driver stays with no debut race (`SET_NULL`), and on PostgreSQL and MySQL the race's and its pit
+# stops' rows are locked first (`FOR UPDATE`, #1815). Typed reads check each, and that the pit stop and driver
+# `prep.jl` seeded on the Monaco race are left as they were; then the driver is deleted, so the step leaves the
+# database as it found it. `delete` returns the total and the rows per model, read at the type the JIT returns.
+struct PitStopRow
+    pitstopid::Int64  # IDField
+    raceid::Int64     # ForeignKey
+    stop::Int64       # IntegerField
+    lap::Int64        # IntegerField
+end
+
+struct DriverRow
+    driverid::Int64                     # IDField
+    surname::String                     # CharField
+    debut_raceid::Union{Nothing, Int64}  # ForeignKey, null = true
+end
+
+# The rows per model `delete` reports for the step's race: its two pit stops and itself, by model name.
+const CASCADE_COUNTS = "pitstop 2, race 1"
+
+function cascade_step(circuitid::Int)::Bool
+    try
+        M.Race.objects.create("year" => 2015, "round" => 6, "circuitid" => circuitid,
+                              "name" => "Monaco Grand Prix", "date" => Date(2015, 5, 24))
+        race = M.Race.objects.filter("year" => 2015).list(RaceRow)
+        length(race) == 1 || (say("cascade", string(length(race), " races of 2015")); return false)
+        raceid = race[1].raceid
+        M.PitStop.objects.create("raceid" => raceid, "stop" => 1, "lap" => 30)
+        M.PitStop.objects.create("raceid" => raceid, "stop" => 2, "lap" => 52)
+        M.Driver.objects.create("surname" => "Verstappen", "debut_raceid" => raceid)
+        n, per = M.Race.objects.filter("raceid" => raceid).delete()::Tuple{Int, Dict{String, Integer}}
+        counts = join([string(k, " ", per[k]::Int) for k in sort!(collect(keys(per)))], ", ")
+        say("cascade", string(n, " rows; ", counts))
+        left = M.PitStop.objects.filter("raceid" => raceid).list(PitStopRow)
+        driver = M.Driver.objects.filter("surname" => "Verstappen").list(DriverRow)
+        debut = length(driver) == 1 ? driver[1].debut_raceid : nothing
+        say("cascade", string(length(left), " pit stops left; ", length(driver), " driver, debut ",
+                              debut === nothing ? "none" : string(debut)))
+        seeded_stops = M.PitStop.objects.filter("raceid__year" => 2008).list(PitStopRow)
+        seeded = M.Driver.objects.filter("surname" => "Piquet").list(DriverRow)
+        seeded_debut = length(seeded) == 1 ? seeded[1].debut_raceid : nothing
+        kept = length(seeded_stops) == 1 && seeded_debut !== nothing && seeded_debut == seeded_stops[1].raceid
+        say("cascade", string("seeded ", length(seeded_stops), " pit stop, ", length(seeded), " driver; ",
+                              kept ? "kept" : "changed"))
+        removed = first(M.Driver.objects.filter("surname" => "Verstappen").delete()::Tuple{Int, Dict{String, Integer}})
+        return n == 3 && counts == CASCADE_COUNTS && isempty(left) && length(driver) == 1 && debut === nothing &&
+               kept && removed == 1
+    catch e
+        failed("cascade", e); return false
+    end
+end

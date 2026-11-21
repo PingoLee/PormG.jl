@@ -689,6 +689,21 @@ function _with_render_scope(f::F, instruc::SQLInstruction, scope::RenderScope) w
   end
 end
 
+# An aggregate's argument rendered in the `:row` phase (#932), the scope opened here as `_with_render_scope` opens it,
+# with no closure (#1599 layer 5). Through `_with_render_scope(() -> _render_function_body(…), instruc; phase = :row)`
+# the helper was re-entered with that closure's type from inside the render's own scopes, the nesting inference limits
+# (#1728's class), and the trimmed `Count("raceid")` in an aliased projection stopped in type inference of the limited
+# call. Without a closure there is no type to vary on re-entry.
+function _render_function_body_row(v::SQLTypeFunction, instruc::SQLInstruction, _as::Union{Nothing,String})
+  prev = instruc.scope
+  instruc.scope = _with_scope(prev; phase = :row)
+  try
+    return _render_function_body(v, instruc; _as = _as)
+  finally
+    instruc.scope = prev
+  end
+end
+
 # Store information to decide the name from table alias in subquery
 mutable struct SQLTbAlias <: SQLTableAlias
   count::Int   # #1593: was `Integer`, an abstract field that boxed every `get_alias` increment

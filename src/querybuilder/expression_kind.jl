@@ -873,10 +873,32 @@ _mysql_number_kind(::Any) = nothing
 # the declaration alone (`_declaration_instruction`) has no engine, so nothing is computed there.
 _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_AllKinds) =
   instruc.connection === nothing ? nothing :
-  _computed_kind(Val(Symbol(p.function_name)), rule, _infer_kind_any(_first_operand(p), instruc, policy), instruc.connection)
-function _number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_MeaningKinds)
-  operands = p.column isa AbstractVector ? p.column : (p.column,)
-  return _output_kind(Val(Symbol(p.function_name)), rule, [_arithmetic_side_kind(o, instruc, policy) for o in operands])
+  _computed_kind_by_name(p.function_name, rule, _infer_kind_any(_first_operand(p), instruc, policy), instruc.connection)
+_number_kind(p::SQLTypeFunction, rule::Symbol, instruc::SQLInstruction, policy::_MeaningKinds) =
+  _output_kind_by_name(p.function_name, rule, _operand_kinds_at(p.column, instruc, policy))
+# Each operand's kind, `_arithmetic_side_kind` over a function's column held untyped (#1599 layer 5): a list of
+# operands, or the one operand. Iterating the untyped column (`(p.column,)`, a `Vector` of an unknown element type)
+# dispatched at run time; the trimmed read stopped at `iterate(::Tuple{FExpression})` on `Abs(F("round") - 10)`. The
+# kinds are `_arithmetic_side_kind_any`'s, which `test_trim_shape_pins.jl` checks against `_arithmetic_side_kind`.
+@noinline function _operand_kinds_at(@nospecialize(col), instruc::SQLInstruction, policy::_MeaningKinds)
+  ks = Any[]
+  if col isa Vector{Any}
+    for o in col; push!(ks, _arithmetic_side_kind_any(o, instruc, policy)); end
+  elseif col isa Vector{String}
+    for o in col; push!(ks, _arithmetic_side_kind_any(o, instruc, policy)); end
+  elseif col isa Vector{FObject}
+    for o in col; push!(ks, _arithmetic_side_kind_any(o, instruc, policy)); end
+  elseif col isa AbstractVector
+    _operand_kinds_other!(ks, col, instruc, policy)
+  else
+    push!(ks, _arithmetic_side_kind_any(col, instruc, policy))
+  end
+  return ks
+end
+@noinline function _operand_kinds_other!(ks::Vector{Any}, @nospecialize(col::AbstractVector),
+                                         instruc::SQLInstruction, policy::_MeaningKinds)
+  for o in col; push!(ks, _arithmetic_side_kind_any(o, instruc, policy)); end
+  return ks
 end
 
 # #1121 — what a computed number MEANS, from its operands' kinds `ks`: Django's `output_field`, the
@@ -896,9 +918,77 @@ function _output_kind(::Val, rule::Symbol, ks)
   all(k -> _numeric_rank(k) !== nothing, ks) || return nothing
   return any(k -> k isa CDecimal, ks) ? CDecimal(nothing, nothing) : CFloat64()
 end
-_operand_meaning(k::Union{CInt16,CInt32,CInt64,CFloat64,CInterval}) = k
-_operand_meaning(::CDecimal) = CDecimal(nothing, nothing)
-_operand_meaning(::Any) = nothing
+# One method over the kind held untyped (`first(ks)`, #1599 layer 5): three methods on the kind dispatched at run time.
+_operand_meaning(@nospecialize(k)) =
+  k isa Union{CInt16,CInt32,CInt64,CFloat64,CInterval} ? k : k isa CDecimal ? CDecimal(nothing, nothing) : nothing
+
+# #1599 layer 5 — `_computed_kind` and `_output_kind` by the function's name, as one branch per name, generated here from
+# the method table (#1820's `_result_rule_by_name` shape, `functions.jl`). They were called on `Val(Symbol(name))`: a
+# type built from a name at run time, which a trimmed image had no target for (`Abs(F("round") - 10)` in a projection).
+# The names are exactly those with a `Val{:NAME}` method of either rule; any other name reaches the rule's `::Val`
+# method through a `Val` no rule names, as the run-time `Val` did.
+#
+# `_computed_kind` also dispatches on the operand's kind and the engine, both held abstractly here (the walk answers
+# any `CanonicalType` or `nothing`; the instruction holds any engine). `_computed_kind_at` narrows the engine to one
+# member of `_SQLEngine` and the kind to each concrete type a method names, so every call is static; a kind no method
+# names reaches the methods that take any kind, through `invoke` on `Any`, which is the set run-time dispatch picks
+# from for such a kind. Both lists are read from the method table, and a method on any other shape is refused here,
+# when the package loads, rather than answered by the wrong method at run time.
+# A rule method the generators below cannot read, refused when the package loads (one site, for the error-type scan).
+_ladder_shape_refusal(rule::Symbol, @nospecialize(sig), what::String) =
+  error("#1599: `$(rule)` has a method on `$(sig)`, which its by-name ladder cannot read; $(what)")
+const _COMPUTED_KIND_TYPES = let named = DataType[]
+  for m in methods(_computed_kind)
+    P = Base.unwrap_unionall(m.sig).parameters
+    length(P) == 5 || _ladder_shape_refusal(:_computed_kind, m.sig, "state it on (Val{:NAME}, Symbol, kind, engine)")
+    V, K, E = P[2], P[4], P[5]
+    (V === Val || (V isa DataType && V <: Val && length(V.parameters) == 1 && V.parameters[1] isa Symbol)) ||
+      _ladder_shape_refusal(:_computed_kind, m.sig, "state it on one `Val{:NAME}`")
+    E in Base.uniontypes(_SQLEngine) || _ladder_shape_refusal(:_computed_kind, m.sig, "its engine must be one member of `_SQLEngine`")
+    K === Any && continue
+    for T in Base.uniontypes(K)
+      (T isa DataType && isconcretetype(T)) ||
+        _ladder_shape_refusal(:_computed_kind, m.sig, "its kind must be `Any` or a union of concrete kinds")
+      T in named || push!(named, T)
+    end
+  end
+  Tuple(sort!(named; by = string))
+end
+let karms = [:(k isa $T && return _computed_kind(v, rule, k::$T, c)) for T in _COMPUTED_KIND_TYPES]
+  @eval function _computed_kind_kinds(v::Val, rule::Symbol, @nospecialize(k), @nospecialize(conn), ::Type{E}) where {E}
+    c = conn::E
+    $(karms...)
+    return invoke(_computed_kind, Tuple{typeof(v), Symbol, Any, E}, v, rule, k, c)
+  end
+end
+# One arm per member of `_SQLEngine`, read from the union, so a backend added there is walked with no default arm here.
+let earms = [:(conn isa $E && return _computed_kind_kinds(v, rule, k, conn, $E)) for E in Base.uniontypes(_SQLEngine)]
+  @eval function _computed_kind_at(v::Val, rule::Symbol, @nospecialize(k), @nospecialize(conn))
+    $(earms...)
+    # No engine (`_number_kind` answers `nothing` before it asks): the `MethodError` the call raised, without the dispatch.
+    throw(MethodError(_computed_kind, (v, rule, k, conn)))
+  end
+end
+for (rule, ladder, tail) in ((:_computed_kind, :_computed_kind_by_name, (:(rule::Symbol), :(@nospecialize(k)), :(@nospecialize(conn)))),
+                             (:_output_kind, :_output_kind_by_name, (:(rule::Symbol), :(ks::Vector{Any}))))
+  stated = String[]
+  for m in methods(getglobal(@__MODULE__, rule))
+    V = Base.unwrap_unionall(m.sig).parameters[2]
+    if V isa DataType && V <: Val && length(V.parameters) == 1 && V.parameters[1] isa Symbol
+      String(V.parameters[1]) in stated || push!(stated, String(V.parameters[1]))
+    elseif V !== Val
+      _ladder_shape_refusal(rule, m.sig, "state the rule on one `Val{:NAME}`")
+    end
+  end
+  args = rule === :_computed_kind ? (:rule, :k, :conn) : (:rule, :ks)
+  target = rule === :_computed_kind ? :_computed_kind_at : :_output_kind
+  arms = [:(name == $n && return $target($(Val(Symbol(n))), $(args...))) for n in sort!(stated)]
+  @eval function $ladder(name::AbstractString, $(tail...))
+    $(arms...)
+    Symbol(name)   # what `Val(Symbol(name))` raised for a name no `Symbol` can be (a NUL inside), raised here too
+    return $target($(Val(:_pormg_no_stated_rule)), $(args...))
+  end
+end
 
 # ── #1034 phase 3 step 3: the read view ──────────────────────────────────────────────────────────────
 # The read path records a kind per projection (`projection_kinds`, #564) so that a read parser can undo

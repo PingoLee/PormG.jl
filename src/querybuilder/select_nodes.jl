@@ -618,6 +618,50 @@ end
 _render_fts_operand(c, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing) =
   _is_fts_operand(c) ? _render_function_body(c, instruc; _as = _as)[1] : _get_select_query(c, instruc; _as = _as)
 
+# A `Round` precision held untyped in a function's options (`get(v.kwargs, "precision", 0)`), compared at its type
+# (#1599 layer 5): a comparison over the untyped value dispatched at run time, and the trimmed `Round(F("round"))`
+# stopped at `<(::Int64, ::Int64)`. An `Int64`, what a literal is, is compared in place; any other `Integer` behind
+# `@noinline`; anything else is no precision, `false`, as `d isa Integer && …` answered.
+_negative_places(@nospecialize(d))::Bool = d isa Int64 ? d < 0 : d isa Integer ? _negative_places_other(d) : false
+@noinline _negative_places_other(@nospecialize(d::Integer))::Bool = d < 0
+_zero_places(@nospecialize(d))::Bool = d isa Int64 ? d == 0 : d isa Integer ? _zero_places_other(d) : false
+@noinline _zero_places_other(@nospecialize(d::Integer))::Bool = d == 0
+_places_within(@nospecialize(d), scale::Int)::Bool = d isa Int64 ? 0 < d <= scale : d isa Integer ? _places_within_other(d, scale) : false
+@noinline _places_within_other(@nospecialize(d::Integer), scale::Int)::Bool = 0 < d <= scale
+
+# `Round`'s precision, read from its options untyped (#1599 layer 5): `digits < 0` over the untyped value dispatched at
+# run time, and the trimmed `Round(F("round"))` stopped at `<(::Int64, ::Int64)`. An `Int64`, what a literal is, takes
+# the checks at its type; any other `Integer` (`Int32`, `BigInt`) the same checks behind `@noinline`; anything else is
+# no precision these checks read, as before.
+@noinline function _check_round_precision(v::FObject, @nospecialize(digits), instruc::SQLInstruction)
+  digits isa Int64 && return _check_round_precision_at(v, digits, instruc)
+  digits isa Integer && return _check_round_precision_other(v, digits, instruc)
+  return nothing
+end
+@noinline _check_round_precision_other(v::FObject, @nospecialize(digits::Integer), instruc::SQLInstruction) =
+  _check_round_precision_at(v, digits, instruc)
+function _check_round_precision_at(v::FObject, digits::Integer, instruc::SQLInstruction)
+  if digits < 0 && !Dialect._supports_at(instruc.connection, :negative_round_precision)
+    throw(Dialect._capability_error_at(instruc.connection, :negative_round_precision, "\e[31mRound(…, $(digits))\e[0m",
+      "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
+  end
+  if digits != 0
+    # #1293: text at `d = 0` is the operand-domain check's (`_check_operand_domain`), as it is under
+    # every number function; this arm also reads a JSON value, which that check lets through.
+    # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`. Only its
+    # `:text` answer is read here: text is no number to round to tens either (#1167, a negative
+    # precision built where the engine has it). It asks at the widest scale, which no number
+    # exceeds, so a decimal or float branch ahead of a text one (`Coalesce("price", "surname")`)
+    # does not answer first; the classifier only compares the scale.
+    # #1387: a time renders through the text formatter, but it is a time, which the operand-domain
+    # check after Phase 3 refuses with its own reason; so is a date, a timestamp or a UUID.
+    divergent = _scale_divergent_operand(v.column, digits > 0 ? Int(digits) : typemax(Int), instruc)
+    divergent !== nothing && divergent[1] === :text && !_non_number_operand(v.column, instruc) &&
+      throw(_round_text_refusal(digits, divergent[2]))
+  end
+  return nothing
+end
+
 function _get_select_query(v::SQLTypeFunction, instruc::SQLInstruction; _as::Union{Nothing,String}=nothing)
   sql, interval_ms, _ = _render_function_typed(v, instruc; _as = _as)
   # #894: an interval held in milliseconds leaves as the interval text, as a difference does (#881).
@@ -647,7 +691,7 @@ function _render_function_typed(v::SQLTypeFunction, instruc::SQLInstruction;
   v.function_name == "WHEN" && throw(_bare_when_refusal())
   _check_fts_render(v, instruc)
   _is_aggregate_call(v) || return _render_function_body(v, instruc; _as = _as)
-  return _with_render_scope(() -> _render_function_body(v, instruc; _as = _as), instruc; phase = :row)
+  return _render_function_body_row(v, instruc, _as)   # #1599 layer 5: the row phase, closure-free (`types.jl`)
 end
 # #955: which column types a date or time part reads. Before it nothing checked, so
 # `"surname__@month"` built and failed (or matched nothing) only at the database, and `@hour` on a
@@ -1063,7 +1107,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # #942: the half of the `When` condition check construction could not do. Read after the condition
   # renders, so a joined path's field memo exists for `_expression_formatter` to find.
   if v.function_name == "WHEN" && v.column isa SQLTypeFunction && _function_condition_kind(v.column) === :unknown
-    formatter = _expression_formatter(v.column, instruc)
+    formatter = _expression_formatter_at(v.column, instruc)
     (formatter === nothing || formatter === Models.format_bool_sql) ||
       throw(_non_boolean_function_condition(v.column))
   end
@@ -1074,7 +1118,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # joined or CTE path, or a slice (`tags__0_2`), whose memo entry is the array field itself. Read
   # after the operand renders, like the check above: rendering a path is what fills the memo. Fails
   # closed — an operand whose type cannot be named (an expression) is refused too.
-  v.function_name == "ARRAY_LEN" && !(_expression_formatter(v.column, instruc) isa Models.ArrayFormatter) &&
+  v.function_name == "ARRAY_LEN" && !(_expression_formatter_at(v.column, instruc) isa Models.ArrayFormatter) &&
     throw(FilterError("The \e[31m@len\e[0m transform counts the elements of an ArrayField, and " *
                       "\e[31m$(_len_operand_label(v.column))\e[0m is not one."))
   # #955, #1070: a date or time part over a column of another type, whoever built the node. Read at
@@ -1131,34 +1175,14 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # #1044, #1167: a negative precision rounds to tens, hundreds, … — a capability, since SQLite's
   # `ROUND` has none and reads it as 0 (`Round(125, -1)` would answer `125.0`, not `130`). Refused on a
   # backend without the row, built on the others, as Django's `Round.as_sqlite` does.
-  if v isa FObject && v.function_name == "ROUND"
-    digits = get(v.kwargs, "precision", 0)
-    if digits isa Integer && digits < 0 && !Dialect._supports_at(instruc.connection, :negative_round_precision)
-      throw(Dialect._capability_error_at(instruc.connection, :negative_round_precision, "\e[31mRound(…, $(digits))\e[0m",
-        "Fetch the value and round it in Julia: \e[32mround(x, RoundNearestTiesAway; digits = $(digits))\e[0m."))
-    end
-    if digits isa Integer && digits != 0
-      # #1293: text at `d = 0` is the operand-domain check's (`_check_operand_domain`), as it is under
-      # every number function; this arm also reads a JSON value, which that check lets through.
-      # `Round` takes any `Integer` (`Int32`, `BigInt`); the classifier's scale is an `Int`. Only its
-      # `:text` answer is read here: text is no number to round to tens either (#1167, a negative
-      # precision built where the engine has it). It asks at the widest scale, which no number
-      # exceeds, so a decimal or float branch ahead of a text one (`Coalesce("price", "surname")`)
-      # does not answer first; the classifier only compares the scale.
-      # #1387: a time renders through the text formatter, but it is a time, which the operand-domain
-      # check after Phase 3 refuses with its own reason; so is a date, a timestamp or a UUID.
-      divergent = _scale_divergent_operand(v.column, digits > 0 ? Int(digits) : typemax(Int), instruc)
-      divergent !== nothing && divergent[1] === :text && !_non_number_operand(v.column, instruc) &&
-        throw(_round_text_refusal(digits, divergent[2]))
-    end
-  end
+  v isa FObject && v.function_name == "ROUND" && _check_round_precision(v, get(v.kwargs, "precision", 0), instruc)
   # #953: an aggregate over a boolean, read once its column resolves (as the check above is). An
   # extremum keeps its meaning — any true, all true — and each engine spells it (`Dialect.MAX`:
   # `BOOL_OR` where `max(boolean)` does not exist). A sum or mean turns a boolean into a number, which
   # the query does not say how to do: EXPLICIT INTENT (#1167), refused on every engine, pointing to the
   # explicit count.
   if v.function_name in ("MAX", "MIN", "SUM", "AVG") &&
-     _expression_formatter(v.column, instruc) === Models.format_bool_sql
+     _expression_formatter_at(v.column, instruc) === Models.format_bool_sql
     v.function_name in ("SUM", "AVG") && throw(_boolean_sum_refusal(v))
     resolved_kwargs["boolean"] = true
   end
@@ -1200,7 +1224,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
     if integer_kind !== nothing
       resolved_kwargs["integer_kind"] = integer_kind
       places = get(v.kwargs, "precision", 0)
-      if v.function_name == "ROUND" && !(places isa Integer && places < 0)
+      if v.function_name == "ROUND" && !_negative_places(places)
         delete!(deferred_kwargs, "precision")
         resolved_kwargs["precision"] = 0
       end

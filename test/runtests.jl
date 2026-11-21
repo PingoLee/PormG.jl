@@ -278,6 +278,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "bulk_insert on the Servers Reads and Counts as Before (#1614)" include("unit/test_server_bulk_trim_1614.jl")
     @testset "The Common Filter Lookups Bind as Before (#1599)" include("unit/test_read_lookups_trim_1599.jl")
     @testset "A Comparison Against an Expression Renders as Before (#1599)" include("unit/test_read_exprs_trim_1599.jl")
+    @testset "A Function Read Answers as Before (#1599)" include("unit/test_read_functions_trim_1599.jl")
     @testset "The Upsert-Shaped Writes Write as Before (#1599, #1694)" include("unit/test_upsert_writes_trim_1694.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")

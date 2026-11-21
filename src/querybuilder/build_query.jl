@@ -775,7 +775,7 @@ function _check_mixed_grouping(instruct::SQLInstruction)
     (!isempty(g) && all(isdigit, g)) && push!(grouped_positions, parse(Int, g))
   end
   grouped_keys = Set{String}()
-  grouped_nodes = Set{Any}()
+  grouped_nodes = Set{String}()
   for i in grouped_positions
     1 <= i <= length(projections) || continue
     key = _grouped_projection_key(projections[i])
@@ -783,7 +783,7 @@ function _check_mixed_grouping(instruct::SQLInstruction)
     sig = projections[i] isa SQLTypeField ? _mixed_node_signature(projections[i].field) : nothing
     sig === nothing || push!(grouped_nodes, sig)
   end
-  covered = node -> !isempty(grouped_nodes) && _mixed_node_signature(node) in grouped_nodes
+  covered = grouped_nodes
   grouped_text = nothing   # rendered lazily: most mixed terms read a column that is projected as-is
   for (i, v) in enumerate(projections)
     i in grouped_positions && continue
@@ -872,45 +872,89 @@ end
 # same path-or-literal reading in each. `nothing` for anything else — aggregates, windows,
 # subqueries, handles it cannot describe — and such a node is simply not matched (over-refusal, never
 # a wrong accept): a covered node therefore reads exactly the columns of the grouped one.
-function _mixed_node_signature(x, depth::Int = 0)
+#
+# #1599 layer 5: the fingerprint is a `String`, built so that two are equal exactly when the nested tuples it used to be
+# were (each leaf length-prefixed, each node `tag(…)`): stored in and looked up from a `Set{String}`. As tuples of
+# whatever types the parts had, `push!`/`in` on the `Set{Any}` hashed and compared each tuple type at run time, which a
+# trimmed image had no code for (the trimmed `values("year", "n" => Count(…))` stopped at
+# `push!(::Set{Any}, ::Tuple{Symbol,String})`). `x` is unspecialized, so the recursion over the untyped slots
+# (`x.field`, `x.column`, an option) is one method with one specialization, each call static.
+_sig_leaf(s::AbstractString) = string(ncodeunits(s), ':', s)
+function _sig_node(tag::String, parts::Vector{String})
+  io = IOBuffer()
+  print(io, tag, '(')
+  for (i, p) in enumerate(parts)
+    i > 1 && print(io, ',')
+    print(io, p)
+  end
+  print(io, ')')
+  return String(take!(io))
+end
+function _mixed_node_signature(@nospecialize(x), depth::Int = 0)::Union{Nothing,String}
   depth > 32 && return nothing
   _is_aggregate_call(x) && return nothing   # a grouped projection never holds one
-  x isa AbstractString && return (:path, String(x))
-  x isa JoinedReference && return (:joined_ref, x.alias, x.path)
-  x isa CTEReference && return (:cte_ref, x.name, x.path)
-  x isa SQLTypeText && return (:value, repr(x.field))
-  x isa SQLTypeField && return _mixed_node_signature(x.field, depth + 1)
-  x isa Union{Number,Symbol,Nothing,Missing} && return (:literal, repr(x))
+  x isa String && return _sig_node("path", [_sig_leaf(x)])
+  x isa AbstractString && return _sig_node("path", [_sig_leaf(String(x)::String)])
+  x isa JoinedReference && return _sig_node("joined_ref", [_sig_leaf(x.alias), _sig_leaf(x.path)])
+  x isa CTEReference && return _sig_node("cte_ref", [_sig_leaf(x.name), _sig_leaf(x.path)])
+  # The concrete text and field types (the only subtypes of `SQLTypeText`/`SQLTypeField`): a field read at the abstract
+  # type is a run-time read (#1599 layer 5).
+  x isa SQLText && return _sig_node("value", [_sig_leaf(repr(x.field))])
+  x isa SQLField && return _mixed_node_signature(x.field, depth + 1)
+  x isa Union{Number,Symbol,Nothing,Missing} && return _sig_node("literal", [_sig_leaf(repr(x))])
   if x isa AbstractVector
-    parts = Any[_mixed_node_signature(v, depth + 1) for v in x]
-    return any(isnothing, parts) ? nothing : (:list, parts...)
+    # Each element at the list's concrete type, in this method (a helper specialized per list type and re-entered from
+    # here would be widened in the recursion); any other list behind `@noinline`.
+    parts = String[]
+    if x isa Vector{Any}
+      for v in x; (p = _mixed_node_signature(v, depth + 1)) === nothing && return nothing; push!(parts, p); end
+    elseif x isa Vector{String}
+      for v in x; (p = _mixed_node_signature(v, depth + 1)) === nothing && return nothing; push!(parts, p); end
+    elseif x isa Vector{FObject}
+      for v in x; (p = _mixed_node_signature(v, depth + 1)) === nothing && return nothing; push!(parts, p); end
+    else
+      _mixed_node_signatures_other!(parts, x, depth + 1) || return nothing
+    end
+    return _sig_node("list", parts)
   end
   if x isa FObject
     col = _mixed_node_signature(x.column, depth + 1)
     col === nothing && return nothing
-    kws = Any[]
+    parts = String[_sig_leaf(x.function_name), col]
     for k in sort!(collect(keys(x.kwargs)))
       s = _mixed_node_signature(x.kwargs[k], depth + 1)
       s === nothing && return nothing
-      push!(kws, (k, s))
+      push!(parts, _sig_node("kw", [_sig_leaf(k), s]))
     end
-    return (:fn, x.function_name, col, kws...)
+    return _sig_node("fn", parts)
   end
   if x isa FExpression
-    parts = Any[_mixed_node_signature(x.field_name, depth + 1), _mixed_node_signature(x.operand, depth + 1)]
-    any(isnothing, parts) && return nothing
-    return (:f, x.operation === nothing ? "" : x.operation, parts...)
+    l = _mixed_node_signature(x.field_name, depth + 1)
+    r = _mixed_node_signature(x.operand, depth + 1)
+    (l === nothing || r === nothing) && return nothing
+    return _sig_node("f", [_sig_leaf(x.operation === nothing ? "" : x.operation), l, r])
   end
   if x isa OperObject
-    parts = Any[_mixed_node_signature(_oper_column(x), depth + 1), with_oper_value(_mixed_node_signature, x, depth + 1)]
-    any(isnothing, parts) && return nothing
-    return (:op, x.operator, parts...)
+    l = _mixed_node_signature(_oper_column(x), depth + 1)
+    r = with_oper_value(_mixed_node_signature, x, depth + 1)::Union{Nothing,String}
+    (l === nothing || r === nothing) && return nothing
+    return _sig_node("op", [_sig_leaf(x.operator), l, r])
   end
   if x isa Union{QObject,QorObject}
     inner = _mixed_node_signature(_q_nodes(x), depth + 1)   # the closed view (#1698 phase 2)
-    return inner === nothing ? nothing : (x isa QObject ? :q : :qor, inner)
+    return inner === nothing ? nothing : _sig_node(x isa QObject ? "q" : "qor", [inner])
   end
   return nothing
+end
+
+# Each element's signature of a list of no type `_mixed_node_signature` walks, or `false` when one has none (#1599 layer 5).
+@noinline function _mixed_node_signatures_other!(parts::Vector{String}, @nospecialize(x::AbstractVector), depth::Int)::Bool
+  for v in x
+    p = _mixed_node_signature(v, depth)
+    p === nothing && return false
+    push!(parts, p)
+  end
+  return true
 end
 
 # One column a mixed term reads outside its aggregate calls:
@@ -956,65 +1000,90 @@ end
 #     term is grouped by #789 — but its argument and `default` always are (#809);
 #   - `OuterRef` is constant per inner row (#194 owns the outer side), a subquery aggregates in its
 #     own statement, and `Value`/literals read no column.
-# `clause` names where the leaf sits, for the message. `covered(node)` answers whether a function or `F` node
-# is itself a grouped projection (see `_mixed_node_signature`); nothing inside it is then visited.
+# `clause` names where the leaf sits, for the message. `covered` holds the grouped projections' fingerprints: a function
+# or `F` node whose fingerprint is one of them is itself grouped (see `_mixed_node_signature`), and nothing inside it is
+# then visited.
 # Depth cap as in `_contains_agg`.
-function _each_bare_column(f::Function, node, instruc::SQLInstruction, clause::String, depth::Int = 0;
-                           covered::Function = _ -> false)
+# #1599 layer 5: `covered` is the set of the grouped projections' fingerprints, or `nothing` for none, rather than a
+# closure, and the walk is one positional method over the node unspecialized and specialized on `f`. Re-entered with an
+# untyped node, a keyword call per node type, and with another closure (`cover = _ -> false`) a call inference treats
+# as recursion and limits: the trimmed `values("year", "n" => Count(…))` stopped at its keyword call.
+_each_bare_column(f::F, @nospecialize(node), instruc::SQLInstruction, clause::String, depth::Int = 0;
+                  covered::Union{Nothing,Set{String}} = nothing) where {F} =
+  _each_bare_column_at(f, node, instruc, clause, depth, covered)
+# Whether `node` is itself a grouped projection: its fingerprint is one of the grouped ones.
+_bare_covered(covered::Union{Nothing,Set{String}}, @nospecialize(node))::Bool =
+  covered !== nothing && !isempty(covered) && _mixed_node_signature(node) in covered
+function _each_bare_column_at(f::F, @nospecialize(node), instruc::SQLInstruction, clause::String, depth::Int,
+                              covered::Union{Nothing,Set{String}}) where {F}
   depth > 32 && return nothing
-  walk(x, c = clause; cover = covered) = _each_bare_column(f, x, instruc, c, depth + 1; covered = cover)
-  if node isa Union{AbstractString,CTEReference,JoinedReference}
+  if node isa String
     f(clause, _mixed_leaf(node))
+  elseif node isa CTEReference
+    f(clause, _mixed_leaf(node))
+  elseif node isa JoinedReference
+    f(clause, _mixed_leaf(node))
+  elseif node isa AbstractString
+    f(clause, _mixed_leaf(String(node)))
   elseif node isa AbstractVector
-    foreach(walk, node)
+    if node isa Vector{Any}
+      for x in node; _each_bare_column_at(f, x, instruc, clause, depth + 1, covered); end
+    elseif node isa Vector{String}
+      for x in node; _each_bare_column_at(f, x, instruc, clause, depth + 1, covered); end
+    elseif node isa Vector{FObject}
+      for x in node; _each_bare_column_at(f, x, instruc, clause, depth + 1, covered); end
+    else
+      for x in node; _each_bare_column_at(f, x, instruc, clause, depth + 1, covered); end
+    end
   elseif _is_aggregate_call(node)
     return nothing
   elseif node isa WindowFunction
     # An OVER term only when it holds an aggregate: a plain one is grouped by #789. Resolved, so an
     # aggregate reached through an alias (#722) counts.
     for term in node.over.partition_by
-      _resolved_contains_agg(term, instruc) && walk(term, "PARTITION BY")
+      _resolved_contains_agg(term, instruc) && _each_bare_column_at(f, term, instruc, "PARTITION BY", depth + 1, covered)
     end
     for term in node.over.order_by
       t = term isa SQLTypeOrder ? with_order_term(_order_term_field, term) : term   # #1599 slice C
-      _resolved_contains_agg(t, instruc) && walk(t, "ORDER BY")
+      _resolved_contains_agg(t, instruc) && _each_bare_column_at(f, t, instruc, "ORDER BY", depth + 1, covered)
     end
     # The argument always (#809): nothing groups a plain one — `LAG("Tb"."raceid")` beside a `SUM` reads
     # `raceid` once per group exactly as `raceid + SUM(…)` does. `Rank()` and its kin carry none.
-    node.column !== nothing && walk(node.column, "argument")
+    node.column !== nothing && _each_bare_column_at(f, node.column, instruc, "argument", depth + 1, covered)
     for (k, v) in node.kwargs   # `Lag`/`Lead`'s `default`, which renders beside the argument
-      v isa SQLType && walk(v, k == "default" ? "default" : "argument")
+      v isa SQLType && _each_bare_column_at(f, v, instruc, k == "default" ? "default" : "argument", depth + 1, covered)
     end
   elseif node isa FObject
-    covered(node) && return nothing
-    walk(node.column)
+    _bare_covered(covered, node) && return nothing
+    _each_bare_column_at(f, node.column, instruc, clause, depth + 1, covered)
     for v in values(node.kwargs)
-      v isa SQLType && walk(v)
+      v isa SQLType && _each_bare_column_at(f, v, instruc, clause, depth + 1, covered)
     end
   elseif node isa FExpression
-    covered(node) && return nothing
-    node.field_name isa Integer || walk(node.field_name)
+    _bare_covered(covered, node) && return nothing
+    node.field_name isa Integer || _each_bare_column_at(f, node.field_name, instruc, clause, depth + 1, covered)
     op = node.operand
     if op isa AbstractString
-      (occursin("__", op) || op in instruc.object.model.field_names) && f(clause, _mixed_leaf(op))
+      (occursin("__", op) || op in instruc.object.model.field_names) && f(clause, _mixed_leaf(String(op)))
     elseif op isa Union{FExpression,SQLTypeFunction,CTEReference,JoinedReference}
-      walk(op)
+      _each_bare_column_at(f, op, instruc, clause, depth + 1, covered)
     end
-  elseif node isa SQLTypeField
-    walk(node.field)
-  elseif node isa SQLTypeOrder
-    walk(with_order_term(_order_term_field, node))   # #1599 slice C
+  elseif node isa SQLField   # the only subtype of `SQLTypeField`: its field read at its type (#1599 layer 5)
+    _each_bare_column_at(f, node.field, instruc, clause, depth + 1, covered)
+  elseif node isa SQLOrder   # likewise the only subtype of `SQLTypeOrder`
+    _each_bare_column_at(f, with_order_term(_order_term_field, node), instruc, clause, depth + 1, covered)   # #1599 slice C
   elseif node isa OperObject
     # A condition's column is never matched structurally: a transformed one
     # (`When("born__@year__@gt" => …)`) arrives as `SQLField(EXTRACT(born), …)`, but the #352 sargable
     # rewrite renders it as `"Tb"."born" >= ?`, so a grouped `born__@year` does not cover it. Its base
     # column is yielded with no path key, and only a grouped `born` does.
     col = _oper_column(node)
-    _alias_filter_key(col, instruc) === nothing && walk(col; cover = _ -> false)
+    _alias_filter_key(col, instruc) === nothing && _each_bare_column_at(f, col, instruc, clause, depth + 1, nothing)
     rhs = _oper_value_node(node)
-    rhs isa Union{FExpression,FObject,WindowFunction,CTEReference,JoinedReference} && walk(rhs)
+    rhs isa Union{FExpression,FObject,WindowFunction,CTEReference,JoinedReference} &&
+      _each_bare_column_at(f, rhs, instruc, clause, depth + 1, covered)
   elseif node isa Union{QObject,QorObject}   # the closed view (#1698 phase 2)
-    walk(_q_nodes(node))
+    _each_bare_column_at(f, _q_nodes(node), instruc, clause, depth + 1, covered)
   end
   return nothing
 end

@@ -6,6 +6,9 @@
 # The steps and their output are in `steps.jl`, shared with the read-only entry `read.jl`.
 using TrimF1, PormG, SQLite, Dates
 include("steps.jl")
+include(joinpath(@__DIR__, "tools", "upstream_roots.jl"))
+# The render's run-time re-entry into a nested node finds code only where the build rooted it (#1599 layer 5).
+for (f, t) in PormG.QueryBuilder._trim_render_roots(); Base.Experimental.entrypoint(f, t); end
 
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
@@ -17,6 +20,7 @@ function (@main)(args::Vector{String})::Cint
     lookup_step() || return Cint(13)
     expr_step() || return Cint(14)
     untyped_step() || return Cint(17)   # the untyped read, before the write (#1599 layer 6)
+    func_step() || return Cint(19)
     write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)

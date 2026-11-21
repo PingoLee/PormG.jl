@@ -384,7 +384,7 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   end
   if _result_rule(p) in (:operand, :one_of, :first_operand)
     for operand in (p.column isa AbstractVector ? p.column : (p.column,))
-      formatter = _expression_formatter(operand, instruc)
+      formatter = _expression_formatter_at(operand, instruc)
       # `Max`/`Min` of a part is still that part; a `Coalesce` may be its fallback (`0`, `"n/a"`).
       formatter === nothing || return name in ("MAX", "MIN") ? formatter : _unranged(formatter)
     end
@@ -398,12 +398,12 @@ end
 # operation (`F("happened") + Day(1)`) keeps no type, rather than get the column's. #942, #949: a
 # comparison is a boolean, which the walk names.
 function _expression_formatter(p::FExpression, instruc::SQLInstruction)
-  p.operation === nothing && return _expression_formatter(p.column, instruc)
+  p.operation === nothing && return _expression_formatter_at(p.column, instruc)
   formatter = _kind_formatter_at(_expression_kind(p, instruc), instruc)
   formatter === nothing || return formatter
   # #1070: `Extract("start_at", "HOUR") + 1` is a plain number — it was one while `Extract` carried no
   # formatter. See `_unranged`. Only what the walk does not type reaches here (a JSON key lookup).
-  return _unranged(_expression_formatter(p.field_name, instruc)) === Models.format_number_sql ?
+  return _unranged(_expression_formatter_at(p.field_name, instruc)) === Models.format_number_sql ?
     Models.format_number_sql : nothing
 end
 _expression_formatter(p::SQLField, instruc::SQLInstruction) = _with_field_part_open(_expression_formatter, p.field, instruc)
@@ -421,6 +421,22 @@ _expression_formatter(p::SubqueryObject, instruc::SQLInstruction) =
 # `Coalesce(Q(…), false)`), as the walk names it.
 _expression_formatter(::Union{ExistsObject,SQLTypeQ,SQLTypeQor}, ::SQLInstruction) = Models.format_bool_sql
 _expression_formatter(::Any, ::SQLInstruction) = nothing
+# `_expression_formatter(x, instruc)` for an operand held untyped (a function's column, `p.field_name`), one arm per
+# method above, each call static; anything else is the `::Any` method's `nothing` (#1599 layer 5). Over the untyped
+# column the call dispatched at run time, and the trimmed `Sum("round")` stopped at `_expression_formatter(::String, …)`
+# (the boolean-aggregate check). `test_read_functions_trim_1599.jl` checks the walk against the methods.
+function _expression_formatter_at(@nospecialize(x), instruc::SQLInstruction)
+  x isa String && return _expression_formatter(x, instruc)
+  x isa FExpression && return _expression_formatter(x, instruc)
+  x isa SQLField && return _expression_formatter(x, instruc)
+  x isa FObject && return _expression_formatter(x, instruc)
+  x isa WindowFunction && return _expression_formatter(x, instruc)
+  x isa CTEReference && return _expression_formatter(x, instruc)
+  x isa JoinedReference && return _expression_formatter(x, instruc)
+  x isa SubqueryObject && return _expression_formatter(x, instruc)
+  x isa Union{ExistsObject,SQLTypeQ,SQLTypeQor} && return Models.format_bool_sql
+  return nothing
+end
 
 
 # #965 — whether a value is a boolean only when ALL of its candidate values are: a `Bool` literal, or
@@ -453,7 +469,7 @@ function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
   return _expression_formatter(p, instruc) === Models.format_bool_sql
 end
 _is_boolean_valued(p::WindowFunction, instruc::SQLInstruction) =
-  _result_rule(p) === :operand && _expression_formatter(p.column, instruc) === Models.format_bool_sql
+  _result_rule(p) === :operand && _expression_formatter_at(p.column, instruc) === Models.format_bool_sql
 
 # #1027 — a `Concat` operand that has no single text: `(kind, what)`, `kind` one of `:bool`, `:float`,
 # `:decimal`, `:numeric`, or `nothing`. PostgreSQL's `CONCAT` writes each operand through its type's
@@ -695,7 +711,7 @@ function _temporal_mix(p::Union{FObject,WindowFunction}, instruc::SQLInstruction
     # #1386: a key lookup is the key's value, of the data's type (`CJSONValue`, #1458): no class.
     class = _temporal_mix_class(_infer_kind_any(value, instruc, _AllKinds()))
     class === nothing && continue
-    side = (class, _temporal_mix_label(value), value isa SQLText)
+    side = (class, value isa SQLText ? _temporal_mix_label(value) : _temporal_mix_label_expr(value), value isa SQLText)
     for seen in sides
       _is_mix(seen[1], class) && !(declared && _declaration_lifts(seen[1], class)) && return (seen, side)
     end
@@ -713,21 +729,44 @@ function _temporal_mix_values(p::Union{FObject,WindowFunction})
     default = get(p.kwargs, "default", nothing)
     default === nothing || push!(values, default isa Union{SQLObject,SQLType} ? default : SQLText(default))
   else
-    append!(values, p.column isa AbstractVector ? p.column : (p.column,))
+    _append_operands!(values, p.column)   # #1599 layer 5: the untyped column at its type
   end
   return Any[v isa Union{SQLObject,SQLType,AbstractString} ? v : SQLText(v) for v in values
              if !_is_null_literal(v isa SQLText ? v.field : v)]
 end
 function _temporal_mix_label(p::SQLText)
-  t = string(nameof(typeof(p.field)))
+  T = typeof(p.field)
+  t = string(T isa DataType ? T.name.name : nameof(T))   # #1599 layer 5: a value's type is a `DataType`, read in place
   return "$(first(t) in "AEIO" ? "an" : "a") $(t) literal"
 end
-function _temporal_mix_label(p)
-  label = _concat_operand_label(p)
+_temporal_mix_label(p) = _temporal_mix_label_expr(p)
+# Any other value's label, one method over the value unspecialized (#1599 layer 5): the call over the untyped value
+# dispatched at run time, and the trimmed `Case(When(…, then = F("round")), default = 0)` stopped at
+# `_temporal_mix_label(::FExpression)`. The label is computed for every value, whether or not a mix is refused.
+function _temporal_mix_label_expr(@nospecialize(p))
+  label = _concat_operand_label_at(p)
   label === nothing || return "`$(label)`"
-  p isa Union{FObject,WindowFunction} && return "`$(p.function_name)(…)`"
+  p isa FObject && return "`$(p.function_name)(…)`"
+  p isa WindowFunction && return "`$(p.function_name)(…)`"
   return "an expression"
 end
+# A function's column appended to `values` as its operands: a list's elements at the list's type, or the one operand
+# (#1599 layer 5): `append!` over the untyped column (`(p.column,)`) dispatched at run time.
+function _append_operands!(values::Vector{Any}, @nospecialize(col))
+  if col isa Vector{Any}
+    append!(values, col)
+  elseif col isa Vector{String}
+    append!(values, col)
+  elseif col isa Vector{FObject}
+    append!(values, col)
+  elseif col isa AbstractVector
+    _append_operands_other!(values, col)
+  else
+    push!(values, col)
+  end
+  return values
+end
+@noinline _append_operands_other!(values::Vector{Any}, @nospecialize(col::AbstractVector)) = append!(values, col)
 
 """
     _check_temporal_mix(p, instruc)
@@ -763,16 +802,39 @@ end
 function _check_operand_domain(p::FObject, instruc::SQLInstruction)
   domain = _operand_domain(p)
   domain === nothing && return nothing
-  for x in (p.column isa AbstractVector ? p.column : (p.column,))
-    _is_null_literal(x isa SQLText ? x.field : x) && continue
-    kind = _expression_kind(x, instruc)
-    if kind isa CInterval
-      :interval in domain || throw(_duration_math_refusal(p.function_name, instruc.connection))
-    elseif kind isa _NonNumberKind
-      throw(_non_number_math_refusal(p.function_name, kind, _concat_operand_label(x), instruc.connection))
-    elseif kind isa Union{CText,CVarChar}
-      throw(_text_math_refusal(p.function_name))
-    end
+  _check_operand_domain_at(p.column, p, domain, instruc)
+  return nothing
+end
+# Each operand of `p`'s column, held untyped: a list of operands, or the one operand (#1599 layer 5). Iterating the
+# untyped column (`(p.column,)`, a `Vector` of an unknown element type) dispatched at run time; the trimmed read stopped
+# at `iterate(::Tuple{FExpression})` on `Abs(F("round") - 10)` (MySQL). The operands are checked in the same order.
+@noinline function _check_operand_domain_at(@nospecialize(col), p::FObject, domain, instruc::SQLInstruction)
+  if col isa Vector{Any}
+    for x in col; _check_operand_domain_one(x, p, domain, instruc); end
+  elseif col isa Vector{String}
+    for x in col; _check_operand_domain_one(x, p, domain, instruc); end
+  elseif col isa Vector{FObject}
+    for x in col; _check_operand_domain_one(x, p, domain, instruc); end
+  elseif col isa AbstractVector
+    _check_operand_domain_other(col, p, domain, instruc)
+  else
+    _check_operand_domain_one(col, p, domain, instruc)
+  end
+  return nothing
+end
+@noinline function _check_operand_domain_other(@nospecialize(col::AbstractVector), p::FObject, domain, instruc::SQLInstruction)
+  for x in col; _check_operand_domain_one(x, p, domain, instruc); end
+  return nothing
+end
+function _check_operand_domain_one(@nospecialize(x), p::FObject, domain, instruc::SQLInstruction)
+  _is_null_literal(x isa SQLText ? x.field : x) && return nothing
+  kind = _expression_kind(x, instruc)
+  if kind isa CInterval
+    :interval in domain || throw(_duration_math_refusal(p.function_name, instruc.connection))
+  elseif kind isa _NonNumberKind
+    throw(_non_number_math_refusal(p.function_name, kind, _concat_operand_label(x), instruc.connection))
+  elseif kind isa Union{CText,CVarChar}
+    throw(_text_math_refusal(p.function_name))
   end
   return nothing
 end
@@ -965,7 +1027,7 @@ function _integral_valued(p, instruc::SQLInstruction)
     p.function_name in ("FLOOR", "CEIL") && return _divided_whole_operand(p, instruc) === nothing
     if p.function_name == "ROUND"
       precision = get(p.kwargs, "precision", 0)
-      return precision isa Integer && precision == 0 && _divided_whole_operand(p, instruc) === nothing
+      return _zero_places(precision) && _divided_whole_operand(p, instruc) === nothing
     end
     p.function_name == "MOD" && p.column isa AbstractVector && return all(x -> _whole_number(x, instruc), p.column)
     # #1167: a cast to a `numeric` keeps a whole number whole, scaled or not (`grid::numeric` is `1`,
@@ -1170,7 +1232,7 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   if operand isa FObject && operand.function_name == "ROUND"
     d = get(operand.kwargs, "precision", 0)
     # #1111: unless what it rounds is an integer division, which has no places on SQLite at all.
-    d isa Integer && 0 < d <= scale && _divided_whole_operand(operand, instruc) === nothing && return nothing
+    _places_within(d, scale) && _divided_whole_operand(operand, instruc) === nothing && return nothing
   end
   # A function whose value is one of its operands' values gains no digits: `Max("price")` of a
   # two-place DecimalField has two. With an `output_field` it is a cast, read above or below.
@@ -1414,6 +1476,17 @@ _concat_operand_label(p::JoinedReference) = "Joined(\"$(p.alias)\", \"$(p.path)\
 _concat_operand_label(p::SQLField) = _concat_operand_label(p.field)
 _concat_operand_label(p::FExpression) = p.operation === nothing ? _concat_operand_label(p.field_name) : nothing
 _concat_operand_label(::Any) = nothing
+# `_concat_operand_label(p)` for a value held untyped, one arm per method above, each call static; anything else is the
+# `::Any` method's `nothing` (#1599 layer 5). `test_read_functions_trim_1599.jl` checks the walk against the methods.
+function _concat_operand_label_at(@nospecialize(p))
+  p isa String && return _concat_operand_label(p)
+  p isa AbstractString && return String(p)   # the `::AbstractString` method's answer
+  p isa CTEReference && return _concat_operand_label(p)
+  p isa JoinedReference && return _concat_operand_label(p)
+  p isa SQLField && return _concat_operand_label_at(p.field)
+  p isa FExpression && return p.operation === nothing ? _concat_operand_label_at(p.field_name) : nothing
+  return nothing
+end
 # #1554 — the operand as a refusal's advice spells it, as Julia a caller can paste: a path quoted
 # (`Cast("price", "text")`), a `CTE(…)`/`Joined(…)` handle as written and unquoted
 # (`Cast(CTE("tc", "v"), "text")`), and any other expression `x`, as the other refusals write a computed

@@ -6375,6 +6375,121 @@ end
     @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
   end
 
+  # What: a function's kind by its name (`_computed_kind_by_name` through the engine and kind walks, `_output_kind_by_name`),
+  #   the operand kinds a computed number's meaning reads (`_operand_kinds_at`, `_operand_meaning`), and `_number_kind`
+  #   under both policies.
+  # Expected: no dynamic call in any; the ladders name every function a `Val` method of either rule states, and the
+  #   kind walk names every concrete kind a `_computed_kind` method states.
+  # Why: `_computed_kind(Val(Symbol(name)), …)` and `_output_kind(Val(Symbol(name)), …)` built a type from a name at run
+  #   time, the meaning's operands were iterated untyped, and `_operand_meaning` dispatched on an untyped kind: each
+  #   stopped the trimmed read of `Abs(F("round") - 10)` (#1599 layer 5).
+  @testset "a function's kind is read by its name at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._computed_kind_by_name, (String, Symbol, Any, Any)) == String[]
+    @test _dynamic_calls(QB._output_kind_by_name, (String, Symbol, Vector{Any})) == String[]
+    @test _dynamic_calls(QB._operand_kinds_at, (Any, QB.InstructionObject, QB._MeaningKinds)) == String[]
+    @test _dynamic_calls(QB._operand_meaning, (Any,)) == String[]
+    for P in (QB._AllKinds, QB._MeaningKinds)
+      @test (P, _dynamic_calls(QB._number_kind, (QB.FObject, Symbol, QB.InstructionObject, P))) == (P, String[])
+    end
+    stated(rule) = Set(String(Base.unwrap_unionall(m.sig).parameters[2].parameters[1]) for m in methods(rule)
+                       if (V = Base.unwrap_unionall(m.sig).parameters[2]) isa DataType && V <: Val && length(V.parameters) == 1)
+    names = union(stated(QB._computed_kind), stated(QB._output_kind))
+    for n in names
+      V = Val{Symbol(n)}
+      @test (n, _dynamic_calls(QB._computed_kind_at, (V, Symbol, Any, Any))) == (n, String[])
+      for E in (PormG.PormGPostgres, PormG.PormGSQLite, PormG.PormGMySQL)
+        @test (n, E, _dynamic_calls(QB._computed_kind_kinds, (V, Symbol, Any, Any, Type{E}))) == (n, E, String[])
+      end
+    end
+    # Every concrete kind a method states is walked, so no named kind falls to the `invoke` on `Any`.
+    kinds = Set{Any}()
+    for m in methods(QB._computed_kind)
+      K = Base.unwrap_unionall(m.sig).parameters[4]
+      K === Any || union!(kinds, Base.uniontypes(K))
+    end
+    @test kinds == Set{Any}(QB._COMPUTED_KIND_TYPES)
+    # Each ladder branches on every stated name (a name with no branch would answer the fallback's kind).
+    for (ladder, rule) in ((QB._computed_kind_by_name, QB._computed_kind), (QB._output_kind_by_name, QB._output_kind))
+      src = string(only(code_lowered(ladder)))
+      for n in stated(rule)
+        @test (nameof(ladder), n, occursin("\"$(n)\"", src)) == (nameof(ladder), n, true)
+      end
+    end
+  end
+
+  # What: a number function's operand check (`_check_operand_domain`) over its untyped column, and the keyword calls a
+  #   function's render makes at run time over a nested `F` or function, which a trimmed build roots
+  #   (`_trim_render_roots`).
+  # Expected: no dynamic call in the check on its success path (the refusal's label and message over the untyped operand
+  #   stay run-time calls, as before); every root names exactly one method.
+  # Why: the check iterated `(p.column,)` untyped (MySQL's trimmed `Abs(F("round") - 10)` stopped there); and a static
+  #   call into a nested node closes the render's recursion, which inference limits, so a limited cycle kept no code for
+  #   reads that ran before (`Core.MissingCodeError`, the #1711 class): those calls stay dynamic, into rooted methods
+  #   (#1599 layer 5).
+  @testset "a function's operands are checked at concrete types, and its nested re-entry is rooted (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._check_operand_domain, (QB.FObject, QB.InstructionObject)) == String[]
+    for D in (Tuple{Symbol}, Tuple{Symbol,Symbol})
+      @test (D, _dynamic_calls(QB._check_operand_domain_at, (Any, QB.FObject, D, QB.InstructionObject))) == (D, String[])
+      d = _dynamic_calls(QB._check_operand_domain_one, (Any, QB.FObject, D, QB.InstructionObject))
+      @test all(x -> occursin(r"_concat_operand_label|_non_number_math_refusal", x), d)
+    end
+    roots = QB._trim_render_roots()
+    @test length(roots) == 24
+    for (f, T) in roots
+      @test (T, length(methods(f, Tuple{T...}))) == (T, 1)
+    end
+  end
+
+  # What: `Round`'s precision read from its options (`_check_round_precision`, `_negative_places`, `_zero_places`,
+  #   `_places_within`) and an aggregate's row phase (`_render_function_typed`).
+  # Expected: no dynamic call in the precision checks for an `Int64` precision (any other `Integer` behind its
+  #   `@noinline` arm); `_render_function_typed` opens the row phase through `_render_function_body_row`, no closure.
+  # Why: `digits < 0` over the untyped precision dispatched at run time (`<(::Int64, ::Int64)`, the trimmed
+  #   `Round(F("round"))`), and the row phase through `_with_render_scope` re-entered that helper from the render's own
+  #   scopes, a limited call the trimmed `Count("raceid")` stopped in (#1599 layer 5).
+  @testset "Round's precision and an aggregate's row phase are read at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._check_round_precision, (QB.FObject, Any, QB.InstructionObject)) == String[]
+    @test _dynamic_calls(QB._check_round_precision_at, (QB.FObject, Int64, QB.InstructionObject)) |>
+          d -> all(x -> occursin(r"_scale_divergent_operand|_non_number_operand|_round_text_refusal|_capability_error_at", x), d)
+    for f in (QB._negative_places, QB._zero_places)
+      @test (nameof(f), _dynamic_calls(f, (Any,))) == (nameof(f), String[])
+    end
+    @test _dynamic_calls(QB._places_within, (Any, Int)) == String[]
+    # An aggregate's column: whether it can have a millisecond form (`Sum("round")` stopped at
+    # `_interval_ms_candidate(::String)` over the untyped column).
+    @test _dynamic_calls(QB._interval_ms_candidate_at, (Any,)) == String[]
+    # The aggregate arm is static; the variadic arm (`Greatest`/`Coalesce` over intervals) keeps its two run-time calls.
+    @test all(x -> occursin(r"== \"\"|all\(", x), _dynamic_calls(QB._interval_ms_candidate, (QB.FObject,)))
+    # An operand's formatter over the untyped column (`Sum("round")`'s boolean-aggregate check).
+    @test _dynamic_calls(QB._expression_formatter_at, (Any, QB.InstructionObject)) == String[]
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "select_nodes.jl"), String)
+    body = src[findfirst("function _render_function_typed(", src).start:end]
+    body = body[1:findfirst("\nend\n", body).stop]
+    @test !occursin("_with_render_scope(", body)
+    @test occursin("_render_function_body_row(v, instruc, _as)", body)
+  end
+
+  # What: an aggregate query's mixed-grouping check (`_check_mixed_grouping`), its fingerprint (`_mixed_node_signature`)
+  #   and its column walk (`_each_bare_column_at`).
+  # Expected: no dynamic call in the check; the fingerprint is a `String` and dispatches only on the rare shapes it
+  #   spells with `repr` or a non-`String` text; the walk only on a non-`String` text and a list of no known element.
+  # Why: the fingerprint dispatched on each untyped slot and was stored as tuples in a `Set{Any}`, and the walk's
+  #   keyword call took a closure per re-entry: each stopped the trimmed `values("year", "n" => Count(…))`
+  #   (#1599 layer 5).
+  @testset "an aggregate query's mixed-grouping check runs at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls(QB._check_mixed_grouping, (QB.InstructionObject,)) == String[]
+    @test Base.return_types(QB._mixed_node_signature, (Any, Int)) == Any[Union{Nothing,String}]
+    @test all(x -> occursin(r"repr|String\(", x), _dynamic_calls(QB._mixed_node_signature, (Any, Int)))
+    g = (c, l) -> nothing
+    d = _dynamic_calls(QB._each_bare_column_at, (typeof(g), Any, QB.InstructionObject, String, Int, Union{Nothing,Set{String}}))
+    @test all(x -> occursin(r"String\(|_mixed_leaf|iterate", x), d)
+    @test _dynamic_calls(QB._bare_covered, (Union{Nothing,Set{String}}, Any)) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -190,6 +190,8 @@ const ALLOWED_UNTYPED_BARE_ERROR = Dict(
     # ladder to answer `:unknown`. Raised at package load, by PormG's own source: no query, and so no consumer, can
     # reach it — it fails the precompile of the change that adds such a method.
     "src/querybuilder/functions.jl" => 1,  # a rule method the by-name ladder cannot read — load-time invariant
+    # #1599 layer 5, the same for `_computed_kind`/`_output_kind` (`_ladder_shape_refusal`): one site, at package load.
+    "src/querybuilder/expression_kind.jl" => 1,  # a kind rule method the by-name ladders cannot read — load-time invariant
     "src/ConnectionPool.jl"             => 1,  # `error("validation failed")` inside atomic()'s DOCSTRING example
 )
 

@@ -274,9 +274,10 @@ function delete(objct::SQLObjectHandler;
       # step locked. A walked self-referential CASCADE (#1377) does not: each level is a plan of its own
       # whose keys `_walk_self_levels!` read `FOR UPDATE`, and the plan does not descend the relation.
       if _locks_cascade_parents(connection)
-        for lock_model in _models_to_lock(collector)
+        for m in _models_to_lock(collector)
+          lock_model = m::Models.ModelType   # #1599 layer 7: once, before `objects` is read by it
           root_locked && lock_model === model && length(collector.objects[lock_model]) == 1 && continue
-          res = lock_objects(connection, lock_model::Models.ModelType, collector.objects[lock_model], show_query, conn)
+          res = lock_objects(connection, lock_model, collector.objects[lock_model], show_query, conn)
           push!(results, res)
         end
       end
@@ -386,30 +387,12 @@ function delete(objct::SQLObjectHandler;
         return nothing
       end
       root_keys = _resolve_root_keys!(results, connection, model, key_plan, show_query, conn)
-      show_query === :execute && isempty(root_keys) && return nothing
-      key = key_plan.entry[:key]
-      # #1377: a self-referential CASCADE is walked by keys, one level per read, and every level is a
-      # plan of its own, run deepest first; see `_walk_self_levels!`.
-      self_fks = _self_cascade_fields(model)
-      walked = length(self_fks) == 1 && !isempty(root_keys)
-      walk = walked ? _walk_self_levels!(results, connection, model, key, only(self_fks), root_keys, objct, show_query, conn) :
-                      (sets = AbstractVector[root_keys], loop_index = 0)
-      # Every chunk of every set is PLANNED before any statement runs, so a refusal the planner raises
-      # (`ProtectedError`, `ModelDefinitionError`) still comes before the first write, as it does for
-      # one plan — a caller who catches it inside its own transaction finds nothing deleted. A loop's set
-      # is one chunk (at most MAX_CASCADE_DEPTH + 1 rows, see `_walk_self_levels!`), tagged by its index.
-      collectors = [(plan(_keyed_root(model, key, chunk, objct), length(self_fks) == 1), i == walk.loop_index, length(level_keys))
-                    for (i, level_keys) in enumerate(walk.sets)
-                    for chunk in _root_key_chunks(connection, level_keys)]
-      for (collector, is_loop, loop_rows) in collectors
-        before = get(deleted_counter, model.name, 0)::Int   # every count stored is an `Int` (`_count_deleted!`)
-        run_plan(conn, collector, true)
-        # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
-        # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
-        # transaction (locked, or behind SQLite's single writer), so when the DELETE succeeds exactly
-        # these rows are gone: count them.
-        is_loop && show_query === :execute && (deleted_counter[model.name] = before + loop_rows)
-      end
+      # #1599 layer 7: the steps after the key read run at the keys' vector type (`_run_root_keys!`, through the walk
+      # `_with_root_keys`): as an `AbstractVector`, every call on the keys dispatched at run time. `conn` goes in a typed
+      # box, as `delete()` hands it to `run_deletions`: as itself, the `NamedTuple`'s type was its run-time type.
+      _with_root_keys(_run_root_keys!, root_keys, (results = results, connection = connection, model = model,
+        key_plan = key_plan, objct = objct, show_query = show_query, conn_box = Base.RefValue{Any}(conn), plan = plan,
+        run_plan = run_plan, deleted_counter = deleted_counter))
       return nothing
     end
 
@@ -494,6 +477,55 @@ function delete(objct::SQLObjectHandler;
 end
 delete(; kwargs...) = (objct) -> delete(objct; kwargs...)
 
+# `run_deletions`' steps after the root's key read (#1342, #1370), at the keys' vector type (#1599 layer 7): moved
+# here unchanged, so that `isempty`, the chunks and each keyed root are called at it. The walked self-referential
+# CASCADE (#1377) still holds its levels as `AbstractVector`s (`_walk_self_levels!`).
+function _run_root_keys!(root_keys::AbstractVector, ctx::C) where {C}
+  (; results, connection, model, key_plan, objct, show_query, conn_box, plan, run_plan, deleted_counter) = ctx
+  conn = conn_box[]
+  show_query === :execute && isempty(root_keys) && return nothing
+  key = key_plan.entry[:key]::String   # a collector entry's key is its column's name (`_collector_entry`)
+  # #1377: a self-referential CASCADE is walked by keys, one level per read, and every level is a
+  # plan of its own, run deepest first; see `_walk_self_levels!`.
+  self_fks = _self_cascade_fields(model)
+  walked = length(self_fks) == 1 && !isempty(root_keys)
+  walk = walked ? _walk_self_levels!(results, connection, model, key, only(self_fks), root_keys, objct, show_query, conn) :
+                  (sets = [root_keys], loop_index = 0)
+  # Every chunk of every set is PLANNED before any statement runs, so a refusal the planner raises
+  # (`ProtectedError`, `ModelDefinitionError`) still comes before the first write, as it does for
+  # one plan — a caller who catches it inside its own transaction finds nothing deleted. A loop's set
+  # is one chunk (at most MAX_CASCADE_DEPTH + 1 rows, see `_walk_self_levels!`), tagged by its index.
+  # #1599 layer 7: two loops in the comprehension's order, into a vector of the plans' type; collected from the nested
+  # generator, the element type was computed at run time.
+  collectors = Tuple{DeletionCollector{Union{String, SQLObjectHandler}}, Bool, Int}[]
+  for (i, level_keys) in enumerate(walk.sets)
+    for chunk in _root_key_chunks(connection, level_keys)
+      push!(collectors, (plan(_keyed_root(model, key, chunk, objct), length(self_fks) == 1), i == walk.loop_index,
+                         length(level_keys)))
+    end
+  end
+  for (collector, is_loop, loop_rows) in collectors
+    before = get(deleted_counter, model.name, 0)::Int   # every count stored is an `Int` (`_count_deleted!`)
+    run_plan(conn, collector, true)
+    # #1377: a loop's rows go in one DELETE, and a key's own ON DELETE CASCADE removes some of them
+    # inside it, which SQLite leaves out of the statement's count. Every one of them was read in this
+    # transaction (locked, or behind SQLite's single writer), so when the DELETE succeeds exactly
+    # these rows are gone: count them.
+    is_loop && show_query === :execute && (deleted_counter[model.name] = before + loop_rows)
+  end
+  return nothing
+end
+
+# `f(keys, ctx)` at the vector types `_key_vector` and `_key_vector_rows` return for PormG's keys; any other through
+# one dynamic call.
+function _with_root_keys(f::F, @nospecialize(keys::AbstractVector), ctx::C) where {F, C}   # called with `AbstractVector`
+  keys isa Vector{Int64} && return f(keys, ctx)
+  keys isa Vector{Int32} && return f(keys, ctx)
+  keys isa Vector{String} && return f(keys, ctx)
+  return _with_root_keys_other(f, keys, ctx)
+end
+@noinline _with_root_keys_other(f::F, @nospecialize(keys), ctx::C) where {F, C} = f(keys, ctx)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Every filtered root with something to cascade is resolved to keys first (#1342, #1370)
 #
@@ -541,10 +573,22 @@ function _cascade_writes(model::PormGModel)::Bool
   for related_value in values(model.related_objects)
     related_value isa Models.ManyToManyRelation && continue
     rel = related_value::Models.ReverseRelation
-    rel.model_resolved.fields[String(rel.fk_field)].on_delete in (CASCADE, SET_NULL, SET_DEFAULT) && return true
+    # #1599 layer 7: the child at `ModelType`, the only model type (as `Models` reads it), and its field's action
+    # at the field's type (`_relation_on_delete`); `in` compared the actions with `==`, which is `===` on them.
+    action = _relation_on_delete((rel.model_resolved::Models.ModelType).fields[String(rel.fk_field)])
+    (action === CASCADE || action === SET_NULL || action === SET_DEFAULT) && return true
   end
   return false
 end
+
+# `field.on_delete` for the field a reverse relation names (#1599 layer 7). Of the model fields PormG defines
+# (`Models.AnyField`), the two relations that a reverse relation can name have an `on_delete` slot; on the 29-member
+# union the read dispatched at run time. Any other field takes that read, which raises as it did.
+function _relation_on_delete(@nospecialize(field))::Union{Function, Nothing}
+  field isa Union{Models.sForeignKey, Models.sOneToOneField} && return field.on_delete
+  return _relation_on_delete_other(field)
+end
+@noinline _relation_on_delete_other(@nospecialize(field)) = getproperty(field, :on_delete)::Union{Function, Nothing}
 
 """
 `nothing` when the delete keeps its own filter; otherwise the root's entry with its rendered row
@@ -574,7 +618,8 @@ connection, with `FOR UPDATE` where the engine locks a cascade's parents. Under 
 them when the pool is a live one, as the cascade's existence probes do, so the statements that follow
 are scoped by the keys that would run; on a mock engine the list is empty.
 """
-function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::PormGModel, plan, show_query::Symbol, conn)
+function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::PormGModel, plan, show_query::Symbol,
+                             @nospecialize(conn))   # held untyped by `run_deletions` (#1599 layer 7)
   locks = _locks_cascade_parents(connection)
   key_column = safe_column_identifier(Models.model_column(model, plan.entry[:key]), connection)
   select_sql = "SELECT $(plan.alias).$(key_column) FROM $(safe_table_identifier(Models.model_table_name(model), connection))" *
@@ -587,9 +632,39 @@ function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::Por
     # On `connection`, the pool the statements render for — a `connection =` override included.
     return _key_vector(Tables.columntable(fetch(connection, select_sql, plan.parameters)))
   end
-  result, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters)
-  return _key_vector(Tables.columntable(result))
+  if !_decodes_concrete_rows(connection)
+    result, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters)
+    return _key_vector(Tables.columntable(result))
+  end
+  # #1599 layer 7: on the pools that decode a concrete result (`_decodes_concrete_rows`) the keys are read as the untyped
+  # read reads its rows (`_ProjectionRowDecoder`, with no parser: a key column has none); `Tables.columntable` over the
+  # result, typed `Any`, dispatched at run time, and a trimmed image had no code for it.
+  rows, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters, _key_row_decoder())
+  return _key_vector_rows(rows::Vector{Dict{Symbol, Any}})
 end
+
+# Any other pool (LibPQ, a test double) reads the keys through `Tables.columntable`, as before.
+_key_row_decoder() = _ProjectionRowDecoder(Dict{Symbol, ReadParser}(), Dict{Symbol, Function}(),
+                                           Base.RefValue{Union{Nothing, Exception}}(nothing))
+
+# `_key_vector` over the decoded rows (#1599 layer 7): each row is the one key column; a missing cell is skipped, and
+# the keys are narrowed to their values' type, as `identity.` narrowed them (`_narrowed_keys`).
+function _key_vector_rows(rows::Vector{Dict{Symbol, Any}})::AbstractVector
+  keys = Any[]
+  for row in rows
+    k = first(values(row))
+    ismissing(k) || push!(keys, k)
+  end
+  return isempty(keys) ? Int[] : _narrowed_keys(keys)
+end
+# `identity.(keys)` at the key types PormG's primary keys read as; any other through that broadcast.
+function _narrowed_keys(keys::Vector{Any})::AbstractVector
+  all(k -> k isa Int64, keys) && return Int64[k::Int64 for k in keys]
+  all(k -> k isa Int32, keys) && return Int32[k::Int32 for k in keys]
+  all(k -> k isa String, keys) && return String[k::String for k in keys]
+  return _narrowed_keys_other(keys)
+end
+@noinline _narrowed_keys_other(keys::Vector{Any})::AbstractVector = identity.(keys)
 
 # The first column of a key read, as a concretely typed vector — `"<pk>__@in"` accepts a typed list,
 # not a `Vector{Any}`; an empty read is `Int[]`, which renders as the empty set on every engine.
@@ -610,10 +685,12 @@ The key sets the cascade runs over, one plan per set, all inside the delete's tr
 where the engine binds a list as a single array (PostgreSQL); otherwise sets that keep every statement
 within the engine's bind limit.
 """
-function _root_key_chunks(connection::_SQLEngine, keys::AbstractVector)::Vector{AbstractVector}
-  (isempty(keys) || _binds_list_as_array(connection)) && return AbstractVector[keys]
+function _root_key_chunks(connection::_SQLEngine, keys::Vector{T})::Vector{Vector{T}} where {T}
+  # #1599 layer 7: at the keys' vector type, so each chunk is one (it was an `AbstractVector`, and every call on a
+  # chunk dispatched at run time).
+  (isempty(keys) || _binds_list_as_array(connection)) && return Vector{T}[keys]
   size = max(1, fld(_backend_parameter_limit(connection), ROOT_KEY_PATH_BUDGET))
-  return AbstractVector[collect(chunk) for chunk in Iterators.partition(keys, size)]
+  return Vector{T}[collect(chunk) for chunk in Iterators.partition(keys, size)]
 end
 
 # The root query a key set stands for: a fresh query on the same model and connection key, so nothing
@@ -672,7 +749,7 @@ checks at each statement. A level a row is deleted at is then always below its p
 own `ON DELETE CASCADE` keys the database never has a child left to cascade to.
 """
 function _walk_self_levels!(results::Vector, connection::_SQLEngine, model::PormGModel, key::String, fk::String,
-    root_keys::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, conn) where {K}
+    root_keys::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, @nospecialize(conn)) where {K}   # #1599 layer 7: `conn` held untyped
   depth = Dict{K, Int}(k => 0 for k in root_keys)
   parent = Dict{K, K}()
   looped = Set{K}()
@@ -707,7 +784,7 @@ function _walk_self_levels!(results::Vector, connection::_SQLEngine, model::Porm
   # at most MAX_CASCADE_DEPTH + 1 rows: one key chunk on every engine, and one DELETE.
   isempty(looped) || _supports(connection, :deferred_foreign_keys) ||
     throw(_self_loop_refusal(connection, model, fk, collect(looped)))
-  sets = AbstractVector[]
+  sets = Vector{K}[]   # #1599 layer 7: every level is a `Vector{K}`, so the sets are one type, as the unwalked plan's are
   for d in maximum(values(depth)):-1:1
     rows = K[k for (k, kd) in depth if kd == d && !(k in looped)]
     isempty(rows) || push!(sets, sort!(rows))
@@ -739,7 +816,8 @@ WHERE <fk> IN (…)`, read like the root's keys (`_resolve_root_keys!`): `FOR UP
 locks a cascade's parents, and recorded but not locked under inspection, reading only a live pool.
 """
 function _read_self_children!(results::Vector, connection::_SQLEngine, model::PormGModel, key::String, fk::String,
-    chunk::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol, conn)::Tuple{Vector{K}, Vector{K}} where {K}
+    chunk::AbstractVector{K}, objct::SQLObjectHandler, show_query::Symbol,
+    @nospecialize(conn))::Tuple{Vector{K}, Vector{K}} where {K}   # #1599 layer 7: `conn` held untyped
   read = _keyed_root(model, fk, chunk, objct)
   read.values(key)
   entry = _collector_entry(key, read)
@@ -815,16 +893,20 @@ function prepare_related_query(keys::Dict{Symbol, Union{String, SQLObjectHandler
   delete_key = resolve_delete_key(related_model; fallback=string(field_name))
   # #1599 layer 7: shallow (#1624), as a read terminal's copy; `values` replaces the projection vector. A deep
   # copy walks the query by run-time dispatch, and the trimmed full fixture entry's `delete` stopped in one.
-  _query = _terminal_copy(keys[:objct])
+  # #1599 layer 7: the parent's query at its type; held as `Union{String, SQLObjectHandler}`, the copy dispatched at run
+  # time. Anything else takes that call.
+  parent = keys[:objct]
+  _query = parent isa ObjectHandler ? _terminal_copy(parent) : _terminal_copy_other(parent)
   delete_key != DIRECT_DELETE_KEY_SENTINEL && _query.values(delete_key)
   return _collector_entry(delete_key, _query)
 end
+@noinline _terminal_copy_other(@nospecialize(parent)) = _terminal_copy(parent)
 
 # One collected entry, `:key` (the column a child's `"<fk>__@in"` reads) and `:objct` (the query), at the collector's
 # element type (#1599 layer 7, #1694). Each slot is assigned, so each store is at its value's type: built from pairs,
 # `Dict(:key => …, :objct => …)` was a `Dict{Symbol,Any}` that `push!` converted value by value, and the typed
 # `Pair` constructor stored each one through a call a trimmed image had no code for either.
-function _collector_entry(key::String, objct::SQLObjectHandler)::Dict{Symbol, Union{String, SQLObjectHandler}}
+function _collector_entry(key::String, @nospecialize(objct::SQLObjectHandler))::Dict{Symbol, Union{String, SQLObjectHandler}}
   entry = Dict{Symbol, Union{String, SQLObjectHandler}}()
   entry[:key] = key
   entry[:objct] = objct
@@ -840,7 +922,8 @@ function add_objects_to_collector!(collector::DeletionCollector, objct::SQLObjec
 end
 
 
-function add_objects_to_collector!(collector::DeletionCollector, model::PormGModel, key::String, objct::SQLObjectHandler)
+function add_objects_to_collector!(collector::DeletionCollector, model::PormGModel, key::String,
+                                   @nospecialize(objct::SQLObjectHandler))   # only stored (#1599 layer 7)
   # Add to collector
   # @info objct |> query
   @pormg_debug false
@@ -965,14 +1048,14 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
     # and `pk_model` slots were destructured here and never read — both are gone with the tuple.
     rel = related_value::Models.ReverseRelation
     field_name = rel.fk_field
-    related_model = rel.model_resolved
+    related_model = rel.model_resolved::Models.ModelType   # #1599 layer 7: the only model type, as `Models` reads it
     # #1377: the root's self-referential CASCADE was walked by keys; this plan is one level of it.
     collector.skip_self_cascade && model === collector.model && related_model === model &&
-      related_model.fields[String(field_name)].on_delete === CASCADE && continue
+      _relation_on_delete(related_model.fields[String(field_name)]) === CASCADE && continue
 
     _query = related_model |> object;
     if size(dict, 1) == 1
-      _query.filter("$(field_name)__@in" => dict[1][:objct]);
+      _filter_in_parent!(_query, "$(field_name)__@in", dict[1][:objct])   # #1599 layer 7
     else
       or_object = Qor("$(field_name)__@in" => dict[1][:objct])
       for (index, dict_) in enumerate(dict)
@@ -1001,10 +1084,23 @@ function _find_related_objects!(collector::DeletionCollector, model::PormGModel,
 
     _keys = _collector_entry(resolve_delete_key(related_model; fallback=string(field_name)), _query)
 
-    handle_on_delete!(collector, field_name, field, model, _keys, related_model)
+    # #1599 layer 7: at the field's own type. The fields `related_model` holds are a union too wide to split, so the
+    # call dispatched at run time; a reverse relation names a foreign key or a one-to-one field, and any other takes
+    # that dynamic call.
+    if field isa Models.sForeignKey
+      handle_on_delete!(collector, field_name, field, model, _keys, related_model)
+    elseif field isa Models.sOneToOneField
+      handle_on_delete!(collector, field_name, field, model, _keys, related_model)
+    else
+      _handle_on_delete_other(collector, field_name, field, model, _keys, related_model)
+    end
 
   end
 end
+@noinline _handle_on_delete_other(collector::DeletionCollector, field_name::Union{String, Symbol}, @nospecialize(field),
+                                  model::PormGModel, keys::Dict{Symbol, Union{String, SQLObjectHandler}},
+                                  related_model::PormGModel) =
+  handle_on_delete!(collector, field_name, field, model, keys, related_model)
 
 # APPEND a SET_NULL / SET_DEFAULT path, never overwrite one (#459 (a)).
 #
@@ -1019,7 +1115,16 @@ end
 # `mid` rows the cascade then deletes, so PostgreSQL's DEFERRABLE INITIALLY DEFERRED check (and
 # SQLite's deferred pragma) raises at COMMIT and the whole delete rolls back. Silent only against a
 # table with no constraint.
-function _push_field_update!(collector::DeletionCollector, bucket::Tuple{String, Any},
+# `q.filter(column => parent)` with the parent's query at its type (#1599 layer 7): from an entry, held as
+# `Union{String, SQLObjectHandler}`, the `Pair` was `Pair{String, <:SQLObjectHandler}`, and the call dispatched at run
+# time. Anything else takes that call.
+function _filter_in_parent!(q::ObjectHandler, column::String, @nospecialize(parent))
+  parent isa ObjectHandler && return q.filter(column => parent)
+  return _filter_in_parent_other!(q, column, parent)
+end
+@noinline _filter_in_parent_other!(q::ObjectHandler, column::String, @nospecialize(parent)) = q.filter(column => parent)
+
+function _push_field_update!(collector::DeletionCollector, bucket::Tuple{String, Union{Nothing, Int64}},
   related_model::PormGModel, keys::Dict{Symbol, Union{String, SQLObjectHandler}}, field_name::Union{String, Symbol})
   per_model = collector.field_updates[bucket]
   entries = get!(() -> Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}(), per_model, related_model)
@@ -1030,17 +1135,21 @@ end
 function handle_on_delete!(collector::DeletionCollector, field_name::Union{String, Symbol}, field::PormGField, model::PormGModel, 
   keys::Dict{Symbol, Union{String, SQLObjectHandler}}, related_model::PormGModel)
   @pormg_debug false
-  if field.on_delete == CASCADE
+  # #1599 layer 7: the action read once and compared with `===`, which is what `==` and `in` do on these singleton
+  # functions; at `Union{Function, Nothing}`, `==` dispatched at run time.
+  action = field.on_delete
+  if action === CASCADE
     @pormg_debug false
     _keys = prepare_related_query(keys, related_model, field_name)
-    add_objects_to_collector!(collector, related_model, _keys[:key], _keys[:objct])
+    # #1599 layer 7: an entry's key and query at their types (`_collector_entry` builds every entry from them).
+    add_objects_to_collector!(collector, related_model, _keys[:key]::String, _keys[:objct]::SQLObjectHandler)
     @pormg_debug false
     find_related_objects!(collector, related_model, [_keys]) # Recursively find related objects for the related model
-  elseif field.on_delete in [PROTECT, RESTRICT]    
+  elseif action === PROTECT || action === RESTRICT
     # More descriptive error with field name, constraint type, and sample IDs
-    constraint_type = field.on_delete == PROTECT ? "PROTECT" : "RESTRICT"
+    constraint_type = action === PROTECT ? "PROTECT" : "RESTRICT"
     throw(ProtectedError("Cannot delete \e[4m\e[31m$(model.name)\e[0m because it is referenced by \e[4m\e[31m$(related_model.name).$(field_name)\e[0m with ON DELETE \e[4m\e[31m$(constraint_type)\e[0m constraint"))
-  elseif field.on_delete == SET_NULL
+  elseif action === SET_NULL
     @pormg_debug false
     # Backstop copy of `set_models`' SET_NULL guard, for models that never passed registration —
     # see the fixtures in test/integration/common_delete_setup.jl, which register a VALID model and
@@ -1066,17 +1175,18 @@ function handle_on_delete!(collector::DeletionCollector, field_name::Union{Strin
     # Add to field updates using _query object like CASCADE — one entry per cascade path.
     _push_field_update!(collector, (field_name |> string, nothing), related_model, keys, field_name)
 
-  elseif field.on_delete == SET_DEFAULT
+  elseif action === SET_DEFAULT
+    # #1599 layer 7: read once, so the check narrows it to the `Int64` the bucket's key holds.
+    default_value = field.default
     # check that there is a default to set — symmetric with the SET_NULL guard above (#287), and
     # per-field/immediate for the same reason spelled out there (#303).
     # Without it `field.default === nothing` flows into update_field, which renders a bare NULL,
     # so SET_DEFAULT silently behaved as SET_NULL and then died on the column's NOT NULL constraint.
-    if field.default === nothing
+    if default_value === nothing
       throw(ModelDefinitionError("Error in delete: ON DELETE SET_DEFAULT is declared on \e[4m\e[31m$(field_name)\e[0m, but the field has no default — the schema contradicts itself. Give the FK a default= or use a different on_delete."))
     end
 
     # Add field update to set field to default value
-    default_value = field.default
     if !haskey(collector.field_updates, (field_name |> string, default_value))
       collector.field_updates[(field_name |> string, default_value)] = Dict{PormGModel, Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}}()
     end    
@@ -1107,7 +1217,8 @@ for it, as a "Circular dependency", where Django deletes both.
 
 `PROTECT` / `RESTRICT` never get here with rows: `handle_on_delete!` raises `ProtectedError` first.
 """
-_orders_deletes(field::PormGField)::Bool = !(field.on_delete === SET_NULL || field.on_delete === SET_DEFAULT)
+_orders_deletes(@nospecialize(field::PormGField))::Bool =   # the action read at the field's type (#1599 layer 7)
+  (action = _relation_on_delete(field); !(action === SET_NULL || action === SET_DEFAULT))
 
 # `cycle` runs child to parent, its first model repeated at the end: each model's rows reference the
 # next one's.
@@ -1188,8 +1299,11 @@ function collect_fast_deletes!(collector::DeletionCollector)
       # This model depends on something, so it's not a leaf node
       push!(models_with_dependents, model::Models.ModelType)
       
-      # Also add the models it depends on (they have dependents)
-      union!(models_with_dependents, dependencies)
+      # Also add the models it depends on (they have dependents). One by one at `ModelType` (#1599 layer 7): `union!`
+      # pushed each at the set's abstract element type, a run-time dispatch.
+      for dependency in dependencies
+        push!(models_with_dependents, dependency::Models.ModelType)
+      end
     end
   end
   
@@ -1372,15 +1486,22 @@ The collected models that are a parent of an emitted statement — a CASCADE chi
 `collector.objects` or a SET_NULL / SET_DEFAULT target in `collector.field_updates` — parent first.
 """
 function _models_to_lock(collector::DeletionCollector)::Vector{PormGModel}
-  emitters = Set{PormGModel}(keys(collector.objects))
+  emitters = Set{PormGModel}()
+  for m in keys(collector.objects)   # each at `ModelType` (#1599 layer 7): the `Set` constructor pushed it at `PormGModel`
+    push!(emitters, m::Models.ModelType)
+  end
   for affected in values(collector.field_updates)
-    union!(emitters, keys(affected))
+    for m in keys(affected)   # each at `ModelType`, as below (#1599 layer 7): `union!` pushed it at `PormGModel`
+      push!(emitters, m::Models.ModelType)
+    end
   end
   parents = Set{PormGModel}()
   for child in emitters
     # The model at its type (#1599 layer 7, #1614): `ModelType` is the only `PormGModel` (#1615), and the lookup on
     # the abstract element of the set was a run-time dispatch, the Postgres.jl entry's `delete` stopped there.
-    union!(parents, get(collector.dependencies, child::Models.ModelType, Set{PormGModel}()))
+    for parent in get(collector.dependencies, child::Models.ModelType, Set{PormGModel}())
+      push!(parents, parent::Models.ModelType)
+    end
   end
   # `sorted_models` is children-first (`topological_sort`), so its reverse is the top-down order. A loop with each
   # model at its type (#1599 layer 7, #1614): the comprehension's filter closure was called on the abstract element,

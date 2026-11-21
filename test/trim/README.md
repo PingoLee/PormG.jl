@@ -24,7 +24,10 @@ each checked by a typed read after it, then a `bulk_insert` of two races from a 
 not a calendar date), which prints the refusal's type and message and checks that no row was written, then a
 `bulk_update` of two bulk-inserted races matched on `raceid` and an `update_or_create` that inserts one explicit id
 and then updates it, each read back typed and undone (#1694), and a `get_or_create` that inserts one explicit id
-and then finds it through the untyped `first()` (#1599 layer 6), then deletes it. Each step prints one line. The read-only entry, `read.jl`, runs
+and then finds it through the untyped `first()` (#1599 layer 6), then deletes it, and last a cascading delete: a
+race of its own with two pit stops (`CASCADE`) and a driver who debuted in it (`SET_NULL`), deleted and checked by
+typed reads, with the pit stop and driver `prep.jl` seeds on the Monaco race left as they were (#1694, #1599 layer
+7). Each step prints one line. The read-only entry, `read.jl`, runs
 the same boot, read and read steps without the writes; the steps both entries share are in `steps.jl`, and the
 ones the server variants share too are in `tools/reads.jl` and `tools/writes.jl`.
 
@@ -153,7 +156,8 @@ raises, the read after it does not show the change, or the delete that undoes it
 function read (a number function, an aggregate, a nested function or a `Case` whose `then` is an `F`) raises or returns
 other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
 join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
-over a partition and an order) does.
+over a partition and an order) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
+does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -248,12 +252,15 @@ step	bulk_refused	0 rows written; 1 Monaco races
 step	bulk_update	2 rows; rounds 7, 8
 step	update_or_create	first created true; second created false; round 7
 step	get_or_create	first created true; second created false; round 6; year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
+step	cascade	3 rows; pitstop 2, race 1
+step	cascade	0 pit stops left; 1 driver, debut none
+step	cascade	seeded 1 pit stop, 1 driver; kept
 ```
 
 The `func` lines follow the `expr` lines, the `subquery` lines the `func` lines, and the `join` lines the `subquery` lines; the `untyped` lines, between them, are checked against the JIT control's. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
-`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 22 a cascading delete, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -368,6 +375,9 @@ step	bulk	2 rows; 2 read back
 step	bulk_update	2 rows; rounds 7, 8
 step	update_or_create	first created true; second created false; round 7
 step	get_or_create	first created true; second created false; round 6; year::Int32, round::Int32, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
+step	cascade	3 rows; pitstop 2, race 1
+step	cascade	0 pit stops left; 1 driver, debut none
+step	cascade	seeded 1 pit stop, 1 driver; kept
 ```
 
 The untyped lines name each cell's type, which is the engine's own: MySQL and PostgreSQL read `year` and

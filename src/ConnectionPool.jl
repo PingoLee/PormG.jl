@@ -4018,7 +4018,8 @@ See also [`acquire_connection`](@ref), `with_transaction_async`, and the
 function with_transaction(pool::_SQLEngine, sql::String;
   @nospecialize(conn = nothing),   # #1599 layer 7: a handle held untyped; compiled once (`_with_transaction_with`)
   release_conn::Bool = false,
-  params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing)
+  params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing,
+  _decode = nothing)   # #1599 layer 7: a row decoder, internal, as `fetch`'s (#1605); `delete()`'s key read
 
   conn_acquired = false
   rollback_failed = false
@@ -4028,6 +4029,7 @@ function with_transaction(pool::_SQLEngine, sql::String;
   # `backend_execute_async` returns, and with no handle there is nothing for the recovery to settle
   # on — that case must fall through to the ordinary release.
   local task = nothing
+  local raw = nothing   # the result a `_decode` call decodes, after the `try`
   if conn === nothing
     conn = _acquire_in_mode(pool, :write)
     conn_acquired = true
@@ -4040,9 +4042,13 @@ function with_transaction(pool::_SQLEngine, sql::String;
     params isa ManualParams && (params = _normalize_manual_params(params, pool))
     _refuse_nul(sql, params)   # #951 — inside the `try` for the same #846 reason
     # Use async execution but await immediately
-    task = _execute_async(pool, conn, sql, params)
+    task = _execute_async(pool, conn, sql, params, _decode)
     result = _fetch_interruptible(task)
-    return result, conn
+    _decode === nothing && return result, conn
+    # #1599 layer 7: decoded after the `try`, as `fetch` decodes (#1605), so an error the decode raises reaches the
+    # caller as it was raised, not as the statement's.
+    raw = result
+    nothing
   catch e
     # A transaction-ending ROLLBACK that itself failed may leave the connection with an
     # open/aborted transaction — it must never return to the pool as-is (#71); both
@@ -4069,6 +4075,7 @@ function with_transaction(pool::_SQLEngine, sql::String;
       _finish_statement_connection!(pool, conn, task; abandoned = abandoned, rollback_failed = rollback_failed)
     end
   end
+  err === nothing && return _decoded_typed(pool, raw, _decode), conn
   throw(err)   # Thrown after the `catch`, never inside it (#987) — see `_as_database_error`.
 end
 with_transaction(pool::PormGSettings, sql::AbstractString; conn = nothing, release_conn::Bool = false, params::Union{Nothing, AbstractPormGParam, ManualParams} = nothing) = with_pool(_with_transaction_on, pool.connections, sql, conn, release_conn, params)
@@ -4086,6 +4093,10 @@ _with_transaction_async_on(pool::_SQLEngine, sql::String, conn, params) = with_t
 # does; a pool `with_pool` does not list takes that call.
 _with_transaction_with(pool::_SQLEngine, sql::String, @nospecialize(conn), release_conn::Bool, params::P) where {P} =
   Core.kwcall(NamedTuple{(:conn, :release_conn, :params), Tuple{Any, Bool, P}}((conn, release_conn, params)),
+              with_transaction, pool, sql)
+# The same with a row decoder (`with_transaction`'s internal `_decode`, #1599 layer 7): `delete()`'s key read.
+_with_transaction_with(pool::_SQLEngine, sql::String, @nospecialize(conn), release_conn::Bool, params::P, decode::D) where {P,D} =
+  Core.kwcall(NamedTuple{(:conn, :release_conn, :params, :_decode), Tuple{Any, Bool, P, D}}((conn, release_conn, params, decode)),
               with_transaction, pool, sql)
 function _with_transaction_with(settings::Settings, sql::String, @nospecialize(conn), release_conn::Bool, params::P) where {P}
   pool = settings.connections

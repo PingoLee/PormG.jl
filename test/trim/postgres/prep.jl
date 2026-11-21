@@ -1,12 +1,12 @@
-# Seed the Postgres.jl variant's database under the JIT (#1599, #1614): PormG's own DDL for Circuit and
-# Race, the Monaco and Interlagos circuits and one Monaco race, so the fixture's read returns one row,
-# and one Brazilian race for the comparison and order steps (`../tools/reads.jl`). The
-# binary does not `migrate` (#1603).
+# Seed the Postgres.jl variant's database under the JIT (#1599, #1614): PormG's own DDL for Circuit, Race, PitStop and
+# Driver; the Monaco and Interlagos circuits and one Monaco race, so the fixture's read returns one row; one
+# Brazilian race for the comparison and order steps (`../tools/reads.jl`); and a pit stop and a driver on the
+# Monaco race (`cascade_step`, `../tools/writes.jl`). The binary does not `migrate` (#1603).
 #   PORMG_TRIM_DATABASE=pormg_trim … julia --project=test/trim/postgres test/trim/postgres/prep.jl
 #
 # The server comes from the same `PORMG_TRIM_*` variables as `main.jl` (`../tools/server.jl`). This script
-# empties both tables before seeding, so it refuses a database whose name does not contain "trim": the
-# integration suite's F1 database has `circuit` and `race` tables too, and must never be emptied from here.
+# empties the fixture's tables before seeding, so it refuses a database whose name does not contain "trim": the
+# integration suite's F1 database has `circuit`, `race` and `driver` tables too, and must never be emptied from here.
 using PormG, Postgres, Dates
 
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
@@ -17,7 +17,7 @@ const KEY = "f1"
 
 server = trim_server()
 occursin("trim", get(ENV, "PORMG_TRIM_DATABASE", "")) || error(
-    "prep.jl empties the circuit and race tables: set PORMG_TRIM_DATABASE to a database of the " *
+    "prep.jl empties the circuit, race, pit stop and driver tables: set PORMG_TRIM_DATABASE to a database of the " *
     "fixture's own, whose name contains \"trim\" (e.g. pormg_trim), never the integration suite's")
 PormG.Configuration.register_connection(KEY, trim_url(server, "postgresql");
     adapter = "PostgreSQL", postgres_driver = "Postgres", env = "prod", pool_size = 1,
@@ -26,6 +26,10 @@ PormG.Models.set_models(models.MODEL_SET; key = KEY)
 
 PormG.Migrations.ensure_table!(M.Circuit, KEY)
 PormG.Migrations.ensure_table!(M.Race, KEY)
+PormG.Migrations.ensure_table!(M.PitStop, KEY)
+PormG.Migrations.ensure_table!(M.Driver, KEY)
+M.PitStop.objects.delete(allow_delete_all = true)
+M.Driver.objects.delete(allow_delete_all = true)
 M.Race.objects.delete(allow_delete_all = true)
 M.Circuit.objects.delete(allow_delete_all = true)
 M.Circuit.objects.create("circuitref" => "monaco", "name" => "Circuit de Monaco", "country" => "Monaco")
@@ -36,4 +40,9 @@ M.Race.objects.create("year" => 2008, "round" => 6, "circuitid" => monaco["circu
 interlagos = M.Circuit.objects.filter("circuitref" => "interlagos").values("circuitid").list()[1]
 M.Race.objects.create("year" => 2008, "round" => 18, "circuitid" => interlagos["circuitid"],
                       "name" => "Brazilian Grand Prix", "date" => Date(2008, 11, 2))
+monaco_race = M.Race.objects.filter("year" => 2008, "round" => 6).values("raceid").list()[1]
+# A child of each kind on the seeded Monaco race (#1694): `cascade_step` (`tools/writes.jl`) deletes a race of its own
+# and checks that these two are left as they are.
+M.PitStop.objects.create("raceid" => monaco_race["raceid"], "stop" => 1, "lap" => 20)
+M.Driver.objects.create("surname" => "Piquet", "debut_raceid" => monaco_race["raceid"])
 println("prepped ", trim_where(server))

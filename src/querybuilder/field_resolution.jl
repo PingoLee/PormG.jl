@@ -60,24 +60,32 @@ function _insert_join(
     # join that reads the wrong relation — a discriminator would not fix the shape, only hide it.
     # #487 kept that when the rows became typed: `_dedup_key` (`types.jl`) is the same
     # `(a, b, key_a, key_b, alias_a)` tuple, with the kind deliberately left out of it.
-    key = _dedup_key(row)
-    check = filter(r -> _dedup_key(r) == key, row_join)
-    if size(check, 1) == 0
+    # #1599 layer 5: the rows that share the key counted in one loop, each key read and compared at its row's
+    # type (`_dedup_key_at`, `_dedup_key_equal`); a closure handed to `filter` was called on each abstract row at
+    # run time.
+    key = _dedup_key_at(row)
+    matches, first_match = 0, 0
+    for (i, r) in enumerate(row_join)
+      _dedup_key_equal(r, key) || continue
+      matches += 1
+      first_match == 0 && (first_match = i)
+    end
+    if matches == 0
       @pormg_debug false
       push!(row_join, row)
       track_path && push!(_row_path!(instruct), join_path)
       return row.alias_b
     else
-      if size(check, 1) > 1
+      if matches > 1
         # #197: was `throw("Error in join")` — a raw String with zero context. This branch means
         # the dedup filter matched the same (a, b, key_a, key_b, alias_a) join row more than once,
         # which the dedup invariant forbids.
         error(_emsg("PormG internal error in _insert_join: duplicate deduplicated join rows for $(row.a) → $(row.b) (alias $(row.alias_a)) — please report this."))
       end
-      # #1599 slice A: the function returns `String`, and this read is asserted as well: `check` holds the
-      # abstract `JoinRow`, so the read is `Any`, and the return type alone would convert it with a dynamic
-      # `convert`. Every `JoinRow` struct declares `alias_b::String`, so the assertion holds.
-      return check[1].alias_b::String
+      # #1599 slice A: the function returns `String`; the first matching row's alias is read at its kind
+      # (`_dedup_alias_b`), since `row_join` holds the abstract `JoinRow`. Every `JoinRow` struct declares
+      # `alias_b::String`; another row type's is asserted, as before.
+      return _dedup_alias_b(row_join[first_match])
     end
   end
 end

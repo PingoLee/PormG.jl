@@ -11,13 +11,62 @@ function _preset_cte_fields(cte_name::String, query::SQLObjectHandler;
   # with `F("<cte>__col")`, the CTE is CROSS JOINed and the F() filter supplies the correlation
   # in WHERE (see the CTE branch of `_build_row_join`). No `id=>id` default — that was a latent
   # trap that only worked when the model happened to carry an `id` column.
-  table = CTEDict(
-    "join_type" => join_type,
-    "query" => deepcopy(query),
-    "join_field" => join_field
-  )
+  # #1599 layer 5: filled one key at a time, each value stored at its type. Built from the three pairs, each
+  # `setindex!` was a run-time call (the value type holds the abstract `Pair`), and the trimmed `.with(…)` had no
+  # code for `setindex!(::CTEDict, ::Pair{String,String}, ::String)`.
+  table = CTEDict()
+  table["join_type"] = join_type
+  table["query"] = _cte_query_copy(query)
+  table["join_field"] = join_field
 
   return table
+end
+
+# The CTE's own copy of its query, so the caller's later calls on `query` do not reach it (#43). When every projected
+# node holds nothing a caller can change afterwards (`_copy_shares_safely`), the projection is copied one level, as
+# the build copies a projection (`_projection_copy`, #1612): a fresh `SQLField` wrapper per node, the immutable node it
+# wraps shared; every other slot is copied as `deepcopy` copies it (#1599 layer 5). The deep copy walked each node's
+# fields by run-time dispatch, and the trimmed `.with("st" => M.Race.objects.values("circuitid", "n" => Count("raceid")))`
+# raised a `TypeError` inside `deepcopy_internal`. A projection holding anything else (a `Subquery` or `Exists`, whose
+# handler the caller's fluent calls change in place; a window's `WindowSpec`, which may be mutated directly; a
+# mutable literal; a node this check does not know) and another handler type are deep-copied as before.
+function _cte_query_copy(query::SQLObjectHandler)
+  query isa ObjectHandler || return deepcopy(query)
+  object = getfield(query, :object)
+  for v in object.values
+    _projection_shares_safely(v) || return deepcopy(query)
+  end
+  return ObjectHandler(object = _query_copy(object, ProjectionNode[_projection_copy(v) for v in object.values]))
+end
+# Whether a projected node can be shared by the copy: its wrapper is copied, so the check is on what it wraps.
+_projection_shares_safely(v::SQLField)::Bool = _copy_shares_safely(v.field)
+_projection_shares_safely(v::SQLText)::Bool = _copy_shares_safely(v)
+# Whether `x` holds nothing a caller can change after `.with()`: a string, a symbol or a bits value; a column
+# reference (`OuterRef`, `CTE`, `Joined`, immutable structs of strings); and an `F` expression, a function or a
+# literal (`SQLText`, all three immutable) whose every part is one of these. `false` for anything else, which is
+# deep-copied: a conservative answer only costs the deep copy the query took before.
+function _copy_shares_safely(@nospecialize(x))::Bool
+  (x isa String || x isa Symbol || isbits(x)) && return true
+  x isa Union{OuterRefObject,CTEReference,JoinedReference} && return true
+  x isa SQLText && return _copy_shares_safely(x.field)
+  x isa FExpression && return _copy_shares_safely(x.field_name) && _copy_shares_safely(x.operand)
+  if x isa FObject
+    col = x.column
+    if col isa Vector{Any}
+      for c in col; _copy_shares_safely(c) || return false; end
+    elseif col isa Vector{String}
+      nothing
+    elseif col isa AbstractVector
+      return false
+    else
+      _copy_shares_safely(col) || return false
+    end
+    for v in Base.values(x.kwargs)
+      _copy_shares_safely(v) || return false
+    end
+    return true
+  end
+  return false
 end
 
 # #479 — the model whose physical table a CTE name would shadow, or `nothing`.
@@ -60,12 +109,15 @@ end
 # Returns `nothing`, or a `(model, m2m_field)` pair: the model whose table (or whose m2m through
 # table, when `m2m_field` is a field name) the CTE name would shadow.
 function _cte_name_shadowed_model(name::String, q::SQLObject, query::SQLObjectHandler)::Union{Nothing,Tuple{PormGModel,Union{Nothing,String}}}
+  # #1599 layer 5: the modules collected in one typed loop each, in the order the splat gave them (the two base
+  # models' modules, then the registered ones in the registry's own order); splatting a `KeySet` or a filtered
+  # generator, a value of either type, was iterated at run time.
   modules = Module[]
+  _push_module!(modules, q.model._module)
+  _push_module!(modules, query.object.model._module)
   own_key = get(Models.REGISTERED_MODULES, q.model._module, nothing)
-  same_db = own_key === nothing ? keys(Models.REGISTERED_MODULES) :
-    (mod for (mod, key) in Models.REGISTERED_MODULES if key == own_key)
-  for mod in (q.model._module, query.object.model._module, same_db...)
-    mod isa Module && !(mod in modules) && push!(modules, mod)
+  for (mod, key) in Models.REGISTERED_MODULES
+    (own_key === nothing || key == own_key) && _push_module!(modules, mod)
   end
   # The direct ForeignKey / many-to-many targets of both base models, whichever key their module
   # registered under (or none). A String `to` is skipped ON PURPOSE — do not resolve it here: a
@@ -74,30 +126,47 @@ function _cte_name_shadowed_model(name::String, q::SQLObject, query::SQLObjectHa
   # there, or visible there through `using`), which `get_all_models(base._module)` already walks;
   # its through table sits on the base model's own m2m cache. Only a target reachable by direct
   # reference from another module is a `PormGModel` here, and that is the one to follow.
+  # #1599 layer 5: a field's target read at the field's type (`_relation_to`), and a target model's module at
+  # `ModelType`, PormG's one `PormGModel` (another model type asks `hasproperty`, behind `@noinline`).
   for base in (q.model, query.object.model), (_, field) in base.fields
-    hasproperty(field, :to) || continue
-    to = getproperty(field, :to)
-    to isa PormGModel && hasproperty(to, :_module) || continue
-    mod = to._module
+    to = _relation_to(field)
+    to isa PormGModel || continue
+    mod = to isa Models.ModelType ? to._module : _other_model_module(to)
     mod isa Module && !(mod in modules) && push!(modules, mod)
   end
   candidates = PormGModel[q.model, query.object.model]
   for mod in modules, m in Models.get_all_models(mod)
-    m isa PormGModel && !any(c === m for c in candidates) && push!(candidates, m)
+    m isa PormGModel && !_holds_identical(candidates, m) && push!(candidates, m)
   end
+  # Each candidate checked at `ModelType` (#1599 layer 5): over the abstract element each read dispatched.
   for m in candidates
-    Models.model_table_name(m) == name && return (m, nothing)
-    # Forward m2m relations sit in the model's cache; reverse ones in `related_objects`. Both carry
-    # the physical through table (#363).
-    m2m = m.cache.many_to_many
-    if m2m isa AbstractDict
-      for (field_name, rel) in m2m
-        rel isa Models.ManyToManyRelation && rel.through_table == name && return (m, String(field_name))
-      end
+    found = m isa Models.ModelType ? _cte_shadow_in(m, name) : _cte_shadow_in_other(m, name)
+    found === nothing || return found
+  end
+  return nothing
+end
+_push_module!(modules::Vector{Module}, @nospecialize(mod))::Nothing = (mod isa Module && !(mod in modules) && push!(modules, mod); nothing)
+@noinline _other_model_module(@nospecialize(to)) = hasproperty(to, :_module) ? to._module : nothing
+function _holds_identical(xs::Vector{PormGModel}, @nospecialize(m))::Bool
+  for c in xs
+    c === m && return true
+  end
+  return false
+end
+@noinline _cte_shadow_in_other(@nospecialize(m), name::String) = _cte_shadow_in(m, name)
+# Whether CTE name `name` shadows model `m`'s table or one of its many-to-many through tables.
+function _cte_shadow_in(m, name::String)::Union{Nothing,Tuple{PormGModel,Union{Nothing,String}}}
+  Models.model_table_name(m) == name && return (m, nothing)
+  # Forward m2m relations sit in the model's cache; reverse ones in `related_objects`. Both carry
+  # the physical through table (#363).
+  m2m = m.cache.many_to_many
+  if m2m isa AbstractDict
+    for (field_name, rel) in m2m
+      rel isa Models.ManyToManyRelation && rel.through_table == name && return (m, String(field_name))
     end
-    for (accessor, rel) in m.related_objects
-      rel isa Models.ManyToManyRelation && rel.through_table == name && return (m, String(accessor))
-    end
+  end
+  for (accessor, rel) in m.related_objects
+    rel isa Models.ManyToManyRelation && rel.through_table == name && return (m, String(accessor))
   end
   return nothing
 end
@@ -650,6 +719,38 @@ function _bind_cte_filter(f, q::SQLObject, depth::Int = 0)
 end
 
 
+# One CTE body rendered under the `:cte` bucket, called by `with_bucket` (#1599 layer 5: a struct, so its type can be
+# named to root the call; the `do` closure it replaces was anonymous). The same steps in the same order:
+# - render the body with the SAME parameters object, so parameter numbering continues sequentially;
+# - #1624: keep the body's columns, read off its own build, for the declaring query's build;
+# - #26/#1237: refuse a body that takes a row lock outside a transaction, as it was when this rendered the body
+#   through `query()` (whose default mode runs the refusal) — on every mode of the declaring query, inspection
+#   included, and after the model above, in the same order;
+# - lift the run it bound and re-emit it, clause-ordered, where its text sits (#432).
+struct _CteBodyRender{Q,C,P,A} <: Function
+  cte_query::Q
+  cte_name::String
+  connection::C
+  parameters::P
+  table_alias::A
+  correlated::Bool
+  state::Dict{String,CTEState}
+end
+function (r::_CteBodyRender)()
+  nested_mark = nested_parameter_mark(r.parameters)
+  rendered = _render_select(r.cte_query, table_alias=r.table_alias, connection=r.connection, parameters=r.parameters,
+                            cte_body=r.cte_name, cte_body_correlated=r.correlated)
+  r.state[r.cte_name] = _build_cte_custom_model(rendered.instruction)
+  _refuse_lock_outside_transaction(r.cte_query, rendered.instruction)
+  reattach_parameters!(r.parameters, detach_nested_run!(r.parameters, nested_mark))
+  return rendered.sql
+end
+# A body that is not PormG's `ObjectHandler`, rendered the same way behind one dynamic call.
+@noinline _render_cte_body_other(@nospecialize(cte_query), cte_name::String, @nospecialize(connection), @nospecialize(parameters),
+                                 @nospecialize(table_alias), correlated::Bool, state::Dict{String,CTEState}) =
+  with_bucket(_CteBodyRender(cte_query, cte_name, connection, parameters, table_alias, correlated, state), parameters, :cte)
+
+
 """
 Build CTE (WITH clause) SQL string from the CTEs defined in the query object.
 
@@ -700,20 +801,12 @@ function build_cte_clause(ctes::OrderedCollections.OrderedDict{String,CTEDict}, 
     # already; for a NESTED render (a `Subquery` or `__@in` whose query declares its own `.with`,
     # #1292) it did not, and this scope is what files the body's run under `:cte`, so the consumer's
     # `detach_nested_run!` lifts it first — where its text sits, ahead of the subquery's own SELECT.
-    cte_sql = with_bucket(parameters, :cte) do
-      nested_mark = nested_parameter_mark(parameters)
-      # IMPORTANT: Pass the SAME parameters object so parameter numbering continues sequentially
-      rendered = _render_select(cte_query, table_alias=table_alias, connection=connection, parameters=parameters,
-                                cte_body=cte_name, cte_body_correlated=correlated)
-      # #1624: the body's columns, read off its own build, kept for the declaring query's build.
-      state[cte_name] = _build_cte_custom_model(rendered.instruction)
-      # #26/#1237: a body that takes a row lock is refused outside a transaction, as it was when this
-      # rendered the body through `query()` (whose default mode runs the refusal) — on every mode of
-      # the declaring query, inspection included, and after the model above, in the same order.
-      _refuse_lock_outside_transaction(cte_query, rendered.instruction)
-      reattach_parameters!(parameters, detach_nested_run!(parameters, nested_mark))
-      rendered.sql
-    end
+    # #1599 layer 5: the body rendered by a callable struct (`_CteBodyRender`, above) rather than a `do` closure, so the
+    # build can root the `with_bucket` call it makes from inside the render's recursion (`_trim_render_roots(P)`); the
+    # trimmed `.with("st" => …)` read had no code for `with_bucket` with the closure.
+    cte_sql = cte_query isa ObjectHandler ?
+      with_bucket(_CteBodyRender(cte_query, cte_name, connection, parameters, table_alias, correlated, state), parameters, :cte) :
+      _render_cte_body_other(cte_query, cte_name, connection, parameters, table_alias, correlated, state)
 
     @pormg_debug false
 
@@ -1065,6 +1158,53 @@ _value_projection_field(::SQLText, ::Nothing, ::SQLInstruction) = throw(QueryBui
 _cte_state(instruc::SQLInstruction, name::AbstractString)::Union{Nothing,CTEState} =
   instruc.cte_state === nothing ? nothing : get(instruc.cte_state, name, nothing)
 
+# A CTE column's field outside the closed set, stored as `fields[key] = field` stored it: one dynamic call, whose
+# conversion to `AnyField` raises what it raised (#1599 layer 5).
+@noinline _store_cte_field_other!(fields::OrderedCollections.OrderedDict{String,Models.AnyField}, @nospecialize(key),
+                                  @nospecialize(field)) = (fields[key] = field; nothing)
+# A CTE column's path when its expression is a plain column path, else `nothing` (#1599 layer 5: typed
+# `Union{Nothing,String}`, each slot read once so its `isa` narrows it; a `String` is read as itself and another string
+# type converted as before, behind `@noinline`, where `String(x)` over the abstract string dispatched at run time).
+function _cte_column_path(@nospecialize(source))::Union{Nothing,String}
+  source isa String && return source
+  source isa AbstractString && return _path_string(source)
+  if source isa SQLField
+    f = source.field
+    f isa String && return f
+    f isa AbstractString && return _path_string(f)
+    return nothing
+  end
+  if source isa FExpression && source.operation === nothing
+    name = source.field_name
+    name isa String && return name
+  end
+  return nothing
+end
+@noinline _path_string(@nospecialize(x))::String = String(x)
+# The records `_build_cte_custom_model` fills for a column beside its field, and the column's path and name, handed
+# together to `_cte_column!`.
+struct _CteColumn
+  kinds::Dict{String,CanonicalType}
+  divisions::Dict{String,CTEDivision}
+  unapplied::Set{String}
+  path::Union{Nothing,String}
+  key::Union{Nothing,String}
+end
+# The rest of one CTE column's record, its expression `source` at its own type (#1599 layer 5), in the order the loop
+# made it:
+# - the walk's kind, which tells a JSON key lookup (`CJSONValue`, the value at the key) from the document (`CJSON`)
+#   itself (#1458), so the outer query reads each as what it holds; a later entry under the same name with a kind
+#   answers for it, as its field does;
+# - the integer-division and JSON-key records, and whether the column reads a declared decimal unapplied (#1110).
+function _cte_column!(source, c::_CteColumn, instruct::SQLInstruction)
+  path, key = c.path, c.key
+  kind = _expression_kind(source, instruct)
+  kind === nothing || _store_cte_kind!(c.kinds, key, kind)
+  path === nothing ? _record_cte_division!(c.divisions, key, source, instruct) :
+                     _record_cte_json_key!(c.divisions, key, source, instruct)
+  _reads_unapplied_declaration(source, instruct) ? push!(c.unapplied, key) : delete!(c.unapplied, key)
+  return nothing
+end
 # #1624: returns the body's `CTEState` (it wrote these into the handler's `CTEDict`), read off the body
 # build's instruction: its view of the projection, its records, its `projection_kinds`.
 function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
@@ -1093,10 +1233,7 @@ function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
     # it is a plain column path (`nothing` for a computed column).
     key_new = value_part.custom_as !== nothing ? value_part.custom_as : value_part._as
     source = value_part isa SQLText ? value_part : value_part.field
-    path = source isa AbstractString ? String(source) :
-           source isa SQLField && source.field isa AbstractString ? String(source.field) :
-           source isa FExpression && source.operation === nothing && source.field_name isa String ? source.field_name :
-           nothing
+    path = _cte_column_path(source)
     try
       # #376: `key_new` is the alias `_query_select` renders for this column, and a CTE's columns
       # ARE its aliases — the physical name is consumed inside the body. So the field object that
@@ -1121,18 +1258,21 @@ function _build_cte_custom_model(instruct::SQLInstruction)::CTEState
       # body emits two columns under the same name — while this loop still registers both names. So
       # `values("id", "sku", "code" => "sku")` puts `code` on the model though the body emits `sku`
       # twice and no `code` at all. It reproduces identically with no db_column anywhere.
+      # #1599 layer 5: a projection's expression handed over at its member's type (`_with_field_part_open`); over the
+      # slot's union the call was made at run time, and the trimmed `.with(…)` read had no code for
+      # `_set_field_from_sql_function(::FObject, ::String, …)`.
       typed = value_part isa SQLText ? _value_projection_field(value_part, key_new, instruct) :
-              _set_field_from_sql_function(value_part.field, value_part._as, instruct)
-      fields[key_new] = Models.field_without_db_column(_meant_column_field(typed, source, path, instruct))
+              _with_field_part_open(_set_field_from_sql_function, value_part.field, value_part._as, instruct)
+      # #1599 layer 5: `typed` asserted at its declared type, so the call into the one `_meant_column_field` method is
+      # static; the field it gives is stored at the closed set's type (`AnyField`), so the store is a static call too.
+      # Any other field takes the store it took before, and its conversion error, behind `@noinline`.
+      column_field = Models.field_without_db_column(_meant_column_field(typed::PormGField, source, path, instruct))
+      column_field isa Models.AnyField ? (fields[key_new] = column_field) : _store_cte_field_other!(fields, key_new, column_field)
       push!(selected_field_names, key_new)
-      # The walk's kind, which tells a JSON key lookup (`CJSONValue`, the value at the key) from the
-      # document (`CJSON`) itself (#1458), so the outer query reads each as what it holds. A later entry
-      # under the same name with a kind answers for it, as its field does.
-      kind = _expression_kind(source, instruct)
-      kind === nothing || (kinds[key_new] = kind)
-      path === nothing ? _record_cte_division!(divisions, key_new, source, instruct) :
-                         _record_cte_json_key!(divisions, key_new, source, instruct)
-      _reads_unapplied_declaration(source, instruct) ? push!(unapplied, key_new) : delete!(unapplied, key_new)
+      # #1599 layer 5: the rest of the column's record is made with its expression at its member's type
+      # (`_cte_column!`, below); over the untyped `source` each reader was a run-time call.
+      column = _CteColumn(kinds, divisions, unapplied, path, key_new)
+      source isa SQLText ? _cte_column!(source, column, instruct) : _with_field_part_open(_cte_column!, source, column, instruct)
     catch e
       @pormg_debug false
       throw(e)
@@ -1166,9 +1306,11 @@ function _record_cte_division!(divisions::Dict{String,CTEDivision}, key::String,
   json_key = _json_number_side(source, instruct)
   divided === nothing && quotient === nothing && json_key === nothing && return nothing
   old = get(divisions, key, (divided = nothing, quotient = nothing, json_key = nothing))
-  divisions[key] = (divided = something(divided, old.divided, Some(nothing)),
-                    quotient = something(quotient, old.quotient, Some(nothing)),
-                    json_key = something(json_key, old.json_key, Some(nothing)))
+  # #1599 layer 5: built as the record's own type, so the store is a static call (the `NamedTuple` of the three
+  # answers' inferred types was converted at run time).
+  divisions[key] = CTEDivision((something(divided, old.divided, Some(nothing))::Union{Tuple{Symbol,String},Nothing},
+                                something(quotient, old.quotient, Some(nothing))::Union{Tuple{Symbol,String},Nothing},
+                                something(json_key, old.json_key, Some(nothing))::Union{Tuple{String,String},Nothing}))
   return nothing
 end
 
@@ -1191,10 +1333,16 @@ end
 # formatter). The inferred field stays when it agrees, which keeps a declared width, a char length
 # and a foreign key's target; for a plain column path, which is that column; and when the walk names
 # no meaning, or a kind no field spells. Its refusals stand: it still runs first.
-function _meant_column_field(typed::PormGField, source, path, instruct::SQLInstruction)::PormGField
+# `typed`, `source` and `path` unspecialized (#1599 layer 5): the loop that calls it holds them untyped, so a method
+# compiled per field type was a run-time call (`_meant_column_field(::sForeignKey, …)` in the trimmed `.with(…)` read).
+function _meant_column_field(@nospecialize(typed::PormGField), @nospecialize(source), @nospecialize(path),
+                             instruct::SQLInstruction)::PormGField
   path === nothing || return typed
   meant = _infer_kind_any(source, instruct, _MeaningKinds())
   meant === nothing && return typed
-  _kind_family(meant) === _kind_family(_field_kind(typed)) && return typed
-  return something(_kind_field(meant), typed)
+  # #1599 layer 5: the kind and the field read at their concrete types (`_kind_family_at`, `_kind_field_at`, the
+  # field by `Models._with_any_field`); over the abstract kind and field each call dispatched at run time.
+  _kind_family_at(meant) === _kind_family_at(Models._with_any_field(_field_kind, typed)) && return typed
+  field = _kind_field_at(meant)
+  return field === nothing ? typed : field
 end

@@ -589,6 +589,38 @@ _kind_family(::Union{CInt16,CInt32,CInt64}) = CInt64
 _kind_family(::Union{CText,CVarChar}) = CText
 _kind_family(k::CanonicalType) = typeof(k)
 _kind_family(::Nothing) = nothing
+# `_kind_family(k)` and `_kind_field(k)` for a kind typed by the abstract `CanonicalType` (what the walk answers), at
+# the kind's concrete type (#1599 layer 5): over the abstract kind each dispatched at run time, and the trimmed
+# `.with(…)` read had no target for them (a CTE column's field, `_meant_column_field`). The family is computed by
+# `isa` as `_kind_family`'s methods compute it; the field has one arm per `_kind_field` method. Anything else takes
+# the old call behind `@noinline`, so its answer, or its `MethodError`, is the one the function gives.
+function _kind_family_at(@nospecialize(k))
+  k === nothing && return nothing
+  k isa Union{CInt16,CInt32,CInt64} && return CInt64
+  k isa Union{CText,CVarChar} && return CText
+  k isa CanonicalType && return typeof(k)
+  return _kind_family_other(k)
+end
+@noinline _kind_family_other(@nospecialize(k)) = _kind_family(k)
+function _kind_field_at(@nospecialize(k))::Union{Nothing,PormGField}
+  k isa CBool && return _kind_field(k)
+  k isa CInt16 && return _kind_field(k)
+  k isa CInt32 && return _kind_field(k)
+  k isa CInt64 && return _kind_field(k)
+  k isa CFloat64 && return _kind_field(k)
+  k isa CDecimal && return _kind_field(k)
+  k isa CText && return _kind_field(k)
+  k isa CVarChar && return _kind_field(k)
+  k isa CDate && return _kind_field(k)
+  k isa CDateTime && return _kind_field(k)
+  k isa CTime && return _kind_field(k)
+  k isa CInterval && return _kind_field(k)
+  k isa CUUID && return _kind_field(k)
+  k isa CJSON && return _kind_field(k)
+  k isa CJSONValue && return _kind_field(k)
+  return _kind_field_other(k)::Union{Nothing,PormGField}   # every `_kind_field` method answers a field or `nothing`
+end
+@noinline _kind_field_other(@nospecialize(k)) = _kind_field(k)
 
 _literal_kind(::Bool, ::_EveryKind) = CBool()
 _literal_kind(::Integer, ::_EveryKind) = CInt64()
@@ -1083,6 +1115,36 @@ end
   kind isa CJSONValue && return (d[name] = kind; nothing)
   throw(MethodError(_store_projection_kind!, (instruc, name, kind)))
 end
+
+# A CTE column's kind, stored into its body's `kinds` the same way (#1599 layer 5): `_expression_kind` over the column's
+# untyped source answers `Any`, and the trimmed `.with(…)` read stopped inferring `setindex!(Dict{String,CanonicalType},
+# CInt64, String)` at run time. The same arms as above (the pin checks both against the kinds); a kind outside them
+# takes the store it took before, behind `@noinline`.
+@noinline function _store_cte_kind!(d::Dict{String,CanonicalType}, name::String, @nospecialize(kind))
+  kind isa CArray && return (d[name] = kind; nothing)
+  kind isa CBool && return (d[name] = kind; nothing)
+  kind isa CBytes && return (d[name] = kind; nothing)
+  kind isa CCidr && return (d[name] = kind; nothing)
+  kind isa CDate && return (d[name] = kind; nothing)
+  kind isa CDateTime && return (d[name] = kind; nothing)
+  kind isa CDecimal && return (d[name] = kind; nothing)
+  kind isa CFloat64 && return (d[name] = kind; nothing)
+  kind isa CInet && return (d[name] = kind; nothing)
+  kind isa CInt16 && return (d[name] = kind; nothing)
+  kind isa CInt32 && return (d[name] = kind; nothing)
+  kind isa CInt64 && return (d[name] = kind; nothing)
+  kind isa CInterval && return (d[name] = kind; nothing)
+  kind isa CJSON && return (d[name] = kind; nothing)
+  kind isa CText && return (d[name] = kind; nothing)
+  kind isa CTime && return (d[name] = kind; nothing)
+  kind isa CTsVector && return (d[name] = kind; nothing)
+  kind isa CUUID && return (d[name] = kind; nothing)
+  kind isa CUnsupported && return (d[name] = kind; nothing)
+  kind isa CVarChar && return (d[name] = kind; nothing)
+  kind isa CJSONValue && return (d[name] = kind; nothing)
+  return _store_cte_kind_other!(d, name, kind)
+end
+@noinline _store_cte_kind_other!(d::Dict{String,CanonicalType}, name::String, @nospecialize(kind)) = (d[name] = kind; nothing)
 
 # #1110: on an engine whose read path applies a decimal's width (`_unapplied_decimal_width`), a
 # `Lag`/`Lead` default is a value no column holds and no declaration covers: PostgreSQL's

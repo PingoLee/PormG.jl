@@ -12,23 +12,10 @@
 # environment variables (`../tools/server.jl`); unset, it is 127.0.0.1:1, where nothing listens: nothing
 # is contacted at boot, and the read raises `PoolConnectError` under the JIT. Against a server seeded by
 # `prep.jl`, the read returns the Monaco race. Each step prints one line to `Core.stdout`, as in ../main.jl.
-using PormG, Postgres, Dates, Base64
-include(joinpath(@__DIR__, "..", "tools", "upstream_roots.jl"))
-# The render's run-time re-entry into a nested node finds code only where the build rooted it (#1599 layer 5).
-for (f, t) in PormG.QueryBuilder._trim_render_roots(PormG.ConnectionPool.PostgresConnectionPool{:postgres}); Base.Experimental.entrypoint(f, t); end
-
-# SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth through Base64's encode
-# and decode pipes, which hold their stream in a field typed `IO`: every write and read on it is a dynamic
-# call, and the trimmed image had no code for the `IOBuffer` methods they reach (`MissingCodeError`
-# during authentication). PormG cannot type that field, so the app roots those methods for `--trim`.
-# `entrypoint` keeps a method in a trimmed image (a `precompile` statement does not) and does nothing
-# under the JIT. Upstream residue: ../README.md, "The Postgres.jl variant".
-Base.Experimental.entrypoint(Base.unsafe_write, (IOBuffer, Ptr{UInt8}, Int))
-Base.Experimental.entrypoint(Base.write, (IOBuffer, UInt8, UInt8, UInt8, UInt8))
-Base.Experimental.entrypoint(Base.eof, (IOBuffer,))
-Base.Experimental.entrypoint(Base64.read_to_buffer, (IOBuffer, Base64.Buffer))
-Base.Experimental.entrypoint(Base64.decode_slow,
-    (UInt8, UInt8, UInt8, UInt8, Base64.Buffer, Int, IOBuffer, Ptr{UInt8}, UInt64, Vector{UInt8}))
+using PormG, Postgres, Dates
+# The roots a trimmed build needs (the render's run-time re-entries, upstream's, and SCRAM authentication's Base64
+# methods, which the Postgres.jl extension names), a no-op under the JIT (#1599).
+PormG.trim_entrypoints(PormG.ConnectionPool.PostgresConnectionPool{:postgres})
 
 include(joinpath(@__DIR__, "..", "db", "models.jl"))
 import .models as M

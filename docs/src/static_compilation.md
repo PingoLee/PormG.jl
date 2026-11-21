@@ -2,9 +2,9 @@
 
 !!! warning "Experimental"
     Building a PormG application into a standalone executable with `juliac --trim` is **experimental**.
-    One kind of read, the single-row write and `bulk_insert` are known to work, on three drivers.
-    Other writes have not run in a trimmed binary yet, and what this page describes may change between
-    releases without an upgrade note. Work in progress is tracked in
+    The reads and writes listed under [What works today](#What-works-today) are known to work, on three
+    drivers. Anything else has not run in a trimmed binary yet, and what this page describes may change
+    between releases without an upgrade note. Work in progress is tracked in
     [#1599](https://github.com/PingoLee/PormG.jl/issues/1599) (the trimmed application) and
     [#1614](https://github.com/PingoLee/PormG.jl/issues/1614) (the drivers).
 
@@ -43,6 +43,14 @@ else is untested in a trimmed binary, even where it compiles.
   (`Sum`, `Round`, …), an `OuterRef`, and an expression on the right of a comparison inside a join's `on(...)` keep a
   call a trimmed binary may have no code for.
 
+  Functions, subqueries, joins, CTEs and windows have run on the three drivers as well (#1826–#1828): `Abs`
+  and `Round` over a column, `Count` and `Sum` grouped by a column, `Upper(Lower(…))`, a `Case` whose `then`
+  is an `F`; `__@in` a queryset, `Exists` correlated with `OuterRef`, a correlated scalar `Subquery` as a
+  column or on the right of a filter; `values()` and `order_by()` across a join; a CTE read as a column and
+  in a filter; `RowNumber` over a partition and `Rank` over an order.
+
+  The untyped read (`.list()` and `list(:dict)`, #1823) has run on the three drivers too.
+
   The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
   nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)
   are built to run trimmed, but no trimmed binary has run them yet.
@@ -53,8 +61,9 @@ else is untested in a trimmed binary, even where it compiles.
     `UUIDField(auto_add = true)`. The timestamp is written in PormG's own text and read back from it;
   - `update` of the rows a filter matches (`filter(…).update("round" => 7)`), which returns the row count;
   - `delete` of the rows a filter matches (`filter(…).delete()`), which returns the count and the rows
-    per table. The delete that has run removes rows nothing else references: no cascade, no `SET NULL`.
-    On MySQL and PostgreSQL it takes their row lock (`SELECT … FOR UPDATE`) first, as under the JIT;
+    per table. A delete that cascades has run too (#1829): a race whose pit stops go with it (`CASCADE`)
+    and whose debuting driver keeps a `NULL` debut (`SET_NULL`). On MySQL and PostgreSQL it takes their
+    row lock (`SELECT … FOR UPDATE`) first, as under the JIT;
   - the refusals PormG raises before any SQL: an `InvalidValueError` for a date string that is not a
     calendar date, and for a `Bool` given to a text column (run on SQLite; the check is the same on every
     driver).
@@ -67,6 +76,8 @@ else is untested in a trimmed binary, even where it compiles.
   date that is not a calendar date has run, on SQLite), with no row written (#1694). No trimmed binary has run
   any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword options. Two of them are known not to work yet:
   `returning=` and a primary-key column in the table still take calls a trimmed binary cannot make.
+- **`bulk_update`** from a `Vector` of `NamedTuple`s with `columns=` and one `match_on=` key, and
+  **`update_or_create`** and **`get_or_create`**, on the three drivers (#1694).
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
   with the server's SQLSTATE (MySQL and PostgreSQL; SQLite has none), its message, and the driver's
   error as the cause ([Error Handling](errors.md)). `IntegrityError` and `OperationalError` take the
@@ -83,16 +94,16 @@ against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is 
 
 ## What does not work yet
 
-- **Writes beyond the single-row write** (#1694) have not run in a trimmed binary. Use the JIT for
+- **Writes beyond those listed above** (#1694) have not run in a trimmed binary. Use the JIT for
   them, or a separate process:
-  - `bulk_update`, `bulk_copy` and the other bulk writers, and `bulk_insert` beyond the input above;
-  - a `bulk_insert` row refused for any reason other than the one that has run (below): a collection
+  - `bulk_copy`, `bulk_insert` beyond the input above, and `bulk_update` beyond the input above
+    (`filters=`, several `match_on=` keys);
+  - a `bulk_insert` row refused for any reason other than the one that has run: a collection
     in a column, an SQL expression for a value, a formatter that raises something other than an
     `InvalidValueError`, or a value PormG fills itself. The pass that names the cell is built to run
     trimmed in each case, but no trimmed binary has refused one;
-  - a delete that cascades or sets a foreign key to NULL;
-  - the other write terminals (`get_or_create`, `update_or_create`, an upsert, deleting one row
-    through `delete(row)`).
+  - a delete through `SET_DEFAULT`, or a self-referential `CASCADE`;
+  - an upsert (`bulk_insert(…; on_conflict)`) and deleting one row through `delete(row)`.
 - **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
   by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three
   digits: PormG's own text, `2009-05-24T14:00:00.000+00:00`, is that shape, and it has run trimmed on
@@ -104,8 +115,8 @@ against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is 
   `InitError(:Infinity, MethodError(...))`. LibPQ depends on Infinity.jl, whose `__init__` uses
   Requires' `@require`, which a trimmed binary cannot run. The cause is upstream. Use Postgres.jl
   (`postgres_driver = "Postgres"`) for PostgreSQL.
-- **Untyped reads.** `.list()`, `.first()` and `.get()` without a type, `list(:dict)`, `list(:json)`,
-  a raw `fetch` or `execute`, and `DataFrame(query)` hold their values as `Any`, and are JIT-only.
+- **Untyped reads beyond `.list()` and `list(:dict)`**: `list(:json)`, a raw `fetch` or `execute` and
+  `DataFrame(query)` have not run in a trimmed binary.
 - **`connection.yml`.** A trimmed binary cannot parse YAML. Register the connection in code, at run time
   (below).
 - **Migrations.** The binary does not run `migrate`. Migrate the database from a JIT process.
@@ -126,7 +137,7 @@ julia -e 'using Pkg; Pkg.Apps.add(name = "JuliaC", version = "0.3.12")'
 ## Building
 
 The application is a project of its own. Its `Project.toml` lists PormG, the driver (`SQLite`, `MySQL`
-or `Postgres`) and `Dates`, plus `Base64` for a Postgres.jl program (see below). From the project's
+or `Postgres`) and `Dates`. From the project's
 directory:
 
 ```
@@ -143,6 +154,25 @@ JULIA_CPU_TARGET=native juliac --project .. --output-exe f1app \
 
 ## A trimmed application
 
+**Root PormG's run-time calls.** Some calls PormG makes are run-time calls by design: the query render
+re-enters itself for a nested node (a function's operand, a subquery, a CTE body, a window), and a
+static call there would close a recursion the compiler limits, leaving no code at all. A trimmed image
+keeps code for such a call only where the build rooted its target. `trim_entrypoints` roots every one,
+for the pool types you pass, together with the methods a driver's own dependencies need (SCRAM
+authentication's for Postgres.jl) and the upstream methods a JLL built with LazyJLLWrappers needs at
+start (Libiconv_jll, which PormG loads through YAML). Call it once, at the **top level** of the entry
+file, after `using` the driver; a trimmed build keeps what the entry's top level roots, not what a
+package's body does. **Under the JIT it does nothing**, so the same file runs with `julia`:
+
+```julia
+PormG.trim_entrypoints(PormG.ConnectionPool.SQLiteConnectionPool)
+# an app on two engines passes both:
+# PormG.trim_entrypoints(PormG.ConnectionPool.MySQLConnectionPool, PormG.ConnectionPool.PostgresConnectionPool{:postgres})
+```
+
+Without it, the binary stops before `main` (`InitError(:Libiconv_jll, MissingCodeError(…))`) or at the
+first nested read (`Core.MissingCodeError`).
+
 The entry point is a `@main` function. The connection is registered and the models bound inside it,
 at run time. PormG refuses to register a connection while the image is being written
 ([Built images read their configuration at run time](configuration/setup.md#Built-images-read-their-configuration-at-run-time)),
@@ -155,6 +185,7 @@ at the top level of the entry file would be frozen into the image. The models ar
 ```julia
 # f1app.jl: run as `f1app <directory holding f1.sqlite>`
 using PormG, SQLite, Dates
+PormG.trim_entrypoints(PormG.ConnectionPool.SQLiteConnectionPool)   # a no-op under the JIT (above)
 
 include(joinpath(@__DIR__, "db", "models.jl"))   # the F1 models; the file ends with `Models.@models …`
 import .models as M
@@ -205,6 +236,8 @@ function (@main)(args::Vector{String})::Cint
 end
 ```
 
+The entry's top level calls `PormG.trim_entrypoints(PormG.ConnectionPool.MySQLConnectionPool)`.
+
 The workflow's binary logs in through MySQL 8.4's full `caching_sha2_password` authentication. MySQL.jl
 prefers TLS by default (`ssl_mode = preferred`), and MySQL 8.4 offers it; the workflow does not check
 that the connection used it.
@@ -233,24 +266,16 @@ connect then fails with `PoolConnectError`, whose cause is a `MethodError`.
 
 **SCRAM authentication.** SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth
 through Base64's encode and decode pipes, which keep their stream in a field typed `IO`. A trimmed image
-has no code for the `IOBuffer` methods those calls reach, and authentication fails with a
-`MissingCodeError`. Root them in your entry file, at the top level, with `Base.Experimental.entrypoint`.
-It keeps a method in a trimmed image and does nothing under the JIT (a `precompile` statement does not
-keep code in a trimmed image):
+has no code for the `IOBuffer` methods those calls reach unless they are rooted, and authentication then
+fails with a `MissingCodeError`. `trim_entrypoints` roots them for the Postgres.jl pool, through the
+Postgres.jl extension, so the entry needs nothing more than:
 
 ```julia
-using PormG, Postgres, Dates, Base64
-
-Base.Experimental.entrypoint(Base.unsafe_write, (IOBuffer, Ptr{UInt8}, Int))
-Base.Experimental.entrypoint(Base.write, (IOBuffer, UInt8, UInt8, UInt8, UInt8))
-Base.Experimental.entrypoint(Base.eof, (IOBuffer,))
-Base.Experimental.entrypoint(Base64.read_to_buffer, (IOBuffer, Base64.Buffer))
-Base.Experimental.entrypoint(Base64.decode_slow,
-    (UInt8, UInt8, UInt8, UInt8, Base64.Buffer, Int, IOBuffer, Ptr{UInt8}, UInt64, Vector{UInt8}))
+using PormG, Postgres, Dates
+PormG.trim_entrypoints(PormG.ConnectionPool.PostgresConnectionPool{:postgres})
 ```
 
-`Base64` must be a dependency of your project for the last two lines. These roots are needed until
-Base64's pipes are typed upstream; they are not PormG's to fix.
+These roots are needed until Base64's pipes are typed upstream.
 
 ## Closing the pools before `main` returns
 
@@ -264,8 +289,8 @@ before `main` returns, in a `finally` so an error path closes them too:
 - `PormG.Configuration.close_pool!("f1")` closes one.
 
 A connection left open is dropped when the process ends: the server sees the client vanish rather than
-close, and SQLite's handle is never closed. `close_all!()` has been run in a trimmed binary on SQLite;
-on the MySQL and Postgres.jl pools it takes the same path but has not been run trimmed yet.
+close, and SQLite's handle is never closed. A trimmed binary has closed one SQLite pool through
+`close_pool!`; `close_all!()` takes the same path on every pool, but no trimmed binary has run it yet.
 
 ## Errors in a trimmed binary
 

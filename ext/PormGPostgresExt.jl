@@ -25,6 +25,7 @@ using PormG
 import PormG: PormGPostgresParam, InvalidConfigurationError
 import Postgres
 import Postgres: DBInterface
+import Base64
 import Decimals
 import TimeZones
 using Dates
@@ -758,6 +759,18 @@ PormG.backend_handle_type(::Type{_Pool}) = _Conn
 # #1599: the result this extension's statements deliver, so `ConnectionPool._decoded_typed` hands it to
 # the typed read's decoder at its concrete type (`backend_result_type`'s docstring).
 PormG.backend_result_type(::Type{_Pool}) = Postgres.Result
+# #1599: SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth (Postgres.jl's dependency)
+# through Base64's encode and decode pipes, which hold their stream in a field typed `IO`: every write and read on it
+# is a dynamic call, and a trimmed image had no code for the `IOBuffer` methods they reach (`MissingCodeError` during
+# authentication). PormG cannot type that field, so `trim_entrypoints(PostgresConnectionPool{:postgres})` roots them
+# (`backend_trim_roots`' docstring). Upstream residue: `test/trim/README.md`, "The Postgres.jl variant".
+PormG.backend_trim_roots(::Type{_Pool}) = (
+  (Base.unsafe_write, (IOBuffer, Ptr{UInt8}, Int)),
+  (Base.write, (IOBuffer, UInt8, UInt8, UInt8, UInt8)),
+  (Base.eof, (IOBuffer,)),
+  (Base64.read_to_buffer, (IOBuffer, Base64.Buffer)),
+  (Base64.decode_slow, (UInt8, UInt8, UInt8, UInt8, Base64.Buffer, Int, IOBuffer, Ptr{UInt8}, UInt64, Vector{UInt8})),
+)
 
 # #1599: the typed read over this driver's result, cell by cell (`QueryBuilder._typed_rows_by_cell`).
 # Postgres.jl keeps each row's cells in a `Vector{Any}` (`ResultRow.data`, read with `getfield`: a

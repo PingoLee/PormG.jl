@@ -251,6 +251,22 @@ Each extension adds one method, keyed on the pool type it serves, and names a CO
 backend_result_type(@nospecialize(P::Type)) = Any
 
 """
+    backend_trim_roots(P::Type) -> Tuple
+
+The methods a `juliac --trim` build of an app on a pool of type `P` needs from the driver's own dependencies,
+as `(f, argtypes)` pairs that [`trim_entrypoints`](@ref) roots with `Base.Experimental.entrypoint`. Empty until
+the extension that serves `P` says otherwise: a driver whose code a trimmed image follows statically needs none.
+
+A driver that reaches a method through a value it holds untyped (a field typed `IO`, say) gets no code for that
+method in a trimmed image, and the call raises `Core.MissingCodeError` at run time. PormG cannot type a driver's
+fields, so the extension names the methods instead, and an app reaches them through the one public call
+(#1599). Each extension adds one method, keyed on the pool type it serves:
+
+    PormG.backend_trim_roots(::Type{_Pool}) = ((Base.eof, (IOBuffer,)), …)
+"""
+backend_trim_roots(@nospecialize(P::Type)) = ()
+
+"""
     backend_classify_error(pool, e) -> Symbol
 
 Classify a failure raised by the database into one of the [`DatabaseError`](@ref) kinds:

@@ -6549,6 +6549,59 @@ end
     end
   end
 
+  # What: `trim_entrypoints(P...)`, the one public call a trimmed app makes at its entry's top level (#1599): what it
+  #   roots for each pool type (the render's roots, the driver's own, the LazyJLLWrappers roots when one is loaded), that
+  #   every root names a method that exists, and that every `test/trim/` entry calls it and nothing there roots by hand.
+  # Expected: `_trim_roots(P)` holds every `_trim_render_roots(P)` signature and `backend_trim_roots(P)`'s; each root
+  #   resolves to a method (`which`), a keyword root to its target's positional method; Postgres.jl's SCRAM roots come
+  #   from its extension and no other pool has driver roots; the entries call `PormG.trim_entrypoints(` and none of
+  #   `test/trim/**/*.jl` calls `Base.Experimental.entrypoint`, `_trim_render_roots` or includes `upstream_roots`.
+  # Why: a root naming a method that is gone fails silently in the build (the binary then stops at
+  #   `Core.MissingCodeError`), and an entry rooting by hand would hide that the public call misses something an app
+  #   needs: the fixture must build with exactly what an app gets.
+  @testset "trim_entrypoints roots what the fixture rooted by hand, and only it does (#1599)" begin
+    QB = PormG.QueryBuilder
+    CPm = PormG.ConnectionPool
+    @test :trim_entrypoints in names(PormG)
+    @test PormG.trim_entrypoints(CPm.SQLiteConnectionPool) === nothing   # a no-op under the JIT
+    @test_throws ArgumentError PormG.trim_entrypoints(Int)
+    lazy = Base.PkgId(Base.UUID("21706172-204c-4d4f-5420-656854206f44"), "LazyJLLWrappers")
+    upstream = PormG._trim_upstream_roots()
+    @test length(upstream) == 1 + haskey(Base.loaded_modules, lazy)
+    @test (string, (Base.Libc.Libdl.LazyLibraryPath,)) in upstream
+    for P in (CPm.SQLiteConnectionPool, CPm.MySQLConnectionPool, CPm.PostgresConnectionPool{:postgres},
+              CPm.PostgresConnectionPool{:libpq})
+      roots = PormG._trim_roots(P)
+      @test (P, setdiff(collect(QB._trim_render_roots(P)), roots)) == (P, [])
+      @test (P, setdiff(collect(PormG.backend_trim_roots(P)), roots)) == (P, [])
+      @test (P, setdiff(upstream, roots)) == (P, [])
+      @test (P, length(roots)) == (P, length(unique(roots)))
+      for (f, T) in roots
+        target, args = f === Core.kwcall ? (T[2].instance, Tuple{T[3:end]...}) : (f, Tuple{T...})
+        @test (P, f, T, hasmethod(target, args)) == (P, f, T, true)
+      end
+    end
+    @test length(PormG._trim_roots(CPm.SQLiteConnectionPool, CPm.MySQLConnectionPool)) <
+          length(PormG._trim_roots(CPm.SQLiteConnectionPool)) + length(PormG._trim_roots(CPm.MySQLConnectionPool))
+    scram = PormG.backend_trim_roots(CPm.PostgresConnectionPool{:postgres})
+    @test length(scram) == 5 && all(r -> r[2][1] === IOBuffer || IOBuffer in r[2], scram)
+    for P in (CPm.SQLiteConnectionPool, CPm.MySQLConnectionPool, CPm.PostgresConnectionPool{:libpq})
+      @test (P, PormG.backend_trim_roots(P)) == (P, ())
+    end
+    trim = joinpath(pkgdir(PormG), "test", "trim")
+    for entry in ("main.jl", "read.jl", "fail.jl", joinpath("mysql", "main.jl"), joinpath("postgres", "main.jl"))
+      @test (entry, occursin("PormG.trim_entrypoints(", read(joinpath(trim, entry), String))) == (entry, true)
+    end
+    by_hand = String[]
+    for (dir, _, files) in walkdir(trim), f in files
+      endswith(f, ".jl") || continue
+      text = read(joinpath(dir, f), String)
+      occursin(r"Base\.Experimental\.entrypoint|_trim_render_roots|upstream_roots|\bprecompile\(", text) &&
+        push!(by_hand, relpath(joinpath(dir, f), trim))
+    end
+    @test by_hand == String[]
+  end
+
   # What: the function readers a subquery's one projection reaches: its formatter over its operands
   #   (`_expression_formatter(::FObject, …)` through `_first_operand_formatter`), what `Concat` and a division make of
   #   it (`_textless_number`, `_whole_numeric_operand`) and whether it holds a temporal value (`_function_held_temporal`).

@@ -1190,12 +1190,19 @@ on SQLite a write needs `mode = :write`) — and `with_read_retry`, which runs a
 dropped connection when you vouch it is safe to repeat
 
 ### Utilities & lifecycle
-`upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`, `close_all!`
+`upgrade_guide`, `register_ignore_tables!`, `@import_models`, `@models_module`, `@pormg_debug`, `close_all!`,
+`trim_entrypoints`
 
 `close_all!()` closes every registered pool, the call PormG's exit hook makes; it is
 `Configuration.close_all!` (#1229), exported since #1599. A program built with `juliac --trim` runs
 no `atexit` hook, so it calls `close_all!()` before `main` returns
 ([Static Compilation](static_compilation.md#Closing-the-pools-before-main-returns)).
+
+`trim_entrypoints(P...)` roots, for a `juliac --trim` build, every method PormG reaches only through a
+run-time call on a pool of type `P` (the query render's nested re-entries, a driver's own roots such as
+Postgres.jl's SCRAM methods, and the LazyJLLWrappers roots when one is loaded). An app calls it once at
+the top level of its entry file, with one pool type per engine it registers; under the JIT it does
+nothing (#1599, [Static Compilation](static_compilation.md#A-trimmed-application)).
 
 `PormG.import_models(path; into = Main)` is the function form of `@import_models` (#1232), for a
 script or a REPL that compares several databases: it includes the models file at `path` (relative to

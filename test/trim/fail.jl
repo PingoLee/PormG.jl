@@ -5,6 +5,8 @@
 #   exe:  <build dir>/fail <run dir>
 # Its own entry, not a step of `read.jl`: the read-only binary is what the `Trim (juliac)` workflow checks.
 using TrimF1, PormG, SQLite
+# The roots a trimmed build needs (the render's run-time re-entries, upstream's), a no-op under the JIT (#1599).
+PormG.trim_entrypoints(PormG.ConnectionPool.SQLiteConnectionPool)
 
 say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", detail); nothing)
 

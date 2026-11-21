@@ -487,7 +487,7 @@ function _function_held_temporal(p::Union{FObject,WindowFunction}, instruc::SQLI
     declared = _declared_cast(p)
     declared isa AbstractString && !isempty(declared) && return nothing
   end
-  operands = Any[(p.column isa AbstractVector ? p.column : (p.column,))...]
+  operands = _append_operands!(Any[], p.column)   # #1599 layer 5: at the column's type, as `_textless_number` gathers them
   # A window value function's `default` is one of its values (`_with_window_default`); a string there
   # is a literal, not a path.
   default = p isa WindowFunction ? get(p.kwargs, "default", nothing) : nothing
@@ -1341,7 +1341,7 @@ function _subquery_projection_kind(handler::SQLObjectHandler, inner::SQLInstruct
   vals = handler.object.values
   length(vals) == 1 || return nothing
   v = only(vals)
-  return _expression_kind(v isa SQLText ? v : v.field, inner)
+  return _with_field_part_open(_expression_kind, v isa SQLText ? v : v.field, inner)
 end
 # #1110: whether the subquery's one projection reads as a declaration the engine left unapplied,
 # asked of the inner instruction in the same `built` window as its kind.
@@ -1349,7 +1349,7 @@ function _subquery_projection_unapplied(handler::SQLObjectHandler, inner::SQLIns
   vals = handler.object.values
   length(vals) == 1 || return false
   v = only(vals)
-  return _reads_unapplied_declaration(v isa SQLText ? v : v.field, inner)
+  return _with_field_part_open(_reads_unapplied_declaration, v isa SQLText ? v : v.field, inner)
 end
 function _record_subquery_unapplied!(instruc::SQLInstruction, p::SubqueryObject, unapplied::Bool)
   unapplied || return nothing

@@ -51,8 +51,9 @@ env:
   # `__@range`, `__@in` over integers and over text, `__@isnull` each way, `__@icontains`, `__@contains`), and the
   # comparisons against an expression (an `F` with arithmetic on each side, `Extract`, the `@year` transform, a
   # `Case`/`When` on each side), the untyped read (#1599 layer 6), and the function shapes (a number function in a
-  # projection and in a filter, `Count`/`Sum` grouped, `Upper(Lower(...))`, a `Case` whose `then` is an `F`), over
-  # the two races every prep.jl seeds. One line per lookup, order or expression;
+  # projection and in a filter, `Count`/`Sum` grouped, `Upper(Lower(...))`, a `Case` whose `then` is an `F`), and the
+  # subqueries (`__@in` a queryset, an `Exists` and a `Subquery` correlated with `OuterRef`, a `Subquery` on the right
+  # of a filter), over the two races every prep.jl seeds. One line per lookup, order or expression;
   # each job checks that its binary prints every one.
   TRIM_READ_LINES: |-
     step\tcompare\tdate__@gte 1 rows: Brazilian Grand Prix
@@ -81,6 +82,11 @@ env:
     step\tfunc\tCount/Sum 1 rows: 2008 2 24
     step\tfunc\tUpper(Lower) 2 rows: MONACO GRAND PRIX, BRAZILIAN GRAND PRIX
     step\tfunc\tCase then F 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 0
+    step\tsubquery\tcircuitid__@in query 1 rows: Monaco Grand Prix
+    step\tsubquery\tExists OuterRef 1 rows: Brazilian Grand Prix
+    step\tsubquery\tSubquery OuterRef column 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
+    step\tsubquery\tcircuitid == Subquery 1 rows: Brazilian Grand Prix
+    step\tsubquery\tround == Subquery OuterRef 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 
 jobs:
   read-only:
@@ -126,7 +132,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 17 untyped read, 19 function read, 124 = timed out)"
+            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 17 untyped read, 19 function read, 20 subquery read, 124 = timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -250,7 +256,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
@@ -394,7 +400,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -536,7 +542,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then

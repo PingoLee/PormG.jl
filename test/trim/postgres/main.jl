@@ -15,7 +15,7 @@
 using PormG, Postgres, Dates, Base64
 include(joinpath(@__DIR__, "..", "tools", "upstream_roots.jl"))
 # The render's run-time re-entry into a nested node finds code only where the build rooted it (#1599 layer 5).
-for (f, t) in PormG.QueryBuilder._trim_render_roots(); Base.Experimental.entrypoint(f, t); end
+for (f, t) in PormG.QueryBuilder._trim_render_roots(PormG.ConnectionPool.PostgresConnectionPool{:postgres}); Base.Experimental.entrypoint(f, t); end
 
 # SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth through Base64's encode
 # and decode pipes, which hold their stream in a field typed `IO`: every write and read on it is a dynamic
@@ -135,6 +135,7 @@ function (@main)(args::Vector{String})::Cint
     expr_step() || return Cint(14)
     untyped_step() || return Cint(17)
     func_step() || return Cint(19)
+    subquery_step() || return Cint(20)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()

@@ -6490,6 +6490,80 @@ end
     @test _dynamic_calls(QB._bare_covered, (Union{Nothing,Set{String}}, Any)) == String[]
   end
 
+  # What: a scalar `Subquery`'s render (`_render_scalar_subquery`), the readers its `built` callback runs and the two
+  #   callbacks (`_ScalarSubqueryBuilt`, `_MembershipBuilt`), `Exists`' render (`_build_exists_query`), an `OuterRef`'s
+  #   column (`_get_filter_query(::OuterRefObject, …)`, `_render_outer_ref_column`) and the multi-row warning's
+  #   aggregate test (`_projection_is_aggregate`).
+  # Expected: no dynamic call, except the nested builds' keyword calls (`query`; `build_cte_clause` and `build`), which
+  #   stay run-time calls into the methods `_trim_render_roots(P)` names: every root one method, for each pool type.
+  # Why: the nested builds took closures and were reached from inside the render's recursion, which inference limits
+  #   (the #1711 class, so they stay dynamic, into rooted methods); and the readers, the `OuterRef` scopes, the `Exists`
+  #   results and the aggregate test each dispatched on an untyped value, a call the trimmed `__@in` a queryset,
+  #   `Exists(… OuterRef(…) …)` and `Subquery(… OuterRef(…) …)` stopped at (#1599 layer 5).
+  @testset "a subquery's read runs at concrete types, and its nested builds are rooted (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    tt_calls(tt) = [string(i, ": ", s) for (ci, _) in Base.code_typed_by_type(tt; optimize = true) for (i, s) in enumerate(ci.code)
+                    if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]
+    d = _dynamic_calls(QB._render_scalar_subquery, (QB.SubqueryObject, I))
+    @test map(x -> occursin(r"Core\.kwcall\(.*QueryBuilder\.query,", x), d) == [true]
+    d = _dynamic_calls(QB._build_exists_query, (QB.ObjectHandler, I))
+    @test map(x -> occursin(r"Core\.kwcall\(.*QueryBuilder\.(build_cte_clause|build),", x), d) == [true, true]
+    for f in (QB._subquery_projection_textless, QB._subquery_projection_whole_numeric, QB._subquery_projection_json_key,
+              QB._subquery_projection_kind, QB._subquery_projection_unapplied, QB._subquery_projection_formatter)
+      @test (nameof(f), _dynamic_calls(f, (QB.ObjectHandler, I))) == (nameof(f), String[])
+    end
+    for B in (QB._ScalarSubqueryBuilt{QB.ObjectHandler}, QB._MembershipBuilt{QB.ObjectHandler})
+      @test (B, tt_calls(Tuple{B, I})) == (B, String[])
+    end
+    @test _dynamic_calls(QB._get_filter_query, (QB.OuterRefObject, I)) == String[]
+    @test _dynamic_calls(QB._render_outer_ref_column, (String, I)) == String[]
+    @test _dynamic_calls(QB._projection_is_aggregate, (Any,)) == String[]
+    for P in (PormG.ConnectionPool.SQLiteConnectionPool, PormG.ConnectionPool.MySQLConnectionPool,
+              PormG.ConnectionPool.PostgresConnectionPool{:postgres})
+      roots = QB._trim_render_roots(P)
+      @test (P, length(roots)) == (P, length(QB._trim_render_roots()) + 9)
+      for (f, T) in roots
+        @test (P, T, length(methods(f, Tuple{T...}))) == (P, T, 1)
+        # `Core.kwcall` has one method for any `NamedTuple`, so a keyword root is also checked against its target: one
+        # method for the positional arguments, declaring every keyword the root names.
+        f === Core.kwcall || continue
+        target = T[2].instance
+        m = only(methods(target, Tuple{T[3:end]...}))
+        @test (P, nameof(target), any(k -> endswith(string(k), "..."), Base.kwarg_decl(m))) == (P, nameof(target), false)
+        declared = Set(Base.kwarg_decl(m))
+        @test (P, nameof(target), setdiff(fieldnames(T[1]), declared)) == (P, nameof(target), Symbol[])
+      end
+    end
+  end
+
+  # What: the function readers a subquery's one projection reaches: its formatter over its operands
+  #   (`_expression_formatter(::FObject, …)` through `_first_operand_formatter`), what `Concat` and a division make of
+  #   it (`_textless_number`, `_whole_numeric_operand`) and whether it holds a temporal value (`_function_held_temporal`).
+  # Expected: no dynamic call over the function's column: the one operand is read at its type and a list at its element
+  #   type (`_append_operands!`); what remains is a declared type's formatter and a list of no element type the walks
+  #   name, iterated at run time as before.
+  # Why: each wrapped the untyped column as `(p.column,)` (or splatted it into `Any[…]`) and iterated it at run time;
+  #   the trimmed `Subquery(… values("n" => Max("name")))` stopped at `iterate(::Tuple{String})`,
+  #   `getindex(::Type, ::String)` and `_division_first(::Generator, …)` (#1599 layer 5).
+  @testset "a function's operands are read at their types in a subquery's projection (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    @test all(x -> occursin("_declared_type_formatter", x), _dynamic_calls(QB._expression_formatter, (QB.FObject, I)))
+    d = _dynamic_calls(QB._first_operand_formatter, (AbstractVector, I))
+    @test map(x -> occursin("Base.iterate(", x), d) == [true, true]
+    # A splat is `Core._apply_iterate`, a builtin the detector skips, so it is looked for by name.
+    splats(f, T) = [s for s in only(code_typed(f, (T, I); optimize = true))[1].code
+                    if s isa Expr && s.head === :call && occursin("_apply_iterate", string(s.args[1]))]
+    for f in (QB._textless_number, QB._function_held_temporal), T in (QB.FObject, QB.WindowFunction)
+      @test (nameof(f), T, splats(f, T)) == (nameof(f), T, Any[])
+    end
+    for T in (QB.FObject, QB.WindowFunction)
+      @test (T, filter(x -> occursin(r"_division_first|iterate", x), _dynamic_calls(QB._textless_number, (T, I)))) == (T, String[])
+      @test (T, filter(x -> occursin("iterate", x), _dynamic_calls(QB._whole_numeric_operand, (T, I)))) == (T, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

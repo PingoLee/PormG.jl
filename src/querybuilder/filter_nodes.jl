@@ -1738,9 +1738,12 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
     # #1130: the queryset's one column, typed by its own build, for the interval check below.
     inner_kind = Ref{Any}(nothing)
     correlated_before = _lazy_length(instruc.outer_refs)
+    # #1599 layer 7: the nested build is a run-time call (rooted, `_trim_render_roots(P)`), and with no `show_query` it
+    # returns its SQL; asserted, the text built around it below is static (MySQL's derived table had no code in a
+    # trimmed image, the cascade's child scoped by its parent).
     placeholders = query(rhs_qs, table_alias=instruc.table_alias, connection=instruc.connection, parameters=instruc.parameters, outer=instruc,
                          semi_join = !_is_sliced(getfield(rhs_qs, :object)),
-                         built = _MembershipBuilt(rhs_qs, inner_kind))
+                         built = _MembershipBuilt(rhs_qs, inner_kind))::String
     reattach_parameters!(instruc, detach_nested_run!(instruc, nested_mark))
     # Where an interval is its integer (MySQL), membership of an interval column in a queryset of
     # numbers, or of a number in a queryset of intervals, compares a count with microseconds. A column

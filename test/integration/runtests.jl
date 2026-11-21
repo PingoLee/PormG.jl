@@ -44,6 +44,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Expression-Kind Read-back (#1034)" begin include("test_expression_kind_readback.jl") end
     @testset "Updates"                      begin include("test_updates.jl")            end
     @testset "Deletes"                      begin include("test_deletes.jl")            end
+    @testset "Cascade key read decode (#1599 layer 7)" begin include("test_cascade_keys_equivalence_1694.jl") end
     @testset "Mutation Fence Race (#765)"   begin include("test_mutation_fence_concurrency.jl") end
     @testset "Fluent parity (#208)"         begin include("test_fluent_parity_208.jl")  end
     @testset "get_or_create read-back (#1299)" begin include("test_get_or_create_read_back.jl") end

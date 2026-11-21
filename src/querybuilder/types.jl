@@ -2995,7 +2995,10 @@ mutable struct DeletionCollector{T}
   # `Dict{Symbol,T}` and `handle_on_delete!` ASSIGNED into it, so a SET_NULL/SET_DEFAULT child of a
   # multi-path parent kept only the last path's scoping query and the other path's rows were never
   # written. `update_field` ORs the fragments, the way `delete_objects` does for `objects`.
-  field_updates::Dict{Tuple{String,Any},Dict{PormGModel,Vector{Dict{Symbol,T}}}}  # Field updates for SET_NULL etc.
+  # Keyed by the column and the value written: `nothing` (SET_NULL) or the field's default (SET_DEFAULT), an `Int64` or
+  # `nothing` on both relation fields that can name it; at `Any`, every lookup hashed and compared the value at run time
+  # (#1599 layer 7).
+  field_updates::Dict{Tuple{String,Union{Nothing,Int64}},Dict{PormGModel,Vector{Dict{Symbol,T}}}}  # Field updates for SET_NULL etc.
   fast_deletes::Dict{PormGModel,Vector{Dict{Symbol,T}}}  # Objects that can be deleted directly
   sorted_models::Vector{PormGModel}  # Models in deletion order
   show_query::Symbol  # Controls whether to execute or inspect; skips _exists during inspection
@@ -3018,7 +3021,7 @@ mutable struct DeletionCollector{T}
     Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
     Dict{PormGModel,Set{PormGModel}}(),
     Dict{PormGModel,Set{PormGModel}}(),
-    Dict{Tuple{String,Any},Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}}(),
+    Dict{Tuple{String,Union{Nothing,Int64}},Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}}(),
     Dict{PormGModel,Vector{Dict{Symbol,Union{String,SQLObjectHandler}}}}(),
     Vector{PormGModel}(),
     show_query,

@@ -1509,10 +1509,10 @@ end
 # Whether `settings`' pool is one of PormG's own, whose `fetch` takes `_decode` and decodes the rows as it reads them
 # (#1599 layer 6). Any other pool (an application's test double with its own `fetch`, which may take no `_decode` or
 # answer with any Tables.jl source) reads its rows as before.
-function _decodes_on_fetch(settings)::Bool
-  pool = settings.connections
-  return pool isa PostgresConnectionPool || pool isa SQLiteConnectionPool || pool isa MySQLConnectionPool
-end
+_decodes_on_fetch(settings)::Bool = _decodes_rows(settings.connections)
+# The same answer for a pool (#1599 layer 7): `delete()`'s key read hands `with_transaction` the decoder on these.
+_decodes_rows(@nospecialize(pool))::Bool =
+  pool isa PostgresConnectionPool || pool isa SQLiteConnectionPool || pool isa MySQLConnectionPool
 
 # The untyped read as it was before #1599 layer 6, for a pool `_decodes_on_fetch` does not list: the result, then
 # its rows built with the projections' parsers. Behind `@noinline`: the result's type is the pool's own.

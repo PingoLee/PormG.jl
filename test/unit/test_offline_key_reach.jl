@@ -197,8 +197,9 @@ const _OKR_REVIEWED = Dict(
   # whether a statement runs: an offline pool takes the first arm, and its `fetch` is refused in
   # `ensure_before_connect!` as it always was.
   ("src/querybuilder/execution_write.jl", "isa") => 2,
-  # `_decodes_on_fetch` (#1599 layer 6): the untyped read and `get_or_create`'s reads hand `fetch` a decoder on PormG's
-  # own pools, and any other (a test double) reads as before. Like the RETURNING arms, it decides how a result is
+  # `_decodes_rows` (#1599 layer 6, `_decodes_on_fetch`'s list): the untyped read and `get_or_create`'s reads hand
+  # `fetch` a decoder on PormG's own pools, and `delete()`'s key read hands `with_transaction` one (#1599 layer 7); any
+  # other pool (a test double) reads as before. Like the RETURNING arms, it decides how a result is
   # read, not whether a statement runs: an offline pool takes the decoding arm, and its `fetch` is refused in
   # `ensure_before_connect!` as it always was.
   ("src/querybuilder/execution_read.jl", "isa") => 3,

@@ -2991,7 +2991,7 @@ end
       end
     end
     @test !occursin(r"with_transaction\((settings|connection), [^)\n]*conn=conn", del_src)
-    @test count("_with_transaction_with(", del_src) == 10
+    @test count("_with_transaction_with(", del_src) == 11   # one more since #1599 layer 7: the key read's, with its decoder
     # The deletions run in the transaction's context: `with_tx_context(settings.connections, conn) do … end` took the
     # pool at its union type and a closure capturing the untyped `conn`, so neither was concrete. The pool is walked
     # (`_with_tx_context_on`, one dynamic call: its open arm), and `conn` goes in a typed box.
@@ -3007,7 +3007,9 @@ end
     # dispatch (the trimmed binary stopped in one). The build writes nothing into a query (#1624): three are a read
     # terminal's shallow copy, whose `values` the planner replaces, and the entry predicate's is `update`'s copy.
     @test !occursin("deepcopy(", del_src)
-    @test count("_terminal_copy(", del_src) == 3 && occursin("work = _mutation_copy(key[:objct].object)", del_src)
+    # (Four calls since #1599 layer 7: `prepare_related_query` copies a parent's query in its `ObjectHandler` arm, and
+    # its open arm makes the same call.)
+    @test count("_terminal_copy(", del_src) == 4 && occursin("work = _mutation_copy(key[:objct].object)", del_src)
     # `plan` and `run_plan` are defined before `run_deletions`, which calls them: defined after, each was captured
     # in a `Core.Box` and called by run-time dispatch on the boxed value.
     @test findfirst("    plan = function", del_src).start < findfirst("    run_deletions = function", del_src).start
@@ -3071,7 +3073,7 @@ end
     @test occursin("delete_objects(connection, fast_model::Models.ModelType,", del_src) &&
           occursin("update_field(connection, affected_model::Models.ModelType,", del_src) &&
           occursin("delete_objects(connection, model_to_delete::Models.ModelType,", del_src) &&
-          occursin("lock_objects(connection, lock_model::Models.ModelType,", del_src)
+          occursin("lock_model = m::Models.ModelType", del_src) && occursin("lock_objects(connection, lock_model,", del_src)
     # The entry predicate's alias in a typed holder: reassigned in the closure it was a `Core.Box`, and the tuple
     # `_collector_predicate` returns was untyped (the DELETE text built from it had no target).
     @test only(Base.return_types(QB._collector_predicate, (CP.SQLiteConnectionPool, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}}))) ==
@@ -6648,6 +6650,99 @@ end
       @test (P, [string(s) for (ci, _) in Base.code_typed_by_type(Tuple{B}; optimize = true) for s in ci.code
                  if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]) == (P, String[])
     end
+  end
+
+  # What: a cascading delete's typed forms (#1599 layer 7, #1694): whether the root has something to cascade to
+  #   (`_cascade_writes`, a field's action by `_relation_on_delete`), the key read (`_resolve_root_keys!` through the
+  #   untyped read's decoder, `_key_vector_rows`) and the steps after it at the keys' vector type (`_with_root_keys`,
+  #   `_run_root_keys!`, `_root_key_chunks`), the collector's walk (`_find_related_objects!`, `handle_on_delete!` at the
+  #   field's type, `prepare_related_query`, `_filter_in_parent!`), its model sets (`collect_fast_deletes!`,
+  #   `_models_to_lock`), `delete()`'s plan runner and key step, and MySQL's derived table around a mutation's subquery.
+  # Expected: no dynamic call in each, except the open arms that hand anything else to the call it made before; the
+  #   nested `query` a membership filter opens is the render's designed run-time call (rooted, the roots pin above),
+  #   so nothing here crosses it: the pin is on the text built from its answer.
+  # Why: each was a run-time call the trimmed fixture's delete stopped at once the race had children: `fields[…]` on
+  #   the abstract child model, `Tables.columntable` over the key read's result, the keys as an `AbstractVector`, the
+  #   context `NamedTuple` holding `conn` at its run-time type, the plans' nested comprehension, `push!` on a set of
+  #   models, and on MySQL `string("SELECT * FROM (", <nested query>, …)`.
+  @testset "a cascading delete plans, reads its keys and runs at concrete types (#1599 layer 7)" begin
+    QB = PormG.QueryBuilder
+    MT = PormG.Models.ModelType
+    PM = PormG.PormGModel
+    H = QB.ObjectHandler
+    E = Dict{Symbol, Union{String, QB.SQLObjectHandler}}
+    K = Vector{E}
+    DC = QB.DeletionCollector{Union{String, QB.SQLObjectHandler}}
+    @test _dynamic_calls(QB._cascade_writes, (MT,)) == String[]
+    @test filter(x -> !occursin("_relation_on_delete_other", x), _dynamic_calls(QB._relation_on_delete, (Any,))) == String[]
+    # The walk: the child's query, its scope, its action and the call into `handle_on_delete!` at the field's type. What
+    # stays is the multi-path `Qor` and the error messages, not this pin's.
+    d = _dynamic_calls(QB._find_related_objects!, (DC, MT, K))
+    @test filter(x -> occursin(r"handle_on_delete!|on_delete|_orders_deletes|resolve_delete_key|object\b|_filter_in_parent!|get!", x), d) == String[]
+    for F in (PormG.Models.sForeignKey, PormG.Models.sOneToOneField)
+      @test (F, _dynamic_calls(QB.handle_on_delete!, (DC, Symbol, F, PM, E, MT))) == (F, String[])
+    end
+    @test _dynamic_calls(QB.prepare_related_query, (E, MT, Symbol)) == String[]
+    @test filter(x -> !occursin("_filter_in_parent_other!", x), _dynamic_calls(QB._filter_in_parent!, (H, String, Any))) == String[]
+    @test filter(x -> occursin("push!", x), _dynamic_calls_deep(QB.collect_fast_deletes!, (DC,); depth = 2)) == String[]
+    @test filter(x -> occursin("push!", x), _dynamic_calls_deep(QB._models_to_lock, (DC,); depth = 2)) == String[]
+    @test filter(x -> !occursin("_narrowed_keys_other", x), _dynamic_calls(QB._key_vector_rows, (Vector{Dict{Symbol, Any}},))) == String[]
+    for P in (PormG.ConnectionPool.SQLiteConnectionPool, PormG.ConnectionPool.MySQLConnectionPool,
+              PormG.ConnectionPool.PostgresConnectionPool{:postgres})
+      PT = Base.typesplit(only(Base.return_types(QB._root_key_plan, (P, MT, H))), Nothing)
+      # The key read: one `Tables.columntable` is left, the inspection read's (`show_query`), which no trimmed fixture
+      # runs; the executed read decodes its rows.
+      d = _dynamic_calls(QB._resolve_root_keys!, (Vector{Any}, P, MT, PT, Symbol, Any))
+      @test (P, count(x -> occursin("columntable", x), d), filter(x -> occursin("_key_vector_rows", x), d)) == (P, 1, String[])
+      @test (P, only(Base.return_types(QB._root_key_chunks, (P, Vector{Int64}))), _dynamic_calls(QB._root_key_chunks, (P, Vector{Int64}))) ==
+            (P, Vector{Vector{Int64}}, String[])
+      # `delete()`'s closures, found by what they capture: the plan, the plan runner and the deletions.
+      closure(want) = only(T for n in names(QB; all = true) if isdefined(QB, n)
+                           for T in (getglobal(QB, n),) if T isa UnionAll && Base.unwrap_unionall(T) <: Function &&
+                           Set(fieldnames(Base.unwrap_unionall(T))) == Set(keys(want)))
+      at(T, want) = (U = Base.unwrap_unionall(T);
+                     T{[want[fieldnames(U)[findfirst(t -> t === v, collect(U.types))]] for v in U.parameters]...})
+      plan = at(closure(Dict(:settings => 0, :show_query => 0, :model => 0)),
+                Dict(:settings => PormG.Configuration.Settings, :show_query => Symbol, :model => MT))
+      run_plan = at(closure(Dict(:connection => 0, :results => 0, :deleted_counter => 0, :show_query => 0, :model => 0)),
+                    Dict(:connection => P, :results => Vector{Any}, :deleted_counter => Dict{String, Integer},
+                         :show_query => Symbol, :model => MT))
+      deletions = at(closure(Dict(:connection => 0, :run_plan => 0, :plan => 0, :results => 0, :deleted_counter => 0,
+                                  :show_query => 0, :objct => 0, :model => 0)),
+                     Dict(:connection => P, :run_plan => run_plan, :plan => plan, :results => Vector{Any},
+                          :deleted_counter => Dict{String, Integer}, :show_query => Symbol, :objct => H, :model => MT))
+      # The plan runner reads each model to lock at `ModelType` before `objects` is read by it (the engines that lock;
+      # SQLite's runner has no lock loop).
+      if P !== PormG.ConnectionPool.SQLiteConnectionPool
+        d = [string(s) for (ci, _) in Base.code_typed_by_type(Tuple{run_plan, Any, DC, Bool}; optimize = true) for s in ci.code
+             if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]
+        @test (P, filter(x -> occursin("getindex", x), d)) == (P, String[])
+      end
+      # The deletions call the key step and the keyed steps at concrete types.
+      d = [string(s) for (ci, _) in Base.code_typed_by_type(Tuple{deletions, Any}; optimize = true) for s in ci.code
+           if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]
+      @test (P, filter(x -> occursin(r"_resolve_root_keys!|_with_root_keys", x), d)) == (P, String[])
+      ctx = NamedTuple{(:results, :connection, :model, :key_plan, :objct, :show_query, :conn_box, :plan, :run_plan,
+                        :deleted_counter),
+                       Tuple{Vector{Any}, P, MT, PT, H, Symbol, Base.RefValue{Any}, plan, run_plan, Dict{String, Integer}}}
+      @test (P, _dynamic_calls(QB._run_root_keys!, (Vector{Int64}, ctx))) == (P, String[])
+      # `with_transaction` decodes a statement's rows when a caller hands it a decoder.
+      Q = P === PormG.ConnectionPool.SQLiteConnectionPool ? QB.SQLiteParameterizedQuery :
+          P === PormG.ConnectionPool.MySQLConnectionPool ? QB.MySQLParameterizedQuery : QB.PgParameterizedQuery
+      @test (P, _dynamic_calls(QB._with_transaction_with, (P, String, Any, Bool, Q, QB._ProjectionRowDecoder))) == (P, String[])
+    end
+    # MySQL's derived table around a mutation's subquery: the nested `query` keyword call's answer is asserted `String`,
+    # so the text built from it is static. Read in the lowered code: the pin process infers the nested build on its own
+    # and finds the call static either way, where a trimmed image, which reaches it only at run time, did not.
+    ci = only(code_lowered(QB._render_filter_oper, (QB.OperObject, QB.InstructionObject)))
+    resolve(x) = x isa Core.SSAValue ? resolve(ci.code[x.id]) : x
+    named(x, n) = (r = resolve(x); r isa GlobalRef && r.name === n)
+    call(st) = st isa Expr && st.head === :call ? st : st isa Expr && st.head === :(=) ? call(st.args[2]) : nothing
+    queries = [i for (i, st) in enumerate(ci.code) if (c = call(st)) !== nothing && length(c.args) >= 3 &&
+               named(c.args[1], :kwcall) && named(c.args[3], :query)]
+    asserted = [i for i in queries if any((c = call(st)) !== nothing && length(c.args) == 3 && named(c.args[1], :typeassert) &&
+                                          c.args[2] == Core.SSAValue(i) && named(c.args[3], :String) for st in ci.code)]
+    @test length(queries) == 1 && asserted == queries
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

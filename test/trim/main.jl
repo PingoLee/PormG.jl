@@ -22,6 +22,7 @@ function (@main)(args::Vector{String})::Cint
     untyped_step() || return Cint(17)   # the untyped read, before the write (#1599 layer 6)
     func_step() || return Cint(19)
     subquery_step() || return Cint(20)
+    join_step() || return Cint(21)
     write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)

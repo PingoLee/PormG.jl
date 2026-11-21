@@ -171,7 +171,8 @@ _model_table_at(@nospecialize(model))::String =
 function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{String}
   tables = Set{String}([_model_table_at(object.model)])
   for rj in instruc.row_join
-    hasproperty(rj, :b) && push!(tables, String(getproperty(rj, :b)))
+    b = _join_b(rj)   # #1599 layer 5: at the row's kind
+    b === nothing || push!(tables, b)
   end
   column_hops(path) = (segs = split(String(first(split(lstrip(path, '-'), "__@"))), "__"); segs[1:end-1])
   # #1599 layer 5: the three sources are walked one after the other, in the order `Iterators.flatten` gave
@@ -219,14 +220,22 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
     name in tables || continue
     for v in values(cte)
       v isa SQLObjectHandler || continue
-      for p in v.object.values
-        p isa SQLField && push!(cols, something(p.custom_as, p._as))
-      end
+      # #1599 layer 5: the CTE's query read at `ObjectHandler`, PormG's one handler type (another is read as
+      # before, behind `@noinline`); `v.object` on the abstract handler dispatched at run time.
+      v isa ObjectHandler ? _add_cte_columns!(cols, v) : _add_cte_columns_other!(cols, v)
     end
   end
   return cols
 end
 
+# The columns a CTE's query projects, as the outer statement names them.
+function _add_cte_columns!(cols::Set{String}, v)
+  for p in v.object.values
+    p isa SQLField && push!(cols, something(p.custom_as, p._as))
+  end
+  return nothing
+end
+@noinline _add_cte_columns_other!(cols::Set{String}, @nospecialize(v)) = _add_cte_columns!(cols, v)
 # One candidate model's part of `_from_column_names`: its columns when its table is in the FROM clause, and the models
 # its fields and relations reach, queued as further candidates.
 function _add_from_model!(cols::Set{String}, candidates::Vector{PormGModel}, m, tables::Set{String})

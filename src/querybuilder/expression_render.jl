@@ -1039,6 +1039,10 @@ _trim_render_roots() = (
   # from inside the function's own render, so its inference ran in that render's limited cycle.
   Tuple((Core.kwcall, (NamedTuple{(:_as,),Tuple{A}}, typeof(_render_case_branch), FObject, InstructionObject))
         for A in (Nothing, String))...,
+  # A window function in a projection (`values("rk" => RowNumber(over = …))`, #1599 layer 5, the joins slice): its
+  # render is entered from the projection walk's own recursion, as a function's is.
+  Tuple((Core.kwcall, (NamedTuple{(:_as,),Tuple{A}}, typeof(_get_select_query), WindowFunction, InstructionObject))
+        for A in (Nothing, String))...,
 )
 # The nested builds a scalar `Subquery`, `__@in` a queryset and `Exists` open from inside the render, for a pool type
 # `P` (their keyword calls carry the pool and its parameter collector): `query()` with each `built` callback
@@ -1066,7 +1070,13 @@ function _trim_render_roots(::Type{P}) where {P<:_SQLEngine}
   # `Exists`' own WITH clause (`build_cte_clause(…; correlated = true)`).
   cte = (Core.kwcall, (NamedTuple{(:correlated,), Tuple{Bool}}, typeof(build_cte_clause),
                        OrderedCollections.OrderedDict{String,CTEDict}, P, Q, SQLTbAlias))
-  return (_trim_render_roots()..., sub, mem, exists..., render..., exists_nodes..., cte)
+  # A top-level CTE body (`build_cte_clause`): its `with_bucket` call with the body's callable struct, and the body's
+  # keyword call into `_render_select` (#1599 layer 5, the joins slice).
+  cte_body = (with_bucket, (_CteBodyRender{ObjectHandler,P,Q,SQLTbAlias}, Q, Symbol))
+  cte_render = (Core.kwcall, (NamedTuple{(:table_alias, :connection, :parameters, :cte_body, :cte_body_correlated),
+                                         Tuple{SQLTbAlias, P, Q, String, Bool}},
+                              typeof(_render_select), ObjectHandler))
+  return (_trim_render_roots()..., sub, mem, exists..., render..., exists_nodes..., cte, cte_body, cte_render)
 end
 
 # #894 — whether a projection's source can have a millisecond form, decided WITHOUT rendering it. The

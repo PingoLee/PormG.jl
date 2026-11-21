@@ -395,6 +395,39 @@ _key_a(r::AnchorlessJoin)::String = r.alias_b
 _key_b(r::Union{ModelJoin,CteJoin})::String = r.key_b
 _key_b(::Union{CrossJoin,AnchorlessJoin})::String = ""
 _dedup_key(r::JoinRow) = (r.a, r.b, _key_a(r), _key_b(r), r.alias_a)
+# `_dedup_key(r)` for a row read off `row_join` at the abstract `JoinRow` (#1599 layer 5): one arm per kind, each
+# the method at its concrete type; a row type defined elsewhere takes the one dynamic call, behind `@noinline`.
+# `_insert_join` compared every row's key through a closure handed to `filter`, a call the trimmed
+# `values("name", "cn" => "circuitid__name")` stopped at (the closure on a `ModelJoin`).
+@noinline function _dedup_key_at(@nospecialize(r::JoinRow))
+  r isa ModelJoin && return _dedup_key(r)
+  r isa CteJoin && return _dedup_key(r)
+  r isa CrossJoin && return _dedup_key(r)
+  r isa AnchorlessJoin && return _dedup_key(r)
+  return _dedup_key_other(r)
+end
+@noinline _dedup_key_other(@nospecialize(r)) = _dedup_key(r)
+# Whether row `r`'s key is `key`, the comparison made at the key's and the row's types: `_dedup_key_at`'s answer is
+# untyped (its open arm), so `==` on it dispatched at run time (`==(::NTuple{5,String}, ::NTuple{5,String})`).
+# The open arms assert the answer is a `Bool`, as `filter` asserted its predicate's.
+@noinline function _dedup_key_equal(@nospecialize(r::JoinRow), @nospecialize(key))
+  key isa NTuple{5,String} || return (_dedup_key_other(r) == key)::Bool
+  r isa ModelJoin && return _dedup_key(r) == key
+  r isa CteJoin && return _dedup_key(r) == key
+  r isa CrossJoin && return _dedup_key(r) == key
+  r isa AnchorlessJoin && return _dedup_key(r) == key
+  return (_dedup_key_other(r) == key)::Bool
+end
+# The matching row's `alias_b` for `_insert_join`, at the row's kind; a row type defined elsewhere is read behind
+# `@noinline` and asserted a `String`, as the read it replaces asserted it (`check[1].alias_b::String`).
+@noinline function _dedup_alias_b(@nospecialize(r::JoinRow))
+  r isa ModelJoin && return r.alias_b
+  r isa CteJoin && return r.alias_b
+  r isa CrossJoin && return r.alias_b
+  r isa AnchorlessJoin && return r.alias_b
+  return _dedup_alias_b_other(r)
+end
+@noinline _dedup_alias_b_other(@nospecialize(r)) = getproperty(r, :alias_b)::String
 
 # `r.alias_a` / `r.alias_b` for a row read off `row_join` at the abstract `JoinRow` (#1599 layer 5): one arm
 # per kind, each a `String` read at its concrete type. A `getproperty` on the abstract row dispatches at run
@@ -415,6 +448,18 @@ end
   return _join_alias_other(r, :alias_b)
 end
 @noinline _join_alias_other(@nospecialize(r), name::Symbol)::String = getproperty(r, name)
+# `hasproperty(r, :b) ? String(r.b) : nothing` the same way (#1599 layer 5): the relation a row joins, which every
+# PormG row kind declares (`b::String`); MySQL's ORDER BY column check asked it of the abstract row (`_from_column_names`)
+# and the trimmed `order_by("-cn")` stopped at `hasproperty(::ModelJoin, :b)`. A row type defined elsewhere is asked
+# as before, behind `@noinline`.
+@noinline function _join_b(@nospecialize(r::JoinRow))::Union{Nothing,String}
+  r isa ModelJoin && return r.b
+  r isa CteJoin && return r.b
+  r isa CrossJoin && return r.b
+  r isa AnchorlessJoin && return r.b
+  return _join_b_other(r)
+end
+@noinline _join_b_other(@nospecialize(r)) = hasproperty(r, :b) ? String(getproperty(r, :b)) : nothing
 # `r.how` the same way (#1599 layer 5): the join type the outer-join check reads. A `CrossJoin` has none, and
 # both callers skip it before asking.
 @noinline function _join_how(@nospecialize(r::JoinRow))::String
@@ -1768,12 +1813,15 @@ end
 # #1698: the query's own slot, element by element through its walk. The recursive `FilterType` fields
 # keep `Base.deepcopy(::Vector{FilterType})` (#1684 is the typed clone).
 Base.deepcopy(filter::Vector{FilterNode}) = FilterNode[with_filter_node(deepcopy, f) for f in filter]
-function Base.deepcopy(obj::SQLObjectQuery)
+Base.deepcopy(obj::SQLObjectQuery) = _query_copy(obj, nothing)
+# A copy of `obj` with `values` as its projection, every other slot copied as `deepcopy` copies it (#1599 layer 5):
+# `deepcopy` passes a deep copy of the projection, a CTE's stored query a one-level one (`_cte_query_copy`).
+function _query_copy(obj::SQLObjectQuery, projection::Union{Nothing,Vector{ProjectionNode}})
   try
     return SQLObjectQuery(
       model=obj.model,  # PormGModel doesn't need deep copy (immutable reference)
       connect_key=obj.connect_key,
-      values=deepcopy(obj.values),
+      values=projection === nothing ? deepcopy(obj.values) : projection,
       filter=deepcopy(obj.filter),
       insert=_copy_insert(obj.insert),   # #1599 layer 7: an empty map without the generic walk
       limit=obj.limit,

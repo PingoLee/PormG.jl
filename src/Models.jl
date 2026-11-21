@@ -2695,13 +2695,32 @@ field_db_column(field::PormGField, name::Symbol)::String = field_db_column(field
 # the IDENTICAL object, so the common path allocates nothing and renders byte-identically. The
 # emptiness guard mirrors `field_db_column`'s own test, so `db_column = ""` — already a no-op
 # there — is not copied either.
-function field_without_db_column(field::PormGField)::PormGField
-  T = typeof(field)
+#
+# #1599 layer 5: the field is handed over at its concrete type, one arm per member of the closed set (`AnyField`,
+# generated below from the union), and each type's rebuild is spelled out argument by argument
+# (`_field_rebuilt_without_db_column`). A caller holds the field at the abstract `PormGField` (a CTE column's field
+# is inferred from its expression), so the call compiled per field type was a run-time call, and the splat over
+# `1:fieldcount(T)` was another: the trimmed `.with(…)` read had no code for `field_without_db_column(::sForeignKey)`.
+function field_without_db_column(@nospecialize(field::PormGField))::PormGField
+  return _with_any_field(_field_rebuilt_without_db_column, field)::PormGField
+end
+# `f(field, args...)` with `field` at its concrete type: one arm per member of the closed field set (`AnyField`),
+# generated from the union, so a field held at the abstract `PormGField` is handed over without a run-time call
+# (#1599 layer 5). Any other value makes the call it made before, one dynamic call behind `@noinline`.
+@eval function _with_any_field(f::F, @nospecialize(field), args::Vararg{Any,N}) where {F,N}
+  $(Expr(:block, (:(field isa $T && return f(field, args...)) for T in Base.uniontypes(AnyField))...))
+  return _with_any_field_other(f, field, args...)
+end
+@noinline _with_any_field_other(f::F, @nospecialize(field), args::Vararg{Any,N}) where {F,N} = f(field, args...)
+@generated function _field_rebuilt_without_db_column(field::T)::PormGField where {T<:PormGField}
   idx = findfirst(==(:db_column), fieldnames(T))
-  idx === nothing && return field
-  dbc = getfield(field, idx)
-  (dbc isa AbstractString && !isempty(dbc)) || return field
-  return T((i == idx ? nothing : getfield(field, i) for i in 1:fieldcount(T))...)
+  idx === nothing && return :(field)
+  args = [i == idx ? :nothing : :(getfield(field, $i)) for i in 1:fieldcount(T)]
+  return quote
+    dbc = getfield(field, $idx)
+    (dbc isa AbstractString && !isempty(dbc)) || return field
+    return $T($(args...))
+  end
 end
 
 # `model_table_name` / `model_has_db_table` (#59) — the table-level mirror of `field_db_column`

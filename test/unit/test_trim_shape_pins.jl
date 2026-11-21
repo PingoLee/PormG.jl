@@ -3400,16 +3400,20 @@ end
     concrete, open = _node_subtypes((PormG.CanonicalType,))
     @test isempty(open)
     src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_kind.jl"), String)
-    start = findfirst("function _store_projection_kind!(", src)[1]
-    body = join(filter(l -> !startswith(lstrip(l), "#"),
-                       split(src[start:findnext("\nend", src, start)[end]], '\n')), '\n')
-    for T in concrete
-      @test occursin("kind isa $(nameof(T)) && return (d[name] = kind; nothing)", body)
+    # The CTE column store (#1599 layer 5) has the same arms.
+    for fname in ("_store_projection_kind!", "_store_cte_kind!")
+      start = findfirst("function $(fname)(", src)[1]
+      body = join(filter(l -> !startswith(lstrip(l), "#"),
+                         split(src[start:findnext("\nend", src, start)[end]], '\n')), '\n')
+      for T in concrete
+        @test (fname, occursin("kind isa $(nameof(T)) && return (d[name] = kind; nothing)", body)) == (fname, true)
+      end
+      @test (fname, count("kind isa ", body)) == (fname, length(concrete))
     end
-    @test count("kind isa ", body) == length(concrete)
     # Every arm names a kind the module can see, statically: an arm naming an unimported kind is a global
     # read typed `Any`, so its `isa` and store dispatch at run time (and the name would throw if reached).
     @test isempty(_dynamic_calls(QB._store_projection_kind!, (QB.InstructionObject, Symbol, Any)))
+    @test filter(x -> !occursin("_store_cte_kind_other!", x), _dynamic_calls(QB._store_cte_kind!, (Dict{String,PormG.CanonicalType}, String, Any))) == String[]
   end
 
   # What: the model field as the query builder reads it (#1599 round 7, row 30): the field memo's value
@@ -6298,20 +6302,26 @@ end
   # What: the insert map of a copied query (`_copy_insert`), which every copying terminal (`bulk_update`'s `deepcopy` of
   #   its handler) goes through.
   # Expected: `deepcopy(::SQLObjectQuery)` copies the map through `_copy_insert` (only its open arm, `_copy_insert_other`,
-  #   deep-copies it), and `_copy_insert` makes no dynamic call.
+  #   deep-copies it), and `_copy_insert` makes no dynamic call. Since #1599 layer 5 (the joins slice) the copy's body
+  #   is `_query_copy`, which `.with()`'s one-level copy shares, so the map's copy is read there.
   # Why: `deepcopy` walked the map's fields generically: the trimmed `bulk_update` stopped at
   #   `deepcopy_internal(::Vector{Int32}, …)` (#1599 layer 7, #1694).
   @testset "a copied query's insert map is copied without the generic walk (#1599 layer 7, #1694)" begin
     QB = PormG.QueryBuilder
     OD = PormG.OrderedCollections.OrderedDict{String,Any}
-    ci, _ = only(InteractiveUtils.code_typed(Base.deepcopy, (QB.SQLObjectQuery,); optimize = true))
-    invoked = Any[]
-    for st in ci.code
-      (st isa Expr && st.head === :invoke) || continue
-      mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
-      push!(invoked, mi.specTypes)
+    invokes(f, T) = begin
+      ci, _ = only(InteractiveUtils.code_typed(f, T; optimize = true))
+      invoked = Any[]
+      for st in ci.code
+        (st isa Expr && st.head === :invoke) || continue
+        mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def)
+        push!(invoked, mi.specTypes)
+      end
+      invoked
     end
-    @test Tuple{typeof(QB._copy_insert), OD} in invoked   # the base reached the map through `deepcopy_internal(::Any, …)`
+    @test Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Nothing} in invokes(Base.deepcopy, (QB.SQLObjectQuery,))
+    # the base reached the map through `deepcopy_internal(::Any, …)`
+    @test Tuple{typeof(QB._copy_insert), OD} in invokes(QB._query_copy, (QB.SQLObjectQuery, Nothing))
     @test _dynamic_calls(QB._copy_insert, (OD,)) == String[]
   end
 
@@ -6436,7 +6446,7 @@ end
       @test all(x -> occursin(r"_concat_operand_label|_non_number_math_refusal", x), d)
     end
     roots = QB._trim_render_roots()
-    @test length(roots) == 24
+    @test length(roots) == 26   # 24, and a window function's two keyword roots (#1599 layer 5, the joins slice)
     for (f, T) in roots
       @test (T, length(methods(f, Tuple{T...}))) == (T, 1)
     end
@@ -6522,7 +6532,7 @@ end
     for P in (PormG.ConnectionPool.SQLiteConnectionPool, PormG.ConnectionPool.MySQLConnectionPool,
               PormG.ConnectionPool.PostgresConnectionPool{:postgres})
       roots = QB._trim_render_roots(P)
-      @test (P, length(roots)) == (P, length(QB._trim_render_roots()) + 9)
+      @test (P, length(roots)) == (P, length(QB._trim_render_roots()) + 11)
       for (f, T) in roots
         @test (P, T, length(methods(f, Tuple{T...}))) == (P, T, 1)
         # `Core.kwcall` has one method for any `NamedTuple`, so a keyword root is also checked against its target: one
@@ -6561,6 +6571,82 @@ end
     for T in (QB.FObject, QB.WindowFunction)
       @test (T, filter(x -> occursin(r"_division_first|iterate", x), _dynamic_calls(QB._textless_number, (T, I)))) == (T, String[])
       @test (T, filter(x -> occursin("iterate", x), _dynamic_calls(QB._whole_numeric_operand, (T, I)))) == (T, String[])
+    end
+  end
+
+  # What: the join, CTE and window read's typed forms (#1599 layer 5): `_insert_join`'s dedup, MySQL's ORDER BY column
+  #   set (`_from_column_names`, a row's `b` by `_join_b`, a CTE's columns by `_add_cte_columns!`), the CTE-name shadow check, `.with()`'s stored copy (`_preset_cte_fields`, `_cte_query_copy`),
+  #   the CTE body render (`_CteBodyRender`) and its column fields (`_meant_column_field`, `field_without_db_column`).
+  # Expected: no dynamic call in each, except the open arms that hand a caller's own row, handler or model type to the
+  #   call it made before (`_dedup_key_other`, `_join_b_other`); the CTE body's `with_bucket` call is the render's
+  #   designed dynamic re-entry and is rooted (the roots pin above), so nothing here crosses it.
+  # Why: each was a run-time call the trimmed `.with(…)`/`order_by` read stopped at: the `filter` closure over the
+  #   abstract rows, `hasproperty(rj, :b)`, the splatted `KeySet`, `setindex!(::CTEDict, ::Pair, …)`, `deepcopy`'s
+  #   `TypeError`, the `do` closure, `_meant_column_field(::sForeignKey, …)` and `field_without_db_column(::sForeignKey)`.
+  @testset "a join, a CTE and its body render at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    H = QB.ObjectHandler
+    # The dedup key is read at each row's kind, a call down (the old `filter` closure made it inside `filter`).
+    # The walk starts at the keyword body (`Base.bodyfunction`), where the code is; it must name exactly one method, or
+    # the empty answer below would pass for the wrong reason.
+    kwbody = Base.bodyfunction(only(methods(QB._insert_join)))
+    kwargs_tt = (Bool, typeof(QB._insert_join), Vector{QB.JoinRow}, QB.JoinRow, I, String)
+    @test length(Base.code_typed_by_type(Base.signature_type(kwbody, kwargs_tt))) == 1
+    d = _dynamic_calls_deep(kwbody, kwargs_tt; depth = 4, skip = (QB._dedup_key_other, QB._dedup_alias_b_other))
+    @test filter(x -> occursin(r"_dedup_key\(|\bfilter\(", x), d) == String[]
+    @test filter(x -> occursin(r"hasproperty|getproperty|_add_cte_columns", x), _dynamic_calls(QB._from_column_names, (QB.SQLObject, I))) == String[]
+    @test _dynamic_calls(QB._add_cte_columns!, (Set{String}, H)) == String[]
+    @test filter(x -> occursin(r"hasproperty|_cte_shadow_in|_holds_identical|_push_module!|model_table_name", x),
+                 _dynamic_calls(QB._cte_name_shadowed_model, (String, QB.SQLObject, H))) == String[]
+    @test _dynamic_calls(QB._cte_shadow_in, (PormG.Models.ModelType, String)) == String[]
+    # Each key stored at its value's type: built from three `Pair`s, the store was a run-time call inside `CTEDict`'s
+    # constructor (the query's copy is pinned on its own below, so its walk is skipped, and so is the copy of the query's
+    # own CTEs, `_copy_ctes`, whose store is unchanged and not this pin's).
+    @test length(Base.code_typed_by_type(Base.signature_type(QB._preset_cte_fields, (String, H)))) == 1
+    d = _dynamic_calls_deep(QB._preset_cte_fields, (String, H); depth = 4, skip = (Base.deepcopy, QB._cte_query_copy, QB._copy_ctes))
+    @test filter(x -> occursin("setindex!", x), d) == String[]
+    @test _dynamic_calls(QB._cte_query_copy, (H,)) == String[]
+    # Whether the projection can be shared one level is read at each node's type.
+    @test _dynamic_calls(QB._copy_shares_safely, (Any,)) == String[]
+    for T in (QB.SQLField, QB.SQLText)
+      @test (T, _dynamic_calls(QB._projection_shares_safely, (T,))) == (T, String[])
+    end
+    @test _dynamic_calls(QB._query_copy, (QB.SQLObjectQuery, Vector{QB.ProjectionNode})) == String[]
+    # A CTE column's field, kind and records: the loop makes no dynamic call, and the column's record is made at its
+    # expression's type (`_cte_column!`), whose readers make none either.
+    @test _dynamic_calls(QB._build_cte_custom_model, (I,)) == String[]
+    for T in (String, QB.FObject, QB.WindowFunction, QB.SQLText, QB.FExpression)
+      @test (T, _dynamic_calls(QB._cte_column!, (T, QB._CteColumn, I))) == (T, String[])
+      @test (T, _dynamic_calls(QB._record_cte_division!, (Dict{String,QB.CTEDivision}, String, T, I))) == (T, String[])
+    end
+    @test _dynamic_calls(QB._cte_column_path, (Any,)) == String[]
+    @test _dynamic_calls(QB._meant_column_field, (PormG.PormGField, Any, Any, I)) == String[]
+    @test _dynamic_calls(QB._kind_family_at, (Any,)) == String[]
+    @test _dynamic_calls(QB._kind_field_at, (Any,)) == String[]
+    @test filter(x -> !occursin("_with_any_field_other", x), _dynamic_calls(PormG.Models._with_any_field, (typeof(QB._field_kind), PormG.PormGField))) == String[]
+    @test _dynamic_calls(PormG.Models.field_without_db_column, (PormG.PormGField,)) == String[]
+    # The walk has one arm per member of the closed field set, each a static call into that type's rebuild.
+    for T in Base.uniontypes(PormG.Models.AnyField)
+      @test (T, _dynamic_calls(PormG.Models._field_rebuilt_without_db_column, (T,))) == (T, String[])
+    end
+    @test _dynamic_calls(QB._dedup_key_at, (QB.JoinRow,)) == String[]
+    # What remains in `_dedup_key_equal` and `_join_b` is the open arm's comparison and its result's conversion.
+    @test filter(x -> !occursin(r"==", x), _dynamic_calls(QB._dedup_key_equal, (QB.JoinRow, Any))) == String[]
+    @test filter(x -> !occursin("_dedup_alias_b_other", x), _dynamic_calls(QB._dedup_alias_b, (QB.JoinRow,))) == String[]
+    @test filter(x -> !occursin("Base.convert", x), _dynamic_calls(QB._join_b, (QB.JoinRow,))) == String[]
+    # A window function's projection render is entered from the projection walk's recursion, so it is rooted, with
+    # either keyword type, as a function's is (the trimmed `values("rk" => RowNumber(…))` had no code for it).
+    for A in (Nothing, String)
+      @test (A, (Core.kwcall, (NamedTuple{(:_as,),Tuple{A}}, typeof(QB._get_select_query), QB.WindowFunction, I)) in QB._trim_render_roots()) == (A, true)
+    end
+    for (P, Q) in ((PormG.ConnectionPool.SQLiteConnectionPool, QB.SQLiteParameterizedQuery),
+                   (PormG.ConnectionPool.MySQLConnectionPool, QB.MySQLParameterizedQuery),
+                   (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, QB.PgParameterizedQuery))
+      B = QB._CteBodyRender{H,P,Q,QB.SQLTbAlias}
+      @test (P, length(Base.code_typed_by_type(Tuple{B}))) == (P, 1)
+      @test (P, [string(s) for (ci, _) in Base.code_typed_by_type(Tuple{B}; optimize = true) for s in ci.code
+                 if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]) == (P, String[])
     end
   end
 

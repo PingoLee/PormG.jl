@@ -1500,6 +1500,10 @@ _isnull_true_filter(v::SQLTypeOper, instruc::SQLInstruction)::Bool =
 # `Qor` inside a `When` or a `Q`-valued expression, which renders through the select and filter walks.
 _or_arm(f, instruc::SQLInstruction) = _in_where_filter(instruc) ? _with_render_scope(f, instruc; outer = true) : f()
 
+# Whether `key`, a filter column's expression at its own type, is one of the model's field names (#1599 layer 5; the
+# walk in `_render_filter_oper` hands it over).
+_field_key_in(key, fields) = haskey(fields, key)
+
 function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
   @pormg_debug false
   # #985: inside an ON clause a comparison renders its column as the LEFT side and its value, below,
@@ -1808,7 +1812,10 @@ function _render_filter_oper(v::SQLTypeOper, instruc::SQLInstruction)
         formatted = _guarded_format(rf.formatter, _oper_literal(v), v.operator, range_label, rf.type)
         placeholders = _bind_range_value(instruc, v.operator, formatted)
       end
-    elseif haskey(instruc.object.model.fields, col.field)
+    # #1599 layer 5: the key read at its member's type (`_with_field_part_open`); over the slot's union `haskey` was a
+    # run-time call, and the trimmed `filter("st__n__@gte" => 1)` on a CTE column had no code for
+    # `haskey(::OrderedDict{String,AnyField}, ::CTEReference)`.
+    elseif _with_field_part_open(_field_key_in, col.field, instruc.object.model.fields)
       # Does this operator take `%` decoration? `add_parameter!` then routes the value through
       # `_apply_like_wildcards`, which picks the shape from the same constants (#604).
       is_like_op = v.operator in LIKE_WILDCARD_OPERATORS

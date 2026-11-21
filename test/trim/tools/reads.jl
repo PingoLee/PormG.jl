@@ -250,3 +250,56 @@ function sub_line(label::String, rows::Vector{RaceRow}, expected::String)::Bool
     say("subquery", string(label, " ", length(rows), " rows: ", isempty(names) ? "none" : names))
     return names == expected
 end
+
+using PormG.Functions: Rank, RowNumber, WindowOver
+
+# The typed rows of `join_step`'s CTE and window reads: the race's name and a count or a rank.
+const CountRow = NamedTuple{(:name, :n), Tuple{String, Int64}}
+const RankRow = NamedTuple{(:name, :rk), Tuple{String, Int64}}
+
+# Joins, CTEs and windows (#1599 layer 5): a join projected with `values()` and ordered by the joined path and by its
+# alias, a read through a CTE joined back to the race (its column projected, and filtered on), and two window functions
+# (`RowNumber` over a partition, `Rank` over an order). Each reads into its typed row and is checked against the two
+# seeded races and their circuits. Exit code 21 when a read raises or returns other rows.
+function join_step()::Bool
+    try
+        ok = true
+        races = M.Race.objects.filter("circuitid__country__@in" => ["Monaco", "Brazil"])
+        ok &= named_line("join", "order_by path",
+                         races.values("name", "cn" => "circuitid__name").order_by("circuitid__name").list(CircuitNameRow),
+                         r -> string(r.name, " at ", r.cn),
+                         "Brazilian Grand Prix at Autódromo José Carlos Pace, Monaco Grand Prix at Circuit de Monaco")
+        races = M.Race.objects.filter("circuitid__country__@in" => ["Monaco", "Brazil"])
+        ok &= named_line("join", "order_by -alias",
+                         races.values("name", "cn" => "circuitid__name").order_by("-cn").list(CircuitNameRow),
+                         r -> string(r.name, " at ", r.cn),
+                         "Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace")
+        stats = M.Race.objects.values("circuitid", "n" => Count("raceid"))
+        q = M.Race.objects
+        q.with("st" => stats, join_field = "circuitid" => "circuitid")
+        ok &= named_line("join", "CTE column", q.values("name", "n" => "st__n").order_by("date").list(CountRow),
+                         r -> string(r.name, " ", r.n), "Monaco Grand Prix 1, Brazilian Grand Prix 1")
+        stats = M.Race.objects.filter("year" => 2008).values("circuitid", "n" => Count("raceid"))
+        q = M.Race.objects
+        q.with("st" => stats, join_field = "circuitid" => "circuitid")
+        ok &= named_line("join", "CTE filter", q.filter("st__n__@gte" => 1, "round__@gt" => 10).values("name", "n" => "st__n").list(CountRow),
+                         r -> string(r.name, " ", r.n), "Brazilian Grand Prix 1")
+        ok &= named_line("join", "RowNumber partition",
+                         M.Race.objects.values("name", "rk" => RowNumber(over = WindowOver(partition_by = ["year"], order_by = ["date"]))).
+                             order_by("date").list(RankRow),
+                         r -> string(r.name, " ", r.rk), "Monaco Grand Prix 1, Brazilian Grand Prix 2")
+        ok &= named_line("join", "Rank order",
+                         M.Race.objects.values("name", "rk" => Rank(over = WindowOver(order_by = ["-round"]))).order_by("-round").list(RankRow),
+                         r -> string(r.name, " ", r.rk), "Brazilian Grand Prix 1, Monaco Grand Prix 2")
+        return ok
+    catch e
+        failed("join", e); return false
+    end
+end
+
+# One read's line, `<label> <n> rows: <rows>`, each row through `show_row`, and whether the rows are `expected`.
+function named_line(step::String, label::String, rows::Vector{T}, show_row::F, expected::String)::Bool where {T,F}
+    text = join([show_row(r) for r in rows], ", ")
+    say(step, string(label, " ", length(rows), " rows: ", isempty(text) ? "none" : text))
+    return text == expected
+end

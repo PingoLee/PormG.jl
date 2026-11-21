@@ -120,6 +120,12 @@ step	subquery	Exists OuterRef 1 rows: Brazilian Grand Prix
 step	subquery	Subquery OuterRef column 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
 step	subquery	circuitid == Subquery 1 rows: Brazilian Grand Prix
 step	subquery	round == Subquery OuterRef 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	join	order_by path 2 rows: Brazilian Grand Prix at Autódromo José Carlos Pace, Monaco Grand Prix at Circuit de Monaco
+step	join	order_by -alias 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
+step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
+step	join	CTE filter 1 rows: Brazilian Grand Prix 1
+step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
 step	elapsed_ms	1
 ```
 
@@ -145,7 +151,9 @@ refused with an `InvalidValueError` or writes a row, 15 when its `bulk_update` a
 raises, the read after it does not show the change, or the delete that undoes it does not remove its rows). 17 when an untyped read raises or returns other rows, 18 when
 `get_or_create` raises, does not insert and then find its row, or the delete after it does not remove it. 19 when a
 function read (a number function, an aggregate, a nested function or a `Case` whose `then` is an `F`) raises or returns
-other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does.
+other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
+join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
+over a partition and an order) does.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -222,6 +230,12 @@ step	subquery	Exists OuterRef 1 rows: Brazilian Grand Prix
 step	subquery	Subquery OuterRef column 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
 step	subquery	circuitid == Subquery 1 rows: Brazilian Grand Prix
 step	subquery	round == Subquery OuterRef 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	join	order_by path 2 rows: Brazilian Grand Prix at Autódromo José Carlos Pace, Monaco Grand Prix at Circuit de Monaco
+step	join	order_by -alias 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
+step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
+step	join	CTE filter 1 rows: Brazilian Grand Prix 1
+step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -236,10 +250,10 @@ step	update_or_create	first created true; second created false; round 7
 step	get_or_create	first created true; second created false; round 6; year::Int64, round::Int64, circuitid::Int64, token::String, name::String, created_at::ZonedDateTime, raceid::Int64, updated_on::Date, date::Date
 ```
 
-The `func` lines follow the `expr` lines, and the `subquery` lines the `func` lines; the `untyped` lines, between them, are checked against the JIT control's. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
+The `func` lines follow the `expr` lines, the `subquery` lines the `func` lines, and the `join` lines the `subquery` lines; the `untyped` lines, between them, are checked against the JIT control's. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
-`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -338,6 +352,12 @@ step	subquery	Exists OuterRef 1 rows: Brazilian Grand Prix
 step	subquery	Subquery OuterRef column 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
 step	subquery	circuitid == Subquery 1 rows: Brazilian Grand Prix
 step	subquery	round == Subquery OuterRef 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	join	order_by path 2 rows: Brazilian Grand Prix at Autódromo José Carlos Pace, Monaco Grand Prix at Circuit de Monaco
+step	join	order_by -alias 2 rows: Monaco Grand Prix at Circuit de Monaco, Brazilian Grand Prix at Autódromo José Carlos Pace
+step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
+step	join	CTE filter 1 rows: Brazilian Grand Prix 1
+step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25

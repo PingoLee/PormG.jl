@@ -26,6 +26,7 @@ function (@main)(args::Vector{String})::Cint
     untyped_step() || return Cint(17)
     func_step() || return Cint(19)
     subquery_step() || return Cint(20)
+    join_step() || return Cint(21)
     tasks && (reap_step() || return Cint(4))
     tasks && (close_step() || return Cint(5))
     elapsed_step(t0)

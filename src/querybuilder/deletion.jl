@@ -632,19 +632,18 @@ function _resolve_root_keys!(results::Vector, connection::_SQLEngine, model::Por
     # On `connection`, the pool the statements render for — a `connection =` override included.
     return _key_vector(Tables.columntable(fetch(connection, select_sql, plan.parameters)))
   end
-  if !_decodes_rows(connection)
+  if !_decodes_concrete_rows(connection)
     result, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters)
     return _key_vector(Tables.columntable(result))
   end
-  # #1599 layer 7: on PormG's own pools the keys are read as the untyped read reads its rows, where the driver's result
-  # is concrete (`_ProjectionRowDecoder`, with no parser: a key column has none); `Tables.columntable` over the result,
-  # typed `Any`, dispatched at run time, and a trimmed image had no code for it.
+  # #1599 layer 7: on the pools that decode a concrete result (`_decodes_concrete_rows`) the keys are read as the untyped
+  # read reads its rows (`_ProjectionRowDecoder`, with no parser: a key column has none); `Tables.columntable` over the
+  # result, typed `Any`, dispatched at run time, and a trimmed image had no code for it.
   rows, _ = _with_transaction_with(connection, sql, conn, false, plan.parameters, _key_row_decoder())
   return _key_vector_rows(rows::Vector{Dict{Symbol, Any}})
 end
 
-# On the pools `_decodes_rows` lists (#1599 layer 6); any other pool (a test double) reads the keys through
-# `Tables.columntable`, as before.
+# Any other pool (LibPQ, a test double) reads the keys through `Tables.columntable`, as before.
 _key_row_decoder() = _ProjectionRowDecoder(Dict{Symbol, ReadParser}(), Dict{Symbol, Function}(),
                                            Base.RefValue{Union{Nothing, Exception}}(nothing))
 
@@ -901,12 +900,12 @@ function prepare_related_query(keys::Dict{Symbol, Union{String, SQLObjectHandler
   delete_key != DIRECT_DELETE_KEY_SENTINEL && _query.values(delete_key)
   return _collector_entry(delete_key, _query)
 end
+@noinline _terminal_copy_other(@nospecialize(parent)) = _terminal_copy(parent)
 
 # One collected entry, `:key` (the column a child's `"<fk>__@in"` reads) and `:objct` (the query), at the collector's
 # element type (#1599 layer 7, #1694). Each slot is assigned, so each store is at its value's type: built from pairs,
 # `Dict(:key => …, :objct => …)` was a `Dict{Symbol,Any}` that `push!` converted value by value, and the typed
 # `Pair` constructor stored each one through a call a trimmed image had no code for either.
-@noinline _terminal_copy_other(@nospecialize(parent)) = _terminal_copy(parent)
 function _collector_entry(key::String, @nospecialize(objct::SQLObjectHandler))::Dict{Symbol, Union{String, SQLObjectHandler}}
   entry = Dict{Symbol, Union{String, SQLObjectHandler}}()
   entry[:key] = key

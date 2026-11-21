@@ -3,15 +3,15 @@
 # PORMG_DB=db_my julia -t auto --project=test/integration test/integration/test_cascade_keys_equivalence_1694.jl
 # PORMG_DB=db_sl julia -t 1 --project=test/integration test/integration/test_cascade_keys_equivalence_1694.jl
 #
-# On LibPQ the key read's decoder takes its generic method (`_rows_from_result`), so the new walks are exercised by the
-# SQLite, Postgres.jl and MySQL runs.
+# On LibPQ the key read keeps `Tables.columntable` (its rows would be built from it anyway), so that run compares the
+# old read with itself; the decode is exercised by the SQLite, Postgres.jl and MySQL runs.
 
 if !isdefined(Main, :PormG)
     include("common_setup.jl")
 end
 
-# #1599 layer 7, #1694 — a cascading delete reads its root's primary keys first (#1342, #1370), and on PormG's own pools
-# it now reads them through the untyped read's decoder (`with_transaction`'s internal `_decode`), where the driver's
+# #1599 layer 7, #1694 — a cascading delete reads its root's primary keys first (#1342, #1370), and on SQLite, Postgres.jl
+# and MySQL it now reads them through the untyped read's decoder (`with_transaction`'s internal `_decode`), where the driver's
 # result is concrete. Before, it read `Tables.columntable` over the result typed `Any`, which a `juliac --trim` image
 # has no code for.
 #

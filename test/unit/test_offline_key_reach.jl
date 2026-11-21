@@ -199,10 +199,11 @@ const _OKR_REVIEWED = Dict(
   ("src/querybuilder/execution_write.jl", "isa") => 2,
   # `_decodes_rows` (#1599 layer 6, `_decodes_on_fetch`'s list): the untyped read and `get_or_create`'s reads hand
   # `fetch` a decoder on PormG's own pools, and `delete()`'s key read hands `with_transaction` one (#1599 layer 7); any
-  # other pool (a test double) reads as before. Like the RETURNING arms, it decides how a result is
+  # other pool (a test double) reads as before. `_decodes_concrete_rows` (#1599 layer 7) is the subset whose decode
+  # runs on a concrete result, where the key read uses it; it too decides how a result is read, not whether it runs. Like the RETURNING arms, it decides how a result is
   # read, not whether a statement runs: an offline pool takes the decoding arm, and its `fetch` is refused in
   # `ensure_before_connect!` as it always was.
-  ("src/querybuilder/execution_read.jl", "isa") => 3,
+  ("src/querybuilder/execution_read.jl", "isa") => 6,
   # `{:postgres}` (Postgres.jl). An offline pool is `{:libpq}`, so no method under it matches one.
   ("ext/PormGPostgresExt.jl", "_Pool") => 1,
   # MySQL. `register_offline` accepts `:postgres` and `:sqlite` only.
@@ -233,7 +234,7 @@ const _OKR_MENTIONS = Dict(
   "src/Migrations.jl" => 1,              # the import behind `introspection.jl`'s scratch-pool constructor call
   "src/querybuilder/deletion.jl" => 3,   # `_is_live_pool` (reviewed)
   "src/QueryBuilder.jl" => 3,            # the imports behind `insert`'s RETURNING arm (#1614) and `_decodes_on_fetch` (#1599 layer 6)
-  "src/querybuilder/execution_read.jl" => 3,    # `_decodes_on_fetch` (#1599 layer 6, reviewed)
+  "src/querybuilder/execution_read.jl" => 6,    # `_decodes_rows` and `_decodes_concrete_rows` (#1599 layers 6 and 7, reviewed)
   "src/querybuilder/execution_write.jl" => 2,   # `insert`'s and `update_or_create`'s RETURNING arms (#1614, #1694, reviewed)
   "ext/PormGMySQLExt.jl" => 1,           # `_Pool` (reviewed)
   "ext/PormGPostgresExt.jl" => 1,        # `_Pool` (reviewed)

@@ -1513,6 +1513,11 @@ _decodes_on_fetch(settings)::Bool = _decodes_rows(settings.connections)
 # The same answer for a pool (#1599 layer 7): `delete()`'s key read hands `with_transaction` the decoder on these.
 _decodes_rows(@nospecialize(pool))::Bool =
   pool isa PostgresConnectionPool || pool isa SQLiteConnectionPool || pool isa MySQLConnectionPool
+# The pools whose decode runs on a concrete result (#1599 layer 7): SQLite's worker, and Postgres.jl's and MySQL's
+# results, read by their extensions. LibPQ's rows are built from `Tables.columntable` over its result either way, so
+# `delete()`'s key read, which reads one column, keeps that columnar read there rather than one `Dict` per key.
+_decodes_concrete_rows(@nospecialize(pool))::Bool =
+  pool isa SQLiteConnectionPool || pool isa PostgresConnectionPool{:postgres} || pool isa MySQLConnectionPool
 
 # The untyped read as it was before #1599 layer 6, for a pool `_decodes_on_fetch` does not list: the result, then
 # its rows built with the projections' parsers. Behind `@noinline`: the result's type is the pool's own.

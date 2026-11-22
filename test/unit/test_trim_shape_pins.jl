@@ -561,7 +561,7 @@ end
     # The typed read's form (#1605): the last argument is its row decoder, concrete per `T`.
     @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool,
                                                 PormG.QueryBuilder._RowDecoder{NamedTuple{(:a,),Tuple{Int}},Tuple{PormG.ReadParser}})))
-    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._atomic_on), Any, typeof(identity), Bool)))
+    @test isempty(_dynamic_calls(CP.with_pool, (CP._Atomic{typeof(identity)}, Any)))
     # A settings entry with no pool built yet: every call that needs the pool refuses it the same way.
     PormG.config["_tsp_nopool"] = Configuration.Settings()
     try
@@ -5204,6 +5204,11 @@ end
   @testset "a transaction is entered and finished without a dynamic call (#1599 layer 2)" begin
     CP = PormG.ConnectionPool
     body = () -> 1
+    # `atomic` on a key or a settings entry, a user's `atomic(key) do … end`: the block reaches `with_pool` as the
+    # callee (`_Atomic`), not in its vararg slot (eight rows once the fixture ran one, #1599 layer 2).
+    for D in (String, PormG.Kernel.Settings)
+      @test (D, _dynamic_calls_deep(CP.atomic, (typeof(body), D); depth = 2, skip = (CP._with_unlisted_pool,))) == (D, String[])
+    end
     @test _dynamic_calls_deep(CP.run_in_transaction, (typeof(body), PormG.Kernel.Settings); depth = 1,
                               skip = (CP._with_unlisted_pool,)) == String[]
     for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},
@@ -6605,6 +6610,24 @@ end
         push!(by_hand, relpath(joinpath(dir, f), trim))
     end
     @test by_hand == String[]
+  end
+
+  # What: the Postgres.jl connect's URL check for a spilled password (`_checked_params`), over a URL with a query
+  #   (`?sslmode=disable`), and the masking of a driver's refusal (`_mask_quoted`).
+  # Expected: no `findlast`/`findprev` left on either path (a typed scan, `_last_char_index`), and the scan itself makes
+  #   no dynamic call.
+  # Why: Base's `findlast(c, s)` forwards to `findlast(::Function, s)`, which is not specialized on its predicate: the
+  #   trimmed connect through a URL with an `sslmode` raised `MethodError` on `findprev(==('@'), ::SubString, ::Int)`
+  #   (#1599 layer 2, the connection-shape step).
+  @testset "a Postgres.jl URL's query is checked without a dynamic findlast (#1599 layer 2)" begin
+    PG = Base.get_extension(PormG, :PormGPostgresExt)
+    for T in (String, SubString{String})
+      @test (T, _dynamic_calls(PG._last_char_index, (T, Char))) == (T, String[])
+    end
+    for (f, T) in ((PG._checked_params, (String,)), (PG._mask_quoted, (String,)))
+      d = _dynamic_calls_deep(f, T; depth = 3)
+      @test (nameof(f), filter(x -> occursin(r"findlast|findprev", x), d)) == (nameof(f), String[])
+    end
   end
 
   # What: the function readers a subquery's one projection reaches: its formatter over its operands

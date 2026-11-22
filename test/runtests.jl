@@ -283,6 +283,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "A Join, CTE and Window Read Answers as Before (#1599)" include("unit/test_read_joins_trim_1599.jl")
     @testset "A Cascading Delete Plans as Before (#1599, #1694)" include("unit/test_cascade_delete_trim_1694.jl")
     @testset "The Upsert-Shaped Writes Write as Before (#1599, #1694)" include("unit/test_upsert_writes_trim_1694.jl")
+    @testset "atomic Answers as Its Vararg Form Did (#1599)" include("unit/test_atomic_callee_trim_1599.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

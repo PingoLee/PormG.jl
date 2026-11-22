@@ -7,6 +7,8 @@
 #   PORMG_TRIM_USER      default f1
 #   PORMG_TRIM_DATABASE  default f1
 #   PORMG_TRIM_PASSWORD  default f1; read from the environment only, never printed
+#   PORMG_TRIM_TRUST_USER  unset by default: the role the Postgres.jl variant's connection shapes without a
+#                          password log in as (`postgres/main.jl`'s `shapes_step`); unset, those shapes are skipped
 #
 # With none of them set the URL is `<scheme>://f1:f1@127.0.0.1:1/f1`, the fixture's port-1 default, so a
 # run without a server behaves as it always has. The variables are read inside a function, at run time: a read

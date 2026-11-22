@@ -25,6 +25,8 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
 @noinline function failed(step::String, @nospecialize(e))
     say(step, string("threw ", nameof(typeof(e))))
     e isa PormG.InvalidValueError && Core.println("  msg: ", (e::PormG.InvalidValueError).msg)
+    # A call the image has no code for: the method instance it missed, printed by the runtime's own static printer.
+    e isa Core.MissingCodeError && Core.println("  missing: ", (e::Core.MissingCodeError).mi)
     e isa MethodError && Core.println("  missed: ", typeof(e.f))
     e isa MethodError && Core.println("  args: ", typeof(e.args))
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)
@@ -118,6 +120,7 @@ include(joinpath(@__DIR__, "tools", "writes.jl"))
 # The read steps after the first typed read (`compare_step`, `order_step`) are in `tools/reads.jl`, shared with the
 # server variants, so every binary prints the same lines (#1599 layer 5).
 include(joinpath(@__DIR__, "tools", "reads.jl"))
+include(joinpath(@__DIR__, "tools", "connections.jl"))
 
 # `bulk_step` (a `bulk_insert` of two rows, read back) is in `tools/writes.jl`, shared with the server variants (#1614).
 

@@ -44,6 +44,8 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
 
 @noinline function failed(step::String, @nospecialize(e))
     say(step, string("threw ", nameof(typeof(e))))
+    # A call the image has no code for: the method instance it missed, printed by the runtime's own static printer.
+    e isa Core.MissingCodeError && Core.println("  missing: ", (e::Core.MissingCodeError).mi)
     e isa MethodError && Core.println("  missed: ", typeof(e.f))
     e isa MethodError && Core.println("  args: ", typeof(e.args))
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)
@@ -98,6 +100,7 @@ end
 
 include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
 include(joinpath(@__DIR__, "..", "tools", "reads.jl"))
+include(joinpath(@__DIR__, "..", "tools", "connections.jl"))
 
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
@@ -136,8 +139,11 @@ function (@main)(args::Vector{String})::Cint
     update_or_create_step(circuitid) || return Cint(16)
     get_or_create_step(circuitid) || return Cint(18)
     cascade_step(circuitid) || return Cint(22)  # the cascading delete (`tools/writes.jl`, #1694)
+    transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
-    fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool) || return Cint(6)
+    pool = PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool
+    fail_step(pool) || return Cint(6)
+    close_all_step(pool) || return Cint(25)  # last: a trimmed binary runs no atexit hook
     return Cint(0)
 end

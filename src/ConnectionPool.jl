@@ -4700,9 +4700,18 @@ function atomic(f::F, pool::_SQLEngine; durable::Bool=false) where {F<:Function}
   end
   return run_in_transaction(f, pool)
 end
-atomic(f::F, db::String; durable::Bool=false) where {F<:Function} = with_pool(_atomic_on, get_settings(db).connections, f, durable)
-atomic(f::F, settings::PormGSettings; durable::Bool=false) where {F<:Function} = with_pool(_atomic_on, settings.connections, f, durable)
-_atomic_on(pool::_SQLEngine, f::F, durable::Bool) where {F<:Function} = atomic(f, pool; durable=durable)
+atomic(f::F, db::String; durable::Bool=false) where {F<:Function} = with_pool(_Atomic(f, durable), get_settings(db).connections)
+atomic(f::F, settings::PormGSettings; durable::Bool=false) where {F<:Function} = with_pool(_Atomic(f, durable), settings.connections)
+
+# The block handed to `with_pool` as the callee, `_InTransaction`'s shape (#1599 layer 2): passed as one of `with_pool`'s
+# `args`, the block sat in a vararg slot, which Julia does not specialize for a `Function`, so `with_pool(_atomic_on, …,
+# f, durable)` called `_atomic_on(pool, ::Function, durable)` at run time (eight rows of the trimmed fixture's write,
+# once a user `atomic(key) do … end` ran there). A struct field keeps the block's concrete type.
+struct _Atomic{F}
+  f::F
+  durable::Bool
+end
+(a::_Atomic)(pool::_SQLEngine) = atomic(a.f, pool; durable=a.durable)
 
 """
     with_read_retry(f::Function; attempts::Integer = 1, backoff::Real = 0,

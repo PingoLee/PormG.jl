@@ -163,7 +163,10 @@ function read (a number function, an aggregate, a nested function or a `Case` wh
 other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
 join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
 over a partition and an order) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
-does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded.
+does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded. 24 when the
+user transactions do not commit or roll back as their typed reads expect, and 25 when `close_all!()` leaves a
+connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
+pools"). The Postgres.jl variant also exits 23 when one of its connection shapes fails.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -202,6 +205,17 @@ break the trimmed read is checked by running it by hand on the branch, or by the
 The fixture's `Manifest.toml` is not committed, so each run resolves the latest SQLite.jl and its
 dependencies: a red nightly with no PormG change between it and the last green one may be an upstream
 release, and the job's `Instantiate the fixture` step prints the versions it resolved.
+
+## Transactions and closing the pools
+
+Every write entry (`main.jl` and the two server variants) runs `transaction` (exit code 24,
+`tools/connections.jl`) after the cascading delete: a `run_in_transaction(KEY) do … end` block creates the 2016
+race and reads it inside; an `atomic(KEY) do … end` block creates the 2017 race and raises the app's own
+`TrimRollback`, which must reach the caller. Typed reads then see the 2016 race and no 2017 race, and the step
+deletes the 2016 race again. `close_all` (exit code 25) is the last step: `close_all!()`, as PormG's exit hook
+calls it, since a trimmed binary runs no `atexit` hook, checked by the key's pool holding a connection before
+and none after. The read-only entry writes nothing, so it runs neither; its `tasks` run closes its pool through
+`close_pool!` (`close` step).
 
 ## The full entry's CI job
 
@@ -261,12 +275,14 @@ step	get_or_create	first created true; second created false; round 6; year::Int6
 step	cascade	3 rows; pitstop 2, race 1
 step	cascade	0 pit stops left; 1 driver, debut none
 step	cascade	seeded 1 pit stop, 1 driver; kept
+step	transaction	committed 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1
+step	close_all	1 open before, 0 after; the handle closed
 ```
 
 The `func` lines follow the `expr` lines, the `subquery` lines the `func` lines, and the `join` lines the `subquery` lines; the `untyped` lines, between them, are checked against the JIT control's. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
-`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 22 a cascading delete, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 22 a cascading delete, 24 a user transaction, 25 `close_all!`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -308,6 +324,7 @@ The scripts below read its `build.log` the same way.
 | `PORMG_TRIM_USER` | `f1` |
 | `PORMG_TRIM_DATABASE` | `f1` |
 | `PORMG_TRIM_PASSWORD` | `f1` |
+| `PORMG_TRIM_TRUST_USER` | unset: the Postgres.jl variant's two connection shapes without a password are skipped (see that variant) |
 
 The password is read from its variable only; the binary prints `host:port/database` and never the
 user or the password. Give the fixture a database of its own (`pormg_trim`, say), never the
@@ -384,7 +401,13 @@ step	get_or_create	first created true; second created false; round 6; year::Int3
 step	cascade	3 rows; pitstop 2, race 1
 step	cascade	0 pit stops left; 1 driver, debut none
 step	cascade	seeded 1 pit stop, 1 driver; kept
+step	transaction	committed 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1
+step	fail	threw StatementError                  (the refused statement, `tools/failing.jl`)
+step	close_all	1 open before, 0 after; the handle closed
 ```
+
+The Postgres.jl variant prints its `shape` lines (`password, sslmode: 1 rows`, `no password: 1 rows`,
+`no password, sslmode: 1 rows`) after `transaction`.
 
 The untyped lines name each cell's type, which is the engine's own: MySQL and PostgreSQL read `year` and
 `round` as `Int32` where SQLite reads `Int64`. The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables
@@ -425,7 +448,27 @@ build-postgres/main
 
 Against a server the trimmed binary connects, authenticates, registers its result types, binds the
 parameters, runs the statement and returns the row its JIT control prints, as the MySQL variant does (with
-`server	127.0.0.1:5432/pormg_trim`). With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
+`server	127.0.0.1:5432/pormg_trim`).
+
+**Connection shapes (#1599 layer 2).** The fixture's own connection has a password and no `sslmode`. The
+`shape` step (`postgres/main.jl`) opens the other three of `_dial`'s typed arms, each as a pool of its own
+under its own key, reads the Monaco race through it (`db(key)`) and closes it: a password with
+`sslmode=disable`, and no password with `sslmode=disable` or none. The two without a password log in as the
+role `PORMG_TRIM_TRUST_USER` names, which the server must trust on the fixture's database and which needs
+`SELECT` on its tables; the CI job creates `trim_trust`, adds its `trust` line to `pg_hba.conf` and grants it
+after `prep.jl`. With the variable unset the step prints `no password: skipped` and the job fails on it, so a
+skipped shape never reads as run. Locally, as the database's superuser:
+
+```
+CREATE ROLE trim_trust LOGIN;                                    -- once
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO trim_trust;       -- in pormg_trim, after prep.jl made them
+-- pg_hba.conf, before the other host lines, then reload:
+-- host  pormg_trim  trim_trust  127.0.0.1/32  trust
+```
+
+then pass `PORMG_TRIM_TRUST_USER=trim_trust` through the runner's environment. With `PGPASSWORD` or `PGSSLMODE`
+exported (even empty), the `shape` step refuses to run and the binary exits 23: Postgres.jl would fill the
+missing password or `sslmode` from it, and the shapes would not be the ones named. With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
 none and an `sslmode` or none (PormG adds `options` itself). Any other connection parameter
 (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`, `statement_timeout`, …) takes
 Postgres.jl's own connect, which a trimmed binary has no code for: it fails at the connect with

@@ -76,6 +76,9 @@ else is untested in a trimmed binary, even where it compiles.
   date that is not a calendar date has run, on SQLite), with no row written (#1694). No trimmed binary has run
   any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword options. Two of them are known not to work yet:
   `returning=` and a primary-key column in the table still take calls a trimmed binary cannot make.
+- **A user transaction** (#1599 layer 2), on the three drivers: a `run_in_transaction(key) do … end`
+  block that commits, and an `atomic(key) do … end` block that rolls back when the block raises its own
+  error, which reaches the caller unchanged. A typed read after each shows the outcome.
 - **`bulk_update`** from a `Vector` of `NamedTuple`s with `columns=` and one `match_on=` key, and
   **`update_or_create`** and **`get_or_create`**, on the three drivers (#1694).
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
@@ -253,12 +256,20 @@ PormG.register_connection("f1", url; adapter = "PostgreSQL", postgres_driver = "
 
 **Connection parameters.** A trimmed binary connects through four connection shapes: a host, port,
 user and database, with a password or none, and with an `sslmode` or none. PormG sets `options` itself.
-All four are compiled into a trimmed binary. The workflow runs one of them:
+All four have run in a trimmed binary (#1599 layer 2): the workflow connects through each, the two without a
+password as a role the server trusts on the fixture's database. The `sslmode` the workflow sets is `disable`, and
+its server has no TLS, so no TLS handshake has run in a trimmed binary yet (`require`, `verify-full`):
 
 | | no `sslmode` | an `sslmode` |
 |---|---|---|
-| **a password** | run (CI) | compiled, not yet run |
-| **no password** | compiled, not yet run | compiled, not yet run |
+| **a password** | run (CI) | run (CI), `sslmode=disable` only |
+| **no password** | run (CI) | run (CI), `sslmode=disable` only |
+
+Postgres.jl fills a missing password and `sslmode` from the `PGPASSWORD` and `PGSSLMODE` environment variables,
+so with either set the connection takes another of the four shapes. It fills the other parameters from their own
+variables too (`PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLCAPATH`,
+`PGGSSENCMODE`, `PGKRBSRVNAME`): with any of them set, the connection is outside the four shapes and a trimmed
+binary fails at the connect.
 
 Any other parameter (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`,
 `statement_timeout`, …) takes Postgres.jl's own connect, which a trimmed binary has no code for. The
@@ -289,8 +300,9 @@ before `main` returns, in a `finally` so an error path closes them too:
 - `PormG.Configuration.close_pool!("f1")` closes one.
 
 A connection left open is dropped when the process ends: the server sees the client vanish rather than
-close, and SQLite's handle is never closed. A trimmed binary has closed one SQLite pool through
-`close_pool!`; `close_all!()` takes the same path on every pool, but no trimmed binary has run it yet.
+close, and SQLite's handle is never closed. `close_all!()` has run last in a trimmed binary on SQLite,
+MySQL and Postgres.jl (#1599 layer 2): the pool held a connection before it and none after, and that
+connection's driver handle was closed.
 
 ## Errors in a trimmed binary
 

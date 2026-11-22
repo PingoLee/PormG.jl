@@ -6742,6 +6742,30 @@ end
     end
   end
 
+  # What: layer 7's residue (#1694): the self-referential children read from decoded rows and its key conversion, the
+  #   self-referential CASCADE keys, `SET_DEFAULT`'s value, and a two-column `bulk_update` key.
+  # Expected: no dynamic call in each, at the types they are reached with; the open arms (another key type, another
+  #   model type, a formatted value that is not a `String`) behind their designed call.
+  # Why: `_read_self_children!` read its two columns through `Tables.columntable` over an untyped result (#1377),
+  #   `_self_cascade_fields` and `update_field` read `on_delete` and `formatter` on the field union, and two match
+  #   columns made a tuple of a run-time length (#1599 layer 7).
+  @testset "the write residue runs at its types (#1694, #1599 layer 7)" begin
+    QB = PormG.QueryBuilder
+    for K in (Int64, Int32, String)
+      @test (K, _dynamic_calls(QB._self_children_rows, (Vector{Dict{Symbol,Any}}, Symbol, Symbol, Type{K}))) == (K, String[])
+      @test (K, _dynamic_calls(QB._key_as, (Type{K}, Any))) == (K, String[])
+    end
+    @test _dynamic_calls(QB._self_cascade_fields, (PormG.Models.ModelType,)) == String[]
+    @test _dynamic_calls(QB._value_sql, (Any,)) == String[]
+    for (A, B) in ((Int64, Int64), (Int64, String), (String, Int64), (String, String))
+      @test ((A, B), _dynamic_calls(QB._ensure_unique_bulk_update_key2, (Vector{A}, Vector{B}, Int, Vector{String}))) == ((A, B), String[])
+    end
+    d = _dynamic_calls(QB.update_field, (PormG.ConnectionPool.SQLiteConnectionPool, PormG.Models.ModelType, String,
+                                         Union{Nothing,Int64}, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}},
+                                         Symbol, Any))
+    @test filter(x -> occursin(r"formatter|getproperty|string\(", x), d) == String[]
+  end
+
   # What: the function readers a subquery's one projection reaches: its formatter over its operands
   #   (`_expression_formatter(::FObject, …)` through `_first_operand_formatter`), what `Concat` and a division make of
   #   it (`_textless_number`, `_whole_numeric_operand`) and whether it holds a temporal value (`_function_held_temporal`).

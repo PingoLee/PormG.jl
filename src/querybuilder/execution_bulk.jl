@@ -3223,7 +3223,10 @@ function _bulk_update(objct::SQLObjectHandler, src,
     # Django shape (`queryset.filter(pk__in=…).update(…)`) and what `update()`/`delete()` already do.
     # Before this, the handler's filters were cleared in place: its scope was silently dropped, and
     # `filters=` was left behind on the caller's handler.
-    work = deepcopy(objct)
+    # #1599 layer 7: the typed copy of the handler (`_tree_copy_handler`, #1599 layer 5), not `deepcopy`'s generic walk,
+    # which a trimmed image cannot run: the trimmed `bulk_update` of an ordered handler raised a `TypeError` inside it
+    # before its own refusal. Another handler type is deep-copied as before, behind the copy's open arm.
+    work = _tree_copy_handler(objct)::SQLObjectHandler
     _reject_unsafe_bulk_update_shape(work.object)
 
     df = _bulk_frame(src, "bulk_update")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)

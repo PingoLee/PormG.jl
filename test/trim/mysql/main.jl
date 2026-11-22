@@ -46,6 +46,7 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
     say(step, string("threw ", nameof(typeof(e))))
     # A call the image has no code for: the method instance it missed, printed by the runtime's own static printer.
     e isa Core.MissingCodeError && Core.println("  missing: ", (e::Core.MissingCodeError).mi)
+    e isa TypeError && Core.println("  typeerror: ", (e::TypeError).func, " ", (e::TypeError).context)
     e isa MethodError && Core.println("  missed: ", typeof(e.f))
     e isa MethodError && Core.println("  args: ", typeof(e.args))
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)

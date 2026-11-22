@@ -115,10 +115,16 @@ end
 # own, registered under its own key, read through it (`db(key)`), and closed (#1599 layer 2, #1614): `_dial`'s typed
 # arms for a password with an `sslmode`, and no password with an `sslmode` or none. `sslmode = disable` needs no TLS on
 # the server. The two shapes without a password log in as the role `PORMG_TRIM_TRUST_USER` names, which the server
-# trusts on this database (`prep.jl` grants it the read); unset, the step says so and skips them, never passing
-# them silently. Exit code 23 when a shape's read raises or does not return the Monaco race.
+# trusts on this database, with `SELECT` on its tables (the CI job grants it after `prep.jl`); unset, the step says so
+# and skips them, never passing them silently. Postgres.jl fills a URL's missing password and `sslmode` from
+# `PGPASSWORD` and `PGSSLMODE`, which would take another arm than the one named, so the step refuses to run with
+# either set. Exit code 23 when a shape's read raises or does not return the Monaco race, or either variable is set.
 function shapes_step(server::TrimServer)::Bool
     try
+        if !isempty(trim_env("PGPASSWORD", "")) || !isempty(trim_env("PGSSLMODE", ""))
+            say("shape", "PGPASSWORD or PGSSLMODE is set: the shapes would not be the ones named")
+            return false
+        end
         trust = trim_env("PORMG_TRIM_TRUST_USER", "")
         names = String["password, sslmode"]
         urls = String[shape_url(server, server.user, server.password, "disable")]
@@ -131,8 +137,11 @@ function shapes_step(server::TrimServer)::Bool
             key = string(KEY, "_shape", i)
             PormG.Configuration.register_connection(key, urls[i]; adapter = "PostgreSQL", postgres_driver = "Postgres",
                                                      env = "prod", pool_size = 1)
-            rows = M.Race.objects.filter("circuitid__country" => "Monaco").db(key).list(RaceRow)
-            PormG.Configuration.close_pool!(key)
+            rows = try
+                M.Race.objects.filter("circuitid__country" => "Monaco").db(key).list(RaceRow)
+            finally
+                PormG.Configuration.close_pool!(key)   # on every path, so a failed shape leaves no pool open
+            end
             say("shape", string(names[i], ": ", length(rows), " rows"))
             ok &= length(rows) == 1 && rows[1].year == 2008
         end

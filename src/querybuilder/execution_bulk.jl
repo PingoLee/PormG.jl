@@ -1185,6 +1185,24 @@ function _ensure_unique_bulk_update_key(column::Vector{T}, row_count::Int, dynam
   end
   return nothing
 end
+# A `filters=` predicate applied at its value's type (#1599 layer 7): the stored pair is `Pair{String, Any}`, and
+# `filter(::Pair{String, Any})` dispatched on the value at run time (`_normalize_filter_pair(::Int64)` had no code in the
+# trimmed `bulk_update(…; filters = ["year" => 2010])`). The value types a constant predicate holds are rebuilt into a
+# concrete pair; any other value is applied as before, behind one call.
+function _apply_static_filter!(work::SQLObjectHandler, f::Pair{String, Any})
+  k, v = f.first, f.second
+  v isa Int64 && return (work.filter(k => v); nothing)
+  v isa String && return (work.filter(k => v); nothing)
+  v isa Bool && return (work.filter(k => v); nothing)
+  v isa Float64 && return (work.filter(k => v); nothing)
+  v isa Date && return (work.filter(k => v); nothing)
+  v isa DateTime && return (work.filter(k => v); nothing)
+  v isa Vector{Int64} && return (work.filter(k => v); nothing)
+  v isa Vector{String} && return (work.filter(k => v); nothing)
+  return _apply_static_filter_other!(work, f)
+end
+@noinline _apply_static_filter_other!(@nospecialize(work::SQLObjectHandler), f::Pair{String, Any}) = (work.filter(f); nothing)
+
 function _ensure_unique_bulk_update_key2(a::Vector{A}, b::Vector{B}, row_count::Int,
                                          dynamic_filters::Vector{String}) where {A, B}
   seen_keys = Dict{Tuple{A, B}, Int}()
@@ -3233,7 +3251,7 @@ function _bulk_update_frame(work::SQLObjectHandler, model::PormGModel, settings,
   # dropped here rather than misbound (aggregates were already refused above).
   empty!(work.object.values)
   for filter in static_filters
-    work.filter(filter)
+    _apply_static_filter!(work, filter)   # #1599 layer 7: the pair at its value's type
   end
   # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
   # `mutation`: a membership subquery over this model's own table is read through a derived table on

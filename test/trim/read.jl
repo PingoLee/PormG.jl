@@ -26,6 +26,7 @@ function (@main)(args::Vector{String})::Cint
     func_step() || return Cint(19)
     subquery_step() || return Cint(20)
     join_step() || return Cint(21)
+    cte_step() || return Cint(26)  # a CTE body copied and typed at its types (`tools/reads.jl`, #1599 layer 5)
     tasks && (reap_step() || return Cint(4))
     tasks && (close_step() || return Cint(5))
     elapsed_step(t0)

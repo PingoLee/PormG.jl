@@ -22,6 +22,7 @@ function (@main)(args::Vector{String})::Cint
     func_step() || return Cint(19)
     subquery_step() || return Cint(20)
     join_step() || return Cint(21)
+    cte_step() || return Cint(26)  # a CTE body copied and typed at its types (`tools/reads.jl`, #1599 layer 5)
     write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)

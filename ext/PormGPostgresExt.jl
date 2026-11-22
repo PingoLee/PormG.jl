@@ -825,7 +825,11 @@ PormG.QueryBuilder._typed_rows_decoded(::Type{T}, result::Postgres.Result, parse
 end
 
 # A cell parsed at its type, returned untyped: one walk for every field type.
+# A NULL cell (`missing`) is parsed at its type too (#1599 layer 7): the decoded rows of a key read (`_pg_dict_rows`)
+# reach a NULL, and the open arm called the parser on it at run time (the trimmed `SET_DEFAULT` delete stopped at
+# `MissingCodeError` on `ReadParser(::Missing)`). The parser's answer for it is the one it gave.
 @eval @noinline function _pg_parsed(@nospecialize(v), parser)
+  v === missing && return PormG.QueryBuilder._typed_parse(parser, missing)
   $(Expr(:block, (:(v isa $R && return PormG.QueryBuilder._typed_parse(parser, v::$R)) for R in _PG_CELL_TYPES)...))
   return _pg_parsed_open(v, parser)
 end

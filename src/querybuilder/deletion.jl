@@ -724,6 +724,20 @@ end
 The fields of `model` that are a CASCADE foreign key to `model` itself, by reverse relation.
 """
 function _self_cascade_fields(model::PormGModel)::Vector{String}
+  # #1599 layer 7: the model at its type and each field's `on_delete` read through `_relation_on_delete`, as the other
+  # cascade readers read it (#1829); on the field union it was a run-time call.
+  model isa Models.ModelType || return _self_cascade_fields_other(model)
+  fields = String[]
+  for related_value in values(model.related_objects)
+    related_value isa Models.ManyToManyRelation && continue
+    rel = related_value::Models.ReverseRelation
+    rel.model_resolved === model || continue
+    fk = String(rel.fk_field)
+    _relation_on_delete(model.fields[fk]) === CASCADE && push!(fields, fk)
+  end
+  return fields
+end
+@noinline function _self_cascade_fields_other(@nospecialize(model::PormGModel))::Vector{String}
   fields = String[]
   for related_value in values(model.related_objects)
     related_value isa Models.ManyToManyRelation && continue
@@ -834,6 +848,14 @@ function _read_self_children!(results::Vector, connection::_SQLEngine, model::Po
     _is_live_pool(connection) || return (K[], K[])
     columns = Tables.columntable(fetch(connection, select_sql, parameters))
   else
+    if _decodes_concrete_rows(connection)
+      # #1599 layer 7, #1377: on the pools that decode a concrete result, the two columns are read as the root's keys are
+      # (`_resolve_root_keys!`, #1829): rows decoded with no parser, each column by its name, each value converted to the
+      # key's type as `K[…]` converted it. `Tables.columntable` over the result, typed `Any`, dispatched at run time.
+      rows, _ = _with_transaction_with(connection, sql, conn, false, parameters, _key_row_decoder())
+      return _self_children_rows(rows::Vector{Dict{Symbol, Any}}, Symbol(Models.model_column(model, key)),
+                                 Symbol(Models.model_column(model, fk)), K)
+    end
     result, _ = _with_transaction_with(connection, sql, conn, false, parameters)
     columns = Tables.columntable(result)
   end
@@ -841,6 +863,36 @@ function _read_self_children!(results::Vector, connection::_SQLEngine, model::Po
   first_column, second_column = columns[1], columns[2]
   return (K[k for k in first_column], K[p for p in second_column])
 end
+# The self-referential children read from decoded rows (#1599 layer 7): the key column and the parent column of each row,
+# by name, converted to `K`.
+function _self_children_rows(rows::Vector{Dict{Symbol, Any}}, key::Symbol, fk::Symbol, ::Type{K})::Tuple{Vector{K}, Vector{K}} where {K}
+  keys, parents = K[], K[]
+  for row in rows
+    push!(keys, _key_as(K, _row_cell(row, key)))
+    push!(parents, _key_as(K, _row_cell(row, fk)))
+  end
+  return (keys, parents)
+end
+# A decoded row's cell by its column name. SQLite names a result column as the table declares it, not as the SELECT
+# spells it, so a model column that differs from it only in case is found case-insensitively: the positional read
+# (`columns[1]`, `columns[2]`) this replaced did not depend on the name at all.
+function _row_cell(row::Dict{Symbol, Any}, name::Symbol)
+  haskey(row, name) && return row[name]
+  want = lowercase(String(name))
+  for (k, v) in row
+    lowercase(String(k)) == want && return v
+  end
+  throw(KeyError(name))
+end
+# `convert(K, x)`, as `K[x]` converts, with `x` read at the types a key column delivers.
+function _key_as(::Type{K}, @nospecialize(x))::K where {K}
+  x isa K && return x
+  x isa Int64 && return convert(K, x)
+  x isa Int32 && return convert(K, x)
+  x isa String && return convert(K, x)
+  return _key_as_other(K, x)
+end
+@noinline _key_as_other(::Type{K}, @nospecialize(x)) where {K} = convert(K, x)::K
 
 """
 The refusal for rows whose self-referential foreign key forms a loop, on an engine that checks a
@@ -1598,6 +1650,16 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
   return deleted_counter  # Return count of deleted objects
 end
 
+# The formatted value as the text interpolation gave it (`string(x)`), at the types a formatter returns: text, or a
+# number (`format_number_sql` returns the number itself, a key's default).
+function _value_sql(@nospecialize(x))::String
+  x isa String && return x
+  x isa Int64 && return string(x)
+  x isa Int32 && return string(x)
+  x isa Float64 && return string(x)
+  return _value_sql_other(x)
+end
+@noinline _value_sql_other(@nospecialize(x))::String = string(x)
 function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, @nospecialize(conn))
   # Update field values using query object like CASCADE
   @pormg_debug false
@@ -1612,7 +1674,10 @@ function update_field(connection::_SQLEngine, model::PormGModel, field::String, 
   any(k -> k[:key] == DIRECT_DELETE_KEY_SENTINEL, keys) &&
     throw(QueryBuildError("Cannot update field on keyless model $(model.name); define a primary key"))
 
-  value_sql = value === nothing ? "NULL" : Models.apply_formatter(model.fields[field].formatter, value)   # #1599
+  # #1599 layer 7: the field's formatter read at the field's type (`_field_formatter`), and the formatted value as the
+  # `String` the formatter returns (another value is interpolated as before, behind one call). On the field union the
+  # slot read and the interpolation were run-time calls (`SET_DEFAULT`'s update).
+  value_sql = value === nothing ? "NULL" : _value_sql(Models.apply_formatter(_field_formatter(model.fields[field]), value))
 
   # One predicate per cascade path, ORed together — the same renderer, and the same single-collector
   # discipline, as `delete_objects` (#452). Before #459 (a) this function took ONE entry because the

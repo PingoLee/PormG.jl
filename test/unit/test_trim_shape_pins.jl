@@ -2991,7 +2991,9 @@ end
       end
     end
     @test !occursin(r"with_transaction\((settings|connection), [^)\n]*conn=conn", del_src)
-    @test count("_with_transaction_with(", del_src) == 11   # one more since #1599 layer 7: the key read's, with its decoder
+    # One more since #1599 layer 7 (the key read's, with its decoder), and one more since #1694 (the self-referential
+    # children's read, with the same decoder).
+    @test count("_with_transaction_with(", del_src) == 12
     # The deletions run in the transaction's context: `with_tx_context(settings.connections, conn) do … end` took the
     # pool at its union type and a closure capturing the untyped `conn`, so neither was concrete. The pool is walked
     # (`_with_tx_context_on`, one dynamic call: its open arm), and `conn` goes in a typed box.
@@ -6764,6 +6766,44 @@ end
       d = _dynamic_calls_deep(f, T; depth = 3)
       @test (nameof(f), filter(x -> occursin(r"findlast|findprev", x), d)) == (nameof(f), String[])
     end
+  end
+
+  # What: layer 7's residue (#1694): the self-referential children read from decoded rows and its key conversion, the
+  #   self-referential CASCADE keys, `SET_DEFAULT`'s value, and a two-column `bulk_update` key.
+  # Expected: no dynamic call in each, at the types they are reached with; the open arms (another key type, another
+  #   model type, a formatted value that is not a `String`) behind their designed call.
+  # Why: `_read_self_children!` read its two columns through `Tables.columntable` over an untyped result (#1377),
+  #   `_self_cascade_fields` and `update_field` read `on_delete` and `formatter` on the field union, and two match
+  #   columns made a tuple of a run-time length (#1599 layer 7).
+  @testset "the write residue runs at its types (#1694, #1599 layer 7)" begin
+    QB = PormG.QueryBuilder
+    for K in (Int64, Int32, String)
+      @test (K, _dynamic_calls(QB._self_children_rows, (Vector{Dict{Symbol,Any}}, Symbol, Symbol, Type{K}))) == (K, String[])
+      @test (K, _dynamic_calls(QB._key_as, (Type{K}, Any))) == (K, String[])
+    end
+    @test _dynamic_calls(QB._self_cascade_fields, (PormG.Models.ModelType,)) == String[]
+    @test _dynamic_calls(QB._value_sql, (Any,)) == String[]
+    for (A, B) in ((Int64, Int64), (Int64, String), (String, Int64), (String, String))
+      @test ((A, B), _dynamic_calls(QB._ensure_unique_bulk_update_key2, (Vector{A}, Vector{B}, Int, Vector{String}))) == ((A, B), String[])
+    end
+    # A NULL cell in the Postgres.jl decoded rows a key read takes is parsed by a static call at `Missing` (the open arm
+    # called the parser at run time: `MissingCodeError` on `ReadParser(::Missing)` in the trimmed `SET_DEFAULT` delete).
+    PG = Base.get_extension(PormG, :PormGPostgresExt)
+    stmts = [string(st) for (ci, _) in code_typed(PG._pg_parsed, (Any, PormG.ReadParser); optimize = true) for st in ci.code]
+    @test any(x -> occursin(r"===\s.*missing", x), stmts)   # the NULL arm, inlined: base had none
+    d = _dynamic_calls(QB.update_field, (PormG.ConnectionPool.SQLiteConnectionPool, PormG.Models.ModelType, String,
+                                         Union{Nothing,Int64}, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}},
+                                         Symbol, Any))
+    @test filter(x -> occursin(r"formatter|getproperty|string\(", x), d) == String[]
+    # The bulk writers' typed paths: a constant `filters=` predicate applied at its value's type, behind the one open
+    # arm; a `columns=` entry normalized without the closure; the `filters=` loop and the work handler's copy.
+    @test all(x -> occursin("_apply_static_filter_other!", x),
+              _dynamic_calls(QB._apply_static_filter!, (PormG.SQLObjectHandler, Pair{String,Any})))
+    @test all(x -> occursin("_norm_bulk_column_other", x), _dynamic_calls(QB._norm_bulk_column, (Any,)))
+    @test filter(x -> occursin(r"_normalize_filter_pair|_check_filter|Pair\{|push!", x),
+                 _dynamic_calls(QB._resolve_bulk_update_keys!, (QB._BulkFrame, PormG.PormGModel, Dict{String,String},
+                                Vector{String}, Vector{String}, Vector{Union{String, Pair{String, <:Any}}}, Vector{String}))) == String[]
+    @test _dynamic_calls(QB._tree_copy_handler, (PormG.SQLObjectHandler,)) == String[]
   end
 
   # What: the function readers a subquery's one projection reaches: its formatter over its operands

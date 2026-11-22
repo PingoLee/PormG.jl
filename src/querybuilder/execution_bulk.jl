@@ -11,9 +11,19 @@
 # with a raw `MethodError` (outside the PormG taxonomy), while the `Pair{String,String}` guards
 # refuse a `SubString`-keyed rename with a wrong-reason "Invalid column specification". Adjacent
 # keyword to `filters` on the same `bulk_*` call, so a caller who reaches one reaches the other.
+# One `columns=` entry as a `String` or a `Pair{String, String}` (#1599 layer 7): read at its type, where the closure it
+# replaces was called on a list's untyped element at run time (the trimmed `columns = ["a" => "year", …]` had no code for
+# it). Another string type is converted as before, behind one call.
+function _norm_bulk_column(@nospecialize(c))::Union{String, Pair{String, String}}
+  c isa String && return c
+  c isa Pair{String, String} && return c
+  return _norm_bulk_column_other(c)
+end
+@noinline _norm_bulk_column_other(@nospecialize(c))::Union{String, Pair{String, String}} =
+  c isa AbstractString ? String(c) : String(c.first) => String(c.second)
 function _normalize_bulk_columns(columns)
   _columns::Vector{Union{String, Pair{String, String}}} = []
-  _norm(c) = c isa AbstractString ? String(c) : String(c.first) => String(c.second)
+  _norm(c) = _norm_bulk_column(c)
   if columns === nothing
   elseif columns isa AbstractString
     push!(_columns, _norm(columns))
@@ -1158,6 +1168,18 @@ function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
     only_column = key_columns[1]
     only_column isa Vector{Int64} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
     only_column isa Vector{String} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
+  elseif length(key_columns) == 2
+    # #1599 layer 7: two match columns of integers or of text (`match_on = ["year", "round"]`), checked by a tuple of
+    # the two values at their types: the same tuple, equal and hashed as the run-time one was, so the same rows are
+    # duplicates and the first duplicate is reported by the same two rows.
+    a, b = key_columns[1], key_columns[2]
+    if a isa Vector{Int64}
+      b isa Vector{Int64} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+      b isa Vector{String} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+    elseif a isa Vector{String}
+      b isa Vector{Int64} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+      b isa Vector{String} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+    end
   end
   return _ensure_unique_bulk_update_keys_other(df, key_columns, dynamic_filters)
 end
@@ -1165,6 +1187,41 @@ function _ensure_unique_bulk_update_key(column::Vector{T}, row_count::Int, dynam
   seen_keys = Dict{T, Int}()
   for index in 1:row_count
     key = column[index]
+    if haskey(seen_keys, key)
+      filters_text = join(dynamic_filters, ", ")
+      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))
+    end
+    seen_keys[key] = index
+  end
+  return nothing
+end
+# A `filters=` predicate applied at its value's type (#1599 layer 7): the stored pair is `Pair{String, Any}`, and
+# `filter(::Pair{String, Any})` dispatched on the value at run time (`_normalize_filter_pair(::Int64)` had no code in the
+# trimmed `bulk_update(…; filters = ["year" => 2010])`). The value types a constant predicate holds are rebuilt into a
+# concrete pair and applied as `work.filter(pair)` applies it (`ChainCaller` calls `_filter!(work.object, (pair,))`;
+# `work.filter` itself is not folded to that type, so it was a run-time call); any other value is applied as before,
+# behind one call.
+function _apply_static_filter!(work::SQLObjectHandler, f::Pair{String, Any})
+  work isa ObjectHandler || return _apply_static_filter_other!(work, f)
+  q = (work::ObjectHandler).object
+  k, v = f.first, f.second
+  v isa Int64 && return (_filter!(q, (k => v,)); nothing)
+  v isa String && return (_filter!(q, (k => v,)); nothing)
+  v isa Bool && return (_filter!(q, (k => v,)); nothing)
+  v isa Float64 && return (_filter!(q, (k => v,)); nothing)
+  v isa Date && return (_filter!(q, (k => v,)); nothing)
+  v isa DateTime && return (_filter!(q, (k => v,)); nothing)
+  v isa Vector{Int64} && return (_filter!(q, (k => v,)); nothing)
+  v isa Vector{String} && return (_filter!(q, (k => v,)); nothing)
+  return _apply_static_filter_other!(work, f)
+end
+@noinline _apply_static_filter_other!(@nospecialize(work::SQLObjectHandler), f::Pair{String, Any}) = (work.filter(f); nothing)
+
+function _ensure_unique_bulk_update_key2(a::Vector{A}, b::Vector{B}, row_count::Int,
+                                         dynamic_filters::Vector{String}) where {A, B}
+  seen_keys = Dict{Tuple{A, B}, Int}()
+  for index in 1:row_count
+    key = (a[index], b[index])
     if haskey(seen_keys, key)
       filters_text = join(dynamic_filters, ", ")
       throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))
@@ -1404,17 +1461,30 @@ function _resolve_bulk_update_keys!(df::_BulkFrame, model::PormGModel,
   end
 
   # filters: permanent contract is constant `field => value` predicates.
+  # #1599 layer 7: each entry read at its type — a bare `String`, or a pair read as its `String` key and its value — so
+  # the shim's check, its message and the store are static calls; over the element type `Union{String, Pair{String}}`
+  # (a `UnionAll` pair) each was a run-time call. The same answers and refusals, in the same order.
   for f in filters
-    # ── TEMPORARY deprecation shim (see banner above; delete with the helpers) ──
-    # Only meaningful when match_on is absent: turn the old dynamic-in-`filters`
-    # usage into an actionable migration error instead of the generic one.
-    if !match_on_given && _is_legacy_dynamic_filter(f, df, model)
-      throw(QueryBuildError(_bulk_update_migration_msg(f)))
+    if f isa String
+      # ── TEMPORARY deprecation shim (see banner above; delete with the helpers) ──
+      # Only meaningful when match_on is absent: a bare string was always a dynamic key.
+      !match_on_given && throw(QueryBuildError(_bulk_update_migration_msg(f)))
+      # ── end shim ───────────────────────────────────────────────────────────────
+      throw(QueryBuildError(_bulk_update_static_only_msg(f)))
+    end
+    pair = f::Pair{String}
+    first_, second_ = pair.first::String, pair.second
+    # ── TEMPORARY deprecation shim: a pair whose value names a model field and whose key a column ──
+    if !match_on_given
+      if second_ isa String
+        (!occursin("__", first_) && first_ in df.names && second_ in model.field_names) &&
+          throw(QueryBuildError(_bulk_update_migration_msg(Pair{String,String}(first_, second_))))
+      elseif second_ isa AbstractString && _is_legacy_dynamic_filter(pair, df, model)
+        throw(QueryBuildError(_bulk_update_migration_msg(pair)))
+      end
     end
     # ── end shim ───────────────────────────────────────────────────────────────
-
-    f isa Pair || throw(QueryBuildError(_bulk_update_static_only_msg(f)))
-    push!(static_filters, f.first => f.second)
+    push!(static_filters, Pair{String, Any}(first_, second_))
   end
 
   # Fallback: nothing to match on => use the model primary key(s)
@@ -3157,7 +3227,10 @@ function _bulk_update(objct::SQLObjectHandler, src,
     # Django shape (`queryset.filter(pk__in=…).update(…)`) and what `update()`/`delete()` already do.
     # Before this, the handler's filters were cleared in place: its scope was silently dropped, and
     # `filters=` was left behind on the caller's handler.
-    work = deepcopy(objct)
+    # #1599 layer 7: the typed copy of the handler (`_tree_copy_handler`, #1599 layer 5), not `deepcopy`'s generic walk,
+    # which a trimmed image cannot run: the trimmed `bulk_update` of an ordered handler raised a `TypeError` inside it
+    # before its own refusal. Another handler type is deep-copied as before, behind the copy's open arm.
+    work = _tree_copy_handler(objct)::SQLObjectHandler
     _reject_unsafe_bulk_update_shape(work.object)
 
     df = _bulk_frame(src, "bulk_update")   # #1344, #132: zero-copy, never mutates `src` (see `_BulkFrame`)
@@ -3195,7 +3268,7 @@ function _bulk_update_frame(work::SQLObjectHandler, model::PormGModel, settings,
   # dropped here rather than misbound (aggregates were already refused above).
   empty!(work.object.values)
   for filter in static_filters
-    work.filter(filter)
+    _apply_static_filter!(work, filter)   # #1599 layer 7: the pair at its value's type
   end
   # #1002: semi-join — the chunk builder refuses any join itself, with its own message.
   # `mutation`: a membership subquery over this model's own table is read through a derived table on

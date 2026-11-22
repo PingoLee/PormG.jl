@@ -209,3 +209,178 @@ function cascade_step(circuitid::Int)::Bool
         failed("cascade", e); return false
     end
 end
+
+# ── The write residue of layer 7 (#1694, #1599 layer 7) ─────────────────────────────────────────────────────────────
+
+# `bulk_update` with a constant `filters=` and with a two-column key (exit code 27): two Monaco races written by
+# `bulk_insert`, their `round` set from `NamedTuple` rows matched on `raceid` under `filters = ["year" => 2010]` (the
+# 2011 row's update is filtered out), then their `name` set matched on `year` and `round` together; each read back typed,
+# then both races deleted.
+function bulk_update_more_step(circuitid::Int)::Bool
+    try
+        PormG.bulk_insert(M.Race.objects,
+            [(year = 2010, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2010, 5, 16)),
+             (year = 2011, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2011, 5, 29))])
+        written = M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)
+        length(written) == 2 || (say("bulk_update_more", string(length(written), " rows to update")); return false)
+        r1 = PormG.bulk_update(M.Race.objects, [(raceid = written[1].raceid, round = 7), (raceid = written[2].raceid, round = 8)];
+                               columns = ["round"], match_on = ["raceid"],
+                               filters = ["year" => 2010])::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        rounds = [x.round for x in M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)]
+        say("bulk_update_more", string("filters: ", r1.count, " rows; rounds ", join(rounds, ", ")))
+        r2 = PormG.bulk_update(M.Race.objects, [(year = 2010, round = 7, name = "Monaco 2010"), (year = 2011, round = 6, name = "Monaco 2011")];
+                               columns = ["name"], match_on = ["year", "round"])::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        names = [x.name for x in M.Race.objects.filter("year__@gte" => 2010).order_by("year").list(RaceRow)]
+        say("bulk_update_more", string("two keys: ", r2.count, " rows; ", join(names, ", ")))
+        removed = first(M.Race.objects.filter("year__@gte" => 2010).delete()::Tuple{Int, Dict{String, Integer}})
+        return r1.count == 1 && rounds == [7, 6] && r2.count == 2 && names == ["Monaco 2010", "Monaco 2011"] && removed == 2
+    catch e
+        failed("bulk_update_more", e); return false
+    end
+end
+
+# The typed row of a constructor (`list(show_query = :struct)`'s fields).
+struct ConstructorRow
+    constructorid::Int64                 # IDField
+    name::String                         # CharField
+    parentid::Union{Nothing, Int64}      # ForeignKey, null = true
+    home_circuitid::Int64                # ForeignKey, SET_DEFAULT
+end
+
+# `SET_DEFAULT` (exit code 28): a circuit of the step's own, a constructor whose home it is; deleting the circuit puts the
+# constructor back on the default circuit (`models.DEFAULT_CIRCUIT_ID`), checked by a typed read, and the step deletes the
+# constructor again. `delete` reports the circuit alone: a `SET_DEFAULT` child is updated, not deleted.
+function set_default_step()::Bool
+    try
+        M.Circuit.objects.create("circuitref" => "hockenheim", "name" => "Hockenheimring", "country" => "Germany")
+        circuit = M.Circuit.objects.filter("circuitref" => "hockenheim").list(CircuitId)
+        length(circuit) == 1 || (say("set_default", string(length(circuit), " circuits named hockenheim")); return false)
+        M.Constructor.objects.create("name" => "Mercedes", "home_circuitid" => circuit[1].circuitid)
+        n, per = M.Circuit.objects.filter("circuitref" => "hockenheim").delete()::Tuple{Int, Dict{String, Integer}}
+        counts = join([string(k, " ", per[k]::Int) for k in sort!(collect(keys(per)))], ", ")
+        back = M.Constructor.objects.filter("name" => "Mercedes").list(ConstructorRow)
+        home = length(back) == 1 ? back[1].home_circuitid : 0
+        say("set_default", string(n, " rows; ", counts, "; home ", home == models_default_circuit() ? "default" : string(home)))
+        removed = first(M.Constructor.objects.filter("name" => "Mercedes").delete()::Tuple{Int, Dict{String, Integer}})
+        return n == 1 && length(back) == 1 && home == models_default_circuit() && removed == 1
+    catch e
+        failed("set_default", e); return false
+    end
+end
+
+# A self-referential `CASCADE` (exit code 29, #1377): a chain of four constructors of the step's own (Tyrrell became BAR,
+# then Honda, then Brawn); deleting Tyrrell deletes the three after it, level by level, through the collector's walk of
+# the constructor's own table. Typed reads check that none of the four is left and that the seeded chain (Toleman,
+# Benetton, Renault) is as it was.
+function self_cascade_step()::Bool
+    try
+        parent = nothing
+        for name in ("Tyrrell", "BAR", "Honda", "Brawn")
+            if parent === nothing
+                M.Constructor.objects.create("name" => name, "home_circuitid" => models_default_circuit())
+            else
+                M.Constructor.objects.create("name" => name, "parentid" => parent, "home_circuitid" => models_default_circuit())
+            end
+            row = M.Constructor.objects.filter("name" => name).list(ConstructorRow)
+            length(row) == 1 || (say("self_cascade", string(length(row), " constructors named ", name)); return false)
+            parent = row[1].constructorid
+        end
+        n, per = M.Constructor.objects.filter("name" => "Tyrrell").delete()::Tuple{Int, Dict{String, Integer}}
+        counts = join([string(k, " ", per[k]::Int) for k in sort!(collect(keys(per)))], ", ")
+        left = M.Constructor.objects.filter("name__@in" => ["Tyrrell", "BAR", "Honda", "Brawn"]).list(ConstructorRow)
+        seeded = M.Constructor.objects.filter("name__@in" => ["Toleman", "Benetton", "Renault"]).order_by("constructorid").list(ConstructorRow)
+        chain = length(seeded) == 3 && seeded[1].parentid === nothing && seeded[2].parentid == seeded[1].constructorid &&
+                seeded[3].parentid == seeded[2].constructorid
+        say("self_cascade", string(n, " rows; ", counts, "; ", length(left), " left; seeded chain ", chain ? "kept" : "changed"))
+        return n == 4 && isempty(left) && chain
+    catch e
+        failed("self_cascade", e); return false
+    end
+end
+
+# One refusal case: `call` must raise a PormG refusal; its line is `<label>: <type>: <message>`. A refusal that does not
+# come, or another error, fails the case. Each case's closure is its own type, so the call into it is static.
+function refusal_case(label::String, call::F)::Bool where {F}
+    try
+        call()
+        say("bulk_refusal", string(label, ": not refused"))
+        return false
+    catch e
+        text = refusal_text(e)
+        text === nothing && (failed("bulk_refusal", e); return false)
+        # One line per refusal, so `same_lines.sh` compares a multi-line message whole.
+        say("bulk_refusal", string(label, ": ", replace(text, '\n' => " ⏎ ")))
+        return true
+    end
+end
+
+# A refusal's type and message, each error type read at its own type (its `msg` field), or `nothing` for any other
+# error: `error_message` over the abstract `PormGError` would be a run-time call in a trimmed image.
+function refusal_text(@nospecialize(e))::Union{Nothing, String}
+    e isa PormG.QueryBuildError && return string("QueryBuildError: ", (e::PormG.QueryBuildError).msg)
+    e isa PormG.UnknownFieldError && return string("UnknownFieldError: ", (e::PormG.UnknownFieldError).msg)
+    e isa PormG.InvalidValueError && return string("InvalidValueError: ", (e::PormG.InvalidValueError).msg)
+    e isa PormG.UnsafeMutationError && return string("UnsafeMutationError: ", (e::PormG.UnsafeMutationError).msg)
+    e isa PormG.FilterError && return string("FilterError: ", (e::PormG.FilterError).msg)
+    return nothing
+end
+
+# The default circuit's id, read where the entry's models are (`M` is the models module in every entry).
+models_default_circuit() = M.DEFAULT_CIRCUIT_ID::Int
+
+# The bulk writers' refusals (exit code 30): one input per kind PormG refuses before any SQL, each printing its typed
+# error's type and text, the line the JIT control prints, so the job compares them (`same_lines.sh`). No row is written:
+# the step checks that no 2012 race exists afterwards. A refusal that does not come is a failure; so is another error type.
+function bulk_refusals_step(circuitid::Int)::Bool
+    ok = true
+    race(year) = (year = year, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(year, 5, 20))
+    ok &= refusal_case("a query as the table", () -> PormG.bulk_insert(M.Race.objects, M.Race.objects.filter("year" => 2012)))
+    ok &= refusal_case("not a table", () -> PormG.bulk_insert(M.Race.objects, [1, 2]))
+    ok &= refusal_case("columns of different lengths", () -> PormG.bulk_insert(M.Race.objects, (year = [2012, 2012], round = [6])))
+    ok &= refusal_case("rows with no columns", () -> PormG.bulk_insert(M.Race.objects, [NamedTuple(), NamedTuple()]))
+    ok &= refusal_case("a columns= of the wrong type", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; columns = 5))
+    ok &= refusal_case("a field mapped twice", () -> PormG.bulk_insert(M.Race.objects,
+        [(a = 2012, b = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20))];
+        columns = ["a" => "year", "b" => "year", "round", "circuitid", "name", "date"]))
+    ok &= refusal_case("a column in another case", () -> PormG.bulk_insert(M.Race.objects,
+        [(Year = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20))]))
+    ok &= refusal_case("a primary key set", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["raceid", "round"], match_on = ["round"]))
+    ok &= refusal_case("a match_on pair", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid" => "raceid"]))
+    ok &= refusal_case("a match_on the model does not have", () -> PormG.bulk_update(M.Race.objects, [(lap = 1, round = 6)];
+        columns = ["round"], match_on = ["lap"]))
+    ok &= refusal_case("a per-row key in filters=", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], filters = ["raceid"]))
+    ok &= refusal_case("a filters= entry that is no predicate", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid"], filters = [5]))
+    ok &= refusal_case("a filters= column name beside match_on", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid"], filters = ["raceid"]))
+    ok &= refusal_case("a key given twice", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6), (raceid = 1, round = 7)];
+        columns = ["round"], match_on = ["raceid"]))
+    ok &= refusal_case("a joined path", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, cn = "x")];
+        columns = ["cn" => "circuitid__name"], match_on = ["raceid"]))
+    ok &= refusal_case("an ordered handler", () -> PormG.bulk_update(M.Race.objects.order_by("year"), [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid"]))
+    ok &= refusal_case("a handler with a CTE", () -> PormG.bulk_update(
+        M.Race.objects.with("st" => M.Race.objects.values("circuitid"), join_field = "circuitid" => "circuitid"),
+        [(raceid = 1, round = 6)]; columns = ["round"], match_on = ["raceid"]))
+    ok &= refusal_case("a returning= of the wrong type", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = 5))
+    ok &= refusal_case("an empty returning=", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = String[]))
+    ok &= refusal_case("a returning= field the model does not have", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        returning = ["laps"]))
+    ok &= refusal_case("an on_conflict= of the wrong kind", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        on_conflict = :replace))
+    ok &= refusal_case("an on_conflict= update with no target", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        on_conflict = (action = :update, set = ["round"])))
+    ok &= refusal_case("an on_conflict= with an unknown key", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        on_conflict = (action = :nothing, bogus = 1)))
+    try
+        left = M.Race.objects.filter("year" => 2012).list(RaceRow)
+        say("bulk_refusal", string(length(left), " races written"))
+        ok &= isempty(left)
+    catch e
+        failed("bulk_refusal", e); ok = false
+    end
+    return ok
+end

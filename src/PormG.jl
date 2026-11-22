@@ -287,6 +287,11 @@ using .Migrations
 # `_emsg`; that helper now lives in Kernel, so this file is free to land where it belongs.)
 include("tools.jl")
 
+# Also layer 4: `trim_entrypoints`, the roots a `juliac --trim` build of an app needs (#1599). It reads the query
+# render's roots (`QueryBuilder`) and each driver extension's (`backend_trim_roots`), so it lands after both.
+include("trim_roots.jl")
+export trim_entrypoints
+
 # Also layer 4, and for the same reason: `Base.show` methods for the model/query/row types consume
 # every layer above and are depended on by nothing. They must land AFTER `QueryBuilder`, since the
 # types they dispatch on are defined there (#534).

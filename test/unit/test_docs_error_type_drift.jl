@@ -74,6 +74,7 @@ const ALLOWED_SRC_ARGUMENTERROR = Dict(
     "src/tools.jl" => 1,   # upgrade_guide's missing `from` kwarg — Julia-level API misuse (#639)
     "src/Utils.jl" => 1,   # @import_models non-literal path — macro (Julia-level) misuse
     "src/Models.jl" => 2,  # @models given a non-name, or a name twice — macro (Julia-level) misuse (#1602)
+    "src/trim_roots.jl" => 2,  # trim_entrypoints given no type, or a type that is not a loaded concrete pool — Julia-level misuse at an entry's top level (#1599)
 )
 
 # ─────────────────────────────────────────────────────────────────────────────

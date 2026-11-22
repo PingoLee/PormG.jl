@@ -101,6 +101,7 @@ non-aggregate columns. Never write it yourself.
 | Concurrency, `fetch_async`, what spawned tasks see inside a transaction | [`async.md`](async.md) |
 | Catching and reporting errors, which call raises what | [`errors.md`](errors.md) |
 | Inspecting generated SQL, testing without a database (a golden-SQL suite that pins your app's SQL across PormG upgrades), pool health, a query that returns the wrong thing | [`debugging.md`](debugging.md) |
+| Building the app into a standalone executable with `juliac --trim` (experimental) | [`static-compilation.md`](static-compilation.md) |
 
 The exhaustive reference is the PormG documentation, <https://pingolee.github.io/PormG.jl/stable/>.
 These files are the working patterns and the gotchas. Each links to the page with the full detail.

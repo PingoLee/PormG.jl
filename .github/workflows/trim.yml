@@ -490,7 +490,7 @@ jobs:
     services:
       postgres:
         # No POSTGRES_HOST_AUTH_METHOD: the image's default for TCP connections is scram-sha-256, the
-        # authentication the fixture's Base64 roots exist for (test/trim/postgres/main.jl).
+        # authentication the Base64 roots exist for (`trim_entrypoints`, through the Postgres.jl extension).
         image: postgres:18
         env:
           POSTGRES_DB: pormg_trim

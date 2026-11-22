@@ -75,6 +75,9 @@ const EXPECTED_TOPLEVEL = Set([
     # PormG's exit hook makes. A `juliac --trim` binary runs no `atexit` hook, so it must call this.
     # The binding is `Configuration.close_all!` (#1229), which stays `public` there.
     :close_all!,
+    # #1599: the roots a `juliac --trim` build of an app needs, called at the entry's top level; a no-op
+    # under the JIT.
+    :trim_entrypoints,
 ])
 
 # The SQL function library, namespaced under PormG.Functions (NOT exported by PormG).

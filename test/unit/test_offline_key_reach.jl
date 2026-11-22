@@ -226,6 +226,7 @@ const _OKR_REVIEWED = Dict(
 const _OKR_MENTION = r"\b(?:Postgres|SQLite|MySQL)ConnectionPool\b(?!\s*(?:\{[^}]*\})?\s*\()"
 const _OKR_MENTIONS = Dict(
   "src/Backend.jl" => 1,                 # docstring: the mock pools are not `PostgresConnectionPool{D}`
+  "src/trim_roots.jl" => 6,              # trim_entrypoints' docstring and refusal texts name the pool types; no branch (#1599)
   "src/Configuration.jl" => 2,           # `_is_offline_pool`'s docstring
   # the three struct definitions, plus the reviewed methods above (`_version_at_hand` names its type
   # three times: the signature, the live fallthrough, the version text)

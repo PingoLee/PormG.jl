@@ -78,6 +78,12 @@ the end of the verifier report, which a spinner line overwrote (#1599 round 1). 
 binary still links; a call with no compiled target then raises a catchable `MethodError` at run
 time, which `main` prints with the function it missed.
 
+**Roots.** Every entry calls `PormG.trim_entrypoints(<its pool type>)` at its top level, the one public
+call a trimmed app makes (`docs/src/static_compilation.md`, "A trimmed application"): the query render's
+run-time re-entries (`QueryBuilder._trim_render_roots`), the driver's own roots (the Postgres.jl
+extension's SCRAM methods) and the LazyJLLWrappers roots Libiconv_jll needs at start. Nothing else in the
+fixture roots by hand; `test/unit/test_trim_shape_pins.jl` fails on an entry that does.
+
 ## The read-only entry and its CI job
 
 `read.jl` is `main.jl` without the write: boot, the typed read, then the read steps. Since #1788 its trimmed
@@ -428,10 +434,10 @@ Postgres.jl's own connect, which a trimmed binary has no code for: it fails at t
 **Authentication roots.** SCRAM-SHA-256, PostgreSQL's default password authentication, runs in SASLAuth
 through Base64's encode and decode pipes, which keep their stream in a field typed `IO`. A trimmed image
 had no code for the `IOBuffer` methods those calls reach and failed with `MissingCodeError` while
-authenticating. `postgres/main.jl` roots them with `Base.Experimental.entrypoint`, which does nothing
-under the JIT (a `precompile` statement does not keep code in a trimmed image). That is upstream residue,
-not PormG's: any app trimmed with Postgres.jl against a SCRAM server needs those lines until Base64's
-pipes are typed.
+authenticating. The Postgres.jl extension names them (`PormG.backend_trim_roots`), and
+`PormG.trim_entrypoints(PostgresConnectionPool{:postgres})` at `postgres/main.jl`'s top level roots them
+with `Base.Experimental.entrypoint`, which does nothing under the JIT (a `precompile` statement does not
+keep code in a trimmed image). The cause is upstream: the roots stay until Base64's pipes are typed.
 
 ## The error path
 
@@ -472,7 +478,7 @@ it starts for the run (#1614):
 - **`Trimmed read (PostgreSQL 18, Postgres.jl)`** builds `postgres/main.jl` and runs it against
   `postgres:18`, whose default authentication over TCP is SCRAM-SHA-256: the job checks first that its
   own connection authenticated that way (`system_user`) and that the role's password is stored as a
-  SCRAM verifier, so the Base64 roots in `postgres/main.jl` are exercised.
+  SCRAM verifier, so the Base64 roots `trim_entrypoints` adds for Postgres.jl are exercised.
 
 Each job sets the `PORMG_TRIM_*` variables to its container, seeds `pormg_trim` with the variant's
 `prep.jl`, runs the JIT control, builds the binary with the pinned Julia and JuliaC, and runs it under

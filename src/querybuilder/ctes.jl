@@ -30,13 +30,19 @@ end
 # raised a `TypeError` inside `deepcopy_internal`. A projection holding anything else (a `Subquery` or `Exists`, whose
 # handler the caller's fluent calls change in place; a window's `WindowSpec`, which may be mutated directly; a
 # mutable literal; a node this check does not know) and another handler type are deep-copied as before.
+#
+# A projection holding anything else takes the typed copy of the whole tree (`_tree_copy_handler`, #1599 layer 5): the
+# trimmed `.with()` over a body projecting a `Subquery`, an `Exists`, a window, a `Case` or a mutable literal stopped in
+# `deepcopy`'s walk (#1828 wall 4). The ORDER BY terms are copied at their type on both paths. Another handler type is
+# deep-copied, behind the copy's open arm.
 function _cte_query_copy(query::SQLObjectHandler)
-  query isa ObjectHandler || return deepcopy(query)
+  query isa ObjectHandler || return _tree_copy_other(query)::SQLObjectHandler
   object = getfield(query, :object)
   for v in object.values
-    _projection_shares_safely(v) || return deepcopy(query)
+    _projection_shares_safely(v) || return _tree_copy_handler(query)::ObjectHandler
   end
-  return ObjectHandler(object = _query_copy(object, ProjectionNode[_projection_copy(v) for v in object.values]))
+  return ObjectHandler(object = _query_copy(object, ProjectionNode[_projection_copy(v) for v in object.values],
+                                            _tree_copy_order(object)))
 end
 # Whether a projected node can be shared by the copy: its wrapper is copied, so the check is on what it wraps.
 _projection_shares_safely(v::SQLField)::Bool = _copy_shares_safely(v.field)
@@ -838,12 +844,18 @@ function _case_output_field(func::SQLTypeFunction, field::String, instruct::SQLI
   if func.function_name == "WHEN"
     push!(outputs, func.kwargs["then"])
   else
-    for branch in (func.column isa AbstractVector ? func.column : (func.column,))
+    # #1599 layer 5: the branches at the column's type (`_append_operands!`), not iterated through `(column,)`.
+    for branch in _append_operands!(Any[], func.column)
       # A `Case` holds `When` nodes; anything else (a `When(…; otherwise = …)`, which is already a
-      # CASE, or a nested `Case`) renders no `THEN`, so there is no branch value to type.
-      (branch isa SQLTypeFunction && branch.function_name == "WHEN") ||
+      # CASE, or a nested `Case`) renders no `THEN`, so there is no branch value to type. A `When` is
+      # always an `FObject`, so the node is read at that type.
+      if branch isa FObject && branch.function_name == "WHEN"
+        push!(outputs, branch.kwargs["then"])
+      elseif branch isa SQLTypeFunction && _is_when_other(branch)
+        push!(outputs, _then_other(branch))   # a caller's own function type, read as before
+      else
         _refuse_case_type(field, "a Case branch is not a bare When(…)")
-      push!(outputs, branch.kwargs["then"])
+      end
     end
     push!(outputs, get(func.kwargs, "else", missing))
   end
@@ -852,29 +864,68 @@ function _case_output_field(func::SQLTypeFunction, field::String, instruct::SQLI
   for value in outputs
     # `Value(missing)` is a NULL too — unwrap it before the check, not after.
     _is_null_literal(value isa SQLText ? value.field : value) && continue
-    push!(fields, _case_value_field(value, field, instruct))
+    push!(fields, _case_value_field_at(value, field, instruct)::PormGField)
   end
   isempty(fields) && _refuse_case_type(field, "every branch is NULL, so there is no type to infer")
   return _unify_case_fields(fields, field)
 end
 
-# A literal types by its Julia type; `Bool` first, because `true isa Integer`.
-_case_value_field(::Bool, ::String, ::SQLInstruction) = Models.BooleanField()
-_case_value_field(::Integer, ::String, ::SQLInstruction) = Models.IntegerField()
-_case_value_field(::Number, ::String, ::SQLInstruction) = Models.FloatField()
-_case_value_field(::AbstractString, ::String, ::SQLInstruction) = Models.CharField()
-_case_value_field(v::SQLText, field::String, instruct::SQLInstruction) = _case_value_field(v.field, field, instruct)
-_case_value_field(v::WindowFunction, field::String, instruct::SQLInstruction) =
-  _set_field_from_sql_function(v, field, instruct)
-_case_value_field(v::JoinedReference, field::String, instruct::SQLInstruction) =
-  _set_field_from_sql_function(v, field, instruct)
-# A function branch is typed as a CTE column is (#1460), and refused as a `Case`, naming `output_field`.
-_case_value_field(v::SQLTypeFunction, field::String, instruct::SQLInstruction) =
-  _set_field_from_sql_function(v, field, instruct, _refuse_case_type; role = "a branch is")
-_case_value_field(v::FExpression, field::String, instruct::SQLInstruction) =
-  _f_expression_field(v, field, instruct, _refuse_case_type)
-_case_value_field(v, field::String, instruct::SQLInstruction) =
-  _walked_field(v, field, instruct, _refuse_case_type, () -> "a branch is a $(nameof(typeof(v))), whose type PormG does not infer")
+# A caller's own `SQLTypeFunction`'s name and `then`, read as before (#1599 layer 5), behind one call each.
+@noinline _is_when_other(@nospecialize(f::SQLTypeFunction))::Bool = f.function_name == "WHEN"
+@noinline _then_other(@nospecialize(f::SQLTypeFunction)) = f.kwargs["then"]
+@noinline _then_or_nothing_other(@nospecialize(f::SQLTypeFunction)) = get(f.kwargs, "then", nothing)
+
+# A refusal's reason, built only when the column is refused (a thunk, as before: a column the walk types builds no
+# message): `<prefix><name><suffix>`, the name a node's type gives (`nameof`, with `Object` dropped when `chop`), or a
+# fixed one. A callable struct rather than a closure (#1599 layer 5): its type is named, so the call into it is static.
+# The parts are kept and joined only when the column is refused, so a column the walk types builds no string.
+struct _Reason
+  a::String
+  b::String
+  c::String
+  d::String
+end
+_Reason(a::String) = _Reason(a, "", "", "")
+_Reason(a::String, b::String, c::String) = _Reason(a, b, c, "")
+(r::_Reason)() = string(r.a, r.b, r.c, r.d)
+# A value's type as a `DataType` (#1599 layer 5): `typeof(x)::DataType` does not narrow a value held at a union of
+# abstract types, so a constructor taking it stayed a run-time call.
+_datatype(@nospecialize(x))::DataType = typeof(x)
+struct _TypeReason
+  p1::String
+  p2::String
+  p3::String
+  T::DataType
+  suffix::String
+  chop::Bool
+end
+_TypeReason(p1::String, T::DataType, suffix::String, chop::Bool = false) = _TypeReason(p1, "", "", T, suffix, chop)
+_TypeReason(p1::String, p2::String, p3::String, T::DataType, suffix::String) = _TypeReason(p1, p2, p3, T, suffix, false)
+(r::_TypeReason)() = string(r.p1, r.p2, r.p3, r.chop ? chopsuffix(string(nameof(r.T)), "Object") : string(nameof(r.T)), r.suffix)
+# `_refuse_projection_type` with a hint, as the closures over it passed one.
+struct _RefuseWithHint
+  hint::String
+end
+(r::_RefuseWithHint)(f::String, reason::String) = _refuse_projection_type(f, reason; hint = r.hint)
+
+# A `Case` branch's value, typed by its Julia type or its node (#1599 layer 5: one walk over the value held untyped, in
+# the order the methods it replaces dispatched): a literal by its type, `Bool` first because `true isa Integer`; a
+# `Value` by what it holds; a window or a joined column as a CTE column is; a function as a CTE column is (#1460),
+# refused as a `Case`, naming `output_field`; `F` arithmetic by the number rule; anything else by the walk.
+function _case_value_field_at(@nospecialize(v), field::String, instruct::SQLInstruction)
+  v isa Bool && return Models.BooleanField()
+  v isa Integer && return Models.IntegerField()
+  v isa Number && return Models.FloatField()
+  v isa AbstractString && return Models.CharField()
+  v isa SQLText && return _case_value_field_at(v.field, field, instruct)
+  v isa WindowFunction && return _set_field_from_sql_function(v, field, instruct)
+  v isa JoinedReference && return _set_field_from_sql_function(v, field, instruct)
+  v isa FObject && return _set_field_from_sql_function(v, field, instruct, _refuse_case_type; role = "a branch is")
+  v isa SQLTypeFunction && return _case_function_other(v, field, instruct)   # a caller's own function type, as before
+  v isa FExpression && return _f_expression_field(v, field, instruct, _refuse_case_type)
+  return _walked_field(v, field, instruct, _refuse_case_type,
+                       _TypeReason("a branch is a ", _datatype(v), ", whose type PormG does not infer"))
+end
 
 # #1460 (#1034 phase 4, decision D4) — a computed shape no arm here types is typed by the walk: the type
 # its expression MEANS (`_MeaningKinds`), as a field (`_kind_field`). It is refused only where the walk
@@ -884,9 +935,11 @@ _case_value_field(v, field::String, instruct::SQLInstruction) =
 # `Exists`, date and interval arithmetic, … The arms that type a shape themselves still answer first:
 # they keep a foreign key's target and a declared width, and `_meant_column_field` reconciles their
 # answer with the walk's afterwards, as it did.
-function _walked_field(x, field::String, instruct::SQLInstruction, refuse, reason)
+# `x` is not specialized (#1599 layer 5): the walks reach it with a value held untyped, and a call specialized on the
+# value's run-time type was one the compiler could not resolve.
+function _walked_field(@nospecialize(x), field::String, instruct::SQLInstruction, refuse, reason)
   kind = _infer_kind_any(x, instruct, _MeaningKinds())
-  typed = kind === nothing ? nothing : _kind_field(kind)
+  typed = kind === nothing ? nothing : _kind_field_at(kind)   # #1599 layer 5: the kind at its type
   typed === nothing && refuse(field, reason())
   return typed
 end
@@ -902,21 +955,28 @@ end
 # too, so a refusal nested inside a top-level `F` never reports itself as a Case.
 function _f_expression_field(v::FExpression, field::String, instruct::SQLInstruction, refuse)
   if v.operation === nothing
-    v.column isa String || return refuse(field, "it is an F(…) over more than one column")
-    return _set_field_from_sql_function(v.column, v.column, instruct)
+    col = v.column   # #1599 layer 5: read once, so the narrowed value is the one passed on
+    col isa String || return refuse(field, "it is an F(…) over more than one column")
+    return _set_field_from_sql_function(col, col, instruct)
   end
   # #1460: arithmetic whose value is not a number (a date shifted, an interval, a comparison) is the
   # type the walk names it, before its operands are asked as numbers: `F("date") + Day(1)` is a date.
   meant = _infer_kind_any(v, instruct, _MeaningKinds())
-  walked = meant === nothing ? nothing : _kind_field(meant)
+  walked = meant === nothing ? nothing : _kind_field_at(meant)   # #1599 layer 5: the kind at its type
   walked !== nothing && _numeric_rank(meant) === nothing && return walked
   # The operands as numbers. Where the walk names the value, an operand the number rule cannot type
   # (the `Date` of `F("date") - Date(2009, 3, 1)`) is no refusal: it answers `nothing`, and the walk's
   # field types the number the operands are not (a day count). Where it names nothing, the operand's
   # own refusal stands.
-  operand_refuse = walked === nothing ? refuse : _no_refusal
-  left = _f_operand_field(v.field_name, field, instruct, operand_refuse)
-  right = _f_operand_field(v.operand, field, instruct, operand_refuse)
+  # #1599 layer 5: each refusal passed at its own type (a `Union` of the two was a `Function`, every call through it
+  # a run-time one), and each operand read through the walk over its untyped slot.
+  if walked === nothing
+    left = _f_operand_field_at(v.field_name, field, instruct, refuse)
+    right = _f_operand_field_at(v.operand, field, instruct, refuse)
+  else
+    left = _f_operand_field_at(v.field_name, field, instruct, _no_refusal)
+    right = _f_operand_field_at(v.operand, field, instruct, _no_refusal)
+  end
   if left isa PormGField && right isa PormGField && _is_number_field(left) && _is_number_field(right)
     return _is_integral_field(left) && _is_integral_field(right) ? Models.IntegerField() : Models.FloatField()
   end
@@ -928,23 +988,35 @@ _no_refusal(::String, ::String) = nothing
 
 # Inside `F` arithmetic a `String` is a column path, not a text literal. A number, a window, a joined
 # column and a function the CTE typing knows type as a `Case` branch does; anything else is refused.
-_f_operand_field(x::String, ::String, instruct::SQLInstruction, refuse) = _set_field_from_sql_function(x, x, instruct)
-_f_operand_field(x::Number, field::String, instruct::SQLInstruction, refuse) = _case_value_field(x, field, instruct)
-_f_operand_field(x::SQLText, field::String, instruct::SQLInstruction, refuse) =
-  x.field isa Number ? _case_value_field(x.field, field, instruct) :
-  refuse(field, "an operand is a Value of type $(nameof(typeof(x.field))), which is not a number")
-_f_operand_field(x::FExpression, field::String, instruct::SQLInstruction, refuse) =
-  _f_expression_field(x, field, instruct, refuse)
-_f_operand_field(x::WindowFunction, field::String, instruct::SQLInstruction, refuse) =
-  _set_field_from_sql_function(x, field, instruct)
-_f_operand_field(x::JoinedReference, field::String, instruct::SQLInstruction, refuse) =
-  _set_field_from_sql_function(x, field, instruct)
-_f_operand_field(x::SQLTypeFunction, field::String, instruct::SQLInstruction, refuse) =
+# A caller's own `SQLTypeFunction` (not one PormG builds) makes the call it made before, behind one call.
+@noinline _case_function_other(@nospecialize(v::SQLTypeFunction), field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(v, field, instruct, _refuse_case_type; role = "a branch is")
+@noinline _operand_function_other(@nospecialize(x::SQLTypeFunction), field::String, instruct::SQLInstruction, refuse::R) where {R} =
   _set_field_from_sql_function(x, field, instruct, refuse; role = "an operand is")
-_f_operand_field(x, field::String, instruct::SQLInstruction, refuse) =
-  _walked_field(x, field, instruct, refuse, () -> "an operand is a $(nameof(typeof(x))), whose type PormG does not infer")
+function _f_operand_field_at(@nospecialize(x), field::String, instruct::SQLInstruction, refuse::R) where {R}
+  x isa String && return _set_field_from_sql_function(x, x, instruct)
+  x isa Number && return _case_value_field_at(x, field, instruct)
+  if x isa SQLText
+    inner = x.field
+    inner isa Number && return _case_value_field_at(inner, field, instruct)
+    return refuse(field, string("an operand is a Value of type ", nameof(_datatype(inner)), ", which is not a number"))
+  end
+  x isa FExpression && return _f_expression_field(x, field, instruct, refuse)
+  x isa WindowFunction && return _set_field_from_sql_function(x, field, instruct)
+  x isa JoinedReference && return _set_field_from_sql_function(x, field, instruct)
+  x isa FObject && return _set_field_from_sql_function(x, field, instruct, refuse; role = "an operand is")
+  x isa SQLTypeFunction && return _operand_function_other(x, field, instruct, refuse)   # a caller's own function type
+  return _walked_field(x, field, instruct, refuse,
+                       _TypeReason("an operand is a ", _datatype(x), ", whose type PormG does not infer"))
+end
 
-_is_number_field(f::PormGField) = hasproperty(f, :formatter) && f.formatter === Models.format_number_sql
+# A field's formatter slot, read at the field's concrete type through `Models._with_any_field` (#1599 layer 5): whether
+# it has one, and its value. `hasproperty(f, :formatter)` on the abstract field was a run-time call per field.
+_has_formatter(f::PormGField)::Bool = Models._with_any_field(_has_formatter_at, f)
+_has_formatter_at(::T) where {T<:PormGField} = hasfield(T, :formatter)
+_field_formatter(f::PormGField) = Models._with_any_field(_field_formatter_at, f)
+_field_formatter_at(f::T) where {T<:PormGField} = hasfield(T, :formatter) ? getfield(f, :formatter) : nothing
+_is_number_field(f::PormGField) = _has_formatter(f) && _field_formatter(f) === Models.format_number_sql
 _is_integral_field(f::PormGField) = f isa Union{Models.sIntegerField, Models.sBigIntegerField,
   Models.sPositiveSmallIntegerField, Models.sPositiveIntegerField, Models.sIDField, Models.sForeignKey,
   Models.sOneToOneField}
@@ -958,26 +1030,83 @@ _is_integral_field(f::PormGField) = f isa Union{Models.sIntegerField, Models.sBi
 # would join constructor ids to drivers. They fall through to the numeric arm instead — a plain
 # integer column, which refuses the traversal rather than answer it wrongly.
 function _unify_case_fields(fields::Vector{PormGField}, field::String)
+  # #1599 layer 5: loops over the fields, each slot read at the field's type (`_has_formatter`, `_field_formatter`),
+  # in place of the closures over `hasproperty`; the same answers in the same order.
   first_field = fields[1]
-  all(f -> typeof(f) === typeof(first_field) && _same_key_target(f, first_field), fields) && return first_field
-  if all(_is_number_field, fields)
-    return all(_is_integral_field, fields) ? Models.IntegerField() : Models.FloatField()
+  same = true
+  for f in fields
+    (typeof(f) === typeof(first_field) && _same_key_target(f, first_field)) || (same = false; break)
   end
-  formatter = hasproperty(first_field, :formatter) ? first_field.formatter : nothing
-  if formatter !== nothing && all(f -> hasproperty(f, :formatter) && f.formatter === formatter, fields)
-    return first_field
+  same && return first_field
+  numbers = true
+  for f in fields
+    _is_number_field(f) || (numbers = false; break)
   end
-  other = fields[findfirst(f -> !(hasproperty(f, :formatter) && f.formatter === formatter), fields)]
+  if numbers
+    integral = true
+    for f in fields
+      _is_integral_field(f) || (integral = false; break)
+    end
+    return integral ? Models.IntegerField() : Models.FloatField()
+  end
+  formatter = _has_formatter(first_field) ? _field_formatter(first_field) : nothing
+  shares(f) = _has_formatter(f) && _field_formatter(f) === formatter
+  if formatter !== nothing
+    all_share = true
+    for f in fields
+      shares(f) || (all_share = false; break)
+    end
+    all_share && return first_field
+  end
+  idx = 0
+  for (i, f) in enumerate(fields)
+    shares(f) || (idx = i; break)
+  end
+  other = idx == 0 ? _no_other_branch(fields) : fields[idx]
   _refuse_case_type(field, "its branches have different types " *
-    "(\e[31m$(_field_label(first_field))\e[0m and \e[31m$(_field_label(other))\e[0m)")
+    "(\e[31m$(Models._with_any_field(_field_label, first_field))\e[0m and " *
+    "\e[31m$(Models._with_any_field(_field_label, other))\e[0m)")
 end
 
+# `fields[findfirst(…)]` when no branch differs, as before (a `getindex` with `nothing`), behind one call.
+@noinline _no_other_branch(fields::Vector{PormGField}) = fields[findfirst(_ -> false, fields)]
+
 _key_target(f::PormGField) = (f.to isa PormGModel ? f.to.name : f.to, f.pk_field)
-_same_key_target(a::PormGField, b::PormGField) =
-  !(a isa Union{Models.sForeignKey,Models.sOneToOneField}) || isequal(_key_target(a), _key_target(b))
+# #1599 layer 5: each side read at its type (`a` narrowed by its `isa`, `b` through `_with_any_field`).
+function _same_key_target(@nospecialize(a::PormGField), @nospecialize(b::PormGField))
+  if a isa Models.sForeignKey
+    b isa Models.sForeignKey && return _same_key(a.to, a.pk_field, b.to, b.pk_field)
+    return _same_key_target_other(a, b)
+  elseif a isa Models.sOneToOneField
+    b isa Models.sOneToOneField && return _same_key(a.to, a.pk_field, b.to, b.pk_field)
+    return _same_key_target_other(a, b)
+  end
+  return true
+end
+# `isequal(_key_target(a), _key_target(b))`, component by component at their types: the target's name (a model's, or the
+# name it was declared by), then the key field, equal only within one type, as `isequal` answers for a `String` and a
+# `Symbol`.
+function _same_key(@nospecialize(ta), @nospecialize(pa), @nospecialize(tb), @nospecialize(pb))::Bool
+  isequal(_target_name(ta), _target_name(tb)) || return false
+  pa === nothing && return pb === nothing
+  pa isa String && return pb isa String && pa == pb
+  pa isa Symbol && return pb isa Symbol && pa === pb
+  return _same_key_other(pa, pb)
+end
+@noinline _same_key_other(@nospecialize(pa), @nospecialize(pb))::Bool = isequal(pa, pb)
+function _target_name(@nospecialize(to))
+  to === nothing && return nothing
+  to isa String && return to
+  to isa Models.ModelType && return to.name
+  return _target_name_other(to)
+end
+@noinline _target_name_other(@nospecialize(to)) = to isa PormGModel ? to.name : to
+# Two keys of different field types (its caller compares fields of one type first), as before, behind one call.
+@noinline _same_key_target_other(@nospecialize(a::PormGField), @nospecialize(b::PormGField)) =
+  isequal(_key_target(a), _key_target(b))
 
 # `IntegerField`, as the caller spells the constructor — not the `sIntegerField` struct behind it.
-_field_label(f::PormGField) = chopprefix(string(nameof(typeof(f))), "s")
+_field_label(f::PormGField) = chopprefix(string(nameof(_datatype(f))), "s")
 
 function _refuse_case_type(field::String, reason::String)
   throw(QueryBuildError(
@@ -1012,17 +1141,18 @@ end
 # rendering never reaches this function: the body's SELECT raises `BackendCapabilityError` first.
 # `Concat` renders no cast on EITHER engine, so its constructor refuses any non-text type (#835).
 function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
-  declared = get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing)
-  (declared isa AbstractString && !isempty(declared)) || return nothing
+  # #1599 layer 5: the declared name read as a `String` (`_declared_string`), so the reads after it are static.
+  declared = _declared_string(get(func.kwargs, func.function_name == "CAST" ? "type" : "output_field", nothing))
+  declared === nothing && return nothing
   typed = _sql_type_field(declared)
   # #929: `uuid`/`inet`/`cidr` became nameable for the alias filter, on PostgreSQL. They stay refused
   # on SQLite, where they were refused before: there each cast renders `CAST(x AS TEXT)`, so typing the
   # column would check — and normalize — its filter values against a type the engine never applied.
-  (typed === nothing || _cast_renders_text(typed, instruct.connection)) || return typed
+  (typed === nothing || _cast_renders_text_in(typed, instruct.connection)) || return typed
   # uuid / inet / cidr are offered only where they type: one that renders as TEXT is refused too. So
   # are the time, timestamp and interval types and `bytea` (#1194), which only PostgreSQL casts to:
   # SQLite refuses the cast itself (`Dialect.sqlite_cast_sql`) before the body reaches this check.
-  typed_uuid = !_cast_renders_text(_sql_type_field("uuid"), instruct.connection)
+  typed_uuid = !_cast_renders_text_in(_sql_type_field("uuid")::PormGField, instruct.connection)
   throw(QueryBuildError(
     "A CTE column cannot be typed from the SQL type \e[4m\e[31m$(declared)\e[0m on " *
     "$(func.function_name)(…). Name a text, integer, bigint, float, numeric, boolean, date or blob type" *
@@ -1030,6 +1160,22 @@ function _declared_type(func::SQLTypeFunction, instruct::SQLInstruction)
     "instead (#812, #823, #929, #1194)."))
 end
 
+
+# `_cast_renders_text(field, conn)` at the connection's concrete type (#1599 layer 5): a pool PormG builds is walked to its
+# type (`with_pool`'s closed set), as the capability calls are (`build_query.jl`); anything else makes the call it made
+# before, behind one call.
+# The field is read at its type first (one arm per member of `AnyField`, generated, as `Models._with_any_field` is), so
+# `with_pool` is reached with a concrete field: its trailing arguments are a `Vararg`, specialized at run time.
+@eval function _cast_renders_text_in(@nospecialize(field::PormGField), @nospecialize(conn))::Bool
+  $(Expr(:block, (:(field isa $T && return _cast_renders_text_at(field, conn)) for T in Base.uniontypes(Models.AnyField))...))
+  return _cast_renders_text_other(field, conn)
+end
+function _cast_renders_text_at(field::PormGField, @nospecialize(conn))::Bool
+  conn isa _SQLEngine && return with_pool(_cast_renders_text_on, conn, field)
+  return _cast_renders_text_other(field, conn)
+end
+_cast_renders_text_on(conn::_SQLEngine, field::PormGField) = _cast_renders_text(field, conn)
+@noinline _cast_renders_text_other(@nospecialize(field::PormGField), @nospecialize(conn)) = _cast_renders_text(field, conn)
 
 # `refuse` and `role` name a refusal as the caller wrote the function: a CTE column (`it is`, naming
 # `Cast`), a `Case` branch (naming `output_field`) or an operand of `F` arithmetic.
@@ -1046,7 +1192,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
   # #1460: any other function is the type the walk names it, refused only where it names none.
   func.function_name in ("COUNT", "SUM", "AVG", "MIN", "MAX") ||
     return _walked_field(func, field, instruct, refuse,
-                         () -> "$(role) \e[31m$(func.function_name)\e[0m(…), whose result type PormG cannot name")
+                         _Reason(role, " \e[31m", func.function_name, "\e[0m(…), whose result type PormG cannot name"))
 
   func.function_name in ("COUNT", "SUM") && return IntegerField()
   # AVG/MIN/MAX type as their operand. #1116: through the same arms a projection takes, as the window
@@ -1066,7 +1212,8 @@ _aggregate_operand_field(x::FExpression, func, field::String, instruct::SQLInstr
   _f_expression_field(x, field, instruct, _refuse_projection_type)
 _aggregate_operand_field(x, func, field::String, instruct::SQLInstruction) =
   _walked_field(func, field, instruct, _refuse_projection_type,
-                () -> "it is $(func.function_name) over a $(nameof(typeof(x))), whose type PormG does not infer")
+                _TypeReason("it is ", func.function_name, " over a ", _datatype(x),
+                            ", whose type PormG does not infer"))
 # #685 — a CTE body that projects a window function. More specific than the `::SQLTypeFunction` arm
 # above, whose name allow-list refused every window with "RANK is not a recognized function" — which
 # made the CTE route the #537 refusal recommends for filtering on a window unreachable. The column
@@ -1081,24 +1228,31 @@ function _set_field_from_sql_function(func::WindowFunction, field::String, instr
   column = func.column
   column === nothing && return IntegerField()
   column isa String && return _set_field_from_sql_function(column, column, instruct)
-  column isa Union{JoinedReference,SQLTypeFunction} && return _set_field_from_sql_function(column, field, instruct)
+  # #1599 layer 5: each node at its type, and the refusals as callable structs rather than closures.
+  column isa JoinedReference && return _set_field_from_sql_function(column, field, instruct)
+  column isa FObject && return _set_field_from_sql_function(column, field, instruct)
+  column isa WindowFunction && return _set_field_from_sql_function(column, field, instruct)
+  column isa SQLTypeFunction && return _window_column_other(column, field, instruct)   # a caller's own function type
   # #1460: a window over anything else (`F` arithmetic, a `Subquery`) is the type the walk names it.
   # #887: where it names none over a subquery, `Cast` inside the window names it.
   column isa SubqueryObject && return _walked_field(func, field, instruct,
-    (f, reason) -> _refuse_projection_type(f, reason;
-      hint = "Name the type inside the window, e.g. \e[32mLag(Cast(Subquery(…), \"integer\"), over = …)\e[0m " *
-             "(or the type it returns)"),
-    () -> "it is $(func.function_name) over Subquery(…), whose type PormG does not infer")
+    _RefuseWithHint("Name the type inside the window, e.g. \e[32mLag(Cast(Subquery(…), \"integer\"), over = …)\e[0m " *
+                    "(or the type it returns)"),
+    _Reason("it is ", func.function_name, " over Subquery(…), whose type PormG does not infer"))
   return _walked_field(func, field, instruct, _refuse_projection_type,
-    () -> "it is $(func.function_name) over a $(nameof(typeof(column))), whose type PormG does not infer")
+    _TypeReason("it is ", func.function_name, " over a ", _datatype(column),
+                ", whose type PormG does not infer"))
 end
+@noinline _window_column_other(@nospecialize(column::SQLTypeFunction), field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(column, field, instruct)
 # #481 — a CTE body that projects a joined-copy column. The body is its own build with its own
 # `alias_join`, so the alias resolves against that inner query; without this method the projection
 # reaches the `::String` method below as a `JoinedReference` and dies with a MethodError.
 function _set_field_from_sql_function(func::JoinedReference, field::String, instruct::SQLInstruction)
   config = get(instruct.object.alias_join, func.alias, nothing)
   if config !== nothing
-    haskey(config.target.fields, func.path) && return config.target.fields[func.path]
+    target = config.target::Models.ModelType   # #1599 layer 5: the model at its type, so the lookup is static
+    haskey(target.fields, func.path) && return target.fields[func.path]
   end
   throw(UnknownFieldError(
     "Error in _set_field_from_sql_function, Joined(\"$(func.alias)\", \"$(func.path)\") names no " *
@@ -1127,14 +1281,13 @@ _set_field_from_sql_function(v::FExpression, field::String, instruct::SQLInstruc
 # `Cast` does not take — at the outer query.
 _set_field_from_sql_function(v::SubqueryObject, field, instruct::SQLInstruction) =
   _walked_field(v, string(something(field, "?")), instruct,
-                (f, reason) -> _refuse_projection_type(f, reason;
-                  hint = "Name the type the column holds by wrapping it in " *
-                         "\e[32mCast(Subquery(…), \"integer\")\e[0m (or the type it returns)"),
-                () -> "it is Subquery(…), whose type PormG does not infer")
+                _RefuseWithHint("Name the type the column holds by wrapping it in " *
+                                "\e[32mCast(Subquery(…), \"integer\")\e[0m (or the type it returns)"),
+                _Reason("it is Subquery(…), whose type PormG does not infer"))
 _set_field_from_sql_function(v, field, instruct::SQLInstruction) =
   _walked_field(v, string(something(field, "?")), instruct,
-                (f, reason) -> _refuse_projection_type(f, reason; hint = "Project it in the outer query instead of the CTE body"),
-                () -> "it is $(chopsuffix(string(nameof(typeof(v))), "Object"))(…), whose type PormG does not infer")
+                _RefuseWithHint("Project it in the outer query instead of the CTE body"),
+                _TypeReason("it is ", _datatype(v), "(…), whose type PormG does not infer", true))
 
 # #823 — a `Value(x)` projection. `values` holds the `SQLText` itself, whose `field` is the literal
 # and whose `_as` is `nothing`, so it never reached a `_set_field_from_sql_function` arm. A literal
@@ -1144,7 +1297,7 @@ _set_field_from_sql_function(v, field, instruct::SQLInstruction) =
 # a float would bind a number against text, the #812 mismatch. A NULL has no type, and any other
 # literal (a `Date`, bound as text on SQLite) is refused rather than guessed.
 function _value_projection_field(v::SQLText, field::String, instruct::SQLInstruction)
-  v.field isa Union{Integer,AbstractFloat,AbstractString} && return _case_value_field(v.field, field, instruct)
+  v.field isa Union{Integer,AbstractFloat,AbstractString} && return _case_value_field_at(v.field, field, instruct)
   _refuse_projection_type(field, v.field === nothing || v.field === missing ? "it is a NULL Value, which has no type" :
                                  "it is a Value of type $(nameof(typeof(v.field))), whose type PormG does not infer")
 end

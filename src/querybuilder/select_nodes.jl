@@ -396,8 +396,10 @@ end
 # #1599 layer 5: the value unspecialized (its callers hold a node's untyped slot: a `Case` branch, an operand), the
 # text compared at `String` first; specialized on the value, the call had no compiled target in a trimmed image
 # (`_is_null_literal(::Int64)` on a `Case` value). The same answer for every value.
-_is_null_literal(@nospecialize(x)) = x isa Missing || x === nothing ||
-                                     (x isa String ? x == "NULL" : (x isa AbstractString && x == "NULL"))
+_is_null_literal(@nospecialize(x))::Bool = x isa Missing || x === nothing ||   # #1599 layer 5: a `Bool`, so `!` over it is static
+                                     (x isa String ? x == "NULL" : (x isa AbstractString && _null_text_other(x)))
+# Another string type compared as before, behind one call (#1599 layer 5).
+@noinline _null_text_other(@nospecialize(x))::Bool = x == "NULL"
 
 function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{Nothing,String}=nothing)
   if _is_null_literal(value)
@@ -1208,7 +1210,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # over a key compared its text with the other operands. An `output_field` casts the RESULT, after the
   # operands are compared, so it does not state the order: each operand states its own (`Cast`).
   if v.function_name in ("GREATEST", "LEAST")
-    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+    for operand in _append_operands!(Any[], v.column)   # #1599 layer 5: at the column's type
       _refuse_uncast_json_key(_JSONKeyOrdering(_ONE_OF_NAMES[v.function_name], :quoted, false), operand, instruc)
     end
   end
@@ -1217,7 +1219,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # error, while SQLite compares `json_extract`'s native value. Each operand, as for `Greatest`: an
   # `output_field` casts the result, after the comparison.
   if v.function_name == "NULLIF"
-    for (i, operand) in enumerate(v.column isa AbstractVector ? v.column : (v.column,))
+    for (i, operand) in enumerate(_append_operands!(Any[], v.column))   # #1599 layer 5: at the column's type
       _refuse_uncast_json_key(_JSONKeyNullIf(i), operand, instruc)
     end
   end
@@ -1359,18 +1361,18 @@ _one_of_intervals(forms)::CInterval =
 # whole function to it as `Cast` casts its operand. A NULL-skipping rotation (#844) declares nothing.
 _declared_output_function(v::SQLTypeFunction)::Bool =
   v isa FObject && v.function_name in ("COALESCE", "GREATEST", "LEAST", "CASE") && !haskey(v.kwargs, "rotation_of") &&
-  _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v))
+  _declared_string(_declared_cast(v)) !== nothing   # #1599 layer 5: the name at `String`
 
 # #1356, #1405 — the integer type a `Cast` or a declared `output_field` names, where this engine's own cast
 # does not apply that integer's range (`_guards_integer_cast`), or `nothing`: any other type, and an engine
 # whose cast is the meaning.
 function _guarded_integer_type(v::SQLTypeFunction, @nospecialize(conn::_SQLEngine))::Union{String,Nothing}
   v isa FObject || return nothing
-  type = _declared_cast(v)
-  (type isa AbstractString && !isempty(type)) || return nothing
+  type = _declared_string(_declared_cast(v))   # #1599 layer 5: the name at `String`
+  type === nothing && return nothing
   bits = Dialect.integer_cast_bits(type)
   (bits === nothing || !_guards_integer_cast(conn, bits)) && return nothing
-  return String(type)
+  return type
 end
 
 # #1356 — `x` cast to the integer `type` (`_guarded_integer_type`) on an engine whose cast does not apply
@@ -1457,11 +1459,11 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   # A NULL-skipping rotation (#844) is `Greatest`/`Least`'s own operand list: the function the caller
   # wrote checks its operands, and names itself.
   haskey(v.kwargs, "rotation_of") && return nothing
-  values = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : Any[v.column]
+  values = v.function_name == "CASE" ? _case_values(v) : _append_operands!(Any[], v.column)   # #1599 layer 5
   kinds = _non_null_operand_kinds(values, instruc)
   engine = _backend_name(conn)
   interval = units && any(k -> k isa CInterval, kinds)
-  label() = v.function_name == "CAST" || _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v)) ?
+  label() = v.function_name == "CAST" || _declared_string(_declared_cast(v)) !== nothing ?
             _declared_cast_label(v) : "$(_ONE_OF_NAMES[v.function_name])(…)"
   # #1321: an operand of another type the walk names is refused before this, on every engine
   # (`_check_temporal_mix`); what reaches it here is one the walk cannot type.
@@ -1469,8 +1471,8 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
     "$(label()) over an interval and a value of another type is not supported on $(engine): it stores an " *
     "interval as its count of microseconds, so one value cannot be both. Give every value the one type: " *
     "a duration beside a duration (Value(Second(0)) for a zero)."))
-  declared = _declared_cast(v)
-  (declared isa AbstractString && !isempty(declared)) || return nothing
+  declared = _declared_string(_declared_cast(v))   # #1599 layer 5: the name at `String`
+  declared === nothing && return nothing
   target_kind = _declared_kind(declared, conn)
   if interval
     target_kind isa CInterval && return identity

@@ -47,7 +47,7 @@ else is untested in a trimmed binary, even where it compiles.
   and `Round` over a column, `Count` and `Sum` grouped by a column, `Upper(Lower(…))`, a `Case` whose `then`
   is an `F`; `__@in` a queryset, `Exists` correlated with `OuterRef`, a correlated scalar `Subquery` as a
   column or on the right of a filter; `values()` and `order_by()` across a join; a CTE read as a column and
-  in a filter; `RowNumber` over a partition and `Rank` over an order.
+  in a filter, over a body projecting a `Subquery`, an `Exists`, a window, a `Case`, a `Cast` or `F` arithmetic; `RowNumber` over a partition and `Rank` over an order.
 
   The untyped read (`.list()` and `list(:dict)`, #1823) has run on the three drivers too.
 

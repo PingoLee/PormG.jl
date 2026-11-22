@@ -1758,12 +1758,29 @@ function _copy_ctes(ctes::OrderedCollections.OrderedDict{String,CTEDict})::Order
   for (name, cte_dict) in ctes
     fresh = CTEDict()
     for (k, v) in cte_dict
-      fresh[k] = v isa SQLObjectHandler ? deepcopy(v) : v
+      # #1599 layer 5: a nested CTE body through the CTE's own typed copy (`_cte_query_copy`), not `deepcopy`'s walk;
+      # each value stored at its type, so neither the copy nor the store is a run-time call.
+      if v isa ObjectHandler
+        fresh[k] = _cte_query_copy(v)::ObjectHandler
+      elseif v isa SQLObjectHandler
+        fresh[k] = _tree_copy_other(v)::SQLObjectHandler
+      elseif v isa String
+        fresh[k] = v
+      elseif v === nothing
+        fresh[k] = nothing
+      elseif v isa Pair{String,String}   # `join_field`, the only pair a CTE stores
+        fresh[k] = v
+      else
+        _store_cte_other!(fresh, k, v)
+      end
     end
     out[name] = fresh
   end
   return out
 end
+
+# Any other value a caller put in the CTE's dict, stored as before, behind one call.
+@noinline _store_cte_other!(d::CTEDict, k::String, @nospecialize(v)) = (d[k] = v; nothing)
 
 # #112: a copy must share no MUTABLE state with its original.
 #
@@ -1816,7 +1833,9 @@ Base.deepcopy(filter::Vector{FilterNode}) = FilterNode[with_filter_node(deepcopy
 Base.deepcopy(obj::SQLObjectQuery) = _query_copy(obj, nothing)
 # A copy of `obj` with `values` as its projection, every other slot copied as `deepcopy` copies it (#1599 layer 5):
 # `deepcopy` passes a deep copy of the projection, a CTE's stored query a one-level one (`_cte_query_copy`).
-function _query_copy(obj::SQLObjectQuery, projection::Union{Nothing,Vector{ProjectionNode}})
+# `order`, when given, is the copy's ORDER BY terms, already copied (`_tree_copy_handler`), in place of `deepcopy`'s.
+function _query_copy(obj::SQLObjectQuery, projection::Union{Nothing,Vector{ProjectionNode}},
+                     order::Union{Nothing,Vector{SQLTypeOrder}} = nothing)
   try
     return SQLObjectQuery(
       model=obj.model,  # PormGModel doesn't need deep copy (immutable reference)
@@ -1826,7 +1845,7 @@ function _query_copy(obj::SQLObjectQuery, projection::Union{Nothing,Vector{Proje
       insert=_copy_insert(obj.insert),   # #1599 layer 7: an empty map without the generic walk
       limit=obj.limit,
       offset=obj.offset,
-      order=deepcopy(_order_terms(obj)),   # the slot (#1599 slice C)
+      order=order === nothing ? deepcopy(_order_terms(obj)) : order,   # the slot (#1599 slice C)
       group=deepcopy(obj.group),
       having=deepcopy(obj.having),
       list_joins=deepcopy(obj.list_joins),
@@ -3054,3 +3073,146 @@ function _render_outer_ref_column(column::String, instruc::InstructionObject)
   end
 end
 
+
+# ── The typed copy of an expression tree (#1599 layer 5) ─────────────────────────────────────────────────────────
+# A CTE body (`.with(...)`) keeps its own copy of the caller's query, so the caller's later calls on it do not reach
+# the CTE (#43). A body whose projection holds a node a caller can change afterwards (a `Subquery` or `Exists`, whose
+# handler the caller's fluent calls change in place; a window's `WindowSpec`; a `Case`'s conditions; a mutable literal)
+# took `deepcopy`, whose generic walk visits each field by run-time dispatch: a trimmed image has no code for it
+# (`.with()` over such a body raised inside `deepcopy_internal`, #1828 wall 4). `_tree_copy` copies the same tree at
+# each node's type, over the closed set a projection holds (`FieldPartNode`, and the operands, conditions and options
+# below them): a fresh copy of every mutable node and container, the immutable strings, symbols, bits values and
+# column references shared, as `deepcopy` shares nothing a caller can change. A value outside the set (a type a user
+# brought) takes `deepcopy` behind one `@noinline` call, the designed open arm.
+_tree_copy(x::String) = x
+_tree_copy(x::Union{OuterRefObject,CTEReference,JoinedReference}) = x
+# The wrapper through its one entitled copy (`Base.deepcopy(::SQLTypeField)`, which carries the memo key's slots), then
+# its node copied in place of the shared one.
+function _tree_copy(x::SQLField)
+  y = deepcopy(x)::SQLField
+  y.field = _tree_copy_part(x.field)
+  return y
+end
+_tree_copy(x::SQLText) = SQLText(_tree_copy_value(x.field), x._as, x.custom_as)
+_tree_copy(x::FObject) = FObject(x.function_name, _tree_copy_column(x.column), x.aggregate, x.formatter, x._as,
+                                 _tree_copy_kwargs(x.kwargs))
+_tree_copy(x::WindowFunction) = WindowFunction(x.function_name, _tree_copy_value(x.column), _tree_copy(x.over),
+                                               x.aggregate, x.formatter, x._as, _tree_copy_kwargs(x.kwargs))
+_tree_copy(x::FExpression) = FExpression(_tree_copy_value(x.field_name), x.operation, _tree_copy_value(x.operand),
+                                         x.function_name, _tree_copy_value(x.column), x.aggregate, x._as,
+                                         _tree_copy_kwargs(x.kwargs))
+function _tree_copy(x::WindowSpec)
+  partition = WindowPartitionPart[]
+  for p in x.partition_by
+    push!(partition, _tree_copy_value(p))
+  end
+  order = WindowOrderPart[]
+  for o in x.order_by
+    push!(order, _tree_copy_value(o))
+  end
+  return WindowSpec(partition, order, x.frame)
+end
+_tree_copy(x::SQLOrder) = SQLOrder(_tree_copy(x.field), x.order, x.orientation, x._as, x.nulls)
+_tree_copy(x::SubqueryObject) = SubqueryObject(_tree_copy_handler(x.query))
+_tree_copy(x::ExistsObject) = ExistsObject(_tree_copy_handler(x.query))
+_tree_copy(x::OperObject) = OperObject(x.operator, _tree_copy_value(_oper_literal(x)), _tree_copy_value(_oper_column(x)))
+_tree_copy(x::QObject) = QObject(_tree_copy_filters(_q_terms(x)))
+_tree_copy(x::QorObject) = QorObject(_tree_copy_filters(_q_terms(x)))
+_tree_copy(x::Interval) = Interval(_tree_copy_value(x.period))
+_tree_copy(x::PormGBytes) = PormGBytes(copy(x.bytes))
+
+# An `SQLField`'s node, over `FieldPartNode` (#1599 slice C): one arm per member, each a static call.
+function _tree_copy_part(@nospecialize(p))
+  p isa String && return p
+  p isa SQLText && return _tree_copy(p)
+  p isa FObject && return _tree_copy(p)
+  p isa WindowFunction && return _tree_copy(p)
+  p isa FExpression && return _tree_copy(p)
+  p isa OuterRefObject && return p
+  p isa SubqueryObject && return _tree_copy(p)
+  p isa ExistsObject && return _tree_copy(p)
+  p isa CTEReference && return p
+  p isa JoinedReference && return p
+  return _tree_copy_other(p)
+end
+
+# Any value a node holds untyped (a literal, an operand, an option, an element of a column list): the nodes above at
+# their types, a value nothing can change (`nothing`, `missing`, a bits value, a string or symbol, the immutable
+# temporal and decimal literals) shared, a container rebuilt with each element copied, anything else the open arm.
+function _tree_copy_value(@nospecialize(v))
+  (v === nothing || v === missing) && return v
+  v isa String && return v
+  v isa Symbol && return v
+  isbits(v) && return v
+  v isa Union{SQLField,SQLText,FObject,WindowFunction,FExpression,SubqueryObject,ExistsObject} && return _tree_copy_node(v)
+  v isa Union{OuterRefObject,CTEReference,JoinedReference} && return v
+  v isa Union{OperObject,QObject,QorObject,SQLOrder,WindowSpec,Interval} && return _tree_copy_node(v)
+  v isa Union{Decimals.Decimal,TimeZones.ZonedDateTime} && return v   # immutable values: shared, as a String is
+  # A `CompoundPeriod` (a mutable vector of abstract `Period`s, re-sorted by its constructor at run time) takes the open
+  # arm, as before: no fixture shape holds one, and its copy cannot be made at concrete types.
+  v isa PormGBytes && return _tree_copy(v)
+  v isa Vector{Any} && return Any[_tree_copy_value(e) for e in v]
+  v isa Vector{String} && return copy(v)
+  v isa Vector{FObject} && return FObject[_tree_copy(e) for e in v]
+  return _tree_copy_other(v)
+end
+# The node arms of `_tree_copy_value`, split out so each `isa` narrows to one concrete call.
+function _tree_copy_node(@nospecialize(v))
+  v isa SQLField && return _tree_copy(v)
+  v isa SQLText && return _tree_copy(v)
+  v isa FObject && return _tree_copy(v)
+  v isa WindowFunction && return _tree_copy(v)
+  v isa FExpression && return _tree_copy(v)
+  v isa SubqueryObject && return _tree_copy(v)
+  v isa ExistsObject && return _tree_copy(v)
+  v isa OperObject && return _tree_copy(v)
+  v isa QObject && return _tree_copy(v)
+  v isa QorObject && return _tree_copy(v)
+  v isa SQLOrder && return _tree_copy(v)
+  v isa WindowSpec && return _tree_copy(v)
+  v isa Interval && return _tree_copy(v)
+  return _tree_copy_other(v)
+end
+
+# An `FObject`'s column: one node, or a list of operands or of a `Case`'s branches.
+_tree_copy_column(@nospecialize(c)) = _tree_copy_value(c)
+
+function _tree_copy_kwargs(d::Dict{String,Any})::Dict{String,Any}
+  out = Dict{String,Any}()
+  for (k, v) in d
+    out[k] = _tree_copy_value(v)
+  end
+  return out
+end
+
+function _tree_copy_filters(fs::Vector{FilterType})::Vector{FilterType}
+  out = FilterType[]
+  for f in fs
+    push!(out, _tree_copy_value(f))
+  end
+  return out
+end
+
+# A nested query's handler (a `Subquery`'s, an `Exists`'): every slot copied as `_query_copy` copies it, the projection,
+# the ORDER BY terms and the nested CTE bodies through the typed copy. Another handler type is the open arm.
+function _tree_copy_handler(@nospecialize(h::SQLObjectHandler))
+  h isa ObjectHandler || return _tree_copy_other(h)::SQLObjectHandler
+  object = getfield(h, :object)
+  values = ProjectionNode[]
+  for v in object.values
+    push!(values, v isa SQLField ? _tree_copy(v) : _tree_copy(v::SQLText))
+  end
+  return ObjectHandler(object = _query_copy(object, values, _tree_copy_order(object)))
+end
+
+# A query's ORDER BY terms, each `SQLOrder` at its type (immutable, but its `SQLField` is not).
+function _tree_copy_order(object::SQLObjectQuery)::Vector{SQLTypeOrder}
+  order = SQLTypeOrder[]
+  for o in _order_terms(object)
+    push!(order, o isa SQLOrder ? _tree_copy(o) : _tree_copy_other(o)::SQLTypeOrder)
+  end
+  return order
+end
+
+# The open arm: a value whose type is outside the set above, deep-copied as before, behind one dynamic call.
+@noinline _tree_copy_other(@nospecialize(x)) = deepcopy(x)

@@ -297,6 +297,52 @@ function join_step()::Bool
     end
 end
 
+using PormG.Functions: Cast
+
+# The typed rows of `cte_step`: the race's name and the CTE column, at the type its expression means.
+const FlagRow = NamedTuple{(:name, :b), Tuple{String, Bool}}
+const TextRow = NamedTuple{(:name, :s), Tuple{String, String}}
+
+# A CTE read over each body `.with()` copies through the typed tree copy, and whose column the CTE typing names through
+# the walk (#1599 layer 5): a body projecting a correlated scalar `Subquery`, an `Exists`, a window, a `Case`, a `Cast`,
+# `F` arithmetic and a `Case` over a mutable literal (a list), each joined back to the race on `circuitid`, its column
+# projected and read into its typed row. Exit code 26 when a read raises or returns other rows.
+function cte_step()::Bool
+    try
+        ok = true
+        latest = M.Race.objects.filter("circuitid" => OuterRef("circuitid")).values("year").order_by("-year")
+        ok &= cte_line("Subquery", M.Race.objects.values("circuitid", "v" => Subquery(latest)), CountRow,
+                       r -> string(r.name, " ", r.n), "Monaco Grand Prix 2008, Brazilian Grand Prix 2008", "n")
+        late = M.Race.objects.filter("circuitid" => OuterRef("circuitid"), "round__@gt" => 10)
+        ok &= cte_line("Exists", M.Race.objects.values("circuitid", "v" => Exists(late)), FlagRow,
+                       r -> string(r.name, " ", r.b), "Monaco Grand Prix false, Brazilian Grand Prix true", "b")
+        ok &= cte_line("RowNumber", M.Race.objects.values("circuitid", "v" => RowNumber(over = WindowOver(order_by = ["date"]))),
+                       CountRow, r -> string(r.name, " ", r.n), "Monaco Grand Prix 1, Brazilian Grand Prix 2", "n")
+        ok &= cte_line("Case", M.Race.objects.values("circuitid", "v" => Case(When("round__@gt" => 10, then = 1), default = 0)),
+                       CountRow, r -> string(r.name, " ", r.n), "Monaco Grand Prix 0, Brazilian Grand Prix 1", "n")
+        ok &= cte_line("Cast", M.Race.objects.values("circuitid", "v" => Cast("round", "text")), TextRow,
+                       r -> string(r.name, " ", r.s), "Monaco Grand Prix 6, Brazilian Grand Prix 18", "s")
+        ok &= cte_line("F arithmetic", M.Race.objects.values("circuitid", "v" => F("round") + 1), CountRow,
+                       r -> string(r.name, " ", r.n), "Monaco Grand Prix 7, Brazilian Grand Prix 19", "n")
+        # The mutable literal (a `Vector` the caller still holds) sits in a condition, so the column reads as one type
+        # everywhere.
+        names = ["Brazilian Grand Prix"]
+        ok &= cte_line("Case over a list", M.Race.objects.values("circuitid", "v" => Case(When("name__@in" => names, then = 1), default = 0)),
+                       CountRow, r -> string(r.name, " ", r.n), "Monaco Grand Prix 0, Brazilian Grand Prix 1", "n")
+        return ok
+    catch e
+        failed("cte", e); return false
+    end
+end
+
+# One CTE read: `body` as the CTE `st`, joined back on `circuitid`, its column `v` projected as `col` into `R`, ordered by
+# date; the line `<label> <n> rows: <rows>`, and whether the rows are `expected`.
+function cte_line(label::String, body, ::Type{R}, show_row::F, expected::String, col::String)::Bool where {R, F}
+    q = M.Race.objects.filter("circuitid__country__@in" => ["Monaco", "Brazil"])
+    q.with("st" => body, join_field = "circuitid" => "circuitid")
+    return named_line("cte", label, q.values("name", col => "st__v").order_by("date").list(R), show_row, expected)
+end
+
 # One read's line, `<label> <n> rows: <rows>`, each row through `show_row`, and whether the rows are `expected`.
 function named_line(step::String, label::String, rows::Vector{T}, show_row::F, expected::String)::Bool where {T,F}
     text = join([show_row(r) for r in rows], ", ")

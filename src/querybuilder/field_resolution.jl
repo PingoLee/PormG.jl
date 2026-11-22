@@ -366,8 +366,8 @@ function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwar
     return _infer_parameter_sql_type(value, instruc; fallback="integer")
   end
 
-  output_field = get(resolved_kwargs, "output_field", nothing)
-  if output_field isa AbstractString && !isempty(output_field)
+  output_field = _declared_string(get(resolved_kwargs, "output_field", nothing))   # #1599 layer 5: at `String`
+  if output_field !== nothing
     # #696: `output_field` becomes the bind cast `$n::<type>` here — a fourth place the type string
     # reaches the SQL text. The dialect helper validates it and gives the engine's spelling.
     _casts_bind_parameters(instruc.connection) || return nothing
@@ -408,9 +408,17 @@ function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruct
   float_declared = _sql_type_field(something(get(v.kwargs, "output_field", nothing), "")) isa Models.sFloatField
   kind = value isa Base.IEEEFloat && !float_declared ? CDecimal(nothing, nothing) : _literal_kind(value, _AllKinds())
   kind === nothing && return nothing
-  for branch in (v.column isa AbstractVector ? v.column : (v.column,))
-    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || continue
-    then = get(branch.kwargs, "then", nothing)
+  for branch in _append_operands!(Any[], v.column)   # #1599 layer 5: at the column's type
+    # A `When` PormG builds is an `FObject`; a caller's own function type is read as before, behind one call.
+    if branch isa FObject
+      branch.function_name == "WHEN" || continue
+      then = get(branch.kwargs, "then", nothing)
+    elseif branch isa SQLTypeFunction
+      _is_when_other(branch) || continue
+      then = _then_or_nothing_other(branch)
+    else
+      continue
+    end
     literal = !(then isa Union{SQLObject,SQLType}) || then isa SQLText
     raw = then isa SQLText ? then.field : then
     _is_null_literal(raw) && continue

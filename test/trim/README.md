@@ -488,7 +488,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO trim_trust;       -- in pormg_tri
 -- host  pormg_trim  trim_trust  127.0.0.1/32  trust
 ```
 
-then pass `PORMG_TRIM_TRUST_USER=trim_trust` through the runner's environment. With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
+then pass `PORMG_TRIM_TRUST_USER=trim_trust` through the runner's environment. With `PGPASSWORD` or `PGSSLMODE`
+exported (even empty), the `shape` step refuses to run and the binary exits 23: Postgres.jl would fill the
+missing password or `sslmode` from it, and the shapes would not be the ones named. With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
 none and an `sslmode` or none (PormG adds `options` itself). Any other connection parameter
 (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`, `statement_timeout`, …) takes
 Postgres.jl's own connect, which a trimmed binary has no code for: it fails at the connect with

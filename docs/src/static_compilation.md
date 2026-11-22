@@ -266,7 +266,10 @@ its server has no TLS, so no TLS handshake has run in a trimmed binary yet (`req
 | **no password** | run (CI) | run (CI), `sslmode=disable` only |
 
 Postgres.jl fills a missing password and `sslmode` from the `PGPASSWORD` and `PGSSLMODE` environment variables,
-so with either set the connection takes another of the four shapes.
+so with either set the connection takes another of the four shapes. It fills the other parameters from their own
+variables too (`PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLCAPATH`,
+`PGGSSENCMODE`, `PGKRBSRVNAME`): with any of them set, the connection is outside the four shapes and a trimmed
+binary fails at the connect.
 
 Any other parameter (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`,
 `statement_timeout`, …) takes Postgres.jl's own connect, which a trimmed binary has no code for. The

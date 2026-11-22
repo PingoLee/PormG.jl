@@ -119,11 +119,11 @@ end
 # the server. The two shapes without a password log in as the role `PORMG_TRIM_TRUST_USER` names, which the server
 # trusts on this database, with `SELECT` on its tables (the CI job grants it after `prep.jl`); unset, the step says so
 # and skips them, never passing them silently. Postgres.jl fills a URL's missing password and `sslmode` from
-# `PGPASSWORD` and `PGSSLMODE`, which would take another arm than the one named, so the step refuses to run with
-# either set. Exit code 23 when a shape's read raises or does not return the Monaco race, or either variable is set.
+# `PGPASSWORD` and `PGSSLMODE` (even exported empty), which would take another arm than the one named, so the step
+# refuses to run with either set. Exit code 23 when a shape's read raises or does not return the Monaco race, or either variable is set.
 function shapes_step(server::TrimServer)::Bool
     try
-        if !isempty(trim_env("PGPASSWORD", "")) || !isempty(trim_env("PGSSLMODE", ""))
+        if haskey(ENV, "PGPASSWORD") || haskey(ENV, "PGSSLMODE")   # an exported empty value counts, as Postgres.jl reads it
             say("shape", "PGPASSWORD or PGSSLMODE is set: the shapes would not be the ones named")
             return false
         end

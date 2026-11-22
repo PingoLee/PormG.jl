@@ -39,12 +39,15 @@ function transaction_step(circuitid::Int, key::String)::Bool
     catch e
         failed("transaction", e)
     finally
-        # On any path, neither race is left behind: a server job runs its binary right after its JIT control, on the
-        # same database (#1614), and a leftover row would fail an earlier step there.
-        try
-            M.Race.objects.filter("year__@in" => [2016, 2017]).delete()
-        catch e
-            failed("transaction", e)   # the cleanup's own failure, reported; the step has already answered
+        # When the step did not pass, neither race is left behind: a server job runs its binary right after its JIT
+        # control, on the same database (#1614), and a leftover row would fail an earlier step there. (When it passed,
+        # its own delete removed the 2016 race and the rollback left no 2017 race.) A cleanup that raises fails the step.
+        if !ok
+            try
+                M.Race.objects.filter("year__@in" => [2016, 2017]).delete()
+            catch e
+                failed("transaction", e)
+            end
         end
     end
     return ok
@@ -76,7 +79,9 @@ function close_all_step(pool::P)::Bool where {P <: PormG.PormGBackend}
         close_all!()
         after, _ = open_slots(pool)
         closed = handle isa H && !isopen(handle::H)
-        say("close_all", string(before, " open before, ", after, " after; the handle ", closed ? "closed" : "still open"))
+        state = handle === nothing ? "no handle held" : !(handle isa H) ? string("not a ", H) :
+                closed ? "the handle closed" : "the handle still open"
+        say("close_all", string(before, " open before, ", after, " after; ", state))
         return before >= 1 && after == 0 && closed
     catch e
         failed("close_all", e); return false

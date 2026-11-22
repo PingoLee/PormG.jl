@@ -2991,7 +2991,9 @@ end
       end
     end
     @test !occursin(r"with_transaction\((settings|connection), [^)\n]*conn=conn", del_src)
-    @test count("_with_transaction_with(", del_src) == 11   # one more since #1599 layer 7: the key read's, with its decoder
+    # One more since #1599 layer 7 (the key read's, with its decoder), and one more since #1694 (the self-referential
+    # children's read, with the same decoder).
+    @test count("_with_transaction_with(", del_src) == 12
     # The deletions run in the transaction's context: `with_tx_context(settings.connections, conn) do … end` took the
     # pool at its union type and a closure capturing the untyped `conn`, so neither was concrete. The pool is walked
     # (`_with_tx_context_on`, one dynamic call: its open arm), and `conn` goes in a typed box.

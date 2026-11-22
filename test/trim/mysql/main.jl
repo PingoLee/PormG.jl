@@ -88,7 +88,8 @@ end
 # The typed read, one line per row (`../steps.jl`'s `query_step`). Exit code 3 when it fails.
 function query_step()::Bool
     try
-        rows = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
+        # Ordered by year, so the two rows print in one order on every driver (Postgres.jl returned them in heap order).
+        rows = M.Race.objects.filter("circuitid__country" => "Monaco").order_by("year").list(RaceRow)
         say("query", string(length(rows), " rows"))
         for r in rows
             say("row", string(r.raceid, " ", r.year, " ", r.name, " ", r.date))

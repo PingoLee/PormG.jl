@@ -122,3 +122,33 @@ end
   PormG.Models.ensure_model_initialized(model)
   @test _WR_QB._self_cascade_fields(model) == _wr_old_self_cascade_fields(model)
 end
+
+struct WrMockSQLite <: PormG.PormGSQLite end
+PormG.backend_sqlite_version(::WrMockSQLite) = 3045000
+PormG.config["wr_mock"] = PormG.Configuration.Settings(connections = WrMockSQLite(), change_data = true, db_def_folder = "wr_mock")
+module WrRaceModels
+import PormG
+import PormG.Models
+Wr_race::Models.ModelType = Models.Model("wr_race",
+  raceid = Models.IDField(), year = Models.IntegerField(), round = Models.IntegerField(), name = Models.CharField(),
+  date = Models.DateField(null = true), fast = Models.BooleanField(null = true), lap = Models.FloatField(null = true))
+Models.@models Wr_race
+PormG.Models.set_models(@__MODULE__, "wr_mock")
+end
+
+# What: a `filters=` predicate applied at its value's type (`_apply_static_filter!`) against `filter` on the stored
+#   `Pair{String, Any}`, for each value type it rebuilds and one it leaves to the open arm.
+# Expected: the same rendered SQL and parameters for the handler either way, and the same refusal for a bad key.
+# Why: `filter(::Pair{String, Any})` dispatched on the value at run time, which a trimmed image could not follow.
+@testset "a filters= predicate filters as the untyped pair did (#1694)" begin
+  R = WrRaceModels.Wr_race
+  render(h) = _wr_outcome(() -> _WR_QB.query(h; connection = WrMockSQLite(), show_query = :dict))
+  for f in (Pair{String,Any}("year", 2010), Pair{String,Any}("name", "Monaco"), Pair{String,Any}("fast", true),
+            Pair{String,Any}("lap", 1.5), Pair{String,Any}("date", Date(2010, 5, 16)), Pair{String,Any}("year__@in", [2010, 2011]),
+            Pair{String,Any}("name__@in", ["a", "b"]), Pair{String,Any}("round__@gte", Int32(3)), Pair{String,Any}("nope", 1))
+    new_h, old_h = R.objects, R.objects
+    new = _wr_outcome(() -> (_WR_QB._apply_static_filter!(new_h, f); render(new_h)))
+    old = _wr_outcome(() -> (old_h.filter(f); render(old_h)))
+    @test (f, new) == (f, old)
+  end
+end

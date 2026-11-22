@@ -1639,7 +1639,15 @@ function delete_objects(connection::_SQLEngine, model::PormGModel, keys::Vector{
   return deleted_counter  # Return count of deleted objects
 end
 
-_value_sql(@nospecialize(x))::String = x isa String ? x : _value_sql_other(x)
+# The formatted value as the text interpolation gave it (`string(x)`), at the types a formatter returns: text, or a
+# number (`format_number_sql` returns the number itself, a key's default).
+function _value_sql(@nospecialize(x))::String
+  x isa String && return x
+  x isa Int64 && return string(x)
+  x isa Int32 && return string(x)
+  x isa Float64 && return string(x)
+  return _value_sql_other(x)
+end
 @noinline _value_sql_other(@nospecialize(x))::String = string(x)
 function update_field(connection::_SQLEngine, model::PormGModel, field::String, value::Any, keys::Vector{Dict{Symbol, Union{String, SQLObjectHandler}}}, show_query::Symbol, @nospecialize(conn))
   # Update field values using query object like CASCADE

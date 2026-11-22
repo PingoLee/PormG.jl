@@ -163,7 +163,10 @@ function read (a number function, an aggregate, a nested function or a `Case` wh
 other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
 join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
 over a partition and an order) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
-does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded.
+does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded. 24 when the
+user transactions do not commit or roll back as their typed reads expect, and 25 when `close_all!()` leaves a
+connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
+pools"). The Postgres.jl variant also exits 23 when one of its connection shapes fails.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -272,12 +275,14 @@ step	get_or_create	first created true; second created false; round 6; year::Int6
 step	cascade	3 rows; pitstop 2, race 1
 step	cascade	0 pit stops left; 1 driver, debut none
 step	cascade	seeded 1 pit stop, 1 driver; kept
+step	transaction	committed 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1
+step	close_all	1 open before, 0 after; the handle closed
 ```
 
 The `func` lines follow the `expr` lines, the `subquery` lines the `func` lines, and the `join` lines the `subquery` lines; the `untyped` lines, between them, are checked against the JIT control's. On a non-zero exit, the job's error names what each exit code means (1 boot, 2 write, 3 read, 6 a
 create was not refused with an `InvalidValueError`, 7 update, 8 delete, 9 `bulk_insert`, 10 a comparison
 filter, 11 an `order_by`, 12 a `bulk_insert` row not refused with an `InvalidValueError`, or a row written, 13 one of the other lookups, 14 an expression comparison, 15
-`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 22 a cascading delete, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
+`bulk_update`, 16 `update_or_create`, 17 an untyped read, 18 `get_or_create`, 19 a function read, 20 a subquery read, 21 a join, CTE or window read, 22 a cascading delete, 24 a user transaction, 25 `close_all!`, 124 timed out). The written row is raceid 3: `prep.jl` seeds the Monaco race (1) and the
 Brazilian one (2) first. The rows are reported as in the read-only job, in the
 job summary and the `trim-full` artifact, never checked. It is a job of its own so the two SQLite
 builds run side by side. Its triggers are the workflow's, which include `ext/PormGSQLiteExt.jl`, the
@@ -396,7 +401,13 @@ step	get_or_create	first created true; second created false; round 6; year::Int3
 step	cascade	3 rows; pitstop 2, race 1
 step	cascade	0 pit stops left; 1 driver, debut none
 step	cascade	seeded 1 pit stop, 1 driver; kept
+step	transaction	committed 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1
+step	fail	threw StatementError                  (the refused statement, `tools/failing.jl`)
+step	close_all	1 open before, 0 after; the handle closed
 ```
+
+The Postgres.jl variant prints its `shape` lines (`password, sslmode: 1 rows`, `no password: 1 rows`,
+`no password, sslmode: 1 rows`) after `transaction`.
 
 The untyped lines name each cell's type, which is the engine's own: MySQL and PostgreSQL read `year` and
 `round` as `Int32` where SQLite reads `Int64`. The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables

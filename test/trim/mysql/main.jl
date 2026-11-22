@@ -44,6 +44,8 @@ say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", 
 
 @noinline function failed(step::String, @nospecialize(e))
     say(step, string("threw ", nameof(typeof(e))))
+    # A call the image has no code for: the method instance it missed, printed by the runtime's own static printer.
+    e isa Core.MissingCodeError && Core.println("  missing: ", (e::Core.MissingCodeError).mi)
     e isa MethodError && Core.println("  missed: ", typeof(e.f))
     e isa MethodError && Core.println("  args: ", typeof(e.args))
     e isa PormG.ModelDefinitionError && Core.println("  msg: ", (e::PormG.ModelDefinitionError).msg)

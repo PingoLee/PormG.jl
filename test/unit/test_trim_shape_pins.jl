@@ -6724,6 +6724,24 @@ end
     @test length(collect(eachmatch(r"isa AbstractVector \? [a-z_.]*column : \([a-z_.]*column,\)", code))) == 2
   end
 
+  # What: the Postgres.jl connect's URL check for a spilled password (`_checked_params`), over a URL with a query
+  #   (`?sslmode=disable`), and the masking of a driver's refusal (`_mask_quoted`).
+  # Expected: no `findlast`/`findprev` left on either path (a typed scan, `_last_char_index`), and the scan itself makes
+  #   no dynamic call.
+  # Why: Base's `findlast(c, s)` forwards to `findlast(::Function, s)`, which is not specialized on its predicate: the
+  #   trimmed connect through a URL with an `sslmode` raised `MethodError` on `findprev(==('@'), ::SubString, ::Int)`
+  #   (#1599 layer 2, the connection-shape step).
+  @testset "a Postgres.jl URL's query is checked without a dynamic findlast (#1599 layer 2)" begin
+    PG = Base.get_extension(PormG, :PormGPostgresExt)
+    for T in (String, SubString{String})
+      @test (T, _dynamic_calls(PG._last_char_index, (T, Char))) == (T, String[])
+    end
+    for (f, T) in ((PG._checked_params, (String,)), (PG._mask_quoted, (String,)))
+      d = _dynamic_calls_deep(f, T; depth = 3)
+      @test (nameof(f), filter(x -> occursin(r"findlast|findprev", x), d)) == (nameof(f), String[])
+    end
+  end
+
   # What: the function readers a subquery's one projection reaches: its formatter over its operands
   #   (`_expression_formatter(::FObject, …)` through `_first_operand_formatter`), what `Concat` and a division make of
   #   it (`_textless_number`, `_whole_numeric_operand`) and whether it holds a temporal value (`_function_held_temporal`).

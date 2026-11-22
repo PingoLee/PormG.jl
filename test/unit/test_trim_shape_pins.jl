@@ -6326,9 +6326,10 @@ end
       end
       invoked
     end
-    @test Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Nothing} in invokes(Base.deepcopy, (QB.SQLObjectQuery,))
+    # `_query_copy` takes the copied ORDER BY terms as an optional third argument since #1599 layer 5 (`nothing`: copied here).
+    @test Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Nothing, Nothing} in invokes(Base.deepcopy, (QB.SQLObjectQuery,))
     # the base reached the map through `deepcopy_internal(::Any, …)`
-    @test Tuple{typeof(QB._copy_insert), OD} in invokes(QB._query_copy, (QB.SQLObjectQuery, Nothing))
+    @test Tuple{typeof(QB._copy_insert), OD} in invokes(QB._query_copy, (QB.SQLObjectQuery, Nothing, Nothing))
     @test _dynamic_calls(QB._copy_insert, (OD,)) == String[]
   end
 
@@ -6645,7 +6646,7 @@ end
       s isa Expr && s.head === :invoke && occursin("deepcopy", string(s.args[1])) && push!(calls, string(s.args[1]))
     end
     @test filter(c -> occursin(r"SQLTypeOrder|SQLOrder|ProjectionNode|SQLField|SQLText|ObjectHandler|CTEDict", c), calls) == String[]
-    @test _dynamic_calls(QB._copy_ctes, (OrderedCollections.OrderedDict{String,QB.CTEDict},)) == String[]
+    @test _dynamic_calls(QB._copy_ctes, (QB.OrderedCollections.OrderedDict{String,QB.CTEDict},)) == String[]
   end
 
   # What: the CTE column typing chain for a `Cast`, a `Case` and a computed column (`_declared_type`, `_case_output_field`
@@ -6673,9 +6674,7 @@ end
                    (QB._walked_field, (Any, String, I, typeof(QB._refuse_case_type), QB._TypeReason)),
                    (QB._walked_field, (Any, String, I, QB._RefuseWithHint, QB._Reason)),
                    (QB._kind_field, (PormG.Kernel.CDecimal,)), (QB._kind_field, (PormG.Kernel.CVarChar,)),
-                   (QB._cast_renders_text_in, (PormG.PormGField, Any)), (QB._cast_renders_text_at, (PormG.Models.sCharField, Any)), (QB._declared_string, (Any,)),
-                   (QB._TypeReason, ()), (QB._Reason, ()))
-      T == () && continue
+                   (QB._cast_renders_text_in, (PormG.PormGField, Any)), (QB._cast_renders_text_at, (PormG.Models.sCharField, Any)), (QB._declared_string, (Any,)))
       @test (nameof(f), T, _dynamic_calls(f, T)) == (nameof(f), T, String[])
     end
     for R in (QB._TypeReason, QB._Reason)

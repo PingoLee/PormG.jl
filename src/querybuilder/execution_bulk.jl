@@ -11,9 +11,19 @@
 # with a raw `MethodError` (outside the PormG taxonomy), while the `Pair{String,String}` guards
 # refuse a `SubString`-keyed rename with a wrong-reason "Invalid column specification". Adjacent
 # keyword to `filters` on the same `bulk_*` call, so a caller who reaches one reaches the other.
+# One `columns=` entry as a `String` or a `Pair{String, String}` (#1599 layer 7): read at its type, where the closure it
+# replaces was called on a list's untyped element at run time (the trimmed `columns = ["a" => "year", …]` had no code for
+# it). Another string type is converted as before, behind one call.
+function _norm_bulk_column(@nospecialize(c))::Union{String, Pair{String, String}}
+  c isa String && return c
+  c isa Pair{String, String} && return c
+  return _norm_bulk_column_other(c)
+end
+@noinline _norm_bulk_column_other(@nospecialize(c))::Union{String, Pair{String, String}} =
+  c isa AbstractString ? String(c) : String(c.first) => String(c.second)
 function _normalize_bulk_columns(columns)
   _columns::Vector{Union{String, Pair{String, String}}} = []
-  _norm(c) = c isa AbstractString ? String(c) : String(c.first) => String(c.second)
+  _norm(c) = _norm_bulk_column(c)
   if columns === nothing
   elseif columns isa AbstractString
     push!(_columns, _norm(columns))

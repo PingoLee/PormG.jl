@@ -298,6 +298,21 @@ function self_cascade_step()::Bool
     end
 end
 
+# One refusal case: `call` must raise a PormG refusal; its line is `<label>: <type>: <message>`. A refusal that does not
+# come, or another error, fails the case. Each case's closure is its own type, so the call into it is static.
+function refusal_case(label::String, call::F)::Bool where {F}
+    try
+        call()
+        say("bulk_refusal", string(label, ": not refused"))
+        return false
+    catch e
+        text = refusal_text(e)
+        text === nothing && (failed("bulk_refusal", e); return false)
+        say("bulk_refusal", string(label, ": ", text))
+        return true
+    end
+end
+
 # A refusal's type and message, each error type read at its own type (its `msg` field), or `nothing` for any other
 # error: `error_message` over the abstract `PormGError` would be a run-time call in a trimmed image.
 function refusal_text(@nospecialize(e))::Union{Nothing, String}
@@ -318,58 +333,45 @@ models_default_circuit() = M.DEFAULT_CIRCUIT_ID::Int
 function bulk_refusals_step(circuitid::Int)::Bool
     ok = true
     race(year) = (year = year, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(year, 5, 20))
-    cases = Tuple{String, Function}[
-        ("a query as the table", () -> PormG.bulk_insert(M.Race.objects, M.Race.objects.filter("year" => 2012))),
-        ("not a table", () -> PormG.bulk_insert(M.Race.objects, [1, 2])),
-        ("columns of different lengths", () -> PormG.bulk_insert(M.Race.objects, (year = [2012, 2012], round = [6]))),
-        ("rows with no columns", () -> PormG.bulk_insert(M.Race.objects, [NamedTuple(), NamedTuple()])),
-        ("a columns= of the wrong type", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; columns = 5)),
-        ("a field mapped twice", () -> PormG.bulk_insert(M.Race.objects, [(a = 2012, b = 2012, round = 6, circuitid = circuitid,
-                                      name = "Monaco Grand Prix", date = Date(2012, 5, 20))];
-                                      columns = ["a" => "year", "b" => "year", "round", "circuitid", "name", "date"])),
-        ("a column in another case", () -> PormG.bulk_insert(M.Race.objects, [(Year = 2012, round = 6, circuitid = circuitid,
-                                           name = "Monaco Grand Prix", date = Date(2012, 5, 20))])),
-        ("a primary key set", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)]; columns = ["raceid", "round"],
-                                                      match_on = ["round"])),
-        ("a match_on pair", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)]; columns = ["round"],
-                                                    match_on = ["raceid" => "raceid"])),
-        ("a match_on the model does not have", () -> PormG.bulk_update(M.Race.objects, [(lap = 1, round = 6)]; columns = ["round"], match_on = ["lap"])),
-        ("a per-row key in filters=", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)]; columns = ["round"], filters = ["raceid"])),
-        ("a filters= entry that is no predicate", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)]; columns = ["round"],
-                                                                          match_on = ["raceid"], filters = [5])),
-        ("a key given twice", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6), (raceid = 1, round = 7)];
-                                                      columns = ["round"], match_on = ["raceid"])),
-        ("a joined path", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, cn = "x")]; columns = ["cn" => "circuitid__name"],
-                                                  match_on = ["raceid"])),
-        ("an ordered handler", () -> PormG.bulk_update(M.Race.objects.order_by("year"), [(raceid = 1, round = 6)];
-                                                       columns = ["round"], match_on = ["raceid"])),
-        ("a handler with a CTE", () -> PormG.bulk_update(M.Race.objects.with("st" => M.Race.objects.values("circuitid"),
-                                                                                join_field = "circuitid" => "circuitid"),
-                                                         [(raceid = 1, round = 6)]; columns = ["round"], match_on = ["raceid"])),
-        ("a returning= of the wrong type", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = 5)),
-        ("an empty returning=", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = String[])),
-        ("a returning= field the model does not have", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = ["laps"])),
-        ("an on_conflict= of the wrong kind", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; on_conflict = :replace)),
-        ("an on_conflict= update with no target", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
-                                                                           on_conflict = (action = :update, set = ["round"]))),
-        ("an on_conflict= with an unknown key", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
-                                                                         on_conflict = (action = :nothing, bogus = 1))),
-    ]
-    for (label, call) in cases
-        try
-            call()
-            say("bulk_refusal", string(label, ": not refused"))
-            ok = false
-        catch e
-            text = refusal_text(e)
-            if text !== nothing
-                say("bulk_refusal", string(label, ": ", text))
-            else
-                failed("bulk_refusal", e)
-                ok = false
-            end
-        end
-    end
+    ok &= refusal_case("a query as the table", () -> PormG.bulk_insert(M.Race.objects, M.Race.objects.filter("year" => 2012)))
+    ok &= refusal_case("not a table", () -> PormG.bulk_insert(M.Race.objects, [1, 2]))
+    ok &= refusal_case("columns of different lengths", () -> PormG.bulk_insert(M.Race.objects, (year = [2012, 2012], round = [6])))
+    ok &= refusal_case("rows with no columns", () -> PormG.bulk_insert(M.Race.objects, [NamedTuple(), NamedTuple()]))
+    ok &= refusal_case("a columns= of the wrong type", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; columns = 5))
+    ok &= refusal_case("a field mapped twice", () -> PormG.bulk_insert(M.Race.objects,
+        [(a = 2012, b = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20))];
+        columns = ["a" => "year", "b" => "year", "round", "circuitid", "name", "date"]))
+    ok &= refusal_case("a column in another case", () -> PormG.bulk_insert(M.Race.objects,
+        [(Year = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20))]))
+    ok &= refusal_case("a primary key set", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["raceid", "round"], match_on = ["round"]))
+    ok &= refusal_case("a match_on pair", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid" => "raceid"]))
+    ok &= refusal_case("a match_on the model does not have", () -> PormG.bulk_update(M.Race.objects, [(lap = 1, round = 6)];
+        columns = ["round"], match_on = ["lap"]))
+    ok &= refusal_case("a per-row key in filters=", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], filters = ["raceid"]))
+    ok &= refusal_case("a filters= entry that is no predicate", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid"], filters = [5]))
+    ok &= refusal_case("a key given twice", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6), (raceid = 1, round = 7)];
+        columns = ["round"], match_on = ["raceid"]))
+    ok &= refusal_case("a joined path", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, cn = "x")];
+        columns = ["cn" => "circuitid__name"], match_on = ["raceid"]))
+    ok &= refusal_case("an ordered handler", () -> PormG.bulk_update(M.Race.objects.order_by("year"), [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid"]))
+    ok &= refusal_case("a handler with a CTE", () -> PormG.bulk_update(
+        M.Race.objects.with("st" => M.Race.objects.values("circuitid"), join_field = "circuitid" => "circuitid"),
+        [(raceid = 1, round = 6)]; columns = ["round"], match_on = ["raceid"]))
+    ok &= refusal_case("a returning= of the wrong type", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = 5))
+    ok &= refusal_case("an empty returning=", () -> PormG.bulk_insert(M.Race.objects, [race(2012)]; returning = String[]))
+    ok &= refusal_case("a returning= field the model does not have", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        returning = ["laps"]))
+    ok &= refusal_case("an on_conflict= of the wrong kind", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        on_conflict = :replace))
+    ok &= refusal_case("an on_conflict= update with no target", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        on_conflict = (action = :update, set = ["round"])))
+    ok &= refusal_case("an on_conflict= with an unknown key", () -> PormG.bulk_insert(M.Race.objects, [race(2012)];
+        on_conflict = (action = :nothing, bogus = 1)))
     try
         left = M.Race.objects.filter("year" => 2012).list(RaceRow)
         say("bulk_refusal", string(length(left), " races written"))

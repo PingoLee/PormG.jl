@@ -6612,6 +6612,42 @@ end
     @test by_hand == String[]
   end
 
+  # What: the typed copy of a CTE body's tree (`_tree_copy` and its walks, #1599 layer 5), and `.with()`'s stored copy
+  #   (`_cte_query_copy`) with the nested CTE bodies (`_copy_ctes`) going through it.
+  # Expected: no dynamic call in any node's copy or in the walks over an untyped value; and from `_cte_query_copy` down,
+  #   no call into `deepcopy`'s generic walk, except the open arm (`_tree_copy_other`, the designed dynamic call for a
+  #   type outside the set) and the filter slot's own copy, unchanged here (`Base.deepcopy(::Vector{FilterNode})`, #1684).
+  # Why: a CTE body projecting a `Subquery`, an `Exists`, a window, a `Case` or a mutable literal took `deepcopy`, whose
+  #   walk visits each field by run-time dispatch: the trimmed `.with()` over such a body stopped inside
+  #   `deepcopy_internal` (#1828 wall 4).
+  @testset "a CTE body's tree is copied at each node's type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    for T in (QB.SQLField, QB.SQLText, QB.FObject, QB.WindowFunction, QB.FExpression, QB.WindowSpec, QB.SQLOrder,
+              QB.SubqueryObject, QB.ExistsObject, QB.OperObject, QB.QObject, QB.QorObject, QB.Interval)
+      @test (T, _dynamic_calls(QB._tree_copy, (T,))) == (T, String[])
+    end
+    for (f, T) in ((QB._tree_copy_part, Any), (QB._tree_copy_value, Any), (QB._tree_copy_node, Any),
+                   (QB._tree_copy_kwargs, Dict{String,Any}), (QB._tree_copy_filters, Vector{QB.FilterType}),
+                   (QB._tree_copy_handler, QB.ObjectHandler), (QB._tree_copy_handler, QB.SQLObjectHandler),
+                   (QB._tree_copy_order, QB.SQLObjectQuery))
+      @test (nameof(f), T, _dynamic_calls(f, (T,))) == (nameof(f), T, String[])
+    end
+    # PormG's own frames on the way down: none dispatches at run time (Base's logging on `_query_copy`'s error path and
+    # the open arms are outside the pin).
+    reached = _dynamic_calls_deep(QB._cte_query_copy, (QB.ObjectHandler,); depth = 8,
+                                  skip = (QB._tree_copy_other, QB._copy_insert_other, QB._store_cte_other!, Base.deepcopy))
+    @test filter(x -> startswith(x, "Tuple{typeof(PormG.QueryBuilder."), reached) == String[]
+    # No `deepcopy` of a projection, an ORDER BY or a nested CTE body is left on the path: the generic walk is reached
+    # only through the filter slot (`deepcopy(obj.filter)`, its own typed hook) and the `Vector{String}` slots.
+    calls = String[]
+    for (ci, _) in Base.code_typed_by_type(Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Vector{QB.ProjectionNode},
+                                                 Vector{QB.SQLTypeOrder}}; optimize = true), s in ci.code
+      s isa Expr && s.head === :invoke && occursin("deepcopy", string(s.args[1])) && push!(calls, string(s.args[1]))
+    end
+    @test filter(c -> occursin(r"SQLTypeOrder|SQLOrder|ProjectionNode|SQLField|SQLText|ObjectHandler|CTEDict", c), calls) == String[]
+    @test _dynamic_calls(QB._copy_ctes, (OrderedCollections.OrderedDict{String,QB.CTEDict},)) == String[]
+  end
+
   # What: the function readers a subquery's one projection reaches: its formatter over its operands
   #   (`_expression_formatter(::FObject, …)` through `_first_operand_formatter`), what `Concat` and a division make of
   #   it (`_textless_number`, `_whole_numeric_operand`) and whether it holds a temporal value (`_function_held_temporal`).

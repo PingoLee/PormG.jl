@@ -30,13 +30,19 @@ end
 # raised a `TypeError` inside `deepcopy_internal`. A projection holding anything else (a `Subquery` or `Exists`, whose
 # handler the caller's fluent calls change in place; a window's `WindowSpec`, which may be mutated directly; a
 # mutable literal; a node this check does not know) and another handler type are deep-copied as before.
+#
+# A projection holding anything else takes the typed copy of the whole tree (`_tree_copy_handler`, #1599 layer 5): the
+# trimmed `.with()` over a body projecting a `Subquery`, an `Exists`, a window, a `Case` or a mutable literal stopped in
+# `deepcopy`'s walk (#1828 wall 4). The ORDER BY terms are copied at their type on both paths. Another handler type is
+# deep-copied, behind the copy's open arm.
 function _cte_query_copy(query::SQLObjectHandler)
-  query isa ObjectHandler || return deepcopy(query)
+  query isa ObjectHandler || return _tree_copy_other(query)::SQLObjectHandler
   object = getfield(query, :object)
   for v in object.values
-    _projection_shares_safely(v) || return deepcopy(query)
+    _projection_shares_safely(v) || return _tree_copy_handler(query)::ObjectHandler
   end
-  return ObjectHandler(object = _query_copy(object, ProjectionNode[_projection_copy(v) for v in object.values]))
+  return ObjectHandler(object = _query_copy(object, ProjectionNode[_projection_copy(v) for v in object.values],
+                                            _tree_copy_order(object)))
 end
 # Whether a projected node can be shared by the copy: its wrapper is copied, so the check is on what it wraps.
 _projection_shares_safely(v::SQLField)::Bool = _copy_shares_safely(v.field)

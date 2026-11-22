@@ -29,6 +29,9 @@ PormG.Migrations.ensure_table!(M.Race, KEY)
 PormG.Migrations.ensure_table!(M.PitStop, KEY)
 PormG.Migrations.ensure_table!(M.Driver, KEY)
 PormG.Migrations.ensure_table!(M.Constructor, KEY)
+# A self-referential CASCADE is not deleted under `allow_delete_all` (PormG refuses the loop): clear the chain's
+# references first, then delete every constructor.
+M.Constructor.objects.filter("parentid__@isnull" => false).update("parentid" => nothing)
 M.Constructor.objects.delete(allow_delete_all = true)
 M.PitStop.objects.delete(allow_delete_all = true)
 M.Driver.objects.delete(allow_delete_all = true)

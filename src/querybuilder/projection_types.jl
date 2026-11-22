@@ -2020,8 +2020,10 @@ end
 function _declared_type_formatter(type_name::AbstractString, instruc::SQLInstruction)
   field = _sql_type_field(type_name)
   field === nothing && return nothing
-  _cast_renders_text(field, instruc.connection) && return nothing
-  return field.formatter
+  # #1599 layer 5: the engine fact at the field's and the pool's types (`_cast_renders_text_in`), and the formatter read
+  # at the field's type; on the two unions they were run-time calls (the trimmed CTE read of a `Cast` column).
+  _cast_renders_text_in(field, instruc.connection) && return nothing
+  return _field_formatter(field)
 end
 # The declared types SQLite renders as `CAST(x AS TEXT)` (predicates in value_validation.jl).
 _text_cast_on_sqlite(field::PormGField) = _is_uuid_field(field) || _is_network_field(field)

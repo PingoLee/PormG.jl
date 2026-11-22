@@ -788,7 +788,7 @@ function _declared_kind(type_name::AbstractString, @nospecialize(conn))::Union{C
   size === nothing || return CDecimal(size...)
   field = _sql_type_field(type_name)
   field === nothing && return nothing
-  _cast_renders_text(field, conn) && return CText()
+  _cast_renders_text_in(field, conn) && return CText()   # #1599 layer 5: at the field's and the pool's types
   field isa Models.sDecimalField && return CDecimal(nothing, nothing)
   lowercase(strip(first(split(type_name, '(')))) in ("smallint", "int2") && return CInt16()
   if field isa Models.sCharField

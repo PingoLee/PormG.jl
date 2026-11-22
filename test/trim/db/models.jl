@@ -38,6 +38,20 @@ Driver::Models.ModelType = Models.Model(
   debut_raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "SET_NULL", null = true)
 )
 
-Models.@models Circuit Race PitStop Driver
+# The circuit a constructor falls back to (#1694, #1599 layer 7), seeded by each `prep.jl` with this fixed id, far above
+# any id a sequence gives in the fixture, so its `default` is a constant on every engine.
+const DEFAULT_CIRCUIT_ID = 9_000_100
+
+# A constructor and the one it became (#1694, #1599 layer 7): deleting a constructor deletes the ones that came after it
+# (`CASCADE` on its own table, #1377), and deleting its home circuit puts it back on the default circuit (`SET_DEFAULT`).
+Constructor::Models.ModelType = Models.Model(
+  constructorid = Models.IDField(),
+  name = Models.CharField(),
+  parentid = Models.ForeignKey("Constructor", pk_field = "constructorid", on_delete = "CASCADE", null = true),
+  home_circuitid = Models.ForeignKey(Circuit, pk_field = "circuitid", on_delete = "SET_DEFAULT",
+                                     default = DEFAULT_CIRCUIT_ID)
+)
+
+Models.@models Circuit Race PitStop Driver Constructor
 
 end

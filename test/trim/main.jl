@@ -33,6 +33,12 @@ function (@main)(args::Vector{String})::Cint
     update_or_create_step(1) || return Cint(16)
     get_or_create_step(1) || return Cint(18)
     cascade_step(1) || return Cint(22)  # the cascading delete (`tools/writes.jl`, #1694)
+    # The write residue of layer 7 (`tools/writes.jl`, #1694): bulk_update with filters= and two keys, SET_DEFAULT, a
+    # self-referential CASCADE, and the bulk writers' refusals.
+    bulk_update_more_step(1) || return Cint(27)
+    set_default_step() || return Cint(28)
+    self_cascade_step() || return Cint(29)
+    bulk_refusals_step(1) || return Cint(30)
     transaction_step(1, TrimF1.KEY) || return Cint(24)  # a user transaction (`tools/connections.jl`, #1599 layer 2)
     elapsed_step(t0)
     # Last: a trimmed binary runs no atexit hook, so the app closes its pools itself.

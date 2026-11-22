@@ -1429,17 +1429,30 @@ function _resolve_bulk_update_keys!(df::_BulkFrame, model::PormGModel,
   end
 
   # filters: permanent contract is constant `field => value` predicates.
+  # #1599 layer 7: each entry read at its type — a bare `String`, or a pair read as its `String` key and its value — so
+  # the shim's check, its message and the store are static calls; over the element type `Union{String, Pair{String}}`
+  # (a `UnionAll` pair) each was a run-time call. The same answers and refusals, in the same order.
   for f in filters
-    # ── TEMPORARY deprecation shim (see banner above; delete with the helpers) ──
-    # Only meaningful when match_on is absent: turn the old dynamic-in-`filters`
-    # usage into an actionable migration error instead of the generic one.
-    if !match_on_given && _is_legacy_dynamic_filter(f, df, model)
-      throw(QueryBuildError(_bulk_update_migration_msg(f)))
+    if f isa String
+      # ── TEMPORARY deprecation shim (see banner above; delete with the helpers) ──
+      # Only meaningful when match_on is absent: a bare string was always a dynamic key.
+      !match_on_given && throw(QueryBuildError(_bulk_update_migration_msg(f)))
+      # ── end shim ───────────────────────────────────────────────────────────────
+      throw(QueryBuildError(_bulk_update_static_only_msg(f)))
+    end
+    pair = f::Pair{String}
+    first_, second_ = pair.first::String, pair.second
+    # ── TEMPORARY deprecation shim: a pair whose value names a model field and whose key a column ──
+    if !match_on_given
+      if second_ isa String
+        (!occursin("__", first_) && first_ in df.names && second_ in model.field_names) &&
+          throw(QueryBuildError(_bulk_update_migration_msg(Pair{String,String}(first_, second_))))
+      elseif second_ isa AbstractString && _is_legacy_dynamic_filter(pair, df, model)
+        throw(QueryBuildError(_bulk_update_migration_msg(pair)))
+      end
     end
     # ── end shim ───────────────────────────────────────────────────────────────
-
-    f isa Pair || throw(QueryBuildError(_bulk_update_static_only_msg(f)))
-    push!(static_filters, f.first => f.second)
+    push!(static_filters, Pair{String, Any}(first_, second_))
   end
 
   # Fallback: nothing to match on => use the model primary key(s)

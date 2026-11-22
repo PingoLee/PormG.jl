@@ -3086,7 +3086,13 @@ end
 # brought) takes `deepcopy` behind one `@noinline` call, the designed open arm.
 _tree_copy(x::String) = x
 _tree_copy(x::Union{OuterRefObject,CTEReference,JoinedReference}) = x
-_tree_copy(x::SQLField) = SQLField(_tree_copy_part(x.field), x._as, x.custom_as, x.root, x.memo_as)
+# The wrapper through its one entitled copy (`Base.deepcopy(::SQLTypeField)`, which carries the memo key's slots), then
+# its node copied in place of the shared one.
+function _tree_copy(x::SQLField)
+  y = deepcopy(x)::SQLField
+  y.field = _tree_copy_part(x.field)
+  return y
+end
 _tree_copy(x::SQLText) = SQLText(_tree_copy_value(x.field), x._as, x.custom_as)
 _tree_copy(x::FObject) = FObject(x.function_name, _tree_copy_column(x.column), x.aggregate, x.formatter, x._as,
                                  _tree_copy_kwargs(x.kwargs))
@@ -3109,9 +3115,9 @@ end
 _tree_copy(x::SQLOrder) = SQLOrder(_tree_copy(x.field), x.order, x.orientation, x._as, x.nulls)
 _tree_copy(x::SubqueryObject) = SubqueryObject(_tree_copy_handler(x.query))
 _tree_copy(x::ExistsObject) = ExistsObject(_tree_copy_handler(x.query))
-_tree_copy(x::OperObject) = OperObject(x.operator, _tree_copy_value(x.values), _tree_copy_value(x.column))
-_tree_copy(x::QObject) = QObject(_tree_copy_filters(x.filters))
-_tree_copy(x::QorObject) = QorObject(_tree_copy_filters(x.or))
+_tree_copy(x::OperObject) = OperObject(x.operator, _tree_copy_value(_oper_literal(x)), _tree_copy_value(_oper_column(x)))
+_tree_copy(x::QObject) = QObject(_tree_copy_filters(_q_terms(x)))
+_tree_copy(x::QorObject) = QorObject(_tree_copy_filters(_q_terms(x)))
 _tree_copy(x::Interval) = Interval(_tree_copy_value(x.period))
 _tree_copy(x::PormGBytes) = PormGBytes(copy(x.bytes))
 

@@ -849,9 +849,13 @@ function _case_output_field(func::SQLTypeFunction, field::String, instruct::SQLI
       # A `Case` holds `When` nodes; anything else (a `When(…; otherwise = …)`, which is already a
       # CASE, or a nested `Case`) renders no `THEN`, so there is no branch value to type. A `When` is
       # always an `FObject`, so the node is read at that type.
-      (branch isa FObject && branch.function_name == "WHEN") ||
+      if branch isa FObject && branch.function_name == "WHEN"
+        push!(outputs, branch.kwargs["then"])
+      elseif branch isa SQLTypeFunction && _is_when_other(branch)
+        push!(outputs, _then_other(branch))   # a caller's own function type, read as before
+      else
         _refuse_case_type(field, "a Case branch is not a bare When(…)")
-      push!(outputs, (branch::FObject).kwargs["then"])
+      end
     end
     push!(outputs, get(func.kwargs, "else", missing))
   end
@@ -866,26 +870,38 @@ function _case_output_field(func::SQLTypeFunction, field::String, instruct::SQLI
   return _unify_case_fields(fields, field)
 end
 
+# A caller's own `SQLTypeFunction`'s name and `then`, read as before (#1599 layer 5), behind one call each.
+@noinline _is_when_other(@nospecialize(f::SQLTypeFunction))::Bool = f.function_name == "WHEN"
+@noinline _then_other(@nospecialize(f::SQLTypeFunction)) = f.kwargs["then"]
+@noinline _then_or_nothing_other(@nospecialize(f::SQLTypeFunction)) = get(f.kwargs, "then", nothing)
+
 # A refusal's reason, built only when the column is refused (a thunk, as before: a column the walk types builds no
 # message): `<prefix><name><suffix>`, the name a node's type gives (`nameof`, with `Object` dropped when `chop`), or a
 # fixed one. A callable struct rather than a closure (#1599 layer 5): its type is named, so the call into it is static.
+# The parts are kept and joined only when the column is refused, so a column the walk types builds no string.
 struct _Reason
-  prefix::String
-  name::String
-  suffix::String
+  a::String
+  b::String
+  c::String
+  d::String
 end
-(r::_Reason)() = string(r.prefix, r.name, r.suffix)
+_Reason(a::String) = _Reason(a, "", "", "")
+_Reason(a::String, b::String, c::String) = _Reason(a, b, c, "")
+(r::_Reason)() = string(r.a, r.b, r.c, r.d)
 # A value's type as a `DataType` (#1599 layer 5): `typeof(x)::DataType` does not narrow a value held at a union of
 # abstract types, so a constructor taking it stayed a run-time call.
 _datatype(@nospecialize(x))::DataType = typeof(x)
 struct _TypeReason
-  prefix::String
+  p1::String
+  p2::String
+  p3::String
   T::DataType
   suffix::String
   chop::Bool
 end
-_TypeReason(prefix::String, T::DataType, suffix::String) = _TypeReason(prefix, T, suffix, false)
-(r::_TypeReason)() = string(r.prefix, r.chop ? chopsuffix(string(nameof(r.T)), "Object") : string(nameof(r.T)), r.suffix)
+_TypeReason(p1::String, T::DataType, suffix::String, chop::Bool = false) = _TypeReason(p1, "", "", T, suffix, chop)
+_TypeReason(p1::String, p2::String, p3::String, T::DataType, suffix::String) = _TypeReason(p1, p2, p3, T, suffix, false)
+(r::_TypeReason)() = string(r.p1, r.p2, r.p3, r.chop ? chopsuffix(string(nameof(r.T)), "Object") : string(nameof(r.T)), r.suffix)
 # `_refuse_projection_type` with a hint, as the closures over it passed one.
 struct _RefuseWithHint
   hint::String
@@ -905,6 +921,7 @@ function _case_value_field_at(@nospecialize(v), field::String, instruct::SQLInst
   v isa WindowFunction && return _set_field_from_sql_function(v, field, instruct)
   v isa JoinedReference && return _set_field_from_sql_function(v, field, instruct)
   v isa FObject && return _set_field_from_sql_function(v, field, instruct, _refuse_case_type; role = "a branch is")
+  v isa SQLTypeFunction && return _case_function_other(v, field, instruct)   # a caller's own function type, as before
   v isa FExpression && return _f_expression_field(v, field, instruct, _refuse_case_type)
   return _walked_field(v, field, instruct, _refuse_case_type,
                        _TypeReason("a branch is a ", _datatype(v), ", whose type PormG does not infer"))
@@ -971,6 +988,11 @@ _no_refusal(::String, ::String) = nothing
 
 # Inside `F` arithmetic a `String` is a column path, not a text literal. A number, a window, a joined
 # column and a function the CTE typing knows type as a `Case` branch does; anything else is refused.
+# A caller's own `SQLTypeFunction` (not one PormG builds) makes the call it made before, behind one call.
+@noinline _case_function_other(@nospecialize(v::SQLTypeFunction), field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(v, field, instruct, _refuse_case_type; role = "a branch is")
+@noinline _operand_function_other(@nospecialize(x::SQLTypeFunction), field::String, instruct::SQLInstruction, refuse::R) where {R} =
+  _set_field_from_sql_function(x, field, instruct, refuse; role = "an operand is")
 function _f_operand_field_at(@nospecialize(x), field::String, instruct::SQLInstruction, refuse::R) where {R}
   x isa String && return _set_field_from_sql_function(x, x, instruct)
   x isa Number && return _case_value_field_at(x, field, instruct)
@@ -983,6 +1005,7 @@ function _f_operand_field_at(@nospecialize(x), field::String, instruct::SQLInstr
   x isa WindowFunction && return _set_field_from_sql_function(x, field, instruct)
   x isa JoinedReference && return _set_field_from_sql_function(x, field, instruct)
   x isa FObject && return _set_field_from_sql_function(x, field, instruct, refuse; role = "an operand is")
+  x isa SQLTypeFunction && return _operand_function_other(x, field, instruct, refuse)   # a caller's own function type
   return _walked_field(x, field, instruct, refuse,
                        _TypeReason("an operand is a ", _datatype(x), ", whose type PormG does not infer"))
 end
@@ -1169,7 +1192,7 @@ function _set_field_from_sql_function(func::SQLTypeFunction, field::String, inst
   # #1460: any other function is the type the walk names it, refused only where it names none.
   func.function_name in ("COUNT", "SUM", "AVG", "MIN", "MAX") ||
     return _walked_field(func, field, instruct, refuse,
-                         _Reason(string(role, " \e[31m"), func.function_name, "\e[0m(…), whose result type PormG cannot name"))
+                         _Reason(role, " \e[31m", func.function_name, "\e[0m(…), whose result type PormG cannot name"))
 
   func.function_name in ("COUNT", "SUM") && return IntegerField()
   # AVG/MIN/MAX type as their operand. #1116: through the same arms a projection takes, as the window
@@ -1189,7 +1212,7 @@ _aggregate_operand_field(x::FExpression, func, field::String, instruct::SQLInstr
   _f_expression_field(x, field, instruct, _refuse_projection_type)
 _aggregate_operand_field(x, func, field::String, instruct::SQLInstruction) =
   _walked_field(func, field, instruct, _refuse_projection_type,
-                _TypeReason(string("it is ", func.function_name, " over a "), _datatype(x),
+                _TypeReason("it is ", func.function_name, " over a ", _datatype(x),
                             ", whose type PormG does not infer"))
 # #685 — a CTE body that projects a window function. More specific than the `::SQLTypeFunction` arm
 # above, whose name allow-list refused every window with "RANK is not a recognized function" — which
@@ -1209,16 +1232,19 @@ function _set_field_from_sql_function(func::WindowFunction, field::String, instr
   column isa JoinedReference && return _set_field_from_sql_function(column, field, instruct)
   column isa FObject && return _set_field_from_sql_function(column, field, instruct)
   column isa WindowFunction && return _set_field_from_sql_function(column, field, instruct)
+  column isa SQLTypeFunction && return _window_column_other(column, field, instruct)   # a caller's own function type
   # #1460: a window over anything else (`F` arithmetic, a `Subquery`) is the type the walk names it.
   # #887: where it names none over a subquery, `Cast` inside the window names it.
   column isa SubqueryObject && return _walked_field(func, field, instruct,
     _RefuseWithHint("Name the type inside the window, e.g. \e[32mLag(Cast(Subquery(…), \"integer\"), over = …)\e[0m " *
                     "(or the type it returns)"),
-    _Reason(string("it is ", func.function_name, " over Subquery(…), whose type PormG does not infer"), "", ""))
+    _Reason("it is ", func.function_name, " over Subquery(…), whose type PormG does not infer"))
   return _walked_field(func, field, instruct, _refuse_projection_type,
-    _TypeReason(string("it is ", func.function_name, " over a "), _datatype(column),
+    _TypeReason("it is ", func.function_name, " over a ", _datatype(column),
                 ", whose type PormG does not infer"))
 end
+@noinline _window_column_other(@nospecialize(column::SQLTypeFunction), field::String, instruct::SQLInstruction) =
+  _set_field_from_sql_function(column, field, instruct)
 # #481 — a CTE body that projects a joined-copy column. The body is its own build with its own
 # `alias_join`, so the alias resolves against that inner query; without this method the projection
 # reaches the `::String` method below as a `JoinedReference` and dies with a MethodError.
@@ -1257,7 +1283,7 @@ _set_field_from_sql_function(v::SubqueryObject, field, instruct::SQLInstruction)
   _walked_field(v, string(something(field, "?")), instruct,
                 _RefuseWithHint("Name the type the column holds by wrapping it in " *
                                 "\e[32mCast(Subquery(…), \"integer\")\e[0m (or the type it returns)"),
-                _Reason("it is Subquery(…), whose type PormG does not infer", "", ""))
+                _Reason("it is Subquery(…), whose type PormG does not infer"))
 _set_field_from_sql_function(v, field, instruct::SQLInstruction) =
   _walked_field(v, string(something(field, "?")), instruct,
                 _RefuseWithHint("Project it in the outer query instead of the CTE body"),

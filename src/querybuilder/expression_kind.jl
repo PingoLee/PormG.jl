@@ -1304,8 +1304,13 @@ function _computes_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   if rule === :declared && p.function_name == "CASE"
     values = Any[]
     for b in _append_operands!(Any[], p.column)
-      b isa FObject && push!(values, get(b.kwargs, "then", nothing))
-      b isa WindowFunction && push!(values, get(b.kwargs, "then", nothing))
+      if b isa FObject
+        push!(values, get(b.kwargs, "then", nothing))
+      elseif b isa WindowFunction
+        push!(values, get(b.kwargs, "then", nothing))
+      elseif b isa SQLTypeFunction
+        push!(values, _then_or_nothing_other(b))   # a caller's own function type, as before
+      end
     end
     push!(values, get(p.kwargs, "else", nothing))
     for v in values

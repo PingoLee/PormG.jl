@@ -39,6 +39,7 @@ function (@main)(args::Vector{String})::Cint
     set_default_step() || return Cint(28)
     self_cascade_step() || return Cint(29)
     bulk_refusals_step(1) || return Cint(30)
+    bulk_conflict_step(1) || return Cint(31)        # bulk_insert's on_conflict= (`tools/writes.jl`, #1694)
     transaction_step(1, TrimF1.KEY) || return Cint(24)  # a user transaction (`tools/connections.jl`, #1599 layer 2)
     elapsed_step(t0)
     # Last: a trimmed binary runs no atexit hook, so the app closes its pools itself.

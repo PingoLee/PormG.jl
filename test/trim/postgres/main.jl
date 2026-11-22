@@ -200,6 +200,7 @@ function (@main)(args::Vector{String})::Cint
     set_default_step() || return Cint(28)
     self_cascade_step() || return Cint(29)
     bulk_refusals_step(circuitid) || return Cint(30)
+    bulk_conflict_step(circuitid) || return Cint(31)        # bulk_insert's on_conflict= (`../tools/writes.jl`, #1694)
     transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
     shapes_step(server) || return Cint(23)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))

@@ -322,6 +322,7 @@ function refusal_text(@nospecialize(e))::Union{Nothing, String}
     e isa PormG.InvalidValueError && return string("InvalidValueError: ", (e::PormG.InvalidValueError).msg)
     e isa PormG.UnsafeMutationError && return string("UnsafeMutationError: ", (e::PormG.UnsafeMutationError).msg)
     e isa PormG.FilterError && return string("FilterError: ", (e::PormG.FilterError).msg)
+    e isa PormG.BackendCapabilityError && return string("BackendCapabilityError: ", (e::PormG.BackendCapabilityError).msg)
     return nothing
 end
 
@@ -383,4 +384,61 @@ function bulk_refusals_step(circuitid::Int)::Bool
         failed("bulk_refusal", e); ok = false
     end
     return ok
+end
+
+# ── bulk_insert's on_conflict= executing (#1694, #1599 layer 7) ─────────────────────────────────────────────────────────
+#
+# The step writes races with explicit ids far above any id a sequence gives in the fixture (as `update_or_create_step`
+# does), so the `on_conflict` target is the primary key, the one unique key the race table has (MySQL's `ON DUPLICATE KEY
+# UPDATE` names no target, so it runs only when the target is that key). Explicit keys also make the write resync the
+# table's sequence afterwards (SQLite's `sqlite_sequence`, PostgreSQL's `setval`; MySQL moves `AUTO_INCREMENT` past them
+# itself), so the next generated id is above them, which no step reads. The step deletes every race it wrote.
+const BULK_CONFLICT_IDS = (9_000_010, 9_000_011, 9_000_012)
+
+# The rounds of the races with these ids, in id order, by a typed read.
+function rounds_of(ids::Vector{Int})::Vector{Int}
+    return Int[Int(x.round) for x in M.Race.objects.filter("raceid__@in" => ids).order_by("raceid").list(RaceRow)]
+end
+
+# `on_conflict=` (exit code 31): a race written first; then an upsert over it and a new one (`action = :update`, target
+# `raceid`, `set` `round`), which updates the first race's round and inserts the second; then a skip over the second and
+# a third (`action = :nothing`, target `raceid`), which leaves the second as it was and inserts the third. Each is read
+# back typed; `bulk_insert` returns `(count, rows)` with `rows = nothing` without `returning=`, asserted at that type.
+function bulk_conflict_step(circuitid::Int)::Bool
+    try
+        a, b, c = BULK_CONFLICT_IDS
+        race(id, year, round) = (raceid = id, year = year, round = round, circuitid = circuitid,
+                                 name = "Monaco Grand Prix", date = Date(year, 5, 20))
+        PormG.bulk_insert(M.Race.objects, [race(a, 2018, 6)])
+        up = PormG.bulk_insert(M.Race.objects, [race(a, 2018, 7), race(b, 2019, 6)];
+            on_conflict = (action = :update, target = ["raceid"], set = ["round"]))::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        after_up = rounds_of([a, b])
+        skip = PormG.bulk_insert(M.Race.objects, [race(b, 2019, 9), race(c, 2020, 6)];
+            on_conflict = (action = :nothing, target = ["raceid"]))::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        after_skip = rounds_of([a, b, c])
+        say("bulk_conflict", string("update ", up.count, " rows; rounds ", join(after_up, ", ")))
+        say("bulk_conflict", string("nothing ", skip.count, " rows; rounds ", join(after_skip, ", ")))
+        removed = first(M.Race.objects.filter("raceid__@in" => [a, b, c]).delete()::Tuple{Int, Dict{String, Integer}})
+        return up.count == 2 && after_up == [7, 6] && skip.count == 1 && after_skip == [7, 6, 6] && removed == 3
+    catch e
+        failed("bulk_conflict", e); return false
+    end
+end
+
+# `returning=` (exit code 32), MySQL only: a race with no id and `returning = ["raceid"]` needs its key drawn before the
+# INSERT, which MySQL's `AUTO_INCREMENT` cannot do, so PormG refuses it before any SQL with a `BackendCapabilityError`,
+# the line the JIT control prints. A `returning=` that executes does not run trimmed on any engine yet: its rows are a
+# table whose type follows the requested names, the values and the caller's table kind (`_returning_table`), which a
+# trimmed image has no code for (#1599 residue). No row is written.
+function preallocated_keys_refusal_step(circuitid::Int)::Bool
+    ok = refusal_case("an allocated key", () -> PormG.bulk_insert(M.Race.objects,
+        [(year = 2022, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2022, 5, 29))];
+        returning = ["raceid"]))
+    try
+        left = M.Race.objects.filter("year" => 2022).list(RaceRow)
+        say("bulk_refusal", string(length(left), " races written"))
+        return ok && isempty(left)
+    catch e
+        failed("bulk_refusal", e); return false
+    end
 end

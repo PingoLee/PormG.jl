@@ -217,8 +217,8 @@ release, and the job's `Instantiate the fixture` step prints the versions it res
 
 ## The write residue (#1694)
 
-Every write entry runs four more steps after the cascading delete (`tools/writes.jl`), each leaving the
-database as it found it:
+Every write entry runs five more steps after the cascading delete (`tools/writes.jl`), six on MySQL, each deleting
+what it wrote (`bulk_conflict` also moves the race table's sequence past its explicit ids):
 
 - `bulk_update_more` (exit code 27): two bulk-inserted races updated through `filters = ["year" => 2010]`
   (only the 2010 row matches) and then through two `match_on=` keys, `year` and `round`, read back typed and
@@ -232,6 +232,17 @@ database as it found it:
 - `bulk_refusal` (exit code 30): twenty-two inputs the bulk writers refuse before any SQL, one line each with
   the refusal's type and text. The job compares these lines with its JIT control's (`tools/same_lines.sh`),
   since a refusal's text can name engine-specific details.
+- `bulk_conflict` (exit code 31): `bulk_insert` with `on_conflict=`, over races with explicit ids far above any id
+  a sequence gives in the fixture. One race is written first. An upsert over it and a new race (`action =
+  :update`, target `raceid`, `set` `round`) updates the first and inserts the second (`update 2 rows; rounds 7, 6`).
+  A skip over the second and a third (`action = :nothing`, target `raceid`) leaves the second as it was and
+  inserts the third (`nothing 1 rows; rounds 7, 6, 6`). Each is read back typed, and the three races are
+  deleted. A write with explicit keys resyncs the table's sequence, so this step also runs SQLite's
+  `sqlite_sequence` reads and PostgreSQL's catalog reads and `setval`.
+- `preallocated_keys_refusal_step` (exit code 32, the MySQL entry only; its line is tagged `bulk_refusal`): a
+  `bulk_insert` with `returning = ["raceid"]` and no id,
+  whose key MySQL cannot draw before the INSERT, refused with the `BackendCapabilityError` the JIT raises. A
+  `returning=` that executes does not run trimmed on any engine yet (`docs/src/static_compilation.md`).
 
 ## Transactions and closing the pools
 

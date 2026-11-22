@@ -73,9 +73,20 @@ else is untested in a trimmed binary, even where it compiles.
   `auto_now_add`, `auto_now` and `auto_add` fields as above) and no `columns=`, `on_conflict` or
   `returning`. It returns `(count = 2, rows = nothing)` and a typed read sees the rows. A row that
   fails validation is refused as under the JIT: an `InvalidValueError` naming its row and field (a
-  date that is not a calendar date has run, on SQLite), with no row written (#1694). No trimmed binary has run
-  any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword options. Two of them are known not to work yet:
-  `returning=` and a primary-key column in the table still take calls a trimmed binary cannot make.
+  date that is not a calendar date has run, on SQLite), with no row written (#1694).
+
+  An **upsert** has run on the three drivers too: rows that carry their primary key, with
+  `on_conflict = (action = :update, target = ["raceid"], set = ["round"])` (an existing row updated, a new one
+  inserted, count 2) and with `on_conflict = (action = :nothing, target = ["raceid"])` (the existing row skipped,
+  count 1). A write with explicit keys then brings the table's sequence up to date, as under the JIT (SQLite's
+  `sqlite_sequence`, PostgreSQL's `setval`). On MySQL the target must be the one unique key the rows can conflict
+  on, as under the JIT (#1267).
+
+  No trimmed binary has run any other input: not a `DataFrame`, a `NamedTuple` of vectors or the other keyword
+  options. **`returning=` does not work yet:** its rows are a table whose type follows the field names you pass,
+  the values read and your table's kind, and a trimmed binary has no code for a type it cannot know when it is
+  built. On MySQL, a `returning=` that needs keys drawn before the INSERT is refused before any SQL, with the
+  `BackendCapabilityError` the JIT raises, and that refusal has run trimmed.
 - **A user transaction** (#1599 layer 2), on the three drivers: a `run_in_transaction(key) do … end`
   block that commits, and an `atomic(key) do … end` block that rolls back when the block raises its own
   error, which reaches the caller unchanged. A typed read after each shows the outcome.
@@ -114,7 +125,8 @@ tasks. The SQLite refused statement is checked by hand.
     in a column, an SQL expression for a value, a formatter that raises something other than an
     `InvalidValueError`, or a value PormG fills itself. The pass that names the cell is built to run
     trimmed in each case, but no trimmed binary has refused one;
-  - an upsert (`bulk_insert(…; on_conflict)`) and deleting one row through `delete(row)`.
+  - `bulk_insert(…; returning = …)` (see above), an upsert without a `target` (`on_conflict = :nothing`), and
+    deleting one row through `delete(row)`.
 - **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
   by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three
   digits: PormG's own text, `2009-05-24T14:00:00.000+00:00`, is that shape, and it has run trimmed on

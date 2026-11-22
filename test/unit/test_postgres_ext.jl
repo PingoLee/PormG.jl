@@ -79,6 +79,7 @@ struct NetClosingError <: Exception end
     (PormG.backend_handle_type, (Type{PostgresPool},)),
     # The result type its statements deliver, for `fetch`'s decode barrier (#1599).
     (PormG.backend_result_type, (Type{PostgresPool},)),
+    (PormG.backend_trim_roots, (Type{PostgresPool},)),   # #1599: SCRAM's Base64 roots for a trimmed build
     # Keyed on the exception alone (#987) — no pool to fall back on, but Postgres.jl's reader is
     # still the extension's own.
     (PormG.backend_error_fields, (Postgres.Error,)),

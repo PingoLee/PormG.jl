@@ -6569,7 +6569,11 @@ end
     CPm = PormG.ConnectionPool
     @test :trim_entrypoints in names(PormG)
     @test PormG.trim_entrypoints(CPm.SQLiteConnectionPool) === nothing   # a no-op under the JIT
+    # Refused, under the JIT too: each would build and then stop at `MissingCodeError` at run time.
+    @test_throws ArgumentError PormG.trim_entrypoints()
     @test_throws ArgumentError PormG.trim_entrypoints(Int)
+    @test_throws ArgumentError PormG.trim_entrypoints(CPm.PostgresConnectionPool)   # no driver parameter: no SCRAM roots
+    @test_throws ArgumentError PormG.trim_entrypoints(PormG.PormGPostgres)
     lazy = Base.PkgId(Base.UUID("21706172-204c-4d4f-5420-656854206f44"), "LazyJLLWrappers")
     upstream = PormG._trim_upstream_roots()
     @test length(upstream) == 1 + haskey(Base.loaded_modules, lazy)
@@ -6582,14 +6586,15 @@ end
       @test (P, setdiff(upstream, roots)) == (P, [])
       @test (P, length(roots)) == (P, length(unique(roots)))
       for (f, T) in roots
-        target, args = f === Core.kwcall ? (T[2].instance, Tuple{T[3:end]...}) : (f, Tuple{T...})
-        @test (P, f, T, hasmethod(target, args)) == (P, f, T, true)
+        # A keyword root names its keywords too: a renamed keyword leaves the root on a signature no call has.
+        ok = f === Core.kwcall ? hasmethod(T[2].instance, Tuple{T[3:end]...}, fieldnames(T[1])) : hasmethod(f, Tuple{T...})
+        @test (P, f, T, ok) == (P, f, T, true)
       end
     end
     @test length(PormG._trim_roots(CPm.SQLiteConnectionPool, CPm.MySQLConnectionPool)) <
           length(PormG._trim_roots(CPm.SQLiteConnectionPool)) + length(PormG._trim_roots(CPm.MySQLConnectionPool))
     scram = PormG.backend_trim_roots(CPm.PostgresConnectionPool{:postgres})
-    @test length(scram) == 5 && all(r -> r[2][1] === IOBuffer || IOBuffer in r[2], scram)
+    @test length(scram) == 5 && all(r -> IOBuffer in r[2], scram)
     for P in (CPm.SQLiteConnectionPool, CPm.MySQLConnectionPool, CPm.PostgresConnectionPool{:libpq})
       @test (P, PormG.backend_trim_roots(P)) == (P, ())
     end
@@ -6600,8 +6605,8 @@ end
     by_hand = String[]
     for (dir, _, files) in walkdir(trim), f in files
       endswith(f, ".jl") || continue
-      text = read(joinpath(dir, f), String)
-      occursin(r"Base\.Experimental\.entrypoint|_trim_render_roots|upstream_roots|\bprecompile\(", text) &&
+      code = join((l for l in eachline(joinpath(dir, f)) if !startswith(lstrip(l), "#")), "\n")   # a comment may name them
+      occursin(r"Base\.Experimental\.entrypoint|_trim_render_roots|upstream_roots|\bprecompile\(", code) &&
         push!(by_hand, relpath(joinpath(dir, f), trim))
     end
     @test by_hand == String[]

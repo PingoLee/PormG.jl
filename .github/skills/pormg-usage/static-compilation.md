@@ -14,6 +14,12 @@ PormG.trim_entrypoints(PormG.ConnectionPool.SQLiteConnectionPool)   # top level;
 include(joinpath(@__DIR__, "db", "models.jl"))
 import .models as M
 
+struct RaceRow            # pasted from `M.Race.objects.list(show_query = :struct)`, trimmed to what you read
+    raceid::Int64
+    name::String
+    date::Date
+end
+
 function (@main)(args::Vector{String})::Cint
     PormG.register_connection("f1", joinpath(abspath(args[1]), "f1.sqlite"); adapter = "SQLite", env = "prod")
     PormG.Models.set_models(models.MODEL_SET; key = "f1")
@@ -34,7 +40,9 @@ end
   file, after `using` the driver, with one pool type per engine:
   `SQLiteConnectionPool`, `MySQLConnectionPool`, `PostgresConnectionPool{:postgres}` (all under
   `PormG.ConnectionPool`). Without it the binary stops before `main` or at the first nested read with
-  `Core.MissingCodeError`. Never root PormG's internals by hand.
+  `Core.MissingCodeError`. Never root PormG's internals by hand. It refuses (`ArgumentError`) no
+  argument, a type that is not a concrete pool type (`PostgresConnectionPool` without `{:postgres}`)
+  and a pool whose driver is not loaded yet.
 - **Register the connection inside `main`**, from the environment or the arguments. A literal at the
   top level is frozen into the binary; a trimmed binary cannot read `connection.yml` (no YAML).
 - **Bind models with `set_models(models.MODEL_SET; key)`**.

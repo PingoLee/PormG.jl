@@ -1208,7 +1208,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # over a key compared its text with the other operands. An `output_field` casts the RESULT, after the
   # operands are compared, so it does not state the order: each operand states its own (`Cast`).
   if v.function_name in ("GREATEST", "LEAST")
-    for operand in (v.column isa AbstractVector ? v.column : (v.column,))
+    for operand in _append_operands!(Any[], v.column)   # #1599 layer 5: at the column's type
       _refuse_uncast_json_key(_JSONKeyOrdering(_ONE_OF_NAMES[v.function_name], :quoted, false), operand, instruc)
     end
   end
@@ -1217,7 +1217,7 @@ function _render_function_body(v::SQLTypeFunction, instruc::SQLInstruction;
   # error, while SQLite compares `json_extract`'s native value. Each operand, as for `Greatest`: an
   # `output_field` casts the result, after the comparison.
   if v.function_name == "NULLIF"
-    for (i, operand) in enumerate(v.column isa AbstractVector ? v.column : (v.column,))
+    for (i, operand) in enumerate(_append_operands!(Any[], v.column))   # #1599 layer 5: at the column's type
       _refuse_uncast_json_key(_JSONKeyNullIf(i), operand, instruc)
     end
   end
@@ -1457,7 +1457,7 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   # A NULL-skipping rotation (#844) is `Greatest`/`Least`'s own operand list: the function the caller
   # wrote checks its operands, and names itself.
   haskey(v.kwargs, "rotation_of") && return nothing
-  values = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : Any[v.column]
+  values = v.function_name == "CASE" ? _case_values(v) : _append_operands!(Any[], v.column)   # #1599 layer 5
   kinds = _non_null_operand_kinds(values, instruc)
   engine = _backend_name(conn)
   interval = units && any(k -> k isa CInterval, kinds)
@@ -1469,8 +1469,8 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
     "$(label()) over an interval and a value of another type is not supported on $(engine): it stores an " *
     "interval as its count of microseconds, so one value cannot be both. Give every value the one type: " *
     "a duration beside a duration (Value(Second(0)) for a zero)."))
-  declared = _declared_cast(v)
-  (declared isa AbstractString && !isempty(declared)) || return nothing
+  declared = _declared_string(_declared_cast(v))   # #1599 layer 5: the name at `String`
+  declared === nothing && return nothing
   target_kind = _declared_kind(declared, conn)
   if interval
     target_kind isa CInterval && return identity

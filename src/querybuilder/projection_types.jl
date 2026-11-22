@@ -480,7 +480,7 @@ function _is_boolean_valued(p::FObject, instruc::SQLInstruction)
   # value but would type `Coalesce("is_active", "points")` a boolean. A declared `output_field` is
   # the cast's type and decides alone.
   if _result_rule(p) === :one_of && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
-    return _all_boolean(p.column isa AbstractVector ? p.column : (p.column,), instruc)
+    return _all_boolean(_append_operands!(Any[], p.column), instruc)   # #1599 layer 5: at the column's type
   end
   return _expression_formatter(p, instruc) === Models.format_bool_sql
 end
@@ -1256,7 +1256,7 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   # two-place DecimalField has two. With an `output_field` it is a cast, read above or below.
   if operand isa FObject && operand.function_name in _SCALE_PRESERVING_FUNCTIONS &&
      !(get(operand.kwargs, "output_field", nothing) isa AbstractString)
-    for x in (operand.column isa AbstractVector ? operand.column : (operand.column,))
+    for x in _append_operands!(Any[], operand.column)   # #1599 layer 5: at the column's type
       side = _scale_divergent_operand(x, scale, instruc)
       side === nothing || return (side[1], "`$(operand.function_name)(…)` over $(side[2])")
     end
@@ -1335,9 +1335,9 @@ _declared_cast_label(v::FObject) = v.function_name == "CAST" ? "Cast(…, \"$(v.
 # `Sum(duration)` from the walk, and that fallback no longer fired over the unit suite.
 # A declared `Case` (#1217) is cast as each row takes a branch, so its operands are its branch values.
 function _cast_divergent_operand(v::FObject, instruc::SQLInstruction)
-  declared = get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing)
-  (declared isa AbstractString && !isempty(declared)) || return nothing
-  operands = v.function_name == "CASE" ? _case_values(v) : v.column isa AbstractVector ? v.column : (v.column,)
+  declared = _declared_string(get(v.kwargs, v.function_name == "CAST" ? "type" : "output_field", nothing))
+  declared === nothing && return nothing   # #1599 layer 5: the name at `String`
+  operands = v.function_name == "CASE" ? _case_values(v) : _append_operands!(Any[], v.column)   # #1599 layer 5
   conn = instruc.connection
   # #1147 step 2: an operand is refused only on the engine that departs from what the cast means
   # (`_departure`); the others build it as written. A divergence that is only each engine's text is
@@ -1795,10 +1795,14 @@ end
 # (`_MEANING_DEPARTURES`): `Concat` over it builds on PostgreSQL and MySQL. A fractional operand is
 # refused on SQLite before this, as the cast's own rounding (#1040, `:scale`). A NULL operand has no text.
 function _zero_scale_cast_textless(p::Union{FObject,WindowFunction}, declared::AbstractString, instruc::SQLInstruction)
-  operands = _declared_case(p) ? _case_values(p) : p.column isa AbstractVector ? p.column : (p.column,)
-  whole(x) = (x isa SQLText && _is_null_literal(x.field)) || _is_null_literal(x) ||
-             (_whole_kind(_expression_kind(x, instruc)) && _concat_textless_operand(x, instruc) === nothing)
-  return all(whole, operands) ? nothing : (:zero_scale_decimal, "a value cast to $(declared)")
+  # #1599 layer 5: the operands at the column's type, and a loop over them rather than a closure.
+  operands = _declared_case(p) ? _case_values(p) : _append_operands!(Any[], p.column)
+  for x in operands
+    whole = (x isa SQLText && _is_null_literal(x.field)) || _is_null_literal(x) ||
+            (_whole_kind(_expression_kind(x, instruc)) && _concat_textless_operand(x, instruc) === nothing)
+    whole || return (:zero_scale_decimal, "a value cast to $(declared)")
+  end
+  return nothing
 end
 _textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _textless_literal(x)
 _textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)

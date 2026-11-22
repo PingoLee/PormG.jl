@@ -484,8 +484,7 @@ end
 function _function_held_temporal(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)
-    declared = _declared_cast(p)
-    declared isa AbstractString && !isempty(declared) && return nothing
+    _declared_string(_declared_cast(p)) === nothing || return nothing
   end
   operands = _append_operands!(Any[], p.column)   # #1599 layer 5: at the column's type, as `_textless_number` gathers them
   # A window value function's `default` is one of its values (`_with_window_default`); a string there
@@ -535,9 +534,9 @@ _kind_field(::Union{CInt16,CInt32}) = Models.IntegerField()
 _kind_field(::CInt64) = Models.BigIntegerField()
 _kind_field(::CFloat64) = Models.FloatField()
 _kind_field(k::CDecimal) = k.precision === nothing ? Models.DecimalField() :
-  Models.DecimalField(max_digits = k.precision, decimal_places = something(k.scale, 0))
+  Models.DecimalField(max_digits = k.precision::Int, decimal_places = something(k.scale, 0)::Int)
 _kind_field(::CText) = Models.TextField()
-_kind_field(k::CVarChar) = k.length === nothing ? Models.TextField() : Models.CharField(max_length = k.length)
+_kind_field(k::CVarChar) = k.length === nothing ? Models.TextField() : Models.CharField(max_length = k.length::Int)
 _kind_field(::CDate) = Models.DateField()
 _kind_field(k::CDateTime) = Models.DateTimeField(type = k.with_timezone ? "TIMESTAMPTZ" : "TIMESTAMP")
 _kind_field(::CTime) = Models.TimeField()
@@ -654,9 +653,8 @@ end
 function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInstruction, policy::_EveryKind)
   rule = _result_rule(p)
   if p isa FObject && rule in (:declared, :one_of)
-    declared = _declared_cast(p)
-    declared isa AbstractString && !isempty(declared) &&
-      return _declared_calendar(_declared_kind(declared, instruc.connection), p, instruc, policy)
+    declared = _declared_string(_declared_cast(p))
+    declared === nothing || return _declared_calendar(_declared_kind(declared, instruc.connection), p, instruc, policy)
   end
   rule isa CanonicalType && return rule
   # #1147: a date part both engines compute as an integer (`_integer_transform`) is one, whatever its
@@ -667,7 +665,7 @@ function _infer_function_kind(p::Union{FObject,WindowFunction}, instruc::SQLInst
   decimal = _decimal_extract_kind(p, instruc, policy)
   decimal === nothing || return decimal
   rule === :operand && return _with_window_default(p, _infer_kind_any(p.column, instruc, policy), instruc, policy)
-  rule === :first_operand && return _infer_kind_any(first(p.column), instruc, policy)
+  rule === :first_operand && return _infer_kind_any(_first_of(p.column), instruc, policy)
   rule === :one_of && return _agreeing_kind(p, instruc, policy)
   rule in (:promoting, :numeric) && return _number_kind(p, rule, instruc, policy)
   rule === :declared && p isa FObject && p.function_name == "CASE" && return _case_kind(p, instruc, policy)
@@ -735,7 +733,28 @@ _sums_bigint(p::SQLTypeFunction, instruc::SQLInstruction) =
   _infer_kind_any(_first_operand(p), instruc, _AllKinds()) isa CInt64
 
 _declared_cast(p::FObject) = get(p.kwargs, p.function_name == "CAST" ? "type" : "output_field", nothing)
-_first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? first(p.column) : p.column
+_first_operand(p::SQLTypeFunction) = p.column isa AbstractVector ? _first_of(p.column) : p.column
+# `first(col)` at the column's type (#1599 layer 5): the three vector types a column holds, a path's first character as
+# `first(::String)` gives it, and any other value behind one call.
+function _first_of(@nospecialize(col))
+  col isa Vector{Any} && return first(col)
+  col isa Vector{String} && return first(col)
+  col isa Vector{FObject} && return first(col)
+  col isa String && return first(col)
+  return _first_of_other(col)
+end
+@noinline _first_of_other(@nospecialize(col)) = first(col)
+
+# A declared type's name (a `Cast`'s type, an `output_field`), read from a node's options untyped: the name as a
+# `String` when it is a non-empty string, else `nothing` (#1599 layer 5). Read where `declared isa AbstractString &&
+# !isempty(declared)` was, so the reads after it are at `String`; another string type is converted behind one call.
+function _declared_string(@nospecialize(declared))::Union{Nothing,String}
+  declared isa String && return isempty(declared) ? nothing : declared
+  declared isa AbstractString || return nothing
+  return _declared_string_other(declared)
+end
+@noinline _declared_string_other(@nospecialize(declared))::Union{Nothing,String} =
+  isempty(declared) ? nothing : String(declared)
 
 # The kind a declared type names on the engine. `_sql_type_field` maps a type NAME to a field and drops
 # its size, so the size is read here: `numeric(10,2)` is `CDecimal(10, 2)`, a bare `numeric` has no
@@ -1205,13 +1224,14 @@ end
 # type name's field, which drops the size, so any `numeric` counted as `DecimalField()`'s `(10, 2)`.
 function _declared_stored_decimal(x, instruc::SQLInstruction)
   (x isa FObject && _result_rule(x) === :one_of) || return nothing
-  declared = _declared_cast(x)
-  (declared isa AbstractString && !isempty(declared)) || return nothing
+  declared = _declared_string(_declared_cast(x))
+  declared === nothing && return nothing
   k = _declared_kind(declared, instruc.connection)
   (k isa CDecimal && k.precision !== nothing) || return nothing
-  for operand in (x.column isa AbstractVector ? x.column : (x.column,))
+  for operand in _append_operands!(Any[], x.column)   # #1599 layer 5: at the column's type
     _is_null_literal(operand isa SQLText ? operand.field : operand) && continue
-    _infer_kind_any(operand, instruc, _AllKinds()) == k || return nothing
+    kk = _infer_kind_any(operand, instruc, _AllKinds())   # #1599 layer 5: compared at `CDecimal`, as `==` answered
+    (kk isa CDecimal && kk == k) || return nothing
   end
   return k
 end
@@ -1267,30 +1287,53 @@ function _computes_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   # — is the number the caller said it means. Both engines render the cast, and SQLite still computes a
   # REAL (or an INTEGER, for a whole operand) where PostgreSQL's driver delivers a `Decimal`.
   p isa FObject && _declares_decimal(p, instruc) && return true
-  rule === :operand && return _computes_number(p.column, instruc)
+  rule === :operand && return _computes_number_at(p.column, instruc)   # #1599 layer 5: at the column's type
   # A value that is one of its operands' (review of #1121): `Coalesce(Avg("grid"), 0)` is the average
   # on the rows that have one, so it is a computed number when one of its values is. Any other declared
   # `output_field` is a cast both engines render, and its own business.
   (p isa FObject && !(get(p.kwargs, "output_field", nothing) isa AbstractString)) || return false
-  rule === :first_operand && return _computes_number(first(p.column), instruc)
-  rule === :one_of && return any(o -> _computes_number(o, instruc), p.column isa AbstractVector ? p.column : (p.column,))
+  rule === :first_operand && return _computes_number_at(_first_of(p.column), instruc)
+  # #1599 layer 5: the operands and branches at the column's type (`_append_operands!`), and each branch's `then` read
+  # at the node's type, in loops rather than a closure over `(p.column,)`.
+  if rule === :one_of
+    for o in _append_operands!(Any[], p.column)
+      _computes_number_at(o, instruc) && return true
+    end
+    return false
+  end
   if rule === :declared && p.function_name == "CASE"
-    branches = p.column isa AbstractVector ? p.column : (p.column,)
-    values = Any[get(b.kwargs, "then", nothing) for b in branches if b isa SQLTypeFunction]
+    values = Any[]
+    for b in _append_operands!(Any[], p.column)
+      b isa FObject && push!(values, get(b.kwargs, "then", nothing))
+      b isa WindowFunction && push!(values, get(b.kwargs, "then", nothing))
+    end
     push!(values, get(p.kwargs, "else", nothing))
-    return any(v -> _computes_number(v, instruc), values)
+    for v in values
+      _computes_number_at(v, instruc) && return true
+    end
+    return false
   end
   return false
 end
 _computes_number(p::Union{CTEReference,SubqueryObject}, instruc::SQLInstruction) = _numeric_read_record(p, instruc) !== nothing
 _computes_number(::Any, ::SQLInstruction) = false
+# `_computes_number` over a value held untyped (an operand, a branch's `then`), at its type (#1599 layer 5): the methods
+# above in their dispatch order, each a static call.
+function _computes_number_at(@nospecialize(x), instruc::SQLInstruction)::Bool
+  x isa FExpression && return _computes_number(x, instruc)
+  x isa FObject && return _computes_number(x, instruc)
+  x isa WindowFunction && return _computes_number(x, instruc)
+  x isa CTEReference && return _computes_number(x, instruc)
+  x isa SubqueryObject && return _computes_number(x, instruc)
+  return false
+end
 
 # Whether `p` declares a decimal type: a `Cast`'s type or an `output_field`, read where
 # `_infer_function_kind` reads one (rules `:declared` and `:one_of`), by the same `_declared_kind`.
 function _declares_decimal(p::FObject, instruc::SQLInstruction)
   _result_rule(p) in (:declared, :one_of) || return false
-  declared = _declared_cast(p)
-  return declared isa AbstractString && !isempty(declared) && _declared_kind(declared, instruc.connection) isa CDecimal
+  declared = _declared_string(_declared_cast(p))
+  return declared !== nothing && _declared_kind(declared, instruc.connection) isa CDecimal
 end
 
 # The numeric read kind a CTE body or a `Subquery`'s inner build recorded for its column: the meaning

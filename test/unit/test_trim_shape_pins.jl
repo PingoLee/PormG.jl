@@ -6648,6 +6648,82 @@ end
     @test _dynamic_calls(QB._copy_ctes, (OrderedCollections.OrderedDict{String,QB.CTEDict},)) == String[]
   end
 
+  # What: the CTE column typing chain for a `Cast`, a `Case` and a computed column (`_declared_type`, `_case_output_field`
+  #   and its branch walk, `_unify_case_fields`, `F` arithmetic's operands, `_walked_field`'s refusals, a window's
+  #   column), and the kind-to-field map it ends in.
+  # Expected: no dynamic call in each, at the types the chain reaches them with: the declared name read at `String`
+  #   (`_declared_string`), each untyped value through a walk (`_case_value_field_at`, `_f_operand_field_at`), a field's
+  #   formatter and key target read at the field's type, the refusal reasons callable structs (`_Reason`, `_TypeReason`,
+  #   `_RefuseWithHint`), the engine fact through `with_pool`, and `_kind_field`'s keyword constructors at `Int`.
+  # Why: the trimmed CTE read over a `Subquery` column stopped at `_kind_field(::CInt32)` (a kind held at the abstract
+  #   type), and every other column shape reached one of these calls on an untyped value (#1599 layer 5).
+  @testset "a CTE column is typed without a dynamic call (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    for (f, T) in ((QB._case_output_field, (QB.FObject, String, I)), (QB._case_value_field_at, (Any, String, I)),
+                   (QB._f_operand_field_at, (Any, String, I, typeof(QB._refuse_case_type))),
+                   (QB._f_operand_field_at, (Any, String, I, typeof(QB._no_refusal))),
+                   (QB._f_expression_field, (QB.FExpression, String, I, typeof(QB._refuse_projection_type))),
+                   (QB._unify_case_fields, (Vector{PormG.PormGField}, String)), (QB._is_number_field, (PormG.PormGField,)),
+                   (QB._same_key_target, (PormG.PormGField, PormG.PormGField)), (QB._declared_type, (QB.FObject, I)),
+                   (QB._set_field_from_sql_function, (QB.WindowFunction, String, I)),
+                   (QB._set_field_from_sql_function, (QB.JoinedReference, String, I)),
+                   (QB._set_field_from_sql_function, (QB.SubqueryObject, String, I)),
+                   (QB._set_field_from_sql_function, (QB.FObject, String, I)),
+                   (QB._walked_field, (Any, String, I, typeof(QB._refuse_case_type), QB._TypeReason)),
+                   (QB._walked_field, (Any, String, I, QB._RefuseWithHint, QB._Reason)),
+                   (QB._kind_field, (PormG.Kernel.CDecimal,)), (QB._kind_field, (PormG.Kernel.CVarChar,)),
+                   (QB._cast_renders_text_in, (PormG.PormGField, Any)), (QB._cast_renders_text_at, (PormG.Models.sCharField, Any)), (QB._declared_string, (Any,)),
+                   (QB._TypeReason, ()), (QB._Reason, ()))
+      T == () && continue
+      @test (nameof(f), T, _dynamic_calls(f, T)) == (nameof(f), T, String[])
+    end
+    for R in (QB._TypeReason, QB._Reason)
+      @test (R, [string(s) for (ci, _) in Base.code_typed_by_type(Tuple{R}; optimize = true) for s in ci.code
+                 if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]) == (R, String[])
+    end
+  end
+
+  # What: the sites that gathered a function's operands or a `Case`'s branches as `column isa AbstractVector ? column :
+  #   (column,)` (#1827's list): `_all_boolean`'s caller (`_is_boolean_valued`), `_computes_number`,
+  #   `_declared_stored_decimal`, `_case_default_bind_type`, `_case_output_field`, `_cast_divergent_operand`,
+  #   `_scale_divergent_operand`'s scale-preserving arm, `_zero_scale_cast_textless`, `_mysql_declared_output`, and
+  #   `_render_function_body`'s `Greatest`/`Least` and `NullIf` checks; and the first operand (`_first_of`).
+  # Expected: no `iterate`/`_apply_iterate` over a tuple or an untyped column left in any of them: each gathers through
+  #   `_append_operands!` (or reads `_first_of`), and each branch's `then` at the node's type. The per-operand checks
+  #   after the gather keep their own dispatch (out of this pin).
+  # Why: iterating `(column,)` or a column held untyped is a run-time `iterate`, which a trimmed image has no code for
+  #   (#1827: `iterate(::Tuple{String})`).
+  @testset "the operand gathers read a column at its type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    iterates(f, T) = filter(x -> occursin(r"\biterate\(|_apply_iterate|\bfirst\(", x), _dynamic_calls(f, T))
+    for (f, T) in ((QB._is_boolean_valued, (QB.FObject, I)), (QB._computes_number, (QB.FObject, I)),
+                   (QB._computes_number, (QB.WindowFunction, I)), (QB._computes_number_at, (Any, I)),
+                   (QB._declared_stored_decimal, (Any, I)), (QB._case_default_bind_type, (QB.FObject, Any, I)),
+                   (QB._case_output_field, (QB.FObject, String, I)), (QB._cast_divergent_operand, (QB.FObject, I)),
+                   (QB._zero_scale_cast_textless, (QB.FObject, String, I)), (QB._mysql_declared_output, (QB.FObject, I)),
+                   (QB._infer_function_kind, (QB.FObject, I, QB._MeaningKinds)), (QB._first_of, (Any,)))
+      @test (nameof(f), T, iterates(f, T)) == (nameof(f), T, String[])
+    end
+    # Each of these reads its operands' kinds only through the walks; no dynamic call is left at all.
+    for (f, T) in ((QB._computes_number, (QB.FObject, I)), (QB._computes_number_at, (Any, I)),
+                   (QB._declared_stored_decimal, (Any, I)), (QB._mysql_declared_output, (QB.FObject, I)),
+                   (QB._declares_decimal, (QB.FObject, I)), (QB._function_held_temporal, (QB.FObject, I)))
+      @test (nameof(f), T, _dynamic_calls(f, T)) == (nameof(f), T, String[])
+    end
+    # `_scale_divergent_operand`'s scale-preserving arm and `_render_function_body`'s two checks: no tuple iterated.
+    src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "projection_types.jl"), String) *
+          read(joinpath(pkgdir(PormG), "src", "querybuilder", "select_nodes.jl"), String) *
+          read(joinpath(pkgdir(PormG), "src", "querybuilder", "expression_kind.jl"), String) *
+          read(joinpath(pkgdir(PormG), "src", "querybuilder", "field_resolution.jl"), String) *
+          read(joinpath(pkgdir(PormG), "src", "querybuilder", "ctes.jl"), String)
+    code = join((l for l in split(src, '\n') if !startswith(lstrip(l), "#")), "\n")
+    # Only the two `@noinline` open arms keep the idiom (`_case_values_other!`, `_case_then_values_other`), behind their
+    # designed dynamic call.
+    @test length(collect(eachmatch(r"isa AbstractVector \? [a-z_.]*column : \([a-z_.]*column,\)", code))) == 2
+  end
+
   # What: the function readers a subquery's one projection reaches: its formatter over its operands
   #   (`_expression_formatter(::FObject, …)` through `_first_operand_formatter`), what `Concat` and a division make of
   #   it (`_textless_number`, `_whole_numeric_operand`) and whether it holds a temporal value (`_function_held_temporal`).

@@ -408,9 +408,9 @@ function _case_default_bind_type(v::SQLTypeFunction, value, instruc::SQLInstruct
   float_declared = _sql_type_field(something(get(v.kwargs, "output_field", nothing), "")) isa Models.sFloatField
   kind = value isa Base.IEEEFloat && !float_declared ? CDecimal(nothing, nothing) : _literal_kind(value, _AllKinds())
   kind === nothing && return nothing
-  for branch in (v.column isa AbstractVector ? v.column : (v.column,))
-    (branch isa SQLTypeFunction && branch.function_name == "WHEN") || continue
-    then = get(branch.kwargs, "then", nothing)
+  for branch in _append_operands!(Any[], v.column)   # #1599 layer 5: at the column's type
+    (branch isa FObject && branch.function_name == "WHEN") || continue   # a `When` is always an `FObject`
+    then = get((branch::FObject).kwargs, "then", nothing)
     literal = !(then isa Union{SQLObject,SQLType}) || then isa SQLText
     raw = then isa SQLText ? then.field : then
     _is_null_literal(raw) && continue

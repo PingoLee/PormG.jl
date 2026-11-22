@@ -2,8 +2,8 @@
 
 !!! warning "Experimental"
     Building a PormG application into a standalone executable with `juliac --trim` is **experimental**.
-    The reads and writes listed under [What works today](#What-works-today) are known to work, on three
-    drivers. Anything else has not run in a trimmed binary yet, and what this page describes may change
+    The reads and writes listed under [What works today](#What-works-today) are known to work, on the
+    drivers each item names. Anything else has not run in a trimmed binary yet, and what this page describes may change
     between releases without an upgrade note. Work in progress is tracked in
     [#1599](https://github.com/PingoLee/PormG.jl/issues/1599) (the trimmed application) and
     [#1614](https://github.com/PingoLee/PormG.jl/issues/1614) (the drivers).
@@ -86,11 +86,11 @@ else is untested in a trimmed binary, even where it compiles.
   statement is still running on.
 
 PormG checks these with a fixture application, `test/trim/` in the repository. Its `Trim (juliac)`
-workflow builds and runs it every night: the SQLite read (its comparison filters and `order_by` included) and
-the pool's tasks, the SQLite write
-(refusals, create, read, update, delete, `bulk_insert`), and the MySQL and Postgres.jl reads, single-row
-writes, `bulk_insert` and refused statements,
-against a MySQL 8.4 and a PostgreSQL 18 server. The SQLite refused statement is checked by hand.
+workflow builds and runs it every night, on SQLite and against a MySQL 8.4 and a PostgreSQL 18 server:
+the reads above (lookups, expressions, functions, subqueries, joins, CTEs, windows, the untyped read),
+the writes above (create, update, delete, the cascading delete, `bulk_insert`, `bulk_update`,
+`update_or_create`, `get_or_create`), the refusals and the refused statements, and on SQLite the pool's
+tasks. The SQLite refused statement is checked by hand.
 
 ## What does not work yet
 

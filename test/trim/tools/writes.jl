@@ -90,8 +90,8 @@ end
 # job runs its binary right after its JIT control, on the same database, #1614) and is checked by a typed read.
 # `update_or_create` looks its row up by `raceid`, the primary key: it needs a unique constraint behind the lookup, and
 # the fixture's only ones are primary keys. The explicit id is far above any id a sequence gives in the fixture, and the
-# step deletes its row again (a row-level write does not resync the sequence). `get_or_create` has no step: on a hit it
-# reads its row through the untyped `first()`, whose rows a trimmed image cannot read (the untyped read, layer 6).
+# step deletes its row again (a row-level write does not resync the sequence). `get_or_create` has its own step below
+# (`get_or_create_step`): on a hit it reads its row through the untyped `first()` (the untyped read, layer 6).
 const UPSERT_UOC_ID = 9_000_002
 
 # `bulk_update` (exit code 15): two Monaco races written by `bulk_insert`, their ids read typed, their `round` set from a

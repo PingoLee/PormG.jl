@@ -6684,6 +6684,31 @@ end
     end
   end
 
+  # What: what a CTE column's text is made of (`_concat_textless_operand`'s readers) for the column shapes the fixture
+  #   reads: a `Case`'s branches weighed (`_case_textless_branch`), a `Value`'s literal (`_textless_literal_at`), `F`
+  #   arithmetic's operands (`_textless_number_at`, `_whole_numeric_operand_at`), a function's whole operand, its declared
+  #   formatter, a JSON key's side through an `OuterRef`, and `_is_null_literal`'s answer.
+  # Expected: no dynamic call in each: the answers gathered into a typed vector before they are weighed, each untyped
+  #   value through its walk, the declared names at `String`; the open arms (a float type PormG does not bind, another
+  #   string or instruction type) behind their designed call.
+  # Why: the trimmed CTE read of a `Case` column stopped at the closure of the generator `_case_textless_branch` handed
+  #   `_division_first` (a `MethodError` with an `SQLText`), and the `Cast` and `F` columns reach the other calls on an
+  #   untyped value (#1599 layer 5).
+  @testset "a CTE column's text is read at its types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    for (f, T) in ((QB._case_textless_branch, (QB.FObject, I)), (QB._textless_literal_at, (Any,)),
+                   (QB._textless_number_at, (Any, I)), (QB._whole_numeric_operand_at, (Any, I)),
+                   (QB._textless_number, (QB.FExpression, I)), (QB._textless_number, (QB.FObject, I)),
+                   (QB._textless_number, (QB.SQLText, I)), (QB._whole_numeric_operand, (QB.FExpression, I)),
+                   (QB._whole_numeric_operand, (QB.FObject, I)), (QB._whole_numeric_operand, (QB.WindowFunction, I)),
+                   (QB._concat_textless_operand, (QB.SQLText, I)), (QB._expression_formatter, (QB.FObject, I)),
+                   (QB._json_number_side, (QB.OuterRefObject, I)), (QB._json_number_side, (QB.WindowFunction, I)),
+                   (QB._is_null_literal, (Any,)), (QB._unapplied_declared_decimal, (Any, I)))
+      @test (nameof(f), T, _dynamic_calls(f, T)) == (nameof(f), T, String[])
+    end
+  end
+
   # What: the sites that gathered a function's operands or a `Case`'s branches as `column isa AbstractVector ? column :
   #   (column,)` (#1827's list): `_all_boolean`'s caller (`_is_boolean_valued`), `_computes_number`,
   #   `_declared_stored_decimal`, `_case_default_bind_type`, `_case_output_field`, `_cast_divergent_operand`,

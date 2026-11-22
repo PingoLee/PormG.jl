@@ -85,8 +85,13 @@ end
 # it), so `Coalesce(OuterRef("payload__n"), 0) / 2` inside a `Subquery` carries the outer key.
 _json_number_side(p::OuterRefObject, instruc::SQLInstruction) =
   instruc.outer === nothing ? nothing :
-  (side = _json_number_side_at(p.field_name, instruc.outer); side === nothing ? nothing :
+  (side = _json_number_side_outer(p.field_name, instruc.outer); side === nothing ? nothing :
    ("$(side[1]) of the outer query (an `OuterRef`)", side[2]))
+# The outer instruction at its type (#1599 layer 5): PormG's own builds hold an `InstructionObject` there; any other
+# instruction type makes the call it made before, behind one call.
+_json_number_side_outer(name::String, @nospecialize(outer)) =
+  outer isa InstructionObject ? _json_number_side_at(name, outer) : _json_number_side_outer_other(name, outer)
+@noinline _json_number_side_outer_other(name::String, @nospecialize(outer)) = _json_number_side_at(name, outer)
 # #1482: a `Subquery` carries the key when its one projection does, as the inner build recorded.
 function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
   instruc.subquery_json_key === nothing && return nothing
@@ -95,8 +100,8 @@ function _json_number_side(p::SubqueryObject, instruc::SQLInstruction)
 end
 function _json_number_side(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
-  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
-  declared isa AbstractString && !isempty(declared) && return nothing
+  # #1599 layer 5: the declared name at `String` (`_declared_string`).
+  _declared_string(get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)) === nothing || return nothing
   # #1599 layer 5: the values are walked at each branch's own type (`_json_values_side`); one variable over a
   # `Vector{Any}`, a one-tuple and the untyped column was `Any`, and its iteration dispatched at run time: the trimmed
   # read stopped at `iterate(::Vector{Any})` on a `Case` compared with a column (`"round__@gte" => Case(…)`).

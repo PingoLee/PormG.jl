@@ -379,7 +379,8 @@ function _expression_formatter(p::SQLTypeFunction, instruc::SQLInstruction)
   name = p.function_name
   declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
   if declared isa AbstractString
-    formatter = _declared_type_formatter(declared, instruc)
+    # #1599 layer 5: a `String` name at its type; another string type behind one call, as before.
+    formatter = declared isa String ? _declared_type_formatter(declared, instruc) : _declared_type_formatter_other(declared, instruc)
     formatter === nothing || return formatter
   end
   if _result_rule(p) in (:operand, :one_of, :first_operand)
@@ -519,7 +520,7 @@ _is_boolean_valued(p::WindowFunction, instruc::SQLInstruction) =
 # are `numeric` on PostgreSQL, which agrees with SQLite's integer until divided, and that
 # `_whole_numeric_operand` names (#1111): a division an engine departs on (`_untyped_sum_departs`).
 function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
-  p isa SQLText && return _textless_literal(p.field)
+  p isa SQLText && return _textless_literal_at(p.field)   # #1599 layer 5: the literal at its type
   # A `Q(...)` / `Qor(...)` renders a predicate, which is a boolean.
   p isa Union{SQLTypeQ,SQLTypeQor} && return (:bool, "a Q(…) condition")
   # #1124: a `Subquery` answers what its one projected expression answers alone — the inner build
@@ -540,7 +541,7 @@ function _concat_textless_operand(p, instruc::SQLInstruction)::Union{Tuple{Symbo
       label === nothing || return (:bool, "the BooleanField `$(label)`")
       # A function whose value is its operand's (`Lag`, `Max`) names the operand it is over.
       if p isa SQLTypeFunction && !(p.column isa AbstractVector) && p.column !== nothing
-        inner = _concat_textless_operand(p.column, instruc)
+        inner = _with_field_part_open(_concat_textless_operand, p.column, instruc)::Union{Nothing,Tuple{Symbol,String}}   # #1599 layer 5
         inner !== nothing && inner[1] === :bool && return (:bool, "`$(p.function_name)(…)` over $(inner[2])")
       end
       return (:bool, "a boolean expression")
@@ -568,7 +569,7 @@ end
 #   its own label, and arithmetic keeps "an interval expression", as the render's kind named it.
 function _temporal_textless_named(temporal::Tuple{Symbol,String}, p, instruc::SQLInstruction)
   p isa Union{FExpression,FObject,WindowFunction} || return temporal
-  named = _undeclared_case(p) ? _case_textless_branch(p, instruc) : _textless_number(p, instruc)
+  named = (_undeclared_case(p) ? _case_textless_branch(p, instruc) : _textless_number(p, instruc))::Union{Nothing,Tuple{Symbol,String}}
   named === nothing && return temporal
   named[1] in _DIVISION_KINDS && return _untyped_sum_departs(instruc.connection) ? named : temporal
   return p isa FExpression ? temporal : (temporal[1], named[2])
@@ -585,7 +586,14 @@ end
 _undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
 _declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) && !isempty(p.kwargs["output_field"])
 function _case_textless_branch(p::FObject, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
-  side = _division_first((_concat_textless_operand(value, instruc) for value in _case_values(p)), instruc.connection)
+  # #1599 layer 5: each branch's answer at its member's type, in order, into a typed vector before the weighing, as
+  # `_textless_number`'s operands are; the generator over the untyped branch values called its closure at run time, and
+  # the trimmed CTE read of a `Case` column stopped at that closure with an `SQLText`.
+  answers = Union{Nothing,Tuple{Symbol,String}}[]
+  for value in _case_values(p)
+    push!(answers, _with_field_part_open(_concat_textless_operand, value, instruc))
+  end
+  side = _division_first(answers, instruc.connection)
   return side === nothing ? nothing : (side[1], "`CASE(…)` over $(side[2])")
 end
 # #1305 — the answer of several sides, operands or branches. Every side is asked: before, the first
@@ -994,7 +1002,8 @@ function _cte_textless_record(p::CTEReference, instruc::SQLInstruction)::Union{T
   tag = k isa CDateTime ? :timestamp : k isa CInterval ? :interval : k isa CFloat64 ? :float :
         k isa CDecimal && _cte_decimal_places(p, k, instruc) != 0 ? :decimal : nothing
   tag === nothing && return nothing
-  return (tag, "the $(_field_label(_kind_field(k))) `$(_concat_operand_label(p))`")
+  # #1599 layer 5: the kind's field at its type, and its label read through the field walk.
+  return (tag, "the $(Models._with_any_field(_field_label, _kind_field_at(k))) `$(_concat_operand_label(p))`")
 end
 # D5 (#1034) — the places of a decimal CTE column: the walk's scale where it names one (a declared
 # `numeric(p, s)` in the body, a `DecimalField` path), which the meaning kind (the read path's width-less
@@ -1235,8 +1244,8 @@ function _scale_divergent_operand(p, scale::Int, instruc::SQLInstruction)::Union
   # the column it comes from. A CTE column is the first (#1034 phase 3 step 2c): its kind is its body
   # expression's, so a `DecimalField(10,2)` path or a `numeric(10,1)` cast in the body keeps its scale
   # through the CTE (`cte["kinds"]`), and a decimal the body computes has none.
-  declared = operand isa FObject ? _declared_cast(operand) : nothing
-  if operand isa Union{String,JoinedReference,CTEReference} || (declared isa AbstractString && !isempty(declared))
+  declared = operand isa FObject ? _declared_string(_declared_cast(operand)) : nothing   # #1599 layer 5: at `String`
+  if operand isa Union{String,JoinedReference,CTEReference} || declared !== nothing
     k = _expression_kind(operand, instruc)
     if k isa CDecimal && k.scale !== nothing
       k.scale <= scale && return nothing
@@ -1486,6 +1495,20 @@ _textless_literal(::Decimals.Decimal) = (:decimal, "a Decimal literal")
 _textless_literal(x::Union{DateTime,ZonedDateTime}) = (:timestamp, "a $(nameof(typeof(x))) literal")
 _textless_literal(::Union{Dates.Period,Dates.CompoundPeriod,Interval}) = (:interval, "a duration literal")
 _textless_literal(::Any) = nothing
+# `_textless_literal` over a literal held untyped (a `Value`'s field), at its type (#1599 layer 5): the methods above in
+# their dispatch order, the float types PormG binds named, any other float behind one call.
+function _textless_literal_at(@nospecialize(x))::Union{Nothing,Tuple{Symbol,String}}
+  x isa Bool && return _textless_literal(x)
+  x isa Float64 && return _textless_literal(x)
+  x isa Float32 && return _textless_literal(x)
+  x isa AbstractFloat && return _textless_literal_other(x)
+  x isa Decimals.Decimal && return _textless_literal(x)
+  x isa DateTime && return _textless_literal(x)
+  x isa ZonedDateTime && return _textless_literal(x)
+  x isa Union{Dates.Period,Dates.CompoundPeriod,Interval} && return (:interval, "a duration literal")
+  return nothing
+end
+@noinline _textless_literal_other(@nospecialize(x))::Union{Nothing,Tuple{Symbol,String}} = _textless_literal(x)
 
 # The column an operand names, as the caller spelled it, or `nothing` for any other expression.
 _concat_operand_label(p::AbstractString) = String(p)
@@ -1532,17 +1555,19 @@ function _textless_number(p::Union{String,CTEReference,JoinedReference}, instruc
     return (:decimal, "the DecimalField `$(_concat_operand_label(p))`")
   return nothing
 end
-_textless_number(p::SQLField, instruc::SQLInstruction) = _textless_number(p.field, instruc)
+_textless_number(p::SQLField, instruc::SQLInstruction) = _textless_number_at(p.field, instruc)   # #1599 layer 5
 function _textless_number(p::FExpression, instruc::SQLInstruction)
-  p.operation === nothing && return _textless_number(p.field_name, instruc)
-  side = _division_first((_textless_number(p.field_name, instruc), _textless_number(p.operand, instruc)), instruc.connection)
+  # #1599 layer 5: each operand through the walk over its untyped slot (`_textless_number_at`, `_whole_numeric_operand_at`).
+  p.operation === nothing && return _textless_number_at(p.field_name, instruc)
+  side = _division_first((_textless_number_at(p.field_name, instruc), _textless_number_at(p.operand, instruc)), instruc.connection)
   if p.operation == "/" && side === nothing
     # #1111: a whole number that PostgreSQL types `numeric` reads like an integer column until it is
     # divided: PostgreSQL's `numeric / int` is `7.5` where SQLite divides its integer as an integer.
     # A float on the other side (`x / 2.0`, `x / Avg(…)`) makes SQLite divide as floats too, and
     # PostgreSQL's `numeric / float8` is a float: no engine drops the fraction.
-    left, right = _whole_numeric_operand(p.field_name, instruc), _whole_numeric_operand(p.operand, instruc)
-    real(x, side) = side === nothing && (k = _concat_textless_operand(x, instruc); k !== nothing && k[1] in (:float, :numeric))
+    left, right = _whole_numeric_operand_at(p.field_name, instruc), _whole_numeric_operand_at(p.operand, instruc)
+    real(x, side) = side === nothing && (k = _with_field_part_open(_concat_textless_operand, x, instruc)::Union{Nothing,Tuple{Symbol,String}};
+                                         k !== nothing && k[1] in (:float, :numeric))
     side = left !== nothing && !real(p.operand, right) ? left :
            right !== nothing && !real(p.field_name, left) ? right : nothing
     # #1150: a quotient the walk names a decimal or a float is one on every engine — SQLite casts its
@@ -1606,26 +1631,26 @@ function _whole_numeric_operand(p::CTEReference, instruc::SQLInstruction)
   side = _cte_division(p, instruc, :divided)
   return side === nothing ? nothing : (side[1], "the CTE column `$(_concat_operand_label(p))` ($(side[2]))")
 end
-_whole_numeric_operand(p::SQLField, instruc::SQLInstruction) = _whole_numeric_operand(p.field, instruc)
+_whole_numeric_operand(p::SQLField, instruc::SQLInstruction) = _whole_numeric_operand_at(p.field, instruc)   # #1599 layer 5
 _whole_numeric_operand(p::FExpression, instruc::SQLInstruction) =
-  something(_whole_numeric_operand(p.field_name, instruc),
-            p.operation === nothing ? nothing : _whole_numeric_operand(p.operand, instruc), Some(nothing))
+  something(_whole_numeric_operand_at(p.field_name, instruc),
+            p.operation === nothing ? nothing : _whole_numeric_operand_at(p.operand, instruc), Some(nothing))
 function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLInstruction)
   name = p.function_name
   # A declared type is the cast the SQL renders, so it decides alone. (A declared decimal over an
   # integer, divided, was SQLite's departure until #1150: its kind is a decimal, which SQLite now
   # divides as REAL, `_division_sql`.) `Coalesce`/`Greatest`/`Least` always carry the key.
-  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
-  declared isa AbstractString && !isempty(declared) && return nothing
+  # #1599 layer 5: the declared name at `String` (`_declared_string`).
+  _declared_string(get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)) === nothing || return nothing
   if name in _NUMERIC_WHOLE_FUNCTIONS
     # Over a whole number BY TYPE only. An operand PormG cannot type (an untyped `Case`, a JSON key
     # lookup) is let through, not guessed at: a float under `FLOOR` is a REAL on SQLite, which
     # divides as one, so the engines agree there and the integer answer would be a false refusal.
-    operand = p.column isa AbstractVector ? first(p.column) : p.column
+    operand = _first_operand(p)   # #1599 layer 5: the first operand at the column's type (`_first_of`)
     # #1147: over an integer the function is that integer on both engines, so it is `numeric` on
     # PostgreSQL only when its operand is. Asked first, because the operand's integer kind is the one
     # fact that differs per engine here, and its answer is the same on both.
-    side = _whole_numeric_operand(operand, instruc)
+    side = _whole_numeric_operand_at(operand, instruc)::Union{Nothing,Tuple{Symbol,String}}
     return side === nothing ? nothing : (side[1], "`$(name)(…)` over $(side[2])")
   end
   # (A value that is one of several, some whole and some fractional — `Coalesce("grid", 0.5)`, a `Case`
@@ -1645,7 +1670,7 @@ function _whole_numeric_operand(p::Union{FObject,WindowFunction}, instruc::SQLIn
     # arithmetic is no such sum: the walk types it since #1034 step 5a, an interval, no integer quotient.
     side = name == "SUM" && _infer_kind_any(operand, instruc, _AllKinds()) === nothing ?
            (:numeric_whole_division, "a value PormG cannot type") : nothing
-    side === nothing && (side = _with_field_part_open(_whole_numeric_operand, operand, instruc))
+    side === nothing && (side = _with_field_part_open(_whole_numeric_operand, operand, instruc)::Union{Nothing,Tuple{Symbol,String}})
     side === nothing || return (side[1], "`$(name)(…)` over $(side[2])")
   end
   return nothing
@@ -1660,6 +1685,17 @@ function _whole_numeric_operand(p::SubqueryObject, instruc::SQLInstruction)
   return side === nothing ? nothing : (side[1], "a Subquery projecting $(side[2])")
 end
 _whole_numeric_operand(::Any, ::SQLInstruction) = nothing
+# `_whole_numeric_operand` over a value held untyped (an `F` operand), at its type (#1599 layer 5): the methods above in
+# their dispatch order.
+function _whole_numeric_operand_at(@nospecialize(x), instruc::SQLInstruction)::Union{Nothing,Tuple{Symbol,String}}
+  x isa CTEReference && return _whole_numeric_operand(x, instruc)
+  x isa SQLField && return _whole_numeric_operand(x, instruc)
+  x isa FExpression && return _whole_numeric_operand(x, instruc)
+  x isa FObject && return _whole_numeric_operand(x, instruc)
+  x isa WindowFunction && return _whole_numeric_operand(x, instruc)
+  x isa SubqueryObject && return _whole_numeric_operand(x, instruc)
+  return nothing
+end
 # #1111 — the first operand of a rounding function that is an integer division (`Round(Floor("n") / 2)`,
 # `Ceil(Sum("id") / 2)`): its `(kind, what)`, or `nothing`. The function cannot bring the half back —
 # PostgreSQL rounds `7.5` and SQLite rounds `7` — so it is the division's split, read wherever the
@@ -1722,8 +1758,8 @@ function _textless_number(p::Union{FObject,WindowFunction}, instruc::SQLInstruct
   name = p.function_name
   # A declared type is the cast the SQL renders, so it decides alone: `Cast(points, IntegerField())`
   # is an integer whatever `points` is.
-  declared = get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing)
-  if declared isa AbstractString && !isempty(declared)
+  declared = _declared_string(get(p.kwargs, name == "CAST" ? "type" : "output_field", nothing))   # #1599 layer 5
+  if declared !== nothing
     field = _sql_type_field(declared)
     field isa Models.sFloatField && return (:float, "a value cast to $(declared)")
     if field isa Models.sDecimalField
@@ -1805,8 +1841,22 @@ function _zero_scale_cast_textless(p::Union{FObject,WindowFunction}, declared::A
   return nothing
 end
 _textless_number(x::Union{Bool,AbstractFloat,Decimals.Decimal}, ::SQLInstruction) = _textless_literal(x)
-_textless_number(p::SQLText, ::SQLInstruction) = _textless_literal(p.field)
+_textless_number(p::SQLText, ::SQLInstruction) = _textless_literal_at(p.field)   # #1599 layer 5: the literal at its type
 _textless_number(::Any, ::SQLInstruction) = nothing
+# `_textless_number` over a value held untyped (an `F` operand), at its type (#1599 layer 5): the methods in their
+# dispatch order.
+function _textless_number_at(@nospecialize(x), instruc::SQLInstruction)::Union{Nothing,Tuple{Symbol,String}}
+  x isa String && return _textless_number(x, instruc)
+  x isa CTEReference && return _textless_number(x, instruc)
+  x isa JoinedReference && return _textless_number(x, instruc)
+  x isa SQLField && return _textless_number(x, instruc)
+  x isa FExpression && return _textless_number(x, instruc)
+  x isa FObject && return _textless_number(x, instruc)
+  x isa WindowFunction && return _textless_number(x, instruc)
+  x isa SQLText && return _textless_number(x, instruc)
+  x isa Union{Bool,AbstractFloat,Decimals.Decimal} && return _textless_literal_at(x)
+  return nothing
+end
 
 # #888, #1153 — a `Subquery(...)`'s READ record, for the one projection the type walk did not file a
 # kind for: a wildcard projection, whose expression the walk never sees (`_infer_kind(::SubqueryObject,
@@ -1963,6 +2013,8 @@ end
 # formatter would normalize it (`ABCDEF01-…` → `abcdef01-…`, `2001:DB8::1` → `2001:db8::1`) away
 # from what the column holds — a silent no-match (review of #929). A `UUIDField` column there holds
 # the canonical text already, which is why a subquery over one IS typed (`subquery_formatters`).
+@noinline _declared_type_formatter_other(@nospecialize(type_name::AbstractString), instruc::SQLInstruction) =
+  _declared_type_formatter(type_name, instruc)
 function _declared_type_formatter(type_name::AbstractString, instruc::SQLInstruction)
   field = _sql_type_field(type_name)
   field === nothing && return nothing

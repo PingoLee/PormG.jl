@@ -47,7 +47,7 @@ else is untested in a trimmed binary, even where it compiles.
   and `Round` over a column, `Count` and `Sum` grouped by a column, `Upper(Lower(…))`, a `Case` whose `then`
   is an `F`; `__@in` a queryset, `Exists` correlated with `OuterRef`, a correlated scalar `Subquery` as a
   column or on the right of a filter; `values()` and `order_by()` across a join; a CTE read as a column and
-  in a filter; `RowNumber` over a partition and `Rank` over an order.
+  in a filter, over a body projecting a `Subquery`, an `Exists`, a window, a `Case`, a `Cast` or `F` arithmetic; `RowNumber` over a partition and `Rank` over an order.
 
   The untyped read (`.list()` and `list(:dict)`, #1823) has run on the three drivers too.
 
@@ -266,7 +266,10 @@ its server has no TLS, so no TLS handshake has run in a trimmed binary yet (`req
 | **no password** | run (CI) | run (CI), `sslmode=disable` only |
 
 Postgres.jl fills a missing password and `sslmode` from the `PGPASSWORD` and `PGSSLMODE` environment variables,
-so with either set the connection takes another of the four shapes.
+so with either set the connection takes another of the four shapes. It fills the other parameters from their own
+variables too (`PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLCAPATH`,
+`PGGSSENCMODE`, `PGKRBSRVNAME`): with any of them set, the connection is outside the four shapes and a trimmed
+binary fails at the connect.
 
 Any other parameter (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`,
 `statement_timeout`, …) takes Postgres.jl's own connect, which a trimmed binary has no code for. The

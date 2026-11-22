@@ -135,6 +135,13 @@ step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
 step	join	CTE filter 1 rows: Brazilian Grand Prix 1
 step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
 step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
+step	cte	Subquery 2 rows: Monaco Grand Prix 2008, Brazilian Grand Prix 2008
+step	cte	Exists 2 rows: Monaco Grand Prix false, Brazilian Grand Prix true
+step	cte	RowNumber 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
+step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
+step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	elapsed_ms	1
 ```
 
@@ -162,7 +169,8 @@ raises, the read after it does not show the change, or the delete that undoes it
 function read (a number function, an aggregate, a nested function or a `Case` whose `then` is an `F`) raises or returns
 other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
 join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
-over a partition and an order) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
+over a partition and an order) does, 26 when a CTE read over a body the typed copy and the CTE typing take (a
+`Subquery`, `Exists`, `RowNumber`, `Case`, `Cast` or `F` column, and a `Case` over a list) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
 does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded. 24 when the
 user transactions do not commit or roll back as their typed reads expect, and 25 when `close_all!()` leaves a
 connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
@@ -260,6 +268,13 @@ step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
 step	join	CTE filter 1 rows: Brazilian Grand Prix 1
 step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
 step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
+step	cte	Subquery 2 rows: Monaco Grand Prix 2008, Brazilian Grand Prix 2008
+step	cte	Exists 2 rows: Monaco Grand Prix false, Brazilian Grand Prix true
+step	cte	RowNumber 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
+step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
+step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -388,6 +403,13 @@ step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
 step	join	CTE filter 1 rows: Brazilian Grand Prix 1
 step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
 step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
+step	cte	Subquery 2 rows: Monaco Grand Prix 2008, Brazilian Grand Prix 2008
+step	cte	Exists 2 rows: Monaco Grand Prix false, Brazilian Grand Prix true
+step	cte	RowNumber 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
+step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
+step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -466,7 +488,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO trim_trust;       -- in pormg_tri
 -- host  pormg_trim  trim_trust  127.0.0.1/32  trust
 ```
 
-then pass `PORMG_TRIM_TRUST_USER=trim_trust` through the runner's environment. With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
+then pass `PORMG_TRIM_TRUST_USER=trim_trust` through the runner's environment. With `PGPASSWORD` or `PGSSLMODE`
+exported (even empty), the `shape` step refuses to run and the binary exits 23: Postgres.jl would fill the
+missing password or `sslmode` from it, and the shapes would not be the ones named. With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
 none and an `sslmode` or none (PormG adds `options` itself). Any other connection parameter
 (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`, `statement_timeout`, …) takes
 Postgres.jl's own connect, which a trimmed binary has no code for: it fails at the connect with

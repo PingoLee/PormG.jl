@@ -135,6 +135,13 @@ step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
 step	join	CTE filter 1 rows: Brazilian Grand Prix 1
 step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
 step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
+step	cte	Subquery 2 rows: Monaco Grand Prix 2008, Brazilian Grand Prix 2008
+step	cte	Exists 2 rows: Monaco Grand Prix false, Brazilian Grand Prix true
+step	cte	RowNumber 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
+step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
+step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	elapsed_ms	1
 ```
 
@@ -162,7 +169,8 @@ raises, the read after it does not show the change, or the delete that undoes it
 function read (a number function, an aggregate, a nested function or a `Case` whose `then` is an `F`) raises or returns
 other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
 join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
-over a partition and an order) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
+over a partition and an order) does, 26 when a CTE read over a body the typed copy and the CTE typing take (a
+`Subquery`, `Exists`, `RowNumber`, `Case`, `Cast` or `F` column, and a `Case` over a list) does. 22 when the cascading delete raises, leaves a pit stop of the deleted race,
 does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded. 24 when the
 user transactions do not commit or roll back as their typed reads expect, and 25 when `close_all!()` leaves a
 connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
@@ -260,6 +268,13 @@ step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
 step	join	CTE filter 1 rows: Brazilian Grand Prix 1
 step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
 step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
+step	cte	Subquery 2 rows: Monaco Grand Prix 2008, Brazilian Grand Prix 2008
+step	cte	Exists 2 rows: Monaco Grand Prix false, Brazilian Grand Prix true
+step	cte	RowNumber 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
+step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
+step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -388,6 +403,13 @@ step	join	CTE column 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 1
 step	join	CTE filter 1 rows: Brazilian Grand Prix 1
 step	join	RowNumber partition 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
 step	join	Rank order 2 rows: Brazilian Grand Prix 1, Monaco Grand Prix 2
+step	cte	Subquery 2 rows: Monaco Grand Prix 2008, Brazilian Grand Prix 2008
+step	cte	Exists 2 rows: Monaco Grand Prix false, Brazilian Grand Prix true
+step	cte	RowNumber 2 rows: Monaco Grand Prix 1, Brazilian Grand Prix 2
+step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
+step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
+step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25

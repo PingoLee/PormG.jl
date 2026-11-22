@@ -396,8 +396,10 @@ end
 # #1599 layer 5: the value unspecialized (its callers hold a node's untyped slot: a `Case` branch, an operand), the
 # text compared at `String` first; specialized on the value, the call had no compiled target in a trimmed image
 # (`_is_null_literal(::Int64)` on a `Case` value). The same answer for every value.
-_is_null_literal(@nospecialize(x)) = x isa Missing || x === nothing ||
-                                     (x isa String ? x == "NULL" : (x isa AbstractString && x == "NULL"))
+_is_null_literal(@nospecialize(x))::Bool = x isa Missing || x === nothing ||   # #1599 layer 5: a `Bool`, so `!` over it is static
+                                     (x isa String ? x == "NULL" : (x isa AbstractString && _null_text_other(x)))
+# Another string type compared as before, behind one call (#1599 layer 5).
+@noinline _null_text_other(@nospecialize(x))::Bool = x == "NULL"
 
 function _resolve_window_kwarg(value, instruc::SQLInstruction; sql_type::Union{Nothing,String}=nothing)
   if _is_null_literal(value)

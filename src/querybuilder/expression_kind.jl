@@ -1242,7 +1242,7 @@ end
 # row. An engine that applies the declaration itself records the width-less decimal (#1212).
 function _unapplied_declared_decimal(x, instruc::SQLInstruction)
   (x isa FObject && instruc.connection !== nothing && _declares_decimal(x, instruc)) || return nothing
-  k = _declared_kind(_declared_cast(x), instruc.connection)
+  k = _declared_kind(_declared_string(_declared_cast(x))::String, instruc.connection)   # #1599 layer 5: at `String`
   (k isa CDecimal && k.precision !== nothing && k.scale !== nothing) || return nothing
   return k.precision <= _unapplied_decimal_width(instruc.connection) ? k : nothing
 end

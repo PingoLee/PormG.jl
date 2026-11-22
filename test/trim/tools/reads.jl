@@ -305,7 +305,7 @@ const TextRow = NamedTuple{(:name, :s), Tuple{String, String}}
 
 # A CTE read over each body `.with()` copies through the typed tree copy, and whose column the CTE typing names through
 # the walk (#1599 layer 5): a body projecting a correlated scalar `Subquery`, an `Exists`, a window, a `Case`, a `Cast`,
-# `F` arithmetic and a `Case` over a mutable literal (a `Decimal`), each joined back to the race on `circuitid`, its column
+# `F` arithmetic and a `Case` over a mutable literal (a list), each joined back to the race on `circuitid`, its column
 # projected and read into its typed row. Exit code 26 when a read raises or returns other rows.
 function cte_step()::Bool
     try
@@ -324,10 +324,10 @@ function cte_step()::Bool
                        r -> string(r.name, " ", r.s), "Monaco Grand Prix 6, Brazilian Grand Prix 18", "s")
         ok &= cte_line("F arithmetic", M.Race.objects.values("circuitid", "v" => F("round") + 1), CountRow,
                        r -> string(r.name, " ", r.n), "Monaco Grand Prix 7, Brazilian Grand Prix 19", "n")
-        # The mutable literal sits in a condition, so the column reads as one type everywhere: a `Decimal` value's own
-        # read type is each engine's (a float on SQLite, a decimal on the servers).
-        dec = PormG.QueryBuilder.Decimals.Decimal(0, 105, -1)   # 10.5
-        ok &= cte_line("Case over a Decimal", M.Race.objects.values("circuitid", "v" => Case(When("round__@gt" => dec, then = 1), default = 0)),
+        # The mutable literal (a `Vector` the caller still holds) sits in a condition, so the column reads as one type
+        # everywhere.
+        names = ["Brazilian Grand Prix"]
+        ok &= cte_line("Case over a list", M.Race.objects.values("circuitid", "v" => Case(When("name__@in" => names, then = 1), default = 0)),
                        CountRow, r -> string(r.name, " ", r.n), "Monaco Grand Prix 0, Brazilian Grand Prix 1", "n")
         return ok
     catch e

@@ -1158,6 +1158,18 @@ function _ensure_unique_bulk_update_keys!(df::_BulkFrame,
     only_column = key_columns[1]
     only_column isa Vector{Int64} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
     only_column isa Vector{String} && return _ensure_unique_bulk_update_key(only_column, df.row_count, dynamic_filters)
+  elseif length(key_columns) == 2
+    # #1599 layer 7: two match columns of integers or of text (`match_on = ["year", "round"]`), checked by a tuple of
+    # the two values at their types: the same tuple, equal and hashed as the run-time one was, so the same rows are
+    # duplicates and the first duplicate is reported by the same two rows.
+    a, b = key_columns[1], key_columns[2]
+    if a isa Vector{Int64}
+      b isa Vector{Int64} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+      b isa Vector{String} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+    elseif a isa Vector{String}
+      b isa Vector{Int64} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+      b isa Vector{String} && return _ensure_unique_bulk_update_key2(a, b, df.row_count, dynamic_filters)
+    end
   end
   return _ensure_unique_bulk_update_keys_other(df, key_columns, dynamic_filters)
 end
@@ -1165,6 +1177,19 @@ function _ensure_unique_bulk_update_key(column::Vector{T}, row_count::Int, dynam
   seen_keys = Dict{T, Int}()
   for index in 1:row_count
     key = column[index]
+    if haskey(seen_keys, key)
+      filters_text = join(dynamic_filters, ", ")
+      throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))
+    end
+    seen_keys[key] = index
+  end
+  return nothing
+end
+function _ensure_unique_bulk_update_key2(a::Vector{A}, b::Vector{B}, row_count::Int,
+                                         dynamic_filters::Vector{String}) where {A, B}
+  seen_keys = Dict{Tuple{A, B}, Int}()
+  for index in 1:row_count
+    key = (a[index], b[index])
     if haskey(seen_keys, key)
       filters_text = join(dynamic_filters, ", ")
       throw(QueryBuildError("Error in bulk_update, duplicate dynamic filter key values detected for filters [$filters_text] at rows $(seen_keys[key]) and $(index)."))

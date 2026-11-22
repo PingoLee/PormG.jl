@@ -1143,3 +1143,21 @@ end
   end
   @test !PGExt._interrupt_in_causes(_pg_error("42P01"))
 end
+
+# What: the extension's typed scan for a character's last index (`_last_char_index`, #1599 layer 2), against Base's
+#   `findlast`, which it replaces on the URL check and the refusal masking.
+# Expected: the same index, or `nothing`, for ASCII and multi-byte text, a `String` and a `SubString`, the character at
+#   either end, repeated, or absent.
+# Why: a different index would move where the URL check splits a password's tail, or what the masking keeps.
+@testset "the typed last-index scan answers as findlast (#1599 layer 2)" begin
+  PG = Base.get_extension(PormG, :PormGPostgresExt)
+  for s in ("", "@", "a@b", "@ab", "ab@", "a@b@c", "sem arroba", "pä@ß@ö", "日本@語", "\"q\" and \"r\"", "x\"")
+    for c in ('@', '"', 'ö', 'z')
+      @test (s, c, PG._last_char_index(s, c)) == (s, c, findlast(c, s))
+      t = string("##", s, "##")
+      sub = SubString(t, 3, prevind(t, prevind(t, lastindex(t))))
+      @test (s, c, PG._last_char_index(sub, c)) == (s, c, findlast(c, sub))
+    end
+  end
+end
+

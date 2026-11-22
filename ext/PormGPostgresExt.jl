@@ -383,11 +383,24 @@ const _CHAR_LITERAL = r"'(?:\\(?:'|[^']*)|[^'\\])'"
 # extension does for libpq's messages: masking quote PAIRS would leak a value that itself contains a
 # `"`. Masking the literals does not depend on the message's shape, so it holds for whichever driver
 # and URIs release produced it; PormG's own escape check can only cover the shapes it knows.
+# The last index of `c` in `s`, or `nothing` (#1599 layer 2). Base's `findlast(c, s)` forwards to
+# `findlast(::Function, s)`, which Julia does not specialize on its predicate, so the `findprev` inside is a
+# run-time call: a trimmed Postgres.jl connect over a URL with a query (`?sslmode=disable`) raised
+# `MethodError` on `findprev(==('@'), ::SubString, ::Int)` while checking the options for a spilled password.
+function _last_char_index(s::Union{String,SubString{String}}, c::Char)::Union{Nothing,Int}
+  i = lastindex(s)
+  while i >= firstindex(s)
+    @inbounds s[i] == c && return i
+    i = prevind(s, i)
+  end
+  return nothing
+end
+
 function _mask_quoted(msg::AbstractString)::String
   msg = replace(msg, _CHAR_LITERAL => "'****'")
   first_q = findfirst('"', msg)
   first_q === nothing && return PormG.Configuration.redact_secret(msg)
-  last_q = findlast('"', msg)
+  last_q = _last_char_index(msg::String, '"')
   tail = last_q == first_q ? "" : msg[nextind(msg, last_q):end]
   return PormG.Configuration.redact_secret(msg[1:first_q] * "****\"" * tail)
 end
@@ -552,7 +565,8 @@ function _checked_params(conn_str::AbstractString;
     query = query_start === nothing ? "" : conn_str[query_start:end]
     for m in eachmatch(_URL_QUERY_PARAM_RE, query)
       raw = m.captures[2]
-      at = findlast('@', raw)
+      raw isa SubString{String} || continue   # the pattern's second group always takes part; read at its type
+      at = _last_char_index(raw, '@')
       at === nothing && continue
       tail = _pct_decode(raw[nextind(raw, at):end])
       if at == firstindex(raw) || isempty(tail) || any(in("/?:,"), tail)

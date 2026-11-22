@@ -79,8 +79,16 @@ else is untested in a trimmed binary, even where it compiles.
 - **A user transaction** (#1599 layer 2), on the three drivers: a `run_in_transaction(key) do … end`
   block that commits, and an `atomic(key) do … end` block that rolls back when the block raises its own
   error, which reaches the caller unchanged. A typed read after each shows the outcome.
-- **`bulk_update`** from a `Vector` of `NamedTuple`s with `columns=` and one `match_on=` key, and
+- **`bulk_update`** from a `Vector` of `NamedTuple`s with `columns=` and one `match_on=` key, with a
+  constant `filters=` predicate (`filters = ["year" => 2010]`) and with two `match_on=` keys, and
   **`update_or_create`** and **`get_or_create`**, on the three drivers (#1694).
+- **A delete through `SET_DEFAULT`** (the child's key set back to its `default`) and a **self-referential
+  `CASCADE`** (a chain of rows of one table deleted level by level, #1377), on the three drivers (#1694).
+- **The bulk writers' refusals** before any SQL, each the error type and text the JIT raises: a query or a
+  value that is no table, ragged or empty columns, a `columns=` of the wrong type or mapping a field twice, a
+  column in another case, a primary key set, a `match_on=` pair or unknown field, a per-row key or a
+  non-predicate in `filters=`, a key given twice, a joined path, an ordered handler or one with a CTE, and the
+  `returning=` and `on_conflict=` misuses (#1694).
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
   with the server's SQLSTATE (MySQL and PostgreSQL; SQLite has none), its message, and the driver's
   error as the cause ([Error Handling](errors.md)). `IntegrityError` and `OperationalError` take the
@@ -91,8 +99,8 @@ else is untested in a trimmed binary, even where it compiles.
 PormG checks these with a fixture application, `test/trim/` in the repository. Its `Trim (juliac)`
 workflow builds and runs it every night, on SQLite and against a MySQL 8.4 and a PostgreSQL 18 server:
 the reads above (lookups, expressions, functions, subqueries, joins, CTEs, windows, the untyped read),
-the writes above (create, update, delete, the cascading delete, `bulk_insert`, `bulk_update`,
-`update_or_create`, `get_or_create`), the refusals and the refused statements, and on SQLite the pool's
+the writes above (create, update, delete, the cascading, `SET_DEFAULT` and self-referential deletes,
+`bulk_insert`, `bulk_update`, `update_or_create`, `get_or_create`), the refusals and the refused statements, and on SQLite the pool's
 tasks. The SQLite refused statement is checked by hand.
 
 ## What does not work yet
@@ -100,12 +108,12 @@ tasks. The SQLite refused statement is checked by hand.
 - **Writes beyond those listed above** (#1694) have not run in a trimmed binary. Use the JIT for
   them, or a separate process:
   - `bulk_copy`, `bulk_insert` beyond the input above, and `bulk_update` beyond the input above
-    (`filters=`, several `match_on=` keys);
+    (a `filters=` value of a type other than an integer, text, a `Bool`, a float, a date, a timestamp or a
+    list of integers or text; three or more `match_on=` keys, or keys of other types);
   - a `bulk_insert` row refused for any reason other than the one that has run: a collection
     in a column, an SQL expression for a value, a formatter that raises something other than an
     `InvalidValueError`, or a value PormG fills itself. The pass that names the cell is built to run
     trimmed in each case, but no trimmed binary has refused one;
-  - a delete through `SET_DEFAULT`, or a self-referential `CASCADE`;
   - an upsert (`bulk_insert(…; on_conflict)`) and deleting one row through `delete(row)`.
 - **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
   by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three

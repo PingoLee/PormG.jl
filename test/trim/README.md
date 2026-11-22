@@ -174,7 +174,8 @@ over a partition and an order) does, 26 when a CTE read over a body the typed co
 does not clear the driver's debut race, reports other counts, or changes the rows `prep.jl` seeded. 24 when the
 user transactions do not commit or roll back as their typed reads expect, and 25 when `close_all!()` leaves a
 connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
-pools"). The Postgres.jl variant also exits 23 when one of its connection shapes fails.
+pools"). 27 to 30 are the write residue's steps (see "The write residue"). The Postgres.jl variant also exits
+23 when one of its connection shapes fails.
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -213,6 +214,24 @@ break the trimmed read is checked by running it by hand on the branch, or by the
 The fixture's `Manifest.toml` is not committed, so each run resolves the latest SQLite.jl and its
 dependencies: a red nightly with no PormG change between it and the last green one may be an upstream
 release, and the job's `Instantiate the fixture` step prints the versions it resolved.
+
+## The write residue (#1694)
+
+Every write entry runs four more steps after the cascading delete (`tools/writes.jl`), each leaving the
+database as it found it:
+
+- `bulk_update_more` (exit code 27): two bulk-inserted races updated through `filters = ["year" => 2010]`
+  (only the 2010 row matches) and then through two `match_on=` keys, `year` and `round`, read back typed and
+  deleted.
+- `set_default` (exit code 28): a circuit of the step's own and a constructor whose home it is; deleting the
+  circuit sets the constructor's `home_circuitid` back to `DEFAULT_CIRCUIT_ID` (`db/models.jl`, seeded by each
+  `prep.jl` with that fixed id), and the constructor is deleted.
+- `self_cascade` (exit code 29): a chain of four constructors (each `parentid` the one before); deleting the
+  first deletes the other three through the collector's walk of the table's own key (#1377), and the chain
+  `prep.jl` seeds (Toleman, Benetton, Renault) is left as it was.
+- `bulk_refusal` (exit code 30): twenty-two inputs the bulk writers refuse before any SQL, one line each with
+  the refusal's type and text. The job compares these lines with its JIT control's (`tools/same_lines.sh`),
+  since a refusal's text can name engine-specific details.
 
 ## Transactions and closing the pools
 

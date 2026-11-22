@@ -366,8 +366,8 @@ function _deferred_kwarg_sql_type(v::SQLTypeFunction, key::String, resolved_kwar
     return _infer_parameter_sql_type(value, instruc; fallback="integer")
   end
 
-  output_field = get(resolved_kwargs, "output_field", nothing)
-  if output_field isa AbstractString && !isempty(output_field)
+  output_field = _declared_string(get(resolved_kwargs, "output_field", nothing))   # #1599 layer 5: at `String`
+  if output_field !== nothing
     # #696: `output_field` becomes the bind cast `$n::<type>` here — a fourth place the type string
     # reaches the SQL text. The dialect helper validates it and gives the engine's spelling.
     _casts_bind_parameters(instruc.connection) || return nothing

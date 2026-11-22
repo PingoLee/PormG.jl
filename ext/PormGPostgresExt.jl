@@ -379,10 +379,6 @@ end
 # the character it rejected, which in #1243 was one character of a password.
 const _CHAR_LITERAL = r"'(?:\\(?:'|[^']*)|[^'\\])'"
 
-# Mask every character literal, then everything between the first and the last `"`, as the LibPQ
-# extension does for libpq's messages: masking quote PAIRS would leak a value that itself contains a
-# `"`. Masking the literals does not depend on the message's shape, so it holds for whichever driver
-# and URIs release produced it; PormG's own escape check can only cover the shapes it knows.
 # The last index of `c` in `s`, or `nothing` (#1599 layer 2). Base's `findlast(c, s)` forwards to
 # `findlast(::Function, s)`, which Julia does not specialize on its predicate, so the `findprev` inside is a
 # run-time call: a trimmed Postgres.jl connect over a URL with a query (`?sslmode=disable`) raised
@@ -396,6 +392,10 @@ function _last_char_index(s::Union{String,SubString{String}}, c::Char)::Union{No
   return nothing
 end
 
+# Mask every character literal, then everything between the first and the last `"`, as the LibPQ
+# extension does for libpq's messages: masking quote PAIRS would leak a value that itself contains a
+# `"`. Masking the literals does not depend on the message's shape, so it holds for whichever driver
+# and URIs release produced it; PormG's own escape check can only cover the shapes it knows.
 function _mask_quoted(msg::AbstractString)::String
   msg = replace(msg, _CHAR_LITERAL => "'****'")
   first_q = findfirst('"', msg)
@@ -564,8 +564,7 @@ function _checked_params(conn_str::AbstractString;
     query_start = findfirst('?', conn_str)
     query = query_start === nothing ? "" : conn_str[query_start:end]
     for m in eachmatch(_URL_QUERY_PARAM_RE, query)
-      raw = m.captures[2]
-      raw isa SubString{String} || continue   # the pattern's second group always takes part; read at its type
+      raw = m.captures[2]::SubString{String}   # the pattern's second group always takes part; read at its type
       at = _last_char_index(raw, '@')
       at === nothing && continue
       tail = _pct_decode(raw[nextind(raw, at):end])

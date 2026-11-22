@@ -6785,6 +6785,11 @@ end
     for (A, B) in ((Int64, Int64), (Int64, String), (String, Int64), (String, String))
       @test ((A, B), _dynamic_calls(QB._ensure_unique_bulk_update_key2, (Vector{A}, Vector{B}, Int, Vector{String}))) == ((A, B), String[])
     end
+    # A NULL cell in the Postgres.jl decoded rows a key read takes is parsed by a static call at `Missing` (the open arm
+    # called the parser at run time: `MissingCodeError` on `ReadParser(::Missing)` in the trimmed `SET_DEFAULT` delete).
+    PG = Base.get_extension(PormG, :PormGPostgresExt)
+    stmts = [string(st) for (ci, _) in code_typed(PG._pg_parsed, (Any, PormG.ReadParser); optimize = true) for st in ci.code]
+    @test any(x -> occursin(r"===\s.*missing", x), stmts)   # the NULL arm, inlined: base had none
     d = _dynamic_calls(QB.update_field, (PormG.ConnectionPool.SQLiteConnectionPool, PormG.Models.ModelType, String,
                                          Union{Nothing,Int64}, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}},
                                          Symbol, Any))

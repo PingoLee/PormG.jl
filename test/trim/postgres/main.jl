@@ -101,6 +101,47 @@ end
 
 include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
 include(joinpath(@__DIR__, "..", "tools", "reads.jl"))
+include(joinpath(@__DIR__, "..", "tools", "connections.jl"))
+
+# The URL of one connection shape: `user` with `password` or none (`nothing`), and an `sslmode` or none. It holds the
+# password when there is one: never print it.
+function shape_url(s::TrimServer, user::String, password::Union{Nothing, String}, sslmode::Union{Nothing, String})::String
+    auth = password === nothing ? trim_urlencode(user) : string(trim_urlencode(user), ":", trim_urlencode(password))
+    query = sslmode === nothing ? "" : string("?sslmode=", sslmode)
+    return string("postgresql://", auth, "@", s.host, ":", s.port, "/", trim_urlencode(s.database), query)
+end
+
+# The three Postgres.jl connection shapes beyond the fixture's own (a password, no `sslmode`), each a connection of its
+# own, registered under its own key, read through it (`db(key)`), and closed (#1599 layer 2, #1614): `_dial`'s typed
+# arms for a password with an `sslmode`, and no password with an `sslmode` or none. `sslmode = disable` needs no TLS on
+# the server. The two shapes without a password log in as the role `PORMG_TRIM_TRUST_USER` names, which the server
+# trusts on this database (`prep.jl` grants it the read); unset, the step says so and skips them, never passing
+# them silently. Exit code 23 when a shape's read raises or does not return the Monaco race.
+function shapes_step(server::TrimServer)::Bool
+    try
+        trust = trim_env("PORMG_TRIM_TRUST_USER", "")
+        names = String["password, sslmode"]
+        urls = String[shape_url(server, server.user, server.password, "disable")]
+        if !isempty(trust)
+            push!(names, "no password"); push!(urls, shape_url(server, trust, nothing, nothing))
+            push!(names, "no password, sslmode"); push!(urls, shape_url(server, trust, nothing, "disable"))
+        end
+        ok = true
+        for i in eachindex(urls)
+            key = string(KEY, "_shape", i)
+            PormG.Configuration.register_connection(key, urls[i]; adapter = "PostgreSQL", postgres_driver = "Postgres",
+                                                     env = "prod", pool_size = 1)
+            rows = M.Race.objects.filter("circuitid__country" => "Monaco").db(key).list(RaceRow)
+            PormG.Configuration.close_pool!(key)
+            say("shape", string(names[i], ": ", length(rows), " rows"))
+            ok &= length(rows) == 1 && rows[1].year == 2008
+        end
+        isempty(trust) && say("shape", "no password: skipped (PORMG_TRIM_TRUST_USER unset)")
+        return ok
+    catch e
+        failed("shape", e); return false
+    end
+end
 
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
@@ -139,8 +180,12 @@ function (@main)(args::Vector{String})::Cint
     update_or_create_step(circuitid) || return Cint(16)
     get_or_create_step(circuitid) || return Cint(18)
     cascade_step(circuitid) || return Cint(22)  # the cascading delete (`tools/writes.jl`, #1694)
+    transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
+    shapes_step(server) || return Cint(23)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
-    fail_step(PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.PostgresConnectionPool{:postgres}) || return Cint(6)
+    pool = PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.PostgresConnectionPool{:postgres}
+    fail_step(pool) || return Cint(6)
+    close_all_step(pool) || return Cint(25)  # last: a trimmed binary runs no atexit hook
     return Cint(0)
 end

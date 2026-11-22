@@ -118,6 +118,7 @@ include(joinpath(@__DIR__, "tools", "writes.jl"))
 # The read steps after the first typed read (`compare_step`, `order_step`) are in `tools/reads.jl`, shared with the
 # server variants, so every binary prints the same lines (#1599 layer 5).
 include(joinpath(@__DIR__, "tools", "reads.jl"))
+include(joinpath(@__DIR__, "tools", "connections.jl"))
 
 # `bulk_step` (a `bulk_insert` of two rows, read back) is in `tools/writes.jl`, shared with the server variants (#1614).
 

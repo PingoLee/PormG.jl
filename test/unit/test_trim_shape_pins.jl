@@ -561,7 +561,7 @@ end
     # The typed read's form (#1605): the last argument is its row decoder, concrete per `T`.
     @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._fetch_on), Any, String, Nothing, Nothing, Bool,
                                                 PormG.QueryBuilder._RowDecoder{NamedTuple{(:a,),Tuple{Int}},Tuple{PormG.ReadParser}})))
-    @test isempty(_dynamic_calls(CP.with_pool, (typeof(CP._atomic_on), Any, typeof(identity), Bool)))
+    @test isempty(_dynamic_calls(CP.with_pool, (CP._Atomic{typeof(identity)}, Any)))
     # A settings entry with no pool built yet: every call that needs the pool refuses it the same way.
     PormG.config["_tsp_nopool"] = Configuration.Settings()
     try
@@ -5204,6 +5204,11 @@ end
   @testset "a transaction is entered and finished without a dynamic call (#1599 layer 2)" begin
     CP = PormG.ConnectionPool
     body = () -> 1
+    # `atomic` on a key or a settings entry, a user's `atomic(key) do … end`: the block reaches `with_pool` as the
+    # callee (`_Atomic`), not in its vararg slot (eight rows once the fixture ran one, #1599 layer 2).
+    for D in (String, PormG.Kernel.Settings)
+      @test (D, _dynamic_calls_deep(CP.atomic, (typeof(body), D); depth = 2, skip = (CP._with_unlisted_pool,))) == (D, String[])
+    end
     @test _dynamic_calls_deep(CP.run_in_transaction, (typeof(body), PormG.Kernel.Settings); depth = 1,
                               skip = (CP._with_unlisted_pool,)) == String[]
     for P in (CP.SQLiteConnectionPool, CP.PostgresConnectionPool{:libpq}, CP.PostgresConnectionPool{:postgres},

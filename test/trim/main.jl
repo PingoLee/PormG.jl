@@ -32,6 +32,9 @@ function (@main)(args::Vector{String})::Cint
     update_or_create_step(1) || return Cint(16)
     get_or_create_step(1) || return Cint(18)
     cascade_step(1) || return Cint(22)  # the cascading delete (`tools/writes.jl`, #1694)
+    transaction_step(1, TrimF1.KEY) || return Cint(24)  # a user transaction (`tools/connections.jl`, #1599 layer 2)
     elapsed_step(t0)
+    # Last: a trimmed binary runs no atexit hook, so the app closes its pools itself.
+    close_all_step(PormG.Configuration.get_settings(TrimF1.KEY).connections::PormG.ConnectionPool.SQLiteConnectionPool) || return Cint(25)
     return Cint(0)
 end

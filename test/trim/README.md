@@ -203,6 +203,17 @@ The fixture's `Manifest.toml` is not committed, so each run resolves the latest 
 dependencies: a red nightly with no PormG change between it and the last green one may be an upstream
 release, and the job's `Instantiate the fixture` step prints the versions it resolved.
 
+## Transactions and closing the pools
+
+Every write entry (`main.jl` and the two server variants) runs `transaction` (exit code 24,
+`tools/connections.jl`) after the cascading delete: a `run_in_transaction(KEY) do … end` block creates the 2016
+race and reads it inside; an `atomic(KEY) do … end` block creates the 2017 race and raises the app's own
+`TrimRollback`, which must reach the caller. Typed reads then see the 2016 race and no 2017 race, and the step
+deletes the 2016 race again. `close_all` (exit code 25) is the last step: `close_all!()`, as PormG's exit hook
+calls it, since a trimmed binary runs no `atexit` hook, checked by the key's pool holding a connection before
+and none after. The read-only entry writes nothing, so it runs neither; its `tasks` run closes its pool through
+`close_pool!` (`close` step).
+
 ## The full entry's CI job
 
 The workflow's `Trimmed write (SQLite)` job builds `main.jl` the same way, seeds a fresh run directory
@@ -308,6 +319,7 @@ The scripts below read its `build.log` the same way.
 | `PORMG_TRIM_USER` | `f1` |
 | `PORMG_TRIM_DATABASE` | `f1` |
 | `PORMG_TRIM_PASSWORD` | `f1` |
+| `PORMG_TRIM_TRUST_USER` | unset: the Postgres.jl variant's two connection shapes without a password are skipped (see that variant) |
 
 The password is read from its variable only; the binary prints `host:port/database` and never the
 user or the password. Give the fixture a database of its own (`pormg_trim`, say), never the
@@ -425,7 +437,25 @@ build-postgres/main
 
 Against a server the trimmed binary connects, authenticates, registers its result types, binds the
 parameters, runs the statement and returns the row its JIT control prints, as the MySQL variant does (with
-`server	127.0.0.1:5432/pormg_trim`). With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
+`server	127.0.0.1:5432/pormg_trim`).
+
+**Connection shapes (#1599 layer 2).** The fixture's own connection has a password and no `sslmode`. The
+`shape` step (`postgres/main.jl`) opens the other three of `_dial`'s typed arms, each as a pool of its own
+under its own key, reads the Monaco race through it (`db(key)`) and closes it: a password with
+`sslmode=disable`, and no password with `sslmode=disable` or none. The two without a password log in as the
+role `PORMG_TRIM_TRUST_USER` names, which the server must trust on the fixture's database and which needs
+`SELECT` on its tables; the CI job creates `trim_trust`, adds its `trust` line to `pg_hba.conf` and grants it
+after `prep.jl`. With the variable unset the step prints `no password: skipped` and the job fails on it, so a
+skipped shape never reads as run. Locally, as the database's superuser:
+
+```
+CREATE ROLE trim_trust LOGIN;                                    -- once
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO trim_trust;       -- in pormg_trim, after prep.jl made them
+-- pg_hba.conf, before the other host lines, then reload:
+-- host  pormg_trim  trim_trust  127.0.0.1/32  trust
+```
+
+then pass `PORMG_TRIM_TRUST_USER=trim_trust` through the runner's environment. With no variables set it stops at the connect, as the JIT does. The trimmed connect covers a connection string with a host, port, user, database, a password or
 none and an `sslmode` or none (PormG adds `options` itself). Any other connection parameter
 (`connect_timeout`, `application_name`, `sslrootcert`, `sslcert`, `sslkey`, `statement_timeout`, …) takes
 Postgres.jl's own connect, which a trimmed binary has no code for: it fails at the connect with

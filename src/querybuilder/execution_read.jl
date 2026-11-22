@@ -649,6 +649,18 @@ function _refuse_lock_outside_transaction(q::SQLObjectHandler, instruction::SQLI
   return nothing
 end
 
+# The SELECT render's `build` call, positional so the call site splits on `cte_state` (#1599 layer 5). It is
+# `nothing` when the query declares no CTE, so a keyword call passing it straight made a keyword tuple of a
+# non-concrete type, `NamedTuple{…, <:Tuple{…, Union{Nothing, Dict{String, CTEState}}}}`. Julia 1.13.3 inferred
+# `build` through that tuple; 1.13.4 gives `Any` for MySQL's build, so the render's instruction, and every call on it,
+# was dynamic there (`_CteBodyRender`'s `_build_cte_custom_model` and `_refuse_lock_outside_transaction`). Here each
+# arm's keyword tuple is concrete, and the call is the same: the same arguments, in the same order.
+function _build_select(object::SQLObjectQuery, cte_state::Union{Nothing,Dict{String,CTEState}}, table_alias, connection,
+                       parameters, outer, semi_join::Bool, cte_body::String, cte_body_correlated::Bool)
+  return build(object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
+               semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated, cte_state=cte_state)
+end
+
 # #1624 — the SELECT render, which WRITES NOTHING into `q`: it returns the SQL and the build's
 # instruction, and the instruction carries what the build produced — the parameter collector
 # (`instruction.parameters`), the kind of each projection (`instruction.projection_kinds`, #564), the
@@ -705,9 +717,8 @@ function _render_select(q::SQLObjectHandler;
 
       # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
       # Context switching for select/where/join happens inside build()
-      instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
-                          semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated,
-                          cte_state=cte_state)
+      instruction = _build_select(q.object, cte_state, table_alias, connection, parameters, outer, semi_join, cte_body,
+                                  cte_body_correlated)
       built === nothing || built(instruction)
   
       # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.

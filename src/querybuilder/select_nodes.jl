@@ -1361,18 +1361,18 @@ _one_of_intervals(forms)::CInterval =
 # whole function to it as `Cast` casts its operand. A NULL-skipping rotation (#844) declares nothing.
 _declared_output_function(v::SQLTypeFunction)::Bool =
   v isa FObject && v.function_name in ("COALESCE", "GREATEST", "LEAST", "CASE") && !haskey(v.kwargs, "rotation_of") &&
-  _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v))
+  _declared_string(_declared_cast(v)) !== nothing   # #1599 layer 5: the name at `String`
 
 # #1356, #1405 — the integer type a `Cast` or a declared `output_field` names, where this engine's own cast
 # does not apply that integer's range (`_guards_integer_cast`), or `nothing`: any other type, and an engine
 # whose cast is the meaning.
 function _guarded_integer_type(v::SQLTypeFunction, @nospecialize(conn::_SQLEngine))::Union{String,Nothing}
   v isa FObject || return nothing
-  type = _declared_cast(v)
-  (type isa AbstractString && !isempty(type)) || return nothing
+  type = _declared_string(_declared_cast(v))   # #1599 layer 5: the name at `String`
+  type === nothing && return nothing
   bits = Dialect.integer_cast_bits(type)
   (bits === nothing || !_guards_integer_cast(conn, bits)) && return nothing
-  return String(type)
+  return type
 end
 
 # #1356 — `x` cast to the integer `type` (`_guarded_integer_type`) on an engine whose cast does not apply
@@ -1463,7 +1463,7 @@ function _mysql_declared_output(v::FObject, instruc::SQLInstruction)::Union{Func
   kinds = _non_null_operand_kinds(values, instruc)
   engine = _backend_name(conn)
   interval = units && any(k -> k isa CInterval, kinds)
-  label() = v.function_name == "CAST" || _declared_cast(v) isa AbstractString && !isempty(_declared_cast(v)) ?
+  label() = v.function_name == "CAST" || _declared_string(_declared_cast(v)) !== nothing ?
             _declared_cast_label(v) : "$(_ONE_OF_NAMES[v.function_name])(…)"
   # #1321: an operand of another type the walk names is refused before this, on every engine
   # (`_check_temporal_mix`); what reaches it here is one the walk cannot type.

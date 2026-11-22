@@ -584,7 +584,9 @@ end
 # on them (`_unify_decimals`, #1550), so a zero-scale one is whole here, as the column is. With an `output_field` the cast it renders decides
 # (`_textless_number`), and that cast is checked against the branches (#1217, `_declared_case`).
 _undeclared_case(p) = p isa FObject && p.function_name == "CASE" && !(get(p.kwargs, "output_field", nothing) isa AbstractString)
-_declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) && !isempty(p.kwargs["output_field"])
+# #1599 layer 5: the declared name read at `String` (`_declared_string`); `!_undeclared_case(p)` has already asked for one.
+_declared_case(p) = p isa FObject && p.function_name == "CASE" && !_undeclared_case(p) &&
+  _declared_string(p.kwargs["output_field"]) !== nothing
 function _case_textless_branch(p::FObject, instruc::SQLInstruction)::Union{Tuple{Symbol,String},Nothing}
   # #1599 layer 5: each branch's answer at its member's type, in order, into a typed vector before the weighing, as
   # `_textless_number`'s operands are; the generator over the untyped branch values called its closure at run time, and

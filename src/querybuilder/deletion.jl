@@ -868,10 +868,21 @@ end
 function _self_children_rows(rows::Vector{Dict{Symbol, Any}}, key::Symbol, fk::Symbol, ::Type{K})::Tuple{Vector{K}, Vector{K}} where {K}
   keys, parents = K[], K[]
   for row in rows
-    push!(keys, _key_as(K, row[key]))
-    push!(parents, _key_as(K, row[fk]))
+    push!(keys, _key_as(K, _row_cell(row, key)))
+    push!(parents, _key_as(K, _row_cell(row, fk)))
   end
   return (keys, parents)
+end
+# A decoded row's cell by its column name. SQLite names a result column as the table declares it, not as the SELECT
+# spells it, so a model column that differs from it only in case is found case-insensitively: the positional read
+# (`columns[1]`, `columns[2]`) this replaced did not depend on the name at all.
+function _row_cell(row::Dict{Symbol, Any}, name::Symbol)
+  haskey(row, name) && return row[name]
+  want = lowercase(String(name))
+  for (k, v) in row
+    lowercase(String(k)) == want && return v
+  end
+  throw(KeyError(name))
 end
 # `convert(K, x)`, as `K[x]` converts, with `x` read at the types a key column delivers.
 function _key_as(::Type{K}, @nospecialize(x))::K where {K}

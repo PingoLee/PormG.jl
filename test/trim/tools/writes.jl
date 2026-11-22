@@ -308,7 +308,8 @@ function refusal_case(label::String, call::F)::Bool where {F}
     catch e
         text = refusal_text(e)
         text === nothing && (failed("bulk_refusal", e); return false)
-        say("bulk_refusal", string(label, ": ", text))
+        # One line per refusal, so `same_lines.sh` compares a multi-line message whole.
+        say("bulk_refusal", string(label, ": ", replace(text, '\n' => " ⏎ ")))
         return true
     end
 end
@@ -353,6 +354,8 @@ function bulk_refusals_step(circuitid::Int)::Bool
         columns = ["round"], filters = ["raceid"]))
     ok &= refusal_case("a filters= entry that is no predicate", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
         columns = ["round"], match_on = ["raceid"], filters = [5]))
+    ok &= refusal_case("a filters= column name beside match_on", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
+        columns = ["round"], match_on = ["raceid"], filters = ["raceid"]))
     ok &= refusal_case("a key given twice", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6), (raceid = 1, round = 7)];
         columns = ["round"], match_on = ["raceid"]))
     ok &= refusal_case("a joined path", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, cn = "x")];

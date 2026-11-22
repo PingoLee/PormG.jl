@@ -316,8 +316,9 @@ jobs:
               missing=1
             fi
           done
-          # The untyped read and get_or_create (#1599 layer 6), against the JIT control's lines.
-          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 5 || missing=1
+          # The untyped read and get_or_create (#1599 layer 6) and the 24 bulk refusals (#1694), against the JIT
+          # control's lines: at least 5 + 24.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 29 || missing=1
           refused=$(grep -c "$(printf '^step\trefused\tInvalidValueError: ')" build/run.txt || true)
           if [ "$refused" -ne 2 ]; then
             echo "::error::the trimmed write binary printed $refused refusal lines, expected 2"
@@ -444,8 +445,9 @@ jobs:
               exit 1
             fi
           done <<< "$TRIM_READ_LINES"
-          # The untyped read and get_or_create (#1599 layer 6), against the JIT control's lines.
-          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 5
+          # The untyped read and get_or_create (#1599 layer 6) and the 24 bulk refusals (#1694), against the JIT
+          # control's lines: at least 5 + 24.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 29
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete, then a bulk_insert of two rows read back (#1694), and last the cascading
           # delete (#1694, #1599 layer 7; its rows are locked first, #1815). The written row's id is not checked: the
@@ -607,8 +609,9 @@ jobs:
               exit 1
             fi
           done <<< "$TRIM_READ_LINES"
-          # The untyped read and get_or_create (#1599 layer 6), against the JIT control's lines.
-          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 5
+          # The untyped read and get_or_create (#1599 layer 6) and the 24 bulk refusals (#1694), against the JIT
+          # control's lines: at least 5 + 24.
+          test/trim/tools/same_lines.sh build/jit.txt build/run.txt 29
           # The single-row write (#1614, test/trim/tools/writes.jl): create with its auto-filled fields, the read
           # back (2 rows), update and delete, then a bulk_insert of two rows read back (#1694), the cascading delete
           # (#1694, #1599 layer 7; its rows are locked first, #1815), a user transaction each way and the three other

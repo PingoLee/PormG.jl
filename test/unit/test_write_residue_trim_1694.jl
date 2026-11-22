@@ -77,6 +77,11 @@ end
     @test typeof(new) == Tuple{Vector{K}, Vector{K}}
   end
   @test _WR_QB._self_children_rows(Dict{Symbol, Any}[], :constructorid, :parentid, Int64) == (Int64[], Int64[])
+  # SQLite names a result column as the table declares it (`ConstructorId`), not as the SELECT spells it: the columnar
+  # read took the columns by position and never looked at the name.
+  rows = [Dict{Symbol, Any}(:ConstructorId => 4, :ParentId => 3), Dict{Symbol, Any}(:ConstructorId => 5, :ParentId => 4)]
+  @test _WR_QB._self_children_rows(rows, :constructorid, :parentid, Int64) == ([4, 5], [3, 4])
+  @test_throws KeyError _WR_QB._self_children_rows([Dict{Symbol, Any}(:a => 1, :b => 2)], :constructorid, :parentid, Int64)
 end
 
 # What: `SET_DEFAULT`'s SQL value, read at the field's type and kept a `String`, against the old interpolation of the

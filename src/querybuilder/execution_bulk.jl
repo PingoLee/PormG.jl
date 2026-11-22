@@ -1198,17 +1198,21 @@ end
 # A `filters=` predicate applied at its value's type (#1599 layer 7): the stored pair is `Pair{String, Any}`, and
 # `filter(::Pair{String, Any})` dispatched on the value at run time (`_normalize_filter_pair(::Int64)` had no code in the
 # trimmed `bulk_update(…; filters = ["year" => 2010])`). The value types a constant predicate holds are rebuilt into a
-# concrete pair; any other value is applied as before, behind one call.
+# concrete pair and applied as `work.filter(pair)` applies it (`ChainCaller` calls `_filter!(work.object, (pair,))`;
+# `work.filter` itself is not folded to that type, so it was a run-time call); any other value is applied as before,
+# behind one call.
 function _apply_static_filter!(work::SQLObjectHandler, f::Pair{String, Any})
+  work isa ObjectHandler || return _apply_static_filter_other!(work, f)
+  q = (work::ObjectHandler).object
   k, v = f.first, f.second
-  v isa Int64 && return (work.filter(k => v); nothing)
-  v isa String && return (work.filter(k => v); nothing)
-  v isa Bool && return (work.filter(k => v); nothing)
-  v isa Float64 && return (work.filter(k => v); nothing)
-  v isa Date && return (work.filter(k => v); nothing)
-  v isa DateTime && return (work.filter(k => v); nothing)
-  v isa Vector{Int64} && return (work.filter(k => v); nothing)
-  v isa Vector{String} && return (work.filter(k => v); nothing)
+  v isa Int64 && return (_filter!(q, (k => v,)); nothing)
+  v isa String && return (_filter!(q, (k => v,)); nothing)
+  v isa Bool && return (_filter!(q, (k => v,)); nothing)
+  v isa Float64 && return (_filter!(q, (k => v,)); nothing)
+  v isa Date && return (_filter!(q, (k => v,)); nothing)
+  v isa DateTime && return (_filter!(q, (k => v,)); nothing)
+  v isa Vector{Int64} && return (_filter!(q, (k => v,)); nothing)
+  v isa Vector{String} && return (_filter!(q, (k => v,)); nothing)
   return _apply_static_filter_other!(work, f)
 end
 @noinline _apply_static_filter_other!(@nospecialize(work::SQLObjectHandler), f::Pair{String, Any}) = (work.filter(f); nothing)

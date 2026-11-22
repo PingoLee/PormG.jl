@@ -6793,6 +6793,15 @@ end
                                          Union{Nothing,Int64}, Vector{Dict{Symbol, Union{String, PormG.SQLObjectHandler}}},
                                          Symbol, Any))
     @test filter(x -> occursin(r"formatter|getproperty|string\(", x), d) == String[]
+    # The bulk writers' typed paths: a constant `filters=` predicate applied at its value's type, behind the one open
+    # arm; a `columns=` entry normalized without the closure; the `filters=` loop and the work handler's copy.
+    @test all(x -> occursin("_apply_static_filter_other!", x),
+              _dynamic_calls(QB._apply_static_filter!, (PormG.SQLObjectHandler, Pair{String,Any})))
+    @test all(x -> occursin("_norm_bulk_column_other", x), _dynamic_calls(QB._norm_bulk_column, (Any,)))
+    @test filter(x -> occursin(r"_normalize_filter_pair|_check_filter|Pair\{|push!", x),
+                 _dynamic_calls(QB._resolve_bulk_update_keys!, (QB._BulkFrame, PormG.PormGModel, Dict{String,String},
+                                Vector{String}, Vector{String}, Vector{Union{String, Pair{String, <:Any}}}, Vector{String}))) == String[]
+    @test _dynamic_calls(QB._tree_copy_handler, (PormG.SQLObjectHandler,)) == String[]
   end
 
   # What: the function readers a subquery's one projection reaches: its formatter over its operands

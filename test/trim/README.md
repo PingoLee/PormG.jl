@@ -142,6 +142,22 @@ step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
 step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
 step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	hops	2 hops 1 rows: stop 1 in Monaco
+step	hops	3 hops 1 rows: Renault from None
+step	hops	reverse 2 rows: Autódromo José Carlos Pace 2008, Circuit de Monaco 2008
+step	lookup_more	date__@yyyy_mm 1 rows: Monaco Grand Prix
+step	lookup_more	round__@ne 1 rows: Brazilian Grand Prix
+step	lookup_more	round__@nin 1 rows: Brazilian Grand Prix
+step	lookup_more	Qor(Q) 1 rows: Monaco Grand Prix
+step	page	page(1) 1 rows: Brazilian Grand Prix
+step	page	page(1, 1) 1 rows: Monaco Grand Prix
+step	page	limit offset 1 rows: Monaco Grand Prix
+step	aggregate	Count distinct/Max/Avg/Min 1 rows: 2008 2 18 12.0 6
+step	aggregate	Sum(Case) 1 rows: 2008 1
+step	aggregate	distinct 1 rows: 2008
+step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
+step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
+step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
 step	elapsed_ms	1
 ```
 
@@ -176,7 +192,8 @@ user transactions do not commit or roll back as their typed reads expect, and 25
 connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
 pools"). 27 to 30 are the write residue's steps (see "The write residue"). The Postgres.jl variant also exits
 23 when one of its connection shapes fails. 33 to 36 are the steps of #1599's layers 1 to 3: a second key, models
-loaded with `@import_models`, a nested transaction and a read on a spawned task (see "How an application starts").
+loaded with `@import_models`, a nested transaction and a read on a spawned task (see "How an application starts"). 37 to 41 are the read shapes applications use most: relation hops, the remaining lookups and `Q`/`Qor`, paging,
+aggregates, and the reads each engine answers its own way (see "The read shapes applications use most").
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -215,6 +232,45 @@ break the trimmed read is checked by running it by hand on the branch, or by the
 The fixture's `Manifest.toml` is not committed, so each run resolves the latest SQLite.jl and its
 dependencies: a red nightly with no PormG change between it and the last green one may be an upstream
 release, and the job's `Instantiate the fixture` step prints the versions it resolved.
+
+## The read shapes applications use most
+
+The read steps of #1599 layer 5 that the shapes applications use most add, in every entry, after `cte` and before
+any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is checked by its typed rows:
+
+- `hops` (exit code 37): `values()` two hops forward (a pit stop's race's circuit), three hops forward (a
+  constructor's parent's parent's home circuit, through the self-referential key twice) and one reverse hop (a
+  circuit's races, `race__year`).
+- `lookup_more` (exit code 38): `__@yyyy_mm`, `__@ne`, `__@nin`, and `Qor` over a lookup and a nested `Q`.
+- `page` (exit code 39): `order_by("-date")` with `page(1)`, `page(1, 1)`, and `limit(1).offset(1)`.
+- `aggregate` (exit code 40): `Count(distinct = true)`, `Max`, `Avg` and `Min` grouped by year;
+  `Sum(Case(When(...), default = 0))`; `distinct()`; `ToChar` ordered by its alias; a CTE joined with
+  `join_type = "INNER"`.
+- `engine_read` (exit code 41): the reads each engine answers its own way. `__@regex`, `__@iregex` and
+  `__@iunaccent_contains` are PostgreSQL's only (`docs/src/backends.md`), and `Extract("date", "EPOCH")`, which SQLite
+  does not have, reads as a `Decimal` (the width-less decimal the call means). An engine without one refuses it
+  before any SQL with `BackendCapabilityError`, and the line is the refusal's text. On PostgreSQL,
+  `__@iunaccent_contains` needs the `unaccent` function in the database, which `migrate` installs when
+  `connection.yml` names the extension and `prep.jl` does not: the line records it (`not run: the database has no
+  unaccent function (SQLSTATE 42883)`). A job checks these lines against its own JIT control (`tools/same_lines.sh`).
+
+```
+step	engine_read	name__@regex refused: The regex lookup needs POSIX regular-expression matching (`~`, `~*`), which SQLite does not support (supported on PostgreSQL). …
+step	engine_read	name__@iregex refused: The iregex lookup needs … which SQLite does not support (supported on PostgreSQL). …
+step	engine_read	name__@iunaccent_contains refused: The iunaccent_contains lookup needs the `unaccent` extension, which SQLite does not support (supported on PostgreSQL).
+step	engine_read	Extract EPOCH refused: Unsupported extract part for SQLite: EPOCH
+```
+
+and on PostgreSQL (Postgres.jl):
+
+```
+step	engine_read	name__@regex: Monaco Grand Prix
+step	engine_read	name__@iregex: Brazilian Grand Prix
+step	engine_read	name__@iunaccent_contains not run: the database has no unaccent function (SQLSTATE 42883)
+step	engine_read	Extract EPOCH: Monaco Grand Prix 1211673600, Brazilian Grand Prix 1225584000
+```
+
+MySQL refuses the three lookups as SQLite does and reads `EPOCH` as PostgreSQL does.
 
 ## The write residue (#1694)
 
@@ -338,6 +394,22 @@ step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
 step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
 step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	hops	2 hops 1 rows: stop 1 in Monaco
+step	hops	3 hops 1 rows: Renault from None
+step	hops	reverse 2 rows: Autódromo José Carlos Pace 2008, Circuit de Monaco 2008
+step	lookup_more	date__@yyyy_mm 1 rows: Monaco Grand Prix
+step	lookup_more	round__@ne 1 rows: Brazilian Grand Prix
+step	lookup_more	round__@nin 1 rows: Brazilian Grand Prix
+step	lookup_more	Qor(Q) 1 rows: Monaco Grand Prix
+step	page	page(1) 1 rows: Brazilian Grand Prix
+step	page	page(1, 1) 1 rows: Monaco Grand Prix
+step	page	limit offset 1 rows: Monaco Grand Prix
+step	aggregate	Count distinct/Max/Avg/Min 1 rows: 2008 2 18 12.0 6
+step	aggregate	Sum(Case) 1 rows: 2008 1
+step	aggregate	distinct 1 rows: 2008
+step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
+step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
+step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -476,6 +548,22 @@ step	cte	Case 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
 step	cte	Cast 2 rows: Monaco Grand Prix 6, Brazilian Grand Prix 18
 step	cte	F arithmetic 2 rows: Monaco Grand Prix 7, Brazilian Grand Prix 19
 step	cte	Case over a list 2 rows: Monaco Grand Prix 0, Brazilian Grand Prix 1
+step	hops	2 hops 1 rows: stop 1 in Monaco
+step	hops	3 hops 1 rows: Renault from None
+step	hops	reverse 2 rows: Autódromo José Carlos Pace 2008, Circuit de Monaco 2008
+step	lookup_more	date__@yyyy_mm 1 rows: Monaco Grand Prix
+step	lookup_more	round__@ne 1 rows: Brazilian Grand Prix
+step	lookup_more	round__@nin 1 rows: Brazilian Grand Prix
+step	lookup_more	Qor(Q) 1 rows: Monaco Grand Prix
+step	page	page(1) 1 rows: Brazilian Grand Prix
+step	page	page(1, 1) 1 rows: Monaco Grand Prix
+step	page	limit offset 1 rows: Monaco Grand Prix
+step	aggregate	Count distinct/Max/Avg/Min 1 rows: 2008 2 18 12.0 6
+step	aggregate	Sum(Case) 1 rows: 2008 1
+step	aggregate	distinct 1 rows: 2008
+step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
+step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
+step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25

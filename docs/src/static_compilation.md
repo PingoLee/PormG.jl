@@ -49,11 +49,24 @@ else is untested in a trimmed binary, even where it compiles.
   column or on the right of a filter; `values()` and `order_by()` across a join; a CTE read as a column and
   in a filter, over a body projecting a `Subquery`, an `Exists`, a window, a `Case`, a `Cast` or `F` arithmetic; `RowNumber` over a partition and `Rank` over an order.
 
+  So have the read shapes applications use most (#1599 layer 5): `values()` two and three relations away
+  (`"raceid__circuitid__country"`, and `"parentid__parentid__home_circuitid__country"` through a self-referential
+  key twice) and across a reverse relation
+  (`"race__year"`); `__@yyyy_mm`, `__@ne` and `__@nin`; `Qor` over a lookup and a nested `Q`; `order_by("-date")`
+  with `page(n)`, `page(n, offset)` and `limit(n).offset(m)`; `Count(…; distinct = true)`, `Max`, `Avg` and `Min`
+  grouped; `Sum(Case(When(…), default = 0))`; `distinct()`; `ToChar(…, "YYYY-MM")` ordered by its alias; and a CTE
+  joined with `join_type = "INNER"`. `__@regex` and `__@iregex` have run on PostgreSQL, and `Extract("date",
+  "EPOCH")` on MySQL and PostgreSQL. An engine without one of them (`__@regex`, `__@iregex` and
+  `__@iunaccent_contains` on SQLite and MySQL, `EPOCH` on SQLite) refuses it with the `BackendCapabilityError`
+  the JIT raises. `__@iunaccent_contains` has not run on PostgreSQL: the workflow's database does not have the
+  `unaccent` function.
+
   The untyped read (`.list()` and `list(:dict)`, #1823) has run on the three drivers too.
 
-  The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`),
-  nullable fields (`Union{Nothing, X}`) and the other column types (`DateTime`, `Time`, `Decimal`, …)
-  are built to run trimmed, but no trimmed binary has run them yet.
+  The other typed terminals (`first(T)`, `last(T)`, `get(T, …)`, `earliest(T, …)`, `latest(T, …)`) and the other
+  column types (`DateTime`, `Time`, …) are built to run trimmed, but no trimmed binary has run them yet. Nullable
+  fields (`Union{Nothing, X}` of a `String`, an `Int64` or a `Float64`) have run, and a `Decimal` on MySQL and
+  PostgreSQL.
 - **The single-row write**, on SQLite through SQLite.jl, on MySQL 8.4 through MySQL.jl and on
   PostgreSQL 18 through Postgres.jl (#1694, #1614):
   - `create` with name–value pairs (`M.Race.objects.create("year" => 2009, …)`), including the fields

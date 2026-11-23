@@ -42,7 +42,7 @@ concurrency:
 
 env:
   # The versions test/trim/README.md pins. Change them together.
-  TRIM_JULIA: '1.13.3'
+  TRIM_JULIA: '1.13.4'
   TRIM_JULIAC: '0.3.12'
   # The row the read-only entry prints, as its JIT control does (test/trim/prep.jl seeds it).
   TRIM_EXPECTED_ROW: "step\trow\t1 2008 Monaco Grand Prix 2008-05-25"

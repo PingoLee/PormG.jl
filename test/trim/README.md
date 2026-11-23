@@ -58,7 +58,7 @@ Requires, a PostgreSQL variant of the fixture uses Postgres.jl. Measurements are
 
 ## Build and run
 
-Julia 1.13.3 and JuliaC 0.3.12 (`pkg> app add JuliaC`, which installs `~/.julia/bin/juliac`). From
+Julia 1.13.4 and JuliaC 0.3.12 (`pkg> app add JuliaC`, which installs `~/.julia/bin/juliac`). From
 the repository root:
 
 ```

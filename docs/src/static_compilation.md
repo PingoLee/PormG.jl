@@ -149,7 +149,7 @@ tasks. The SQLite refused statement is checked by hand.
 
 ## Versions
 
-The versions PormG builds with are **Julia 1.13.3** and **JuliaC 0.3.12**. Other versions may work, but
+The versions PormG builds with are **Julia 1.13.4** and **JuliaC 0.3.12**. Other versions may work, but
 these are the ones the workflow runs. Install JuliaC as a Julia app, which puts `juliac` in
 `~/.julia/bin`:
 

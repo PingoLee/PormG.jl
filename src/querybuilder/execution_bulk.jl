@@ -376,11 +376,13 @@ function _normalize_bulk_filters(filters)
   return _filters
 end
 
-function _is_blank_bulk_primary_key_value(value)
+function _is_blank_bulk_primary_key_value(@nospecialize(value))::Bool   # one method, called on untyped cells too (#1599 layer 7)
   if value === nothing || ismissing(value)
     return true
   end
-
+  # A `String` first, at its type: called on an untyped cell (a `Vector{Any}` column), `strip` over the abstract
+  # `AbstractString` was a dynamic call (#1599 layer 7). The answer is the same.
+  value isa String && return isempty(strip(value))
   return value isa AbstractString && isempty(strip(value))
 end
 
@@ -420,6 +422,30 @@ end
 # to the ordinary NOT NULL sweep and raised `InvalidValueError`. It now hits the SAME mixed-value
 # guard below as an auto-increment pk always has, and raises `QueryBuildError` — intentional, not a
 # regression: the two pk kinds now agree on both the error type and the message shape.
+# Which cells of a frame's primary-key column are blank (#1599 layer 7, #1694), read at the column's type. It was
+# `map(_is_blank_bulk_primary_key_value, column)` over the frame's `AbstractVector`, a dynamic call: the trimmed
+# fixture's `bulk_insert` with its key column (`on_conflict = (…, target = ["raceid"])`) raised
+# `MethodError(map, (_is_blank_bulk_primary_key_value, Vector{Int64}))` there. One arm per column type a key column
+# commonly has, each the same `map`; any other column takes one dynamic call. The mask is what `map` returned for a
+# `Vector`, and its two readers (`all`, `any`) see the same answer for any other column.
+@noinline function _blank_primary_key_mask(@nospecialize(column::AbstractVector))::Vector{Bool}
+  column isa Vector{Int64} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Int32} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{String} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{UUIDs.UUID} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Any} && return Bool[_is_blank_bulk_primary_key_value(v) for v in column]   # `map` cannot name its eltype
+  column isa Vector{Nothing} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Missing} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Union{Missing, Int64}} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Union{Nothing, Int64}} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Union{Missing, String}} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Union{Nothing, String}} && return map(_is_blank_bulk_primary_key_value, column)
+  column isa Vector{Union{Missing, UUIDs.UUID}} && return map(_is_blank_bulk_primary_key_value, column)
+  return _blank_primary_key_mask_other(column)
+end
+@noinline _blank_primary_key_mask_other(@nospecialize(column::AbstractVector))::Vector{Bool} =
+  Bool[_is_blank_bulk_primary_key_value(v) for v in column]
+
 function _drop_blank_auto_primary_keys!(df::_BulkFrame,
   model::PormGModel,
   fields_df::Vector{String},
@@ -435,7 +461,7 @@ function _drop_blank_auto_primary_keys!(df::_BulkFrame,
     _is_pormg_minted_bulk_primary_key(f_meta) || continue
 
     col_name = mapping[field]
-    blank_mask = map(_is_blank_bulk_primary_key_value, _bulk_column(df, col_name))
+    blank_mask = _blank_primary_key_mask(_bulk_column(df, col_name))
 
     if all(blank_mask)
       delete!(mapping, field)
@@ -2888,14 +2914,40 @@ function _refuse_unnamed_bulk_target(model::PormGModel, on_conflict, action::Sym
 end
 
 # A frame's reading for `_can_conflict`.
+# Each predicate reads at its types (#1599 layer 7, #1694): a column through `_bulk_column_holds_value`, a field's facts
+# through `Models._with_any_field`. `any` over the frame's `AbstractVector` and the field facts over the abstract field
+# were run-time calls, which the trimmed MySQL upsert (`on_conflict = (…, target = ["raceid"])`) reaches.
 function _frame_conflict_reading(model::PormGModel, fields_df::Vector{String}, mapping, df::_BulkFrame)
   inserted = Set(fields_df)
-  holds = name -> name in inserted ? any(v -> !(v === nothing || ismissing(v)), _bulk_column(df, mapping[name])) :
-                                     _has_db_default(model.fields[name])
-  minted = name -> _is_minted_value(model.fields[name]) &&
+  holds = name -> name in inserted ? _bulk_column_holds_value(_bulk_column(df, mapping[name])) :
+                                     Models._with_any_field(_has_db_default, model.fields[name])
+  minted = name -> Models._with_any_field(_is_minted_value, model.fields[name]) &&
                    (!(name in inserted) || _is_injected_fill_column(mapping[name]))
   return holds, minted
 end
+
+# Whether a frame column holds a value in some row: a cell that is neither `nothing` nor `missing` (#1599 layer 7). One
+# arm per column type a table commonly hands over, each the `any` it replaced; any other column takes that call.
+@noinline function _bulk_column_holds_value(@nospecialize(column::AbstractVector))::Bool
+  column isa Vector{Int64} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Int32} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{String} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Float64} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Bool} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Dates.Date} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Dates.DateTime} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{UUIDs.UUID} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Any} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Nothing} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Missing} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Union{Missing, Int64}} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Union{Nothing, Int64}} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Union{Missing, String}} && return any(v -> !(v === nothing || ismissing(v)), column)
+  column isa Vector{Union{Nothing, String}} && return any(v -> !(v === nothing || ismissing(v)), column)
+  return _bulk_column_holds_value_other(column)
+end
+@noinline _bulk_column_holds_value_other(@nospecialize(column::AbstractVector))::Bool =
+  any(v -> !(v === nothing || ismissing(v)), column)
 
 # DO NOTHING on MySQL (`Dialect.on_conflict_clause`'s `noop`): an assignment that writes nothing, on the
 # first inserted column that is not AUTO_INCREMENT, qualified by the table. A frame whose only column is

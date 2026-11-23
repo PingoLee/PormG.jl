@@ -88,7 +88,8 @@ end
 # The typed read, one line per row (`../steps.jl`'s `query_step`). Exit code 3 when it fails.
 function query_step()::Bool
     try
-        rows = M.Race.objects.filter("circuitid__country" => "Monaco").list(RaceRow)
+        # Ordered by year, so the two rows print in one order on every driver (Postgres.jl returned them in heap order).
+        rows = M.Race.objects.filter("circuitid__country" => "Monaco").order_by("year").list(RaceRow)
         say("query", string(length(rows), " rows"))
         for r in rows
             say("row", string(r.raceid, " ", r.year, " ", r.name, " ", r.date))
@@ -147,6 +148,8 @@ function (@main)(args::Vector{String})::Cint
     set_default_step() || return Cint(28)
     self_cascade_step() || return Cint(29)
     bulk_refusals_step(circuitid) || return Cint(30)
+    bulk_conflict_step(circuitid) || return Cint(31)        # bulk_insert's on_conflict= (`../tools/writes.jl`, #1694)
+    preallocated_keys_refusal_step(circuitid) || return Cint(32)  # MySQL cannot reserve an AUTO_INCREMENT id: the refusal
     transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).

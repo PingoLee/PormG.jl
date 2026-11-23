@@ -443,10 +443,18 @@ end
 # NULL, or a database default. A NULL member never conflicts. (A generated column is PostgreSQL's,
 # #1032, so no MySQL row reaches here with one.) The predicates read one row (`_row_conflict_reading`)
 # or a whole frame (`_frame_conflict_reading`, `bulk_insert`).
-function _can_conflict(key, holds, minted)::Bool
+# `holds` and `minted` are typed parameters, and the two checks are the loops `any`/`all` ran (#1599 layer 7): passed
+# straight on to `any`/`all`, a predicate is not specialized on (Julia's rule for an argument a method only passes
+# along), so `any(::Function, …)` was a run-time call. Same order, same short circuit, same answer.
+function _can_conflict(key, holds::H, minted::M)::Bool where {H, M}
   key.kind === :text && return true
-  any(minted, key.fields) && return false
-  return all(holds, key.fields)
+  for name in key.fields
+    minted(name) && return false
+  end
+  for name in key.fields
+    holds(name) || return false
+  end
+  return true
 end
 
 _has_db_default(f)::Bool = hasproperty(f, :db_default) && f.db_default !== nothing
@@ -485,9 +493,9 @@ end
 # The check itself, for one row or a frame (`bulk_insert`, `_refuse_unnamed_bulk_target`): the target
 # must be a declared plain unique key, and when `others`, no other key may be one the rows can conflict
 # on. A key over the target's fields and more can only match the target's own row: not another conflict.
-function _refuse_unnamed_target(model::PormGModel, target_fields::Vector{String}, holds, minted, connection;
+function _refuse_unnamed_target(model::PormGModel, target_fields::Vector{String}, holds::H, minted::M, connection;
                                 what::String, noun::String, others::Bool, not_unique::String,
-                                subject::String, effect::String, alternative::String)
+                                subject::String, effect::String, alternative::String) where {H, M}   # specialized, #1599 layer 7
   _supports(connection, :upsert_conflict_target) && return nothing
   keys = _unique_keys(model)
   target = Set(target_fields)
@@ -1066,17 +1074,54 @@ _sql_literal(value::AbstractString)::String = replace(String(value), "'" => "''"
 _table_ident_literal(model::PormGModel)::String =
   _sql_literal(_quote_ident_raw(Models.model_table_name(model)))
 
+# The two catalog reads of PostgreSQL's sequence resync, each a typed read into its row (#1599 layer 7, #1694), as SQLite's
+# sequence reads are (`_sqlite_one_cell_decoder`). Piped through `Tables.rowtable`, the row's type was decided at run time,
+# and the trimmed Postgres.jl upsert raised `MethodError(|>, (Postgres.Result, typeof(Tables.rowtable)))` there (a bulk
+# write with explicit keys resyncs the sequence; a single-row write never does, #358). `pg_get_serial_sequence` returns
+# text or NULL, and `pg_namespace.nspname`/`pg_class.relname` are non-null `name`s, so the rows hold what the row table did.
+const _PgSerialSequenceRow = NamedTuple{(:pg_get_serial_sequence,), Tuple{Union{Missing, String}}}
+const _PgSequenceRow = NamedTuple{(:schemaname, :sequencename), Tuple{String, String}}
+
+# The typed reads run on PormG's own pools only (`_decodes_rows`), as every decoder PormG hands `fetch` does: a stand-in
+# pool's own `fetch` may take no `_decode` or answer with any Tables.jl source, so it reads as it did before.
 function _get_owned_sequence_name(connection::PormGPostgres, model::PormGModel, field::String; ignore_tx::Bool = false)
   table_literal = _table_ident_literal(model)
-  rows = fetch(
-    connection,
-    "SELECT pg_get_serial_sequence('$(table_literal)', '$(_sql_literal(field))');";
-    ignore_tx=ignore_tx,
-  ) |> Tables.rowtable
+  sql = "SELECT pg_get_serial_sequence('$(table_literal)', '$(_sql_literal(field))');"
+  _decodes_rows(connection) || return _get_owned_sequence_name_undecoded(connection, sql, ignore_tx)
+  rows = fetch(connection, sql; ignore_tx=ignore_tx,
+    _decode = _RowDecoder{_PgSerialSequenceRow}((NO_READ_PARSER,), _TypedReadSite("pg_get_serial_sequence", "pg_get_serial_sequence")),
+  )::Vector{_PgSerialSequenceRow}
 
+  isempty(rows) && return nothing
+  sequence_name = first(rows).pg_get_serial_sequence
+  return ismissing(sequence_name) ? nothing : sequence_name
+end
+# The read as it was, for a pool `_decodes_rows` does not list. Behind `@noinline`: the result's type is the pool's own.
+@noinline function _get_owned_sequence_name_undecoded(@nospecialize(connection), sql::String, ignore_tx::Bool)
+  rows = fetch(connection, sql; ignore_tx=ignore_tx) |> Tables.rowtable
   isempty(rows) && return nothing
   sequence_name = get(first(rows), :pg_get_serial_sequence, nothing)
   return ismissing(sequence_name) || isnothing(sequence_name) ? nothing : sequence_name
+end
+
+# The fallback for a key with no owned sequence: the sequence named `conventional` in the table's own namespace, as
+# `"schema"."name"`, or `nothing` when there is none. A typed read on PormG's own pools, the read as it was on any other.
+function _conventional_sequence_name(connection::PormGPostgres, model::PormGModel, conventional::String, ignore_tx::Bool)::Union{Nothing, String}
+  sql = "SELECT n.nspname AS schemaname, c.relname AS sequencename " *
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " *
+        "WHERE c.relkind = 'S' AND c.relname = '$(_sql_literal(conventional))' " *
+        "AND c.relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = to_regclass('$(_table_ident_literal(model))'))"
+  _decodes_rows(connection) || return _conventional_sequence_name_undecoded(connection, sql, ignore_tx)
+  seqs = fetch(connection, sql; ignore_tx=ignore_tx,
+    _decode = _RowDecoder{_PgSequenceRow}((NO_READ_PARSER, NO_READ_PARSER), _TypedReadSite("pg_class", "sequencename")),
+  )::Vector{_PgSequenceRow}
+  isempty(seqs) && return nothing
+  return string(_quote_ident_raw(first(seqs).schemaname), ".", _quote_ident_raw(first(seqs).sequencename))
+end
+@noinline function _conventional_sequence_name_undecoded(@nospecialize(connection), sql::String, ignore_tx::Bool)::Union{Nothing, String}
+  seqs = fetch(connection, sql; ignore_tx=ignore_tx) |> Tables.rowtable
+  isempty(seqs) && return nothing
+  return string(_quote_ident_raw(first(seqs).schemaname), ".", _quote_ident_raw(first(seqs).sequencename))
 end
 
 function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field::Vector{String}, settings::PormGSettings; ignore_tx::Bool = false)
@@ -1139,16 +1184,9 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         # raising for a missing relation, so a vanished table degrades to zero rows and the
         # `continue` below.
         conventional = string(Models.model_table_name(model), "_", col, "_seq")
-        seqs = fetch(
-          connection,
-          "SELECT n.nspname AS schemaname, c.relname AS sequencename " *
-          "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " *
-          "WHERE c.relkind = 'S' AND c.relname = '$(_sql_literal(conventional))' " *
-          "AND c.relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = to_regclass('$(_table_ident_literal(model))'))";
-          ignore_tx=ignore_tx,
-        ) |> Tables.rowtable
+        conventional_name = _conventional_sequence_name(connection, model, conventional, ignore_tx)
 
-        if isempty(seqs)
+        if conventional_name === nothing
           # Not an error: a natural-key PK legitimately has no sequence, and `pk_exist` fires for
           # those too, so @debug rather than @warn keeps ordinary inserts quiet.
           #
@@ -1161,8 +1199,7 @@ function _update_sequence(model::PormGModel, connection::PormGPostgres, pk_field
         end
         # Quoted, not interpolated bare: `setval` takes regclass and case-folds unquoted parts, so
         # `public.Db_Table_id_seq` would be looked up as `public.db_table_id_seq` and fail.
-        sequence_name = string(_quote_ident_raw(first(seqs).schemaname), ".",
-                               _quote_ident_raw(first(seqs).sequencename))
+        sequence_name = conventional_name
       end
 
       safe_field_name = safe_column_identifier(col, connection)
@@ -1239,8 +1276,34 @@ end
 # keep in step: SQLite assigns the next rowid as `MAX(rowid) + 1`. Asked on every call rather than
 # cached, because an AUTOINCREMENT table created later in the session brings the table into being.
 function _sqlite_has_sequence_table(settings::PormGSettings)::Bool
-  return !isempty(fetch(settings, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';") |> Tables.rowtable)
+  sql = "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence';"
+  _decodes_on_fetch(settings) || return _sqlite_has_sequence_table_undecoded(settings, sql)   # a stand-in pool, as before
+  rows = fetch(settings, sql; _decode = _sqlite_one_cell_decoder(_SQLitePresentRow, "sqlite_master", "present"))::Vector{_SQLitePresentRow}
+  return !isempty(rows)
 end
+@noinline _sqlite_has_sequence_table_undecoded(settings, sql::String)::Bool = !isempty(fetch(settings, sql) |> Tables.rowtable)
+
+# The SQLite sequence reads after a write with explicit keys (`_sqlite_has_sequence_table`, `_update_sequence`), each one cell,
+# read as a typed read into a one-field row (#1599 layer 7, #1694), as `SELECT changes()` is (`_changes_decoder`). Piped
+# through `Tables.rowtable`, the row's type was decided at run time, and the trimmed fixture's upsert raised
+# `MethodError(|>, (Vector{NamedTuple{(:present,), Tuple{Int64}}}, typeof(Tables.rowtable)))` there. The field is
+# `Any`, so the cell is the value the driver read, NULL (`missing`) included, as the row table held it.
+const _SQLitePresentRow = NamedTuple{(:present,), Tuple{Any}}
+const _SQLiteMaxRow = NamedTuple{(:m,), Tuple{Any}}
+_sqlite_one_cell_decoder(::Type{T}, op::String, column::String) where T =
+  _RowDecoder{T}((NO_READ_PARSER,), _TypedReadSite(op, column))
+
+# `_update_sequence`'s reading of `MAX(pk)` as the sequence value, at the cell's type: an integer as it is, a float
+# floored, anything else parsed from its text (`nothing` when it is not an integer). The answer is the one
+# `max_id isa Real ? floor(Int64, max_id) : tryparse(Int64, string(max_id))` gave; any other type takes that call.
+@noinline function _sqlite_sequence_value(@nospecialize(max_id))::Union{Nothing, Int64}
+  max_id isa Int64 && return max_id
+  max_id isa Float64 && return floor(Int64, max_id)
+  max_id isa String && return tryparse(Int64, max_id)
+  return _sqlite_sequence_value_other(max_id)
+end
+@noinline _sqlite_sequence_value_other(@nospecialize(max_id))::Union{Nothing, Int64} =
+  max_id isa Real ? floor(Int64, max_id) : tryparse(Int64, string(max_id))
 
 # sqlite_sequence.name has no UNIQUE constraint, so `INSERT OR REPLACE` appends a duplicate row
 # instead of overwriting. Upsert by hand: UPDATE the existing row (collapsing any duplicates a prior
@@ -1258,6 +1321,18 @@ end
 _update_sequence(model::PormGModel, connection::PormGMySQL, pk_field::Vector{String}, settings::PormGSettings;
                  ignore_tx::Bool = false) = nothing
 
+# `MAX(pk)`'s cell, or `nothing` when the read returns no row: a typed read on PormG's own pools, the read as it was on
+# any other (`_decodes_rows`). The cell is the value the driver read, `missing` for NULL.
+function _sqlite_max_pk(connection::PormGSQLite, sql::String)
+  _decodes_rows(connection) || return _sqlite_max_pk_undecoded(connection, sql)
+  rows = fetch(connection, sql; _decode = _sqlite_one_cell_decoder(_SQLiteMaxRow, "MAX(pk)", "m"))::Vector{_SQLiteMaxRow}
+  return isempty(rows) ? nothing : first(rows).m
+end
+@noinline function _sqlite_max_pk_undecoded(@nospecialize(connection), sql::String)
+  rows = fetch(connection, sql) |> Tables.rowtable
+  return isempty(rows) ? nothing : first(rows).m
+end
+
 function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::Vector{String}, settings::PormGSettings)
   _sqlite_has_sequence_table(settings) || return nothing   # no AUTOINCREMENT table, nothing to resync (#674)
   for field in pk_field
@@ -1267,15 +1342,14 @@ function _update_sequence(model::PormGModel, connection::PormGSQLite, pk_field::
     # the resolved physical name (db_table when set, #59), not a fold of the logical one.
     safe_table_literal = replace(Models.model_table_name(model), "'" => "''")
     max_id_query = "SELECT MAX($(safe_field_name)) as m FROM $(safe_table_name);"
-    rows = fetch(connection, max_id_query) |> Tables.rowtable
+    max_id = _sqlite_max_pk(connection, max_id_query)   # `nothing` when no row: skipped, as an empty read was
 
-    if !isempty(rows)
-      max_id = first(rows).m
+    if max_id !== nothing
       if !ismissing(max_id) && !isnothing(max_id)
         # MAX(pk) is normally an Int64, but coerce defensively: a Float ("5.0") must still
         # resolve to its integer seq value instead of being silently skipped
         # (tryparse(Int64, "5.0") === nothing). A non-numeric value yields `nothing` → skipped.
-        parsed_id = max_id isa Real ? floor(Int64, max_id) : tryparse(Int64, string(max_id))
+        parsed_id = _sqlite_sequence_value(max_id)
         parsed_id !== nothing && _sqlite_sequence_upsert!(settings, safe_table_literal, parsed_id)
       end
     end

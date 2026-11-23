@@ -7002,6 +7002,79 @@ end
     @test length(queries) == 1 && asserted == queries
   end
 
+  # What: the SELECT render's `build` call (#1599 layer 5) and the bulk writers' upsert and returning
+  #   paths (#1694, #1599 layer 7): a `bulk_insert` with its key column, `on_conflict=` and `returning=`.
+  # Expected: the render asserts `build`'s answer, so its instruction is `InstructionObject` under any Julia release;
+  #   the blank-key mask is read at the column's type.
+  # Why: `build_cte_clause` returns `nothing` for a query without CTEs, so `build(…; cte_state = cte_state)` built a
+  #   keyword tuple of a non-concrete type. Julia 1.13.3 inferred through it, 1.13.4 did not for MySQL, and every call on
+  #   the render's instruction was then dynamic there (`_CteBodyRender` above failed under 1.13.4). The fixture's
+  #   upsert step stopped at `map(_is_blank_bulk_primary_key_value, ::Vector{Int64})`.
+  @testset "the render's build call and the bulk upsert paths run at their types (#1599 layers 5 and 7)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    D = Dict{String, QB.CTEState}
+    pools = ((PormG.ConnectionPool.SQLiteConnectionPool, QB.SQLiteParameterizedQuery),
+             (PormG.ConnectionPool.MySQLConnectionPool, QB.MySQLParameterizedQuery),
+             (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, QB.PgParameterizedQuery))
+    for (P, Q) in pools
+      kw = NamedTuple{(:table_alias, :connection, :parameters, :cte_body, :cte_body_correlated), Tuple{QB.SQLTbAlias, P, Q, String, Bool}}
+      @test (P, Base.return_types(Core.kwcall, (kw, typeof(QB._render_select), QB.ObjectHandler))) ==
+            (P, Any[NamedTuple{(:sql, :instruction), Tuple{String, I}}])
+      # The render's `build` call has its answer asserted `InstructionObject`, read in the unoptimized code so the pin
+      # does not depend on the release's inference or inlining: the shape 1.13.4 needs, whatever it infers for `build`.
+      kwbody = Base.bodyfunction(only(methods(QB._render_select)))
+      body, _ = only(Base.code_typed_by_type(Tuple{typeof(kwbody), QB.SQLTbAlias, P, Q, Nothing, Symbol, Nothing, Bool, String,
+                                                   Bool, typeof(QB._render_select), QB.ObjectHandler}; optimize = false))
+      closures = unique([t for t in body.ssavaluetypes if t isa DataType && t <: Function && t.name.module === QB &&
+                                                         fieldcount(t) > 0 && startswith(string(t.name.name), "#")])
+      @test length(closures) == 1
+      m = only(Base._methods_by_ftype(Tuple{only(closures), PormG.Kernel.Settings, P, String}, -1, Base.get_world_counter())).method
+      closure = Base.uncompressed_ir(m)   # the lowered body: what the source says, before any inference
+      resolve(x) = x isa Core.SSAValue ? resolve(closure.code[x.id]) : x
+      named(x, n) = (r = resolve(x); r isa GlobalRef && r.name === n)
+      callexpr(st) = st isa Expr && st.head === :(=) ? callexpr(st.args[2]) : (st isa Expr && st.head === :call ? st : nothing)
+      builds = [i for (i, st) in enumerate(closure.code) if (c = callexpr(st)) !== nothing && length(c.args) >= 3 &&
+                named(c.args[1], :kwcall) && named(c.args[3], :build)]
+      asserted = [i for i in builds if any((c = callexpr(st)) !== nothing && length(c.args) == 3 && named(c.args[1], :typeassert) &&
+                                           c.args[2] == Core.SSAValue(i) && named(c.args[3], :InstructionObject) for st in closure.code)]
+      @test (P, length(builds), asserted) == (P, 1, builds)
+    end
+    # The blank-key mask: no dynamic `map`/`all`/`any` in `_drop_blank_auto_primary_keys!`, and none in the mask's arms.
+    @test filter(x -> occursin(r"\bmap\(|\ball\(|\bany\(", x),
+                 _dynamic_calls(QB._drop_blank_auto_primary_keys!,
+                                (QB._BulkFrame, PormG.Models.ModelType, Vector{String}, Dict{String, String}, Symbol))) == String[]
+    for T in (Vector{Int64}, Vector{String}, Vector{Any}, Vector{Union{Missing, Int64}})
+      @test (T, filter(x -> !occursin("_blank_primary_key_mask_other", x), _dynamic_calls(QB._blank_primary_key_mask, (T,)))) == (T, String[])
+    end
+    # The sequence reads after a write with explicit keys: each a typed read, so no `Tables.rowtable` on a result whose row
+    # type is decided at run time, and SQLite's `MAX(pk)` read at its type.
+    S = PormG.Kernel.Settings
+    MT = PormG.Models.ModelType
+    SQ = PormG.ConnectionPool.SQLiteConnectionPool
+    untyped_read = r"rowtable|\|>|\bfloor\(|\btryparse\(|\bisinteger\(|\bInt64\(|\bget\("
+    @test filter(x -> occursin(untyped_read, x), _dynamic_calls(QB._sqlite_has_sequence_table, (S,))) == String[]
+    @test filter(x -> occursin(untyped_read, x), _dynamic_calls(QB._update_sequence, (MT, SQ, Vector{String}, S))) == String[]
+    for P in (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, PormG.ConnectionPool.PostgresConnectionPool{:libpq})
+      @test (P, filter(x -> occursin(untyped_read, x), _dynamic_calls_kw(QB._get_owned_sequence_name, (P, MT, String)))) == (P, String[])
+      @test (P, filter(x -> occursin(untyped_read, x), _dynamic_calls_kw(QB._update_sequence, (MT, P, Vector{String}, S)))) == (P, String[])
+    end
+    # MySQL's conflict reading of a frame: the two predicates read a column and a field at their types, and
+    # `_can_conflict` calls them, not `any`/`all` over a `Function`.
+    H, Mi = only(Base.return_types(QB._frame_conflict_reading, (MT, Vector{String}, Dict{String, String}, QB._BulkFrame))).parameters
+    @test isconcretetype(H) && isconcretetype(Mi)
+    calls_of(tt) = [string(s) for (ci, _) in Base.code_typed_by_type(tt; optimize = true) for s in ci.code
+                    if s isa Expr && s.head === :call && !(_tsp_callee_type(ci, s.args[1]) <: Core.Builtin)]
+    @test length(Base.code_typed_by_type(Tuple{H, String})) == 1 && length(Base.code_typed_by_type(Tuple{Mi, String})) == 1
+    @test filter(x -> occursin(r"\bany\(|_has_db_default|_is_minted_value", x), calls_of(Tuple{H, String})) == String[]
+    @test filter(x -> occursin(r"_is_minted_value|_is_injected_fill_column", x), calls_of(Tuple{Mi, String})) == String[]
+    K = @NamedTuple{fields::Vector{String}, kind::Symbol}
+    @test _dynamic_calls(QB._can_conflict, (K, H, Mi)) == String[]
+    for T in (Vector{Int64}, Vector{String}, Vector{Any}, Vector{Union{Missing, Int64}})
+      @test (T, filter(x -> !occursin("_bulk_column_holds_value_other", x), _dynamic_calls(QB._bulk_column_holds_value, (T,)))) == (T, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

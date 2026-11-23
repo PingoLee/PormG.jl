@@ -286,6 +286,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "atomic Answers as Its Vararg Form Did (#1599)" include("unit/test_atomic_callee_trim_1599.jl")
     @testset "A CTE Body's Typed Copy Renders and Isolates as deepcopy Did (#1599)" include("unit/test_tree_copy_trim_1599.jl")
     @testset "The Write Residue Writes as Before (#1599, #1694)" include("unit/test_write_residue_trim_1694.jl")
+    @testset "The Bulk Upsert Paths and the Render's Build Call Answer as Before (#1599, #1694)" include("unit/test_bulk_upsert_trim_1694.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

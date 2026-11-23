@@ -705,9 +705,16 @@ function _render_select(q::SQLObjectHandler;
 
       # Main query uses the SAME parameters object (will continue numbering from where CTEs left off)
       # Context switching for select/where/join happens inside build()
+      # #1599 layer 5: `build`'s answer is asserted `InstructionObject`, which it always is. `cte_state` is `nothing` when
+      # the query declares no CTE, so the keyword tuple below is of a non-concrete type,
+      # `NamedTuple{…, <:Tuple{…, Union{Nothing, Dict{String, CTEState}}}}`. Julia 1.13.3 inferred `build` through it,
+      # 1.13.4 gives `Any` for MySQL's build, and every call on the instruction was then dynamic there
+      # (`_CteBodyRender`'s `_build_cte_custom_model` and `_refuse_lock_outside_transaction`). Splitting the call on
+      # `cte_state` also fixed the inference, but compiled `build` twice: a first read with every driver loaded took
+      # 1.5-2.5 s longer.
       instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters, outer=outer,
                           semi_join=semi_join, cte_body=cte_body, cte_body_correlated=cte_body_correlated,
-                          cte_state=cte_state)
+                          cte_state=cte_state)::InstructionObject
       built === nothing || built(instruction)
   
       # Prevent SELECT * across JOINs which causes DataFrame column collisions downstream.

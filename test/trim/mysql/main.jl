@@ -110,6 +110,8 @@ end
 include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
 include(joinpath(@__DIR__, "..", "tools", "reads.jl"))
 include(joinpath(@__DIR__, "..", "tools", "connections.jl"))
+raw_marker(i::Int)::String = "?"   # the backend's bind marker, for the raw `fetch` of `../tools/terminals.jl`
+include(joinpath(@__DIR__, "..", "tools", "terminals.jl"))
 
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
@@ -143,6 +145,13 @@ function (@main)(args::Vector{String})::Cint
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
+    # The terminals applications use most (`tools/terminals.jl`, #1599 layer 6): count(), exists(), a locking read in a
+    # transaction, a raw fetch, and the Tables.jl interface a table sink reads.
+    count_step() || return Cint(42)
+    exists_step() || return Cint(43)
+    lock_step(KEY) || return Cint(44)
+    raw_fetch_step(KEY) || return Cint(45)
+    tables_step() || return Cint(46)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()

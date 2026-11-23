@@ -34,6 +34,11 @@ function (@main)(args::Vector{String})::Cint
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
+    # The terminals applications use most (`tools/terminals.jl`, #1599 layer 6): count(), exists() and the Tables.jl
+    # interface a table sink reads.
+    count_step() || return Cint(42)
+    exists_step() || return Cint(43)
+    tables_step() || return Cint(46)
     tasks && (reap_step() || return Cint(4))
     tasks && (close_step() || return Cint(5))
     elapsed_step(t0)

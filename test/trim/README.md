@@ -158,6 +158,9 @@ step	aggregate	distinct 1 rows: 2008
 step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
 step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
 step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
+step	count	round__@gt 2; circuitid__country 1; year 1900 0
+step	exists	year 2008 true; year 1900 false
+step	tables	columntable of list(T) name, round: Monaco Grand Prix, Brazilian Grand Prix; rounds 6, 18
 step	elapsed_ms	1
 ```
 
@@ -193,7 +196,8 @@ connection held or its driver handle open (`main.jl` and the server variants; se
 pools"). 27 to 30 are the write residue's steps (see "The write residue"). The Postgres.jl variant also exits
 23 when one of its connection shapes fails. 33 to 36 are the steps of #1599's layers 1 to 3: a second key, models
 loaded with `@import_models`, a nested transaction and a read on a spawned task (see "How an application starts"). 37 to 41 are the read shapes applications use most: relation hops, the remaining lookups and `Q`/`Qor`, paging,
-aggregates, and the reads each engine answers its own way (see "The read shapes applications use most").
+aggregates, and the reads each engine answers its own way (see "The read shapes applications use most"). 42 to 46 are the terminals applications use most: `count()`, `exists()`, a locking read in a transaction, a raw `fetch`,
+and typed rows into a table sink (see "The terminals applications use most").
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -271,6 +275,33 @@ step	engine_read	Extract EPOCH: Monaco Grand Prix 1211673600, Brazilian Grand Pr
 ```
 
 MySQL refuses the three lookups as SQLite does and reads `EPOCH` as PostgreSQL does.
+
+## The terminals applications use most
+
+The steps of #1599 layer 6 (`tools/terminals.jl`), after `engine_read` and before any write:
+
+- `count` (exit code 42): `count()` over a filter, across a join and over no row. `count()` returns the integer the
+  driver read, untyped: the step states its type, `count()::Int`, as a trimmed program states a typed read's row type.
+- `exists` (exit code 43): `exists()` for a filter that matches and one that does not, stated `::Bool` for the same
+  reason.
+- `lock` (exit code 44, the write entries): `select_for_update(of = ("self",))` as a user read inside
+  `run_in_transaction`. SQLite renders no lock clause (its transaction holds the write lock), the servers `FOR UPDATE`.
+- `raw_fetch` (exit code 45, the write entries): the raw `fetch` hatch with the backend's own markers (`raw_marker(i)`:
+  `?` on SQLite and MySQL, `$i` on PostgreSQL), an `UPDATE` that moves the 2008 Monaco race's round by +100 and,
+  inside a transaction, the one that moves it back, each checked by a typed read. The hatch returns the driver's own
+  result, untyped and of another type on each engine, so the step reads the effect through the ORM.
+- `tables` (exit code 46): typed rows (`list(T)`) handed to `Tables.columntable`, a `NamedTuple` of typed vectors, as
+  `DataFrame(rows)` reads them. The fixture depends on `Tables` directly, as an application would. A query handed to a
+  sink itself (`Tables.columntable(query)`, `query |> DataFrame`) does not run trimmed: its columns' types are decided
+  by the result, at run time.
+
+```
+step	count	round__@gt 2; circuitid__country 1; year 1900 0
+step	exists	year 2008 true; year 1900 false
+step	lock	select_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	raw_fetch	update +100: rounds 18, 106; in a transaction -100: rounds 6, 18
+step	tables	columntable of list(T) name, round: Monaco Grand Prix, Brazilian Grand Prix; rounds 6, 18
+```
 
 ## The write residue (#1694)
 
@@ -410,6 +441,11 @@ step	aggregate	distinct 1 rows: 2008
 step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
 step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
 step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
+step	count	round__@gt 2; circuitid__country 1; year 1900 0
+step	exists	year 2008 true; year 1900 false
+step	lock	select_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	raw_fetch	update +100: rounds 18, 106; in a transaction -100: rounds 6, 18
+step	tables	columntable of list(T) name, round: Monaco Grand Prix, Brazilian Grand Prix; rounds 6, 18
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
@@ -564,6 +600,11 @@ step	aggregate	distinct 1 rows: 2008
 step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
 step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
 step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
+step	count	round__@gt 2; circuitid__country 1; year 1900 0
+step	exists	year 2008 true; year 1900 false
+step	lock	select_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	raw_fetch	update +100: rounds 18, 106; in a transaction -100: rounds 6, 18
+step	tables	columntable of list(T) name, round: Monaco Grand Prix, Brazilian Grand Prix; rounds 6, 18
 step	write	ok
 step	query	2 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25

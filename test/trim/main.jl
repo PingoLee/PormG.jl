@@ -35,6 +35,13 @@ function (@main)(args::Vector{String})::Cint
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
+    # The terminals applications use most (`tools/terminals.jl`, #1599 layer 6): count(), exists(), a locking read in a
+    # transaction, a raw fetch, and the Tables.jl interface a table sink reads.
+    count_step() || return Cint(42)
+    exists_step() || return Cint(43)
+    lock_step(TrimF1.KEY) || return Cint(44)
+    raw_fetch_step(TrimF1.KEY) || return Cint(45)
+    tables_step() || return Cint(46)
     write_step(1) || return Cint(2)   # the Monaco circuit `prep.jl` seeds first
     query_step() || return Cint(3)
     update_step() || return Cint(7)

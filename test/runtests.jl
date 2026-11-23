@@ -288,6 +288,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "The Write Residue Writes as Before (#1599, #1694)" include("unit/test_write_residue_trim_1694.jl")
     @testset "The Bulk Upsert Paths and the Render's Build Call Answer as Before (#1599, #1694)" include("unit/test_bulk_upsert_trim_1694.jl")
     @testset "The App's Read Shapes Answer as Before (#1599)" include("unit/test_app_reads_trim_1599.jl")
+    @testset "count() and the Raw SQLite Bind Answer as Before (#1599)" include("unit/test_app_terminals_trim_1599.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

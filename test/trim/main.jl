@@ -1,4 +1,5 @@
-# The juliac --trim entry of the fixture app (#1616, #1599): boot, two refused writes, two comparison filters,
+# The juliac --trim entry of the fixture app (#1616, #1599): boot, models loaded with @import_models, a read-only second
+# key, two refused writes, two comparison filters,
 # an order_by each way, the other common lookups and comparisons against an expression, one write, one typed read, one update, one delete, one bulk_insert of two rows and
 # one bulk_insert validation refuses.
 #   JIT:  julia --project=test/trim test/trim/main.jl <run dir>
@@ -13,6 +14,10 @@ function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
     dir = start_step(args)
     boot_step(dir) || return Cint(1)
+    # How an application starts (#1599 layers 1-3): models loaded with `@import_models` and read through the key they
+    # recorded, registered in code (`steps.jl`), and a second, read-only key beside the entry's own (`tools/connections.jl`).
+    imported_step(dir) || return Cint(34)
+    keys_step(key -> TrimF1.register_readonly!(dir, key)) || return Cint(33)
     refused_step() || return Cint(6)
     compare_step() || return Cint(10)  # before the write: the two seeded races (`tools/reads.jl`)
     order_step() || return Cint(11)
@@ -41,6 +46,8 @@ function (@main)(args::Vector{String})::Cint
     bulk_refusals_step(1) || return Cint(30)
     bulk_conflict_step(1) || return Cint(31)        # bulk_insert's on_conflict= (`tools/writes.jl`, #1694)
     transaction_step(1, TrimF1.KEY) || return Cint(24)  # a user transaction (`tools/connections.jl`, #1599 layer 2)
+    nested_transaction_step(1, TrimF1.KEY) || return Cint(35)  # a transaction inside one (`tools/connections.jl`)
+    spawned_read_step(2008) || return Cint(36)  # a read on spawned tasks (`tools/connections.jl`, #1599 layer 2)
     elapsed_step(t0)
     # Last: a trimmed binary runs no atexit hook, so the app closes its pools itself.
     close_all_step(PormG.Configuration.get_settings(TrimF1.KEY).connections::PormG.ConnectionPool.SQLiteConnectionPool) || return Cint(25)

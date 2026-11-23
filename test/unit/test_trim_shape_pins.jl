@@ -7002,10 +7002,10 @@ end
     @test length(queries) == 1 && asserted == queries
   end
 
-  # What: the SELECT render's `build` call (`_build_select`, #1599 layer 5) and the bulk writers' upsert and returning
+  # What: the SELECT render's `build` call (#1599 layer 5) and the bulk writers' upsert and returning
   #   paths (#1694, #1599 layer 7): a `bulk_insert` with its key column, `on_conflict=` and `returning=`.
-  # Expected: the render calls `build` with a concrete keyword tuple on every engine, so its instruction is
-  #   `InstructionObject` under any Julia release; the blank-key mask is read at the column's type.
+  # Expected: the render asserts `build`'s answer, so its instruction is `InstructionObject` under any Julia release;
+  #   the blank-key mask is read at the column's type.
   # Why: `build_cte_clause` returns `nothing` for a query without CTEs, so `build(…; cte_state = cte_state)` built a
   #   keyword tuple of a non-concrete type. Julia 1.13.3 inferred through it, 1.13.4 did not for MySQL, and every call on
   #   the render's instruction was then dynamic there (`_CteBodyRender` above failed under 1.13.4). The fixture's
@@ -7018,29 +7018,27 @@ end
              (PormG.ConnectionPool.MySQLConnectionPool, QB.MySQLParameterizedQuery),
              (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, QB.PgParameterizedQuery))
     for (P, Q) in pools
-      for C in (Nothing, D)
-        @test (P, C, Base.return_types(QB._build_select, (QB.SQLObjectQuery, C, QB.SQLTbAlias, P, Q, Nothing, Bool, String, Bool))) ==
-              (P, C, Any[I])
-      end
       kw = NamedTuple{(:table_alias, :connection, :parameters, :cte_body, :cte_body_correlated), Tuple{QB.SQLTbAlias, P, Q, String, Bool}}
       @test (P, Base.return_types(Core.kwcall, (kw, typeof(QB._render_select), QB.ObjectHandler))) ==
             (P, Any[NamedTuple{(:sql, :instruction), Tuple{String, I}}])
-      # Every keyword call in the render's closure is made with a concrete keyword tuple: the shape that 1.13.4 stopped
-      # inferring through, read in the unoptimized code so the pin does not depend on the release's inlining.
+      # The render's `build` call has its answer asserted `InstructionObject`, read in the unoptimized code so the pin
+      # does not depend on the release's inference or inlining: the shape 1.13.4 needs, whatever it infers for `build`.
       kwbody = Base.bodyfunction(only(methods(QB._render_select)))
       body, _ = only(Base.code_typed_by_type(Tuple{typeof(kwbody), QB.SQLTbAlias, P, Q, Nothing, Symbol, Nothing, Bool, String,
                                                    Bool, typeof(QB._render_select), QB.ObjectHandler}; optimize = false))
       closures = unique([t for t in body.ssavaluetypes if t isa DataType && t <: Function && t.name.module === QB &&
                                                          fieldcount(t) > 0 && startswith(string(t.name.name), "#")])
       @test length(closures) == 1
-      closure, _ = only(Base.code_typed_by_type(Tuple{only(closures), PormG.Kernel.Settings, P, String}; optimize = false))
-      iskwcall(x) = x == GlobalRef(Core, :kwcall)
-      # A call can stand alone or be assigned to a slot (`_19 = Core.kwcall(…)`, the build call itself), so both forms.
-      callexpr(s) = s isa Expr && s.head === :(=) ? callexpr(s.args[2]) : (s isa Expr && s.head === :call ? s : nothing)
-      kwtuples = [Core.Compiler.widenconst(closure.ssavaluetypes[c.args[2].id]) for c in map(callexpr, closure.code)
-                  if c !== nothing && iskwcall(c.args[1]) && c.args[2] isa Core.SSAValue]
-      @test (P, isempty(kwtuples)) == (P, false)
-      @test (P, filter(!isconcretetype, kwtuples)) == (P, Any[])
+      m = only(Base._methods_by_ftype(Tuple{only(closures), PormG.Kernel.Settings, P, String}, -1, Base.get_world_counter())).method
+      closure = Base.uncompressed_ir(m)   # the lowered body: what the source says, before any inference
+      resolve(x) = x isa Core.SSAValue ? resolve(closure.code[x.id]) : x
+      named(x, n) = (r = resolve(x); r isa GlobalRef && r.name === n)
+      callexpr(st) = st isa Expr && st.head === :(=) ? callexpr(st.args[2]) : (st isa Expr && st.head === :call ? st : nothing)
+      builds = [i for (i, st) in enumerate(closure.code) if (c = callexpr(st)) !== nothing && length(c.args) >= 3 &&
+                named(c.args[1], :kwcall) && named(c.args[3], :build)]
+      asserted = [i for i in builds if any((c = callexpr(st)) !== nothing && length(c.args) == 3 && named(c.args[1], :typeassert) &&
+                                           c.args[2] == Core.SSAValue(i) && named(c.args[3], :InstructionObject) for st in closure.code)]
+      @test (P, length(builds), asserted) == (P, 1, builds)
     end
     # The blank-key mask: no dynamic `map`/`all`/`any` in `_drop_blank_auto_primary_keys!`, and none in the mask's arms.
     @test filter(x -> occursin(r"\bmap\(|\ball\(|\bany\(", x),

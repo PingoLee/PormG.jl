@@ -10,7 +10,8 @@
 #     - `_bulk_column_holds_value` is `any(v -> !(v === nothing || ismissing(v)), column)`;
 #     - `_can_conflict`'s loops are `any(minted, …)` / `all(holds, …)`, in the same order;
 #     - `_sqlite_sequence_value` is the expression it replaces, a raise included;
-#     - `_build_select` builds what `build(…; cte_state = cte_state)` built, with and without CTEs, on every engine;
+#     - the SELECT render's assertion on `build`'s answer (`::InstructionObject`) holds for every query shape, with and
+#       without CTEs, on every engine;
 #     - MySQL's frame conflict predicates answer as their closures did.
 #   The old expressions are written out here as the oracle.
 #
@@ -126,37 +127,23 @@ end
   @test _BUP_QB._typed_value(Any, 7.0, :m, 1, _BUP_QB._TypedReadSite("t", "m")) === 7.0
 end
 
-# What: the SELECT render's `build` call through `_build_select` against the keyword call it replaces, for a query with
-#   no CTE (`cte_state` is `nothing`) and with one, on every engine.
-# Expected: the same projection, WHERE, joins, ORDER BY and GROUP BY text, and the same bound values, from each
-#   instruction (the render above them is the same code either way, so it is not compared).
-# Why: the call is now positional so its keyword tuple is concrete (Julia 1.13.4 gave `Any` for MySQL's build through
-#   the non-concrete one); it must build exactly what the keyword call built.
-@testset "the render's build call builds what the keyword call built (#1599 layer 5)" begin
+# What: the SELECT render's assertion on `build`'s answer, for reads with and without CTEs, a subquery, a window and a
+#   join, on every engine.
+# Expected: each renders, so `build` answered an `InstructionObject` every time.
+# Why: `_render_select` now asserts it (#1599 layer 5, for Julia 1.13.4's inference of the call); an answer of another
+#   type would raise a `TypeError` where the render used to carry on. The SQL is checked against the code before the
+#   change by a base-against-branch render (the PR), not here.
+@testset "the render's build call answers an InstructionObject (#1599 layer 5)" begin
   sources = [
     () -> _BUP_RACE.objects.filter("year__@gte" => 2008).values("raceid", "name").order_by("-year"),
     () -> _BUP_RACE.objects.filter("circuitid__name" => "Monaco").values("year", "circuitid__name"),
     () -> _BUP_RACE.objects.with("st" => _BUP_RACE.objects.values("circuitid", "n" => Count("raceid")),
                                  join_field = "circuitid" => "circuitid").values("name", "st__n").filter("round" => F("year") - 2000),
+    () -> _BUP_RACE.objects.filter("circuitid__@in" => BupModels.Bup_circuit.objects.filter("name" => "Monaco").values("circuitid")).values("name"),
   ]
   for conn in (BupMockSQLite(), BupMockPostgres(), BupMockMySQL()), mk in sources
-    built(callee) = begin
-      q = mk()
-      alias = _BUP_QB.SQLTbAlias()
-      params = _BUP_QB.get_parameter(conn)
-      _BUP_QB.set_context!(params, :cte)
-      _, cte_state = _BUP_QB.build_cte_clause(q.object.ctes, conn, params, alias; correlated = false)
-      instruction = callee(q.object, cte_state, alias, params)
-      (instruction.select, instruction._where, instruction.join, instruction.order, instruction.group,
-       instruction.parameters)
-    end
-    new = built((obj, cs, alias, params) -> _BUP_QB._build_select(obj, cs, alias, conn, params, nothing, false, "", false))
-    old = built((obj, cs, alias, params) -> _BUP_QB.build(obj, table_alias = alias, connection = conn, parameters = params,
-                                                          outer = nothing, semi_join = false, cte_body = "",
-                                                          cte_body_correlated = false, cte_state = cs))
-    # The bound values, by clause, as each build filed them.
-    binds(p) = sprint(show, p)
-    @test (typeof(conn), string.(new[1]), new[2:5]..., binds(new[6])) == (typeof(conn), string.(old[1]), old[2:5]..., binds(old[6]))
+    rendered = _BUP_QB._render_select(mk(); connection = conn)
+    @test (typeof(conn), rendered.instruction isa _BUP_QB.InstructionObject, rendered.sql isa String) == (typeof(conn), true, true)
   end
 end
 

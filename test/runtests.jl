@@ -290,6 +290,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "The App's Read Shapes Answer as Before (#1599)" include("unit/test_app_reads_trim_1599.jl")
     @testset "count() and the Raw SQLite Bind Answer as Before (#1599)" include("unit/test_app_terminals_trim_1599.jl")
     @testset "An Empty RETURNING and an Unknown columns= Field Raise Typed Errors (#1694)" include("unit/test_app_writes_trim_1694.jl")
+    @testset "bulk_update Renders and Refuses as Recorded; an Empty SET Is Refused (#1841)" include("unit/test_bulk_update_matrix_1841.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

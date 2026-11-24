@@ -51,10 +51,11 @@ Aw_race::PormG.Models.ModelType = Models.Model("aw_race",
 Models.@models Aw_race
 end
 
+# The message without ANSI: `_emsg` keeps the colour codes when the session has colour (CI's `--color=yes`).
 _aw_outcome(f) = try
   (:value, f())
 catch e
-  (:raised, typeof(e), sprint(showerror, e))
+  (:raised, typeof(e), replace(sprint(showerror, e), r"\e\[[0-9;]*m" => ""))
 end
 
 @testset "the round's write changes: two typed errors and the filters= walk (#1694)" begin

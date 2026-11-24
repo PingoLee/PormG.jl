@@ -839,13 +839,23 @@ end
 # `"YYYY-MM"` key meets the #1070 row first, over a column. A native PostgreSQL template is no key and
 # passes (fails open, as the #1070 check does).
 function _check_tochar_date_of_time(v::FObject, instruc::SQLInstruction)
-  format = get(v.kwargs, "format", nothing)
-  (format isa AbstractString && Dialect._tochar_reads_date(format)) || return nothing
+  format = _tochar_format(v)
+  (format !== nothing && Dialect._tochar_reads_date(format)) || return nothing
   _expression_kind(v.column, instruc) isa CTime || return nothing
   throw(QueryBuildError(
     "\e[4m\e[31mToChar(…, \"$(format)\")\e[0m over a time is not supported: a time of day has no date, so " *
     "the year, month or day in the format has no value on any engine (#1336). Format its clock alone " *
     "(\e[32m\"HH:MI:SS\"\e[0m), or take the date from a date or a timestamp column."))
+end
+
+# The format of a `ToChar` node, at the type its constructor stores (`String(format)`), so the checks above call
+# `Dialect._tochar_reads_date` at a concrete type (#1599 layer 5): narrowed to `AbstractString` only, the call was made at
+# run time, and a trimmed image had no code for it. Other text, which no constructor stores, is converted; anything else
+# is no format.
+function _tochar_format(v::FObject)::Union{Nothing, String}
+  format = get(v.kwargs, "format", nothing)
+  format isa String && return format
+  return format isa AbstractString ? String(format) : nothing
 end
 
 # #1416: `ToChar` over a duration, whatever its format. A duration has no calendar date (#1388), and its

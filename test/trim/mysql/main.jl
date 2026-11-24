@@ -136,6 +136,13 @@ function (@main)(args::Vector{String})::Cint
     subquery_step() || return Cint(20)
     join_step() || return Cint(21)
     cte_step() || return Cint(26)  # a CTE body copied and typed at its types (`tools/reads.jl`, #1599 layer 5)
+    # The read shapes applications use most (`tools/reads.jl`, #1599 layer 5): relation hops, the remaining lookups and
+    # Q/Qor, paging, aggregates, and the shapes each engine answers its own way.
+    hops_step() || return Cint(37)
+    lookup_more_step() || return Cint(38)
+    page_step() || return Cint(39)
+    aggregate_step() || return Cint(40)
+    engine_read_step() || return Cint(41)
     # The single-row write (#1614, `../tools/writes.jl`): create with the auto-filled fields, read back, update,
     # delete, each checked by a typed read. Monaco's id is read first: the server's sequence is not reset.
     circuitid = monaco_circuitid_step()

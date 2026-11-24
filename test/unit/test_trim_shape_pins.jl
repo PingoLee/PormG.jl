@@ -7075,6 +7075,50 @@ end
     end
   end
 
+  # What: `Q` and `Qor` over arguments of mixed types, a pair beside a nested `Q` (#1599 layer 5), and the collection of
+  #   their terms (`_q_terms_of`).
+  # Expected: no dynamic call in either constructor or in the collection, for each mix of argument types.
+  # Why: the comprehension they used collected over a tuple of mixed types, a `Generator`/`collect` a trimmed image had no
+  #   code for: the trimmed `Qor("round__@lt" => 3, Q(…))` stopped there with a `MethodError` on the `Generator`.
+  @testset "Q and Qor collect their terms at each argument's type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    # The mixes with a node beside a pair: the ones the old comprehension could not infer (a pair-only mix inferred).
+    mixes = ((Pair{String, Int64}, QB.QObject), (QB.QObject, QB.QorObject, Pair{String, Int64}))
+    for f in (QB.Q, QB.Qor), args in mixes
+      @test (nameof(f), args, _dynamic_calls(f, args)) == (nameof(f), args, String[])
+    end
+    for args in mixes
+      @test (args, _dynamic_calls_deep(QB._q_terms_of, (Tuple{args...},); depth = 3,
+                                       skip = (QB._check_filter, QB._check_filter_node))) == (args, String[])
+    end
+  end
+
+  # What: `ToChar`'s date-of-time check (`_check_tochar_date_of_time`) and the regex and unaccent renderers on an engine
+  #   held `@nospecialize` (#1599 layer 5).
+  # Expected: the check calls `Dialect._tochar_reads_date` at a concrete type; each renderer reaches its refusal through
+  #   the barrier (`_capability_error_at`), with no dynamic call to `_capability_error` or `_regex_capability_error`.
+  # Why: the check narrowed the format to `AbstractString` only, and the renderers called the capability helpers with
+  #   the engine at its abstract type: a trimmed image had no code for either call, so `ToChar(…, "YYYY-MM")` stopped
+  #   before any SQL, and `__@regex`/`__@iunaccent_contains` on SQLite or MySQL raised `MissingCodeError` in place of
+  #   the `BackendCapabilityError` the JIT raises.
+  @testset "ToChar's format check and the regex/unaccent refusals call at concrete types (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    D = PormG.Dialect
+    @test filter(x -> occursin("_tochar_reads_date", x),
+                 _dynamic_calls(QB._check_tochar_date_of_time, (QB.FObject, QB.InstructionObject))) == String[]
+    # An engine without the feature, at its abstract type, as the renderers hold it (the PostgreSQL method is not
+    # applicable, so each call has one body). The regex renderers call `_regex_capability_error`, whose own body is
+    # pinned below; the unaccent renderers call the capability helper themselves.
+    for E in (PormG.PormGSQLite, PormG.PormGMySQL)
+      for f in (D.iunaccent_contains, D.iunaccent_exact, D.niunaccent_contains, D.niunaccent_exact)
+        @test (E, nameof(f), filter(x -> occursin("capability_error", x), _dynamic_calls(f, (E, String, String)))) ==
+              (E, nameof(f), String[])
+      end
+      @test (E, filter(x -> occursin(r"\b_capability_error\b|kwcall", x),
+                       _dynamic_calls(D._regex_capability_error, (E, String)))) == (E, String[])
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

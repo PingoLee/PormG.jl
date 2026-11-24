@@ -349,3 +349,168 @@ function named_line(step::String, label::String, rows::Vector{T}, show_row::F, e
     say(step, string(label, " ", length(rows), " rows: ", isempty(text) ? "none" : text))
     return text == expected
 end
+
+# ── The read shapes applications use most (#1599 layer 5): relation hops, the remaining lookups, `Q`/`Qor`, paging,
+# aggregates, `Case` in an aggregate, `distinct()`, `ToChar` ordered by its alias and an INNER CTE join. Each is
+# checked by its typed rows, over the rows every `prep.jl` seeds (two races, one pit stop, a chain of three
+# constructors), before any write.
+
+using PormG.Functions: Avg, Min, ToChar
+using PormG: Q, Qor
+
+const HopRow = NamedTuple{(:stop, :country), Tuple{Int64, String}}
+const HomeRow = NamedTuple{(:name, :home), Tuple{String, Union{Nothing, String}}}
+const RaceYearRow = NamedTuple{(:name, :yr), Tuple{String, Int64}}
+const RaceNameRow = NamedTuple{(:name,), Tuple{String}}
+const AggRow = NamedTuple{(:year, :c, :mx, :av, :mn),
+                          Tuple{Int64, Int64, Union{Nothing, Int64}, Union{Nothing, Float64}, Union{Nothing, Int64}}}
+const LateRow = NamedTuple{(:year, :late), Tuple{Int64, Union{Nothing, Int64}}}
+const YearRow = NamedTuple{(:year,), Tuple{Int64}}
+const MonthRow = NamedTuple{(:name, :ym), Tuple{String, Union{Nothing, String}}}
+const CteCountRow = NamedTuple{(:name, :n), Tuple{String, Union{Nothing, Int64}}}
+
+race_name(r)::String = r.name
+
+# `values()` across relations (#1599 layer 5): two hops forward (a pit stop's race's circuit), three hops forward
+# (a constructor's parent's parent's home circuit, through the self-referential key twice) and one reverse hop (a
+# circuit's races). Exit code 37 when a read raises or returns other rows.
+function hops_step()::Bool
+    try
+        ok = true
+        ok &= named_line("hops", "2 hops", M.PitStop.objects.values("stop", "country" => "raceid__circuitid__country").list(HopRow),
+                         r -> string("stop ", r.stop, " in ", r.country), "stop 1 in Monaco")
+        ok &= named_line("hops", "3 hops",
+                         M.Constructor.objects.filter("name" => "Renault").
+                             values("name", "home" => "parentid__parentid__home_circuitid__country").list(HomeRow),
+                         r -> string(r.name, " from ", something(r.home, "NULL")), "Renault from None")
+        ok &= named_line("hops", "reverse",
+                         M.Circuit.objects.filter("circuitref__@in" => ["monaco", "interlagos"]).
+                             values("name", "yr" => "race__year").order_by("name").list(RaceYearRow),
+                         r -> string(r.name, " ", r.yr), "Autódromo José Carlos Pace 2008, Circuit de Monaco 2008")
+        return ok
+    catch e
+        failed("hops", e); return false
+    end
+end
+
+# The lookups `lookup_step` leaves out that every engine has (#1599 layer 5): a year and month (`__@yyyy_mm`), not
+# equal (`__@ne`), not in a list (`__@nin`), and `Qor` over a lookup and a nested `Q`. Exit code 38 when a read raises
+# or returns other rows.
+function lookup_more_step()::Bool
+    try
+        ok = true
+        ok &= named_line("lookup_more", "date__@yyyy_mm",
+                         M.Race.objects.filter("date__@yyyy_mm" => "2008-05").values("name").list(RaceNameRow), race_name,
+                         "Monaco Grand Prix")
+        ok &= named_line("lookup_more", "round__@ne",
+                         M.Race.objects.filter("round__@ne" => 6).values("name").list(RaceNameRow), race_name,
+                         "Brazilian Grand Prix")
+        ok &= named_line("lookup_more", "round__@nin",
+                         M.Race.objects.filter("round__@nin" => [6, 7]).values("name").list(RaceNameRow), race_name,
+                         "Brazilian Grand Prix")
+        ok &= named_line("lookup_more", "Qor(Q)",
+                         M.Race.objects.filter(Qor("round__@lt" => 3, Q("name__@icontains" => "monaco", "year" => 2008))).
+                             values("name").list(RaceNameRow), race_name, "Monaco Grand Prix")
+        return ok
+    catch e
+        failed("lookup_more", e); return false
+    end
+end
+
+# Paging (#1599 layer 5): `order_by("-date")` with `page(limit)`, with `page(limit, offset)`, and with `limit` and
+# `offset`. Exit code 39 when a read raises or returns other rows.
+function page_step()::Bool
+    try
+        ok = true
+        ok &= named_line("page", "page(1)", M.Race.objects.order_by("-date").page(1).values("name").list(RaceNameRow),
+                         race_name, "Brazilian Grand Prix")
+        ok &= named_line("page", "page(1, 1)", M.Race.objects.order_by("-date").page(1, 1).values("name").list(RaceNameRow),
+                         race_name, "Monaco Grand Prix")
+        ok &= named_line("page", "limit offset",
+                         M.Race.objects.order_by("-date").limit(1).offset(1).values("name").list(RaceNameRow), race_name,
+                         "Monaco Grand Prix")
+        return ok
+    catch e
+        failed("page", e); return false
+    end
+end
+
+# Aggregates and the grouped shapes around them (#1599 layer 5): `Count(distinct = true)`, `Max`, `Avg` and `Min`
+# grouped by year; `Sum(Case(When(...), default = ...))`; `distinct()`; `ToChar` ordered by its alias; and a CTE
+# joined with `join_type = "INNER"`. Exit code 40 when a read raises or returns other rows.
+function aggregate_step()::Bool
+    try
+        ok = true
+        ok &= named_line("aggregate", "Count distinct/Max/Avg/Min",
+                         M.Race.objects.values("year", "c" => Count("circuitid", distinct = true), "mx" => Max("round"),
+                                               "av" => Avg("round"), "mn" => Min("round")).list(AggRow),
+                         r -> string(r.year, " ", r.c, " ", something(r.mx, -1), " ", something(r.av, -1.0), " ",
+                                     something(r.mn, -1)),
+                         "2008 2 18 12.0 6")
+        ok &= named_line("aggregate", "Sum(Case)",
+                         M.Race.objects.values("year", "late" => Sum(Case(When("round__@gt" => 10, then = 1), default = 0))).
+                             list(LateRow),
+                         r -> string(r.year, " ", something(r.late, -1)), "2008 1")
+        ok &= named_line("aggregate", "distinct", M.Race.objects.values("year").distinct().list(YearRow),
+                         r -> string(r.year), "2008")
+        ok &= named_line("aggregate", "ToChar -alias",
+                         M.Race.objects.values("name", "ym" => ToChar("date", "YYYY-MM")).order_by("-ym").list(MonthRow),
+                         r -> string(r.name, " ", something(r.ym, "NULL")),
+                         "Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05")
+        late = M.Race.objects.filter("round__@gt" => 10).values("circuitid", "n" => Count("raceid"))
+        q = M.Race.objects
+        q.with("st" => late, join_field = "circuitid" => "circuitid", join_type = "INNER")
+        ok &= named_line("aggregate", "CTE INNER", q.values("name", "n" => "st__n").list(CteCountRow),
+                         r -> string(r.name, " ", something(r.n, -1)), "Brazilian Grand Prix 1")
+        return ok
+    catch e
+        failed("aggregate", e); return false
+    end
+end
+
+# `Extract("date", "EPOCH")` means a width-less decimal (#1121): the engines that compute it read it as a `Decimal`.
+const EpochRow = NamedTuple{(:name, :ep), Tuple{String, Union{Nothing, PormG.Decimals.Decimal}}}
+
+# The read shapes whose answer is each engine's own (#1599 layer 5): `__@regex`, `__@iregex` and
+# `__@iunaccent_contains`, which only PostgreSQL has (`docs/src/backends.md`), and `Extract("date", "EPOCH")`. An engine
+# without one refuses it with `BackendCapabilityError` before any SQL, and the line is the refusal's text; one that runs
+# it prints its rows. A job checks these `engine_read` lines against its own JIT control (`same_lines.sh`). Exit code 41
+# when a read raises anything else.
+function engine_read_step()::Bool
+    try
+        engine_read_line("name__@regex",
+                         () -> join(map(race_name, M.Race.objects.filter("name__@regex" => "^Monaco").values("name").list(RaceNameRow)), ", "))
+        engine_read_line("name__@iregex",
+                         () -> join(map(race_name, M.Race.objects.filter("name__@iregex" => "^brazil").values("name").list(RaceNameRow)), ", "))
+        engine_read_line("name__@iunaccent_contains",
+                         () -> join(map(race_name, M.Circuit.objects.filter("name__@iunaccent_contains" => "autodromo").values("name").list(RaceNameRow)), ", ");
+                         needs_function = true)
+        engine_read_line("Extract EPOCH",
+                         () -> join([string(r.name, " ", r.ep === nothing ? "NULL" : string(r.ep::PormG.Decimals.Decimal)) for r in
+                                     M.Race.objects.values("name", "ep" => Extract("date", "EPOCH")).order_by("date").list(EpochRow)], ", "))
+        return true
+    catch e
+        failed("engine_read", e); return false
+    end
+end
+
+# One `engine_read` line: `<label>: <rows>`, or `<label> refused: <message>` when the engine refuses it with
+# `BackendCapabilityError`. With `needs_function`, a server that lacks the SQL function the lookup calls (SQLSTATE 42883,
+# PostgreSQL's `unaccent` when the extension is not installed in the database) is recorded as such rather than failing:
+# `migrate` installs the extension when `connection.yml` names it, and the fixture's `prep.jl` does not. Anything else
+# propagates to the step.
+function engine_read_line(label::String, read::F; needs_function::Bool = false)::Nothing where {F <: Function}
+    text = try
+        string(": ", read()::String)
+    catch e
+        if e isa PormG.BackendCapabilityError
+            string(" refused: ", (e::PormG.BackendCapabilityError).msg)
+        elseif needs_function && e isa PormG.StatementError && (e::PormG.StatementError).sqlstate == "42883"
+            " not run: the database has no unaccent function (SQLSTATE 42883)"
+        else
+            rethrow()
+        end
+    end
+    say("engine_read", string(label, text))
+    return nothing
+end

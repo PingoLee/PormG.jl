@@ -14,9 +14,31 @@ a.filter(Q("name" => "John", Qor("age" => 18, "age" => 19)))
 ```
 """
 function Q(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value).")) for v in x]   # #863
-  return QObject(filters = colect)
+  return QObject(filters = _q_terms_of(x))
 end
+
+# The terms of a `Q`/`Qor`, in argument order (#863), each a checked pair or a checked filter node. A recursion over the
+# argument tuple, so each argument is checked at its own concrete type (#1599 layer 5): the comprehension it replaced
+# collected over a tuple of mixed types (`Qor("round__@lt" => 3, Q(…))`), and a trimmed image had no code for that
+# `Generator`/`collect`. The first invalid argument raises, after the ones before it were checked, as before. From 32
+# arguments on (`Base.Any32`, the bound Base's own tuple recursions use) a plain loop takes over: the recursion compiles
+# one method per remaining length, which cost seconds of JIT for a splatted list of a hundred pairs, and a trimmed binary
+# with such a call meets the loop's dynamic `_q_term` call instead.
+_q_terms_of(x::Tuple)::Vector{FilterType} = _q_push_terms!(Vector{FilterType}(undef, 0), x)
+_q_push_terms!(terms::Vector{FilterType}, ::Tuple{})::Vector{FilterType} = terms
+function _q_push_terms!(terms::Vector{FilterType}, x::Tuple)::Vector{FilterType}
+  push!(terms, _q_term(first(x)))
+  return _q_push_terms!(terms, Base.tail(x))
+end
+function _q_push_terms!(terms::Vector{FilterType}, x::Base.Any32)::Vector{FilterType}
+  for v in x
+    push!(terms, _q_term(v))
+  end
+  return terms
+end
+_q_term(v::Pair) = _check_filter(v)
+_q_term(v::FilterType) = _check_filter_node(v)
+_q_term(v) = throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value)."))
 
 
 """
@@ -34,8 +56,7 @@ a.filter(Qor("name" => "John", Q("age__gte" => 18, "age__lte" => 19)))
 ```
 """
 function Qor(x...)
-  colect = [isa(v, Pair) ? _check_filter(v) : isa(v, FilterType) ? _check_filter_node(v) : throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value).")) for v in x]   # #863
-  return QorObject(or = colect)
+  return QorObject(or = _q_terms_of(x))
 end
 
 #

@@ -4321,7 +4321,7 @@ function iunaccent_contains(@nospecialize(conn::PormGPostgres), column::Abstract
   return "public.immutable_unaccent($(column)) ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
 function iunaccent_contains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :unaccent, "The iunaccent_contains lookup"))
+  throw(_capability_error_at(conn, :unaccent, "The iunaccent_contains lookup"))   # the barrier, as `_regex_capability_error`
   return nothing
 end
 function iunaccent_contains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
@@ -4336,7 +4336,7 @@ function iunaccent_exact(@nospecialize(conn::PormGPostgres), column::AbstractStr
   return "LOWER(public.immutable_unaccent($(column))) = LOWER(public.immutable_unaccent($(value)))"
 end
 function iunaccent_exact(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :unaccent, "The iunaccent_exact lookup"))
+  throw(_capability_error_at(conn, :unaccent, "The iunaccent_exact lookup"))   # the barrier, as `_regex_capability_error`
   return nothing
 end
 function iunaccent_exact(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
@@ -4469,10 +4469,13 @@ SEARCH_HEADLINE(column, format::FnOptions, @nospecialize(conn::PormGAbstractType
 # one filter would silently return different rows per engine. A capability error cannot.
 # Indexing: an anchored, case-sensitive `~ '^…'` can use a `text_pattern_ops` / C-locale btree just
 # as `LIKE 'x%'` can; unanchored patterns and `~*` are evaluated row by row (`pg_trgm` GIN helps).
-_regex_capability_error(conn, op::AbstractString) =
-  _capability_error(conn, :regex, "The $(op) lookup"; why = "PormG does not emulate it: a Julia-side "
-                    * "pattern would be PCRE, which disagrees with POSIX syntax on backreferences, lazy "
-                    * "quantifiers and lookaround.")
+# Through the barrier (`_capability_error_at`, top of this file, #1599 layer 5): the renderers above hold the engine
+# `@nospecialize`, and a direct `_capability_error` call from here was a dynamic call a trimmed image had no code for,
+# so the refusal itself failed on SQLite and MySQL. The text is the same.
+_regex_capability_error(@nospecialize(conn), op::AbstractString) =
+  _capability_error_at(conn, :regex, "The $(op) lookup", "PormG does not emulate it: a Julia-side "
+                       * "pattern would be PCRE, which disagrees with POSIX syntax on backreferences, lazy "
+                       * "quantifiers and lookaround.")
 
 function regex(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ~ $(value)"
@@ -4592,7 +4595,7 @@ function niunaccent_contains(@nospecialize(conn::PormGPostgres), column::Abstrac
   return "public.immutable_unaccent($(column)) NOT ILIKE public.immutable_unaccent($(value))$(_like_escape_clause())"
 end
 function niunaccent_contains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :unaccent, "The niunaccent_contains lookup"))
+  throw(_capability_error_at(conn, :unaccent, "The niunaccent_contains lookup"))   # the barrier, as `_regex_capability_error`
   return nothing
 end
 function niunaccent_contains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
@@ -4604,7 +4607,7 @@ function niunaccent_exact(@nospecialize(conn::PormGPostgres), column::AbstractSt
   return "LOWER(public.immutable_unaccent($(column))) <> LOWER(public.immutable_unaccent($(value)))"
 end
 function niunaccent_exact(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :unaccent, "The niunaccent_exact lookup"))
+  throw(_capability_error_at(conn, :unaccent, "The niunaccent_exact lookup"))   # the barrier, as `_regex_capability_error`
   return nothing
 end
 function niunaccent_exact(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)

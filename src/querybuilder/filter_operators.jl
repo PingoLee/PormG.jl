@@ -13,13 +13,13 @@ for (fname, ops) in ((:_json_operator_sql, JSON_CONTAINMENT_OPERATORS),
                      (:_array_operator_sql, ARRAY_CONTAINMENT_OPERATORS),
                      (:_pattern_operator_sql, PATTERN_LOOKUP_OPERATORS))
   arms = [:(op == $(String(o)) && return Dialect.$(Symbol(o))(conn, column, ph)) for o in ops]
-  # #1599 layer 5: the pattern family takes the engine unspecialized at the split union (`ConnType`), as its
-  # `Dialect` renderers take theirs (`@nospecialize(conn::T)` on every method), so each arm is a static call over
-  # the engines. Specialized on the engine, `_pattern_operator_sql(::String, ::SQLiteConnectionPool, …)` had no
-  # compiled target in a trimmed image: the read stopped at `name__@icontains`. The other three families keep
-  # theirs until a trimmed read reaches them.
-  connarg = fname === :_pattern_operator_sql ? :(@nospecialize(conn::ConnType)) : :conn
-  @eval function $fname(op::AbstractString, $connarg, column, ph)
+  # #1599 layer 5: each family takes the engine unspecialized at the split union (`ConnType`), as its `Dialect`
+  # renderers take theirs (`@nospecialize(conn::T)` on every method), so each arm is a static call over the
+  # engines. Specialized on the engine, `_pattern_operator_sql(::String, ::SQLiteConnectionPool, …)` had no
+  # compiled target in a trimmed image: the read stopped at `name__@icontains`. The JSON, network and array
+  # families followed (#1838 decision 2), so an engine without the feature raises its `BackendCapabilityError`
+  # through the barrier (`_capability_error_at`) in a trimmed binary too, not a `MissingCodeError`.
+  @eval function $fname(op::AbstractString, @nospecialize(conn::ConnType), column, ph)
     $(arms...)
     throw(FilterError("Invalid filter operator: $(op) is not a supported operator."))
   end

@@ -7224,6 +7224,108 @@ end
     end
   end
 
+  # What: the JSON, array and network lookups' render (`_render_json_operator`/`_render_array_operator`/
+  #   `_render_network_operator` → the family's `_*_operator_sql` → the `Dialect` renderer the operator names), and the
+  #   refusal each renderer raises on an engine without the feature (#1838 decision 2).
+  # Expected: no dynamic call to the family function from its render; the family function is static at the split engine
+  #   union with its engine argument unspecialized (bit 2), and so is every `Dialect` method of every renderer (bit 1);
+  #   on SQLite and MySQL each renderer reaches its refusal with no dynamic call to `_capability_error`.
+  # Why: specialized on the engine, the family functions had no compiled target in a trimmed image (as the pattern family's
+  #   had, `name__@icontains`), and a direct `_capability_error` call under an unspecialized engine raises
+  #   `MissingCodeError` there in place of the JIT's `BackendCapabilityError` (as the regex/unaccent ones did).
+  @testset "the JSON, array and network lookups render and refuse at the split engine union (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    D = PormG.Dialect
+    families = ((QB._render_json_operator, (QB.OperObject, String, QB.InstructionObject), QB._json_operator_sql, QB.JSON_CONTAINMENT_OPERATORS),
+                (QB._render_array_operator, (QB.OperObject, String, QB.InstructionObject), QB._array_operator_sql, QB.ARRAY_CONTAINMENT_OPERATORS),
+                (QB._render_network_operator, nothing, QB._network_operator_sql, QB.NETWORK_LOOKUP_OPERATORS))
+    for (render, rargs, fam, ops) in families
+      if rargs !== nothing
+        @test (nameof(render), filter(x -> occursin("_operator_sql", x), _dynamic_calls(render, rargs))) == (nameof(render), String[])
+      end
+      @test (nameof(fam), _dynamic_calls(fam, (String, QB.ConnType, String, String))) == (nameof(fam), String[])
+      @test (nameof(fam), only(methods(fam)).nospecialize & 0b10) == (nameof(fam), 0b10)
+      for op in ops
+        f = getglobal(D, Symbol(op))
+        for m in methods(f)
+          m.module === D || continue
+          @test (op, string(m.sig), m.nospecialize & 0b1) == (op, string(m.sig), 0b1)
+        end
+        for E in (PormG.PormGSQLite, PormG.PormGMySQL)
+          @test (E, op, filter(x -> occursin(r"capability_error|kwcall", x), _dynamic_calls(f, (E, String, String)))) == (E, op, String[])
+        end
+      end
+    end
+    # The network render's operand arguments (`operand_field`, `field_label`) vary by caller: its pin is the call into
+    # the family function, read from its source, which takes the engine as the instruction holds it.
+    fo_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "filter_operators.jl"), String)
+    @test occursin("return _network_operator_sql(op, instruc.connection, column, ph)", fo_src)
+    @test !occursin("connarg", fo_src)
+  end
+
+  # What: every function in `src/` and `ext/` that takes an argument `@nospecialize` (an engine, as a renderer holds it)
+  #   and calls `_capability_error` directly.
+  # Expected: none, except the reviewed barriers themselves (`_capability_error_at` and its helper
+  #   `_capability_error_why`, `Dialect.jl`), which call it once the engine is resolved through `with_pool`.
+  # Why: under an unspecialized engine the direct call has no compiled target in a trimmed image, so the refusal raises
+  #   `Core.MissingCodeError` where the JIT raises `BackendCapabilityError` (#1838: regex/unaccent; #1838 decision 2:
+  #   the JSON, array and network lookups). A renderer added later with the direct call fails here.
+  @testset "no direct _capability_error call under an unspecialized argument (#1599)" begin
+    reviewed = Set(["_capability_error_at", "_capability_error_why"])
+    nospec(a) = a isa Expr && a.head === :macrocall && a.args[1] in (Symbol("@nospecialize"), GlobalRef(Base, Symbol("@nospecialize")))
+    defname(sig) = sig isa Expr && sig.head === :where ? defname(sig.args[1]) :
+                   sig isa Expr && sig.head === :(::) && length(sig.args) == 2 ? defname(sig.args[1]) :
+                   sig isa Expr && sig.head === :call ? sig.args[1] : nothing
+    callsig(sig) = sig isa Expr && sig.head in (:where, :(::)) ? callsig(sig.args[1]) : sig
+    # The name an argument binds: `conn` in `@nospecialize(conn::T)`, `@nospecialize(conn)`, `conn::T` or `conn`.
+    argname(a) = a isa Symbol ? a : a isa Expr && a.head === :macrocall ? argname(a.args[end]) :
+                 a isa Expr && a.head === :(::) && length(a.args) == 2 ? argname(a.args[1]) :
+                 a isa Expr && a.head === :kw ? argname(a.args[1]) : nothing
+    # A direct `_capability_error(x, …)` whose first argument is one of `names` (an unspecialized parameter): a call
+    # on a value bound inside, such as a `do` block's resolved pool (`bulk_copy`'s `connection`), is not one.
+    function calls_direct(ex, names)
+      ex isa Expr || return false
+      if ex.head === :call && length(ex.args) >= 2
+        c = ex.args[1]
+        name = c isa Symbol ? c : (c isa Expr && c.head === :. && c.args[end] isa QuoteNode) ? c.args[end].value : nothing
+        a1 = ex.args[2] isa Expr && ex.args[2].head === :parameters ? (length(ex.args) >= 3 ? ex.args[3] : nothing) : ex.args[2]
+        name === :_capability_error && a1 isa Symbol && a1 in names && return true
+      end
+      return any(a -> calls_direct(a, names), ex.args)
+    end
+    found = String[]
+    function walk(ex, file)
+      ex isa Expr || return
+      if ex.head in (:function, :(=)) && length(ex.args) == 2
+        sig = callsig(ex.args[1])
+        if sig isa Expr && sig.head === :call && any(nospec, sig.args[2:end])
+          fname = defname(ex.args[1])
+          fstr = fname isa Symbol ? String(fname) : string(fname)
+          names = Set(Symbol[n for n in map(argname, filter(nospec, sig.args[2:end])) if n !== nothing])
+          calls_direct(ex.args[2], names) && !(fstr in reviewed) && push!(found, "$(file): $(fstr)")
+        end
+      end
+      foreach(a -> walk(a, file), ex.args)
+    end
+    root = pkgdir(PormG)
+    n_files = 0
+    for dir in ("src", "ext"), (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
+      endswith(f, ".jl") || continue
+      n_files += 1
+      walk(Meta.parseall(read(joinpath(d, f), String); filename = f), relpath(joinpath(d, f), root))
+    end
+    @test n_files > 50
+    @test found == String[]
+    # The scan finds what it looks for: a renderer written the way the fourteen were before.
+    probe = Meta.parseall("""
+      function jprobe(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+        throw(_capability_error(conn, :jsonb_operators, "The @jprobe lookup"))
+      end
+      """)
+    empty!(found); walk(probe, "probe"); @test found == ["probe: jprobe"]
+    empty!(found)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

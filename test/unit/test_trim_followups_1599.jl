@@ -193,4 +193,37 @@ const _TF_LOOKUPS = (
     # An inspection mode still returns its shape.
     @test L.objects.filter("year" => 2008).exists(show_query = :sql) isa String
   end
+
+  # What: the fourteen JSON, array and network lookup renderers on each engine, against a direct `_capability_error`
+  #   call (the old refusal) and PostgreSQL's SQL; and the same lookups through a filter, on each engine.
+  # Expected: on SQLite, MySQL and a backend with no rows, a `BackendCapabilityError` with the old text; on PostgreSQL,
+  #   the SQL each renderer returned. Through a filter: the same refusal on SQLite and MySQL, and SQL on PostgreSQL.
+  # Why: the renderers take the engine `@nospecialize` and refuse through the barrier so a trimmed image has code for
+  #   both; the error's type and text are what a caller reads and what the trimmed fixture's lines compare.
+  @testset "the JSON, array and network refusals keep their type and text" begin
+    for conn in (TfMockSQLite(), TfMockMySQL(), TfMockOther()), (f, feature, what, _, _, _) in _TF_LOOKUPS
+      old = PormG._capability_error(conn, feature, what)
+      @test (nameof(typeof(conn)), nameof(f), _tf_outcome(() -> f(conn, "col", "\$1"))) ==
+            (nameof(typeof(conn)), nameof(f), (:raised, PormG.BackendCapabilityError, _tf_strip(sprint(showerror, old))))
+    end
+    for (f, _, _, sql, _, _) in _TF_LOOKUPS
+      @test (nameof(f), f(TfMockPostgres(), "col", "\$1")) == (nameof(f), sql)
+    end
+    # Through a filter: the query builder's operator functions (`_json_operator_sql`, …) reach the JSON and network
+    # renderers. An array lookup's value is refused by its bind first, before the renderer, as it was: an array value
+    # has no representation on an engine without array types.
+    engine_name = Dict(:TfMockSQLite => "SQLite", :TfMockMySQL => "MySQL")
+    for (f, feature, what, sql, key, value) in _TF_LOOKUPS
+      for conn in (TfMockSQLite(), TfMockMySQL())
+        r = _tf_render(_TF_TEL.objects.filter(key => value).values("id"), conn)
+        E = engine_name[nameof(typeof(conn))]
+        old = feature === :arrays ?
+          "An ArrayField value cannot be bound on $(E): $(E) has no array type, and PormG does not emulate one. Run this model on PostgreSQL." :
+          _tf_strip(sprint(showerror, PormG._capability_error(conn, feature, what)))
+        @test (nameof(typeof(conn)), key, r) == (nameof(typeof(conn)), key, (:raised, PormG.BackendCapabilityError, old))
+      end
+      r = _tf_render(_TF_TEL.objects.filter(key => value).values("id"), TfMockPostgres())
+      @test (key, r[1]) == (key, :value)
+    end
+  end
 end

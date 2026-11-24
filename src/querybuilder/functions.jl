@@ -32,10 +32,51 @@ function _q_push_terms!(terms::Vector{FilterType}, x::Tuple)::Vector{FilterType}
 end
 function _q_push_terms!(terms::Vector{FilterType}, x::Base.Any32)::Vector{FilterType}
   for v in x
-    push!(terms, _q_term(v))
+    push!(terms, _q_term_known(v))
   end
   return terms
 end
+
+# #1599 (#1838 residue): the loop's element is the tuple's element type, a union or `Any` for mixed arguments, so
+# `_q_term(v)` was a dynamic call, and a pair whose value type merged (`Pair{String}`) reached `_check_filter` with
+# its value typed `Any`; a trimmed binary stopped at either. This walk names the argument types `Q`/`Qor` take — a
+# pair with a `String` key and a value of the types a constant predicate holds, and the filter nodes — so each is a
+# static call into `_q_term` at its concrete type; anything else takes `_q_term_open`, the call as it was. One body
+# for every tuple length and argument mix (`@nospecializeinfer`), so the compile cost stays flat; every arm calls
+# `_q_term`, so a term, its order and the first refusal are what they were. A pair whose type does not name its value
+# (`Pair{String,Any}`, as a mixed `Vector` holds) is narrowed by its value and rebuilt: `_check_filter` reads only
+# `first`/`second`, at their run-time types.
+@noinline Base.@nospecializeinfer function _q_term_known(@nospecialize(v))::FilterType
+  v isa Pair{String,Int64} && return _q_term(v)
+  v isa Pair{String,String} && return _q_term(v)
+  v isa Pair{String,Bool} && return _q_term(v)
+  v isa Pair{String,Float64} && return _q_term(v)
+  v isa Pair{String,Date} && return _q_term(v)
+  v isa Pair{String,DateTime} && return _q_term(v)
+  v isa Pair{String,Vector{Int64}} && return _q_term(v)
+  v isa Pair{String,Vector{String}} && return _q_term(v)
+  if v isa Pair && getfield(v, :first) isa String
+    k = getfield(v, :first)::String
+    s = getfield(v, :second)
+    s isa Int64 && return _q_term(k => s)
+    s isa String && return _q_term(k => s)
+    s isa Bool && return _q_term(k => s)
+    s isa Float64 && return _q_term(k => s)
+    s isa Date && return _q_term(k => s)
+    s isa DateTime && return _q_term(k => s)
+    s isa Vector{Int64} && return _q_term(k => s)
+    s isa Vector{String} && return _q_term(k => s)
+  end
+  v isa QObject && return _q_term(v)
+  v isa QorObject && return _q_term(v)
+  v isa OperObject && return _q_term(v)
+  v isa FExpression && return _q_term(v)
+  v isa OuterRefObject && return _q_term(v)
+  v isa ExistsObject && return _q_term(v)
+  return _q_term_open(v)
+end
+@noinline _q_term_open(@nospecialize(v))::FilterType = _q_term(v)
+
 _q_term(v::Pair) = _check_filter(v)
 _q_term(v::FilterType) = _check_filter_node(v)
 _q_term(v) = throw(FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value)."))

@@ -226,4 +226,67 @@ const _TF_LOOKUPS = (
       @test (key, r[1]) == (key, :value)
     end
   end
+
+  # What: `Q`/`Qor` from 32 arguments on (`Base.Any32`), against the comprehension they used, over mixed argument types.
+  # Expected: the same terms (type, and SQL on every engine) in the same order; the same first refusal wherever an
+  #   invalid argument sits; the same for a splatted `Vector`.
+  # Why: the loop now checks each argument through a walk over the types `Q`/`Qor` take, so a trimmed image has code
+  #   for it; a different term, order or refusal would change the SQL or the error a caller sees.
+  @testset "Q and Qor from 32 arguments collect the same terms as the comprehension did" begin
+    node_q = Q("year" => 2008)
+    node_qor = Qor("round" => 6, "round" => 18)
+    pick(i) = (i % 9 == 0) ? ("round" => i) :
+              (i % 9 == 1) ? ("name__@icontains" => "gp$(i)") :
+              (i % 9 == 2) ? ("year__@gte" => Float64(i)) :
+              (i % 9 == 3) ? ("date" => Date(2008, 1, 1) + Day(i)) :
+              (i % 9 == 4) ? node_q :
+              (i % 9 == 5) ? node_qor :
+              (i % 9 == 6) ? ("round__@in" => [i, i + 1]) :
+              (i % 9 == 7) ? ("name__@in" => ["a$(i)", "b$(i)"]) :
+                             ("year__@isnull" => false)
+    sets = (Tuple(("round" => i) for i in 1:32), Tuple(("round" => i) for i in 1:40), Tuple(("round" => i) for i in 1:100),
+            Tuple(pick(i) for i in 1:40), Tuple(pick(i) for i in 1:81),
+            Tuple(Pair{String, Any}("round", i) for i in 1:40),                       # values typed Any, as a mixed Vector
+            Tuple((i % 2 == 0 ? Pair{String, Any}("round", i) : Pair{String, Any}("name", "n$(i)")) for i in 1:40),
+            Tuple((i == 20 ? (SubString("round__x", 1, 5) => 3) : ("round" => i)) for i in 1:40),  # a SubString key: the open arm
+            Tuple((i == 33 ? ("date__@lt" => DateTime(2009, 1, 1)) : ("year" => i)) for i in 1:40),
+            Tuple((i == 33 ? ("round" => Int32(3)) : ("year" => i)) for i in 1:40))   # a value type outside the walk
+    for args in sets
+      @test (length(args), map(typeof, _TF_QB._q_terms_of(args))) == (length(args), map(typeof, _tf_old_terms(args...)))
+      for conn in _TF_ENGINES, (mk, wrap) in ((Q, :q), (Qor, :qor))
+        new_q = _TF_RACE.objects.filter(mk(args...)).values("name")
+        old_terms = _tf_old_terms(args...)
+        old_node = wrap === :q ? _TF_QB.QObject(filters = old_terms) : _TF_QB.QorObject(or = old_terms)
+        @test (length(args), nameof(typeof(conn)), wrap, _tf_render(new_q, conn)) ==
+              (length(args), nameof(typeof(conn)), wrap, _tf_render(_TF_RACE.objects.filter(old_node).values("name"), conn))
+      end
+    end
+    # A splatted Vector, the way an application builds a Qor from a list (run-time length).
+    for v in (Pair{String, Int64}[("round" => i) for i in 1:40],
+              Pair{String, Any}[(isodd(i) ? ("round" => i) : ("name" => "n$(i)")) for i in 1:40],
+              Pair[(isodd(i) ? ("round" => i) : ("name__@icontains" => "n$(i)")) for i in 1:50],
+              Pair{String, Int64}[("round" => i) for i in 1:5])
+      @test (eltype(v), map(typeof, Qor(v...).or)) == (eltype(v), map(typeof, _tf_old_terms(v...)))
+      for conn in _TF_ENGINES
+        @test (eltype(v), _tf_render(_TF_RACE.objects.filter(Qor(v...)).values("name"), conn)) ==
+              (eltype(v), _tf_render(_TF_RACE.objects.filter(_TF_QB.QorObject(or = _tf_old_terms(v...))).values("name"), conn))
+      end
+    end
+    # The first refusal, from the head, the middle and the tail of a 40-argument tuple, for each kind of invalid argument.
+    base = Tuple(("round" => i) for i in 1:40)
+    bads = (5, :k => 1, "round__@nosuchop" => 1, "name" => r"a", "nosuchfield" => 1, F("round") + 1, "round" => nothing)
+    for bad in bads, pos in (1, 20, 40)
+      args = Tuple(i == pos ? bad : base[i] for i in 1:40)
+      @test (bad, pos, _tf_outcome_repr(() -> _TF_QB._q_terms_of(args))) == (bad, pos, _tf_outcome_repr(() -> _tf_old_terms(args...)))
+      @test (bad, pos, _tf_outcome_repr(() -> Qor(args...))) ==
+            (bad, pos, _tf_outcome_repr(() -> _TF_QB.QorObject(or = _tf_old_terms(args...))))
+    end
+    # Two invalid arguments in both orders: the first in argument order is the one raised.
+    for (a, b) in ((5, "nosuchfield" => 1), ("nosuchfield" => 1, 5), (:k => 1, "round__@nosuchop" => 1), ("round__@nosuchop" => 1, :k => 1))
+      for (i, j) in ((3, 36), (36, 3))
+        args = Tuple(k == i ? a : k == j ? b : base[k] for k in 1:40)
+        @test (a, b, i, _tf_outcome_repr(() -> Q(args...))) == (a, b, i, _tf_outcome_repr(() -> _TF_QB.QObject(filters = _tf_old_terms(args...))))
+      end
+    end
+  end
 end

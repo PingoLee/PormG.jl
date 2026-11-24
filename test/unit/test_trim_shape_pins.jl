@@ -7326,6 +7326,74 @@ end
     empty!(found)
   end
 
+  # What: `Q`/`Qor` from 32 arguments on (`Base.Any32`, #1838 residue): the walk each argument goes through
+  #   (`_q_term_known`), the collection over a 40-argument tuple of mixed pairs and nodes, and the literal call.
+  # Expected: the walk's only dynamic call is its open arm; collecting a mixed 40-tuple makes no dynamic call outside the
+  #   reviewed checks and the open arm; each pair reaches `_check_filter` at a concrete pair type; a literal call does not
+  #   compile to a `Vararg`-widened `Q`/`Qor`.
+  # Why: the loop's element was the tuple's element union, so `_q_term(v)` was dynamic (or, for a few member types, reached
+  #   `_check_filter(::Pair{String})` with the value typed `Any`): a trimmed binary given 32 or more arguments stopped
+  #   there. A widened `Q`/`Qor` would make every length dynamic.
+  @testset "Q and Qor from 32 arguments check each argument at its type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_q_term_known)
+    W = Tuple{(i % 9 == 0 ? Pair{String, Int64} : i % 9 == 1 ? Pair{String, String} : i % 9 == 2 ? Pair{String, Float64} :
+               i % 9 == 3 ? Pair{String, PormG.Dates.Date} : i % 9 == 4 ? QB.QObject : i % 9 == 5 ? QB.QorObject :
+               i % 9 == 6 ? QB.OperObject : i % 9 == 7 ? QB.FExpression : QB.ExistsObject for i in 1:40)...}
+    N4 = Tuple{(i % 7 == 0 ? Pair{String, Int64} : i % 7 == 1 ? Pair{String, String} : i % 7 == 2 ? Pair{String, Float64} :
+                i % 7 == 3 ? Pair{String, Bool} : i % 7 == 4 ? QB.QObject : i % 7 == 5 ? QB.QorObject : QB.OperObject for i in 1:40)...}
+    if isdefined(QB, :_q_term_known)
+      @test filter(x -> !occursin("_q_term_open", x), _dynamic_calls(QB._q_term_known, (Any,))) == String[]
+      skip = (QB._check_filter, QB._check_filter_node, QB._q_term_open)
+      for T in (W, N4, NTuple{40, Pair{String, Int64}}, NTuple{40, Pair{String, Any}})
+        @test (T, _dynamic_calls_deep(QB._q_terms_of, (T,); depth = 3, skip = skip)) == (T, String[])
+      end
+    end
+    # Each `_check_filter` the 40-argument collection reaches is at a concrete pair type (a merged `Pair{String}` reads
+    # its value as `Any`, and `_check_filter`'s operator choice is then made at run time).
+    function check_filter_specs(T)
+      specs = Any[]
+      seen = Set{Any}()
+      function go(tt, d)
+        d > 4 && return
+        for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+          for st in ci.code
+            st isa Expr && st.head === :invoke || continue
+            mi = st.args[1]
+            mi isa Core.CodeInstance && (mi = mi.def)
+            mi isa Core.MethodInstance || continue
+            mi in seen && continue
+            push!(seen, mi)
+            if mi.def isa Method && mi.def.name === :_check_filter
+              push!(specs, mi.specTypes.parameters[2])
+            elseif mi.def isa Method && mi.def.module === QB && mi.def.name in (:_q_push_terms!, :_q_term, :_q_term_known, :_q_terms_of)
+              go(mi.specTypes, d + 1)
+            end
+          end
+        end
+      end
+      go(Tuple{typeof(QB._q_terms_of), T}, 0)
+      return specs
+    end
+    for T in (N4, W)
+      specs = check_filter_specs(T)
+      @test (T, !isempty(specs)) == (T, true)
+      @test (T, filter(!isconcretetype, specs)) == (T, Any[])
+    end
+    # A literal call of 40 (`Qor`) and 81 (`Q`) mixed arguments does not invoke a `Vararg`-widened method instance.
+    widened(f, n) = begin
+      args = [isodd(i) ? :("round" => $i) : :("name" => $(string("n", i))) for i in 1:n]
+      g = @eval () -> $(f)($(args...))
+      any(Base.code_typed(g, (); optimize = true)) do (ci, _)
+        any(st -> st isa Expr && st.head === :invoke &&
+                  (mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def); mi isa Core.MethodInstance &&
+                   mi.def isa Method && mi.def.name in (:Q, :Qor) && Base.isvarargtype(last(mi.specTypes.parameters))), ci.code)
+      end
+    end
+    @test widened(QB.Qor, 40) == false
+    @test widened(QB.Q, 81) == false
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

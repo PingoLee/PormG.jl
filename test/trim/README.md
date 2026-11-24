@@ -764,8 +764,8 @@ The `Trim (juliac)` workflow has two more jobs, one per server variant, each aga
 it starts for the run (#1614):
 
 - **`Trimmed read (MySQL 8.4)`** builds `mysql/main.jl` and runs it against `mysql:8.4`.
-- **`Trimmed read (PostgreSQL 18, Postgres.jl)`** builds `postgres/main.jl` and runs it against
-  `postgres:18`, whose default authentication over TCP is SCRAM-SHA-256: the job checks first that its
+- **`Trimmed read (PostgreSQL 19, Postgres.jl)`** builds `postgres/main.jl` and runs it against
+  `postgres:19`, whose default authentication over TCP is SCRAM-SHA-256: the job checks first that its
   own connection authenticated that way (`system_user`) and that the role's password is stored as a
   SCRAM verifier, so the Base64 roots `trim_entrypoints` adds for Postgres.jl are exercised.
 

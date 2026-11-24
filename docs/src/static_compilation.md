@@ -125,6 +125,15 @@ else is untested in a trimmed binary, even where it compiles.
   column in another case, a primary key set, a `match_on=` pair or unknown field, a per-row key or a
   non-predicate in `filters=`, a key given twice, a joined path, an ordered handler or one with a CTE, and the
   `returning=` and `on_conflict=` misuses (#1694).
+- **The terminals applications use most** (#1599 layer 6), on the three drivers: `count()` over a filter, across a
+  join and over no row; `exists()`; `select_for_update(of = ("self",))` as a read inside `run_in_transaction`; the
+  raw `fetch` hatch with values bound by the backend's own markers (`fetch(settings, "UPDATE … WHERE year = ?",
+  [2008])`), outside and inside a transaction. `count()` and `exists()` return the driver's value untyped, so state
+  the type where you use it, `count()::Int`, `exists()::Bool`, as you declare a typed read's row type: a call on an
+  untyped value has no code in a trimmed binary unless that exact call was compiled.
+- **Typed rows into a table sink** (#1599 layer 6), on the three drivers: `Tables.columntable(rows)` over the rows
+  `list(T)` returns, a `NamedTuple` of typed vectors. `Tables` is a dependency of your application, as it is of a
+  `DataFrame`.
 - **A statement the server refuses** reaches your code as the `StatementError` it raises under the JIT,
   with the server's SQLSTATE (MySQL and PostgreSQL; SQLite has none), its message, and the driver's
   error as the cause ([Error Handling](errors.md)). `IntegrityError` and `OperationalError` take the
@@ -163,8 +172,19 @@ tasks. The SQLite refused statement is checked by hand.
   `InitError(:Infinity, MethodError(...))`. LibPQ depends on Infinity.jl, whose `__init__` uses
   Requires' `@require`, which a trimmed binary cannot run. The cause is upstream. Use Postgres.jl
   (`postgres_driver = "Postgres"`) for PostgreSQL.
-- **Untyped reads beyond `.list()` and `list(:dict)`**: `list(:json)`, a raw `fetch` or `execute` and
-  `DataFrame(query)` have not run in a trimmed binary.
+- **A query as a table** (`Tables.columns(query)`, `Tables.columntable(query)`, `query |> DataFrame`). The table's
+  type is the result's, decided when the statement runs: its column names and element types come from the data, and
+  each driver builds it at that type (SQLite's materialized rows, MySQL's `NamedTuple` of its columns, Postgres.jl's
+  `Tables.buildcolumns`). A trimmed binary has no code for a type it did not know when it was built, so the call fails.
+  Read typed rows instead and hand them to the sink: `Tables.columntable(M.Race.objects.values(…).list(T))`.
+- **`DataFrame`, even from typed rows.** DataFrames holds a frame's columns as a `Vector{AbstractVector}`, so building
+  one (`DataFrame(rows)`) and every operation on its columns dispatch at run time; a trimmed binary stops in
+  DataFrames' own constructor (`DataFrame(columns::Vector{AbstractVector}, colindex)`, measured with DataFrames 1.8.3).
+  The cause is upstream. A `NamedTuple` of vectors (`Tables.columntable`) is the column table a trimmed binary can use.
+- **The result of a raw `fetch`.** The hatch returns the driver's own result (a vector of rows on SQLite, a
+  `MySQLResult`, a `Postgres.Result`), untyped and of a different type on each engine, and reading it as a table is the
+  run-time-typed case above. Read what a raw statement changed through the ORM, as the fixture does.
+- **Other untyped reads**: `list(:json)` and `execute` have not run in a trimmed binary.
 - **`connection.yml`.** A trimmed binary cannot parse YAML. Register each connection in code, at run time
   ([Migrating an application boot](#Migrating-an-application-boot)).
 - **Migrations.** The binary does not run `migrate`. Migrate the database from a JIT process.

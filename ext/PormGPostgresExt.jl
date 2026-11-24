@@ -881,6 +881,10 @@ end
 # was `length(Tables.rowtable(result))`, a row type decided at run time, which a trimmed image has no code for. One
 # row per `ResultRow`, as `Tables.rowtable` made; Postgres.jl has parsed the cells already, so nothing raises.
 (::PormG.QueryBuilder._RowCounter)(result::Postgres.Result)::Int = length(result.rows)
+# `count()`'s cell (#1599 layer 6): the first row's first cell, the value `Tables.rowtable`'s first row held (a
+# `Postgres.Result` is a vector, so `count()` took that path). A result with no row takes the old expression.
+(::PormG.QueryBuilder._FirstCell)(result::Postgres.Result) =
+  isempty(result.rows) ? PormG.QueryBuilder._first_cell_any(result) : getfield(result.rows[1], :data)[1]
 
 
 PormG.backend_connect(pool::_Pool; read_only::Bool = false) = _open_connection(pool)

@@ -159,6 +159,8 @@ include(joinpath(@__DIR__, "tools", "writes.jl"))
 # server variants, so every binary prints the same lines (#1599 layer 5).
 include(joinpath(@__DIR__, "tools", "reads.jl"))
 include(joinpath(@__DIR__, "tools", "connections.jl"))
+raw_marker(i::Int)::String = "?"   # SQLite's bind marker, for the raw `fetch` of `tools/terminals.jl`
+include(joinpath(@__DIR__, "tools", "terminals.jl"))
 
 # `bulk_step` (a `bulk_insert` of two rows, read back) is in `tools/writes.jl`, shared with the server variants (#1614).
 

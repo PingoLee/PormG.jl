@@ -7119,6 +7119,52 @@ end
     end
   end
 
+  # What: `count()`'s read of its one cell (#1599 layer 6): `_fetch_first_cell` and the `_FirstCell` decoder, SQLite's
+  #   worker method and the two server extensions' methods for their results.
+  # Expected: no dynamic call on any of them; each server's method is its extension's own.
+  # Why: `count()` read the cell from `fetch`'s result typed `Any`, through `hasmethod` and `Tables.rowtable`, which a
+  #   trimmed image had no code for: every trimmed `count()` raised `MethodError` (`Tables.rowtable` on SQLite and
+  #   Postgres.jl, `Core._hasmethod` on MySQL).
+  @testset "count() reads its cell where the driver's result is concrete (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    CP = PormG.ConnectionPool
+    X = Base.get_extension(PormG, :PormGSQLiteExt)
+    PG = Base.get_extension(PormG, :PormGPostgresExt)
+    MY = Base.get_extension(PormG, :PormGMySQLExt)
+    @test isdefined(QB, :_FirstCell) && isdefined(X, :_sqlite_first_cell)
+    if isdefined(QB, :_FirstCell) && isdefined(X, :_sqlite_first_cell)
+      S = PormG.Kernel.Settings
+      for P in (Nothing, QB.SQLiteParameterizedQuery, QB.PgParameterizedQuery, QB.MySQLParameterizedQuery)
+        @test (P, _dynamic_calls(QB._fetch_first_cell, (S, String, P))) == (P, String[])
+      end
+      @test isempty(_dynamic_calls_kw(PormG.backend_execute_rows, (CP.SQLiteConnectionPool, SQLite.DB, String, Nothing, QB._FirstCell)))
+      @test isempty(_dynamic_calls(X._sqlite_first_cell, (SQLite.DB, String, Nothing)))
+      @test isempty(_dynamic_calls(X._sqlite_first_cell_in, (SQLite.Query{false},)))
+      for (label, ext, R) in (("Postgres.jl", PG, PG === nothing ? Nothing : PG.Postgres.Result),
+                              ("MySQL", MY, MY === nothing ? Nothing : MY.MySQLResult))
+        @test (label, R !== Nothing) == (label, true)
+        R === Nothing && continue
+        @test (label, which(QB._FirstCell(), (R,)).module) == (label, ext)
+        @test (label, _dynamic_calls(QB._FirstCell(), (R,))) == (label, String[])
+      end
+    end
+  end
+
+  # What: a raw `fetch`'s parameters bound on SQLite (`_normalize_manual_params` → `_sqlite_bind_manual`, #1599 layer 6).
+  # Expected: no dynamic call to `sqlite_bind_value`: the walk calls it at each listed value type, and its open arm is
+  #   one `@noinline` method.
+  # Why: the values arrive as `Any`, and the bind called `sqlite_bind_value` on each at run time: a trimmed raw `fetch`
+  #   with parameters on SQLite raised `MissingCodeError` (`sqlite_bind_value(Int64, SQLiteConnectionPool)`).
+  @testset "a raw fetch's SQLite parameters bind at each value's type (#1599 layer 6)" begin
+    CP = PormG.ConnectionPool
+    @test isdefined(CP, :_sqlite_bind_manual)
+    if isdefined(CP, :_sqlite_bind_manual)
+      @test _dynamic_calls(CP._sqlite_bind_manual, (Any, CP.SQLiteConnectionPool)) == String[]
+    end
+    @test filter(x -> occursin("sqlite_bind_value", x),
+                 _dynamic_calls(CP._normalize_manual_params, (Vector{Any}, CP.SQLiteConnectionPool))) == String[]
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

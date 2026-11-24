@@ -1148,21 +1148,49 @@ function _count(oq::SQLObjectHandler; column::Union{Nothing, AbstractString} = n
         return _show_query_result(show_query, resposta, instruction.connection, q.object.model.name, :select;
                                 parameters=instruction.parameters)
       end
-      query_result = fetch(settings, resposta, instruction.parameters)
-      # PostgreSQL returns a LibPQ.Result that supports scalar [row, col] indexing.
-      # SQLite returns a materialized rowtable (Vector{<:NamedTuple}); a Vector *also* has a
-      # (Int, Int) getindex method (trailing-singleton dimension), so exclude vectors explicitly
-      # and take the Tables path, which extracts the scalar from the single COUNT row.
-      if !(query_result isa AbstractVector) &&
-         (query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int}))
-        return query_result[1, 1]
-      else
-        row = Tables.rowtable(query_result) |> Base.first
-        return Base.first(values(row))
-      end
+      # #1599 layer 6: the count is read where the driver's result is concrete (`_FirstCell`); a stand-in pool
+      # (a test's) reads it as before.
+      _decodes_on_fetch(settings) || return _first_cell_any(fetch(settings, resposta, instruction.parameters))
+      return _fetch_first_cell(settings, resposta, instruction.parameters)
     end
   end
 end
+
+# The first cell of a statement's result (`count()`'s single `COUNT(*)`, #1599 layer 6), read where the driver's result
+# is concrete, as `_RowCounter` counts `exists()`'s rows. `count()` read it from `fetch`'s result typed `Any`, through a
+# `hasmethod` test and `Tables.rowtable`, which a trimmed image had no code for. Handed to `fetch` as a decoder: the
+# driver extensions read the cell from their own result (Postgres.jl's, MySQL's) or from the statement on SQLite's
+# worker, each the value the expression below reads from it; any other result (LibPQ's) takes that expression.
+#
+# The old expression runs on the caller, after `fetch`'s `try`, wherever it runs at all, so anything it raises reaches the
+# caller as it did (a result with no row raised `BoundsError`, not the statement's `StatementError`): SQLite's worker
+# hands back the cell, or its materialized rows when there is none to read (the extension's method), or the rows
+# `backend_execute` materialized (the fallback, `decode_on_worker` below), and `decoded_on_worker` reads those rows here.
+struct _FirstCell end
+(::_FirstCell)(result) = _first_cell_any(result)
+decode_on_worker(::_FirstCell, result) = result
+decoded_on_worker(::_FirstCell, @nospecialize(result)) =
+  result isa AbstractVector{<:NamedTuple} ? _first_cell_any(result) : result
+
+# What `count()` read from a result before (#1599 layer 6 kept it as is): a result with scalar `[row, col]` indexing
+# (LibPQ's) gives `[1, 1]`; SQLite's materialized rowtable (`Vector{<:NamedTuple}`) also has an `(Int, Int)` getindex
+# method (a trailing singleton dimension), so a vector is excluded explicitly and takes the Tables path, which extracts
+# the scalar from the single COUNT row.
+@noinline function _first_cell_any(@nospecialize(query_result))
+  if !(query_result isa AbstractVector) &&
+     (query_result isa AbstractMatrix || hasmethod(getindex, Tuple{typeof(query_result), Int, Int}))
+    return query_result[1, 1]
+  else
+    row = Tables.rowtable(query_result) |> Base.first
+    return Base.first(values(row))
+  end
+end
+
+function _fetch_first_cell(settings, sql::String, params::Union{Nothing,ParamCollector})
+  params === nothing && return fetch(settings, sql; params = nothing, _decode = _FirstCell())
+  return with_collector(_fetch_first_cell_on, params, settings, sql)
+end
+_fetch_first_cell_on(params, settings, sql::String) = fetch(settings, sql; params = params, _decode = _FirstCell())
 
 # Whole-queryset aggregation (#208). Django's aggregate(): compute one or more aggregate scalars
 # over the ENTIRE queryset (no GROUP BY) and return them as a single-row NamedTuple keyed by alias.

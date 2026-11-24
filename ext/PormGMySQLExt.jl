@@ -439,6 +439,19 @@ PormG.backend_result_type(::Type{_Pool}) = MySQLResult
 Tables.istable(::Type{MySQLResult}) = true
 Tables.columnaccess(::Type{MySQLResult}) = true
 Tables.columns(r::MySQLResult) = NamedTuple{Tuple(r.names)}(Tuple(r.columns))
+# `count()`'s cell (#1599 layer 6): the first column's first value, the cell `Tables.rowtable`'s first row held (a
+# `MySQLResult` has no `[row, col]` indexing, so `count()` took that path). A result with no row takes the old
+# expression.
+(::PormG.QueryBuilder._FirstCell)(r::MySQLResult) =
+  (isempty(r.columns) || r.nrows == 0) ? PormG.QueryBuilder._first_cell_any(r) : _first_value(r.columns[1])
+# The first value of a column the result holds as `AbstractVector`, at the column's concrete type: a `COUNT(*)` column
+# is a `BIGINT`, so its vector is an `Int64` one; any other takes one `@noinline` arm. The same element either way.
+function _first_value(@nospecialize(col::AbstractVector))
+  col isa Vector{Int64} && return (col::Vector{Int64})[1]
+  col isa Vector{Union{Missing, Int64}} && return (col::Vector{Union{Missing, Int64}})[1]
+  return _first_value_open(col)
+end
+@noinline _first_value_open(@nospecialize(col)) = col[1]
 Tables.schema(r::MySQLResult) = Tables.Schema(r.names, Tuple(eltype(c) for c in r.columns))
 Base.length(r::MySQLResult) = r.nrows
 # Iterated, a result yields each row as a tuple — what `collect(result)[1][1]` reads in core's

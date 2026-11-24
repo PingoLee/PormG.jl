@@ -79,7 +79,26 @@ _normalize_manual_params(params::ManualParams) = Any[v === nothing ? missing : v
 # Julia object. The ORM collector applies the same `sqlite_bind_value`, so a raw query and the ORM
 # bind a literal identically. PostgreSQL is untouched — LibPQ adapts every one of these itself.
 _normalize_manual_params(params::ManualParams, connection::PormGSQLite) =
-  Any[PormG.sqlite_bind_value(v, connection) for v in _normalize_manual_params(params)]
+  Any[_sqlite_bind_manual(v, connection) for v in _normalize_manual_params(params)]
+
+# One raw value's SQLite bind (#1599 layer 6): `sqlite_bind_value` at the value's own type, for the types a raw array
+# holds most (each a method above it), so the call is static; any other value takes the same call through one
+# `@noinline` arm. The values are the caller's, read as `Any`: the call made on each of them at run time had no code
+# in a trimmed image, so a raw `fetch` with parameters on SQLite raised `MissingCodeError`. The same function on the
+# same value, so the bound value and any refusal are the same.
+function _sqlite_bind_manual(@nospecialize(v), connection::PormGSQLite)
+  v isa Int64 && return PormG.sqlite_bind_value(v::Int64, connection)
+  v isa String && return PormG.sqlite_bind_value(v::String, connection)
+  v isa Float64 && return PormG.sqlite_bind_value(v::Float64, connection)
+  v isa Bool && return PormG.sqlite_bind_value(v::Bool, connection)
+  v isa Missing && return PormG.sqlite_bind_value(v::Missing, connection)
+  v isa Int32 && return PormG.sqlite_bind_value(v::Int32, connection)
+  v isa PormG.Dates.Date && return PormG.sqlite_bind_value(v::PormG.Dates.Date, connection)
+  v isa PormG.Dates.DateTime && return PormG.sqlite_bind_value(v::PormG.Dates.DateTime, connection)
+  v isa Vector{UInt8} && return PormG.sqlite_bind_value(v::Vector{UInt8}, connection)
+  return _sqlite_bind_manual_open(v, connection)
+end
+@noinline _sqlite_bind_manual_open(@nospecialize(v), connection::PormGSQLite) = PormG.sqlite_bind_value(v, connection)
 _normalize_manual_params(params::ManualParams, ::Union{PormGPostgres, PormGMySQL}) = _normalize_manual_params(params)
 
 # #951 — a NUL ('\0') in text is refused before anything is sent, the same way on every backend.

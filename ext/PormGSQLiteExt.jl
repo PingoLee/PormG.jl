@@ -573,6 +573,45 @@ function _sqlite_count_rows_in(q::SQLite.Query{false})::Int
   return n
 end
 
+# `count()`'s cell (#1599 layer 6): the statement lifecycle, retry and lock release of `backend_execute`, the first
+# row's first cell read as `_sqlite_rowtable` reads it (`_sqlite_value`), which is the value `count()` took from the
+# materialized rows. A statement with no row (a `COUNT(*)` always has one) hands back its rows, for the old expression to
+# read on the caller (`QueryBuilder.decoded_on_worker`), so what it raises is not wrapped as the statement's error.
+function PormG.backend_execute_rows(pool::PormGSQLite, conn::SQLite.DB, sql::String, params,
+                                    ::PormG.QueryBuilder._FirstCell)
+  resolved = params isa PormGSQLiteParam ? params.parameters : params
+  try
+    return _sqlite_with_retry(() -> _sqlite_first_cell(conn, sql, resolved))
+  catch
+    # swallows nothing: releases the database lock a failed statement leaks, then rethrows (`backend_execute`'s rule)
+    _release_leaked_db_lock!(conn)
+    rethrow()
+  end
+end
+
+function _sqlite_first_cell(conn::SQLite.DB, sql::String, params)
+  stmt = SQLite.Stmt(conn, sql; register = false)
+  try
+    q = params === nothing ? SQLite.DBInterface.execute(stmt) : SQLite.DBInterface.execute(stmt, _sqlite_binds(params))
+    q isa SQLite.Query{false} && return _sqlite_first_cell_in(q)   # `_sqlite_decode_rows`'s reason
+    return _sqlite_first_cell_open(q)
+  finally
+    SQLite.DBInterface.close!(stmt)
+  end
+end
+@noinline function _sqlite_first_cell_open(@nospecialize(q))
+  rows = Tables.rowtable(q)
+  return isempty(rows) ? rows : Base.first(values(Base.first(rows)))
+end
+
+@noinline _sqlite_no_rows(@nospecialize(q)) = Tables.rowtable(q)   # the (empty) rows, for the caller to read
+
+function _sqlite_first_cell_in(q::SQLite.Query{false})
+  handle = SQLite._get_stmt_handle(q.stmt)::Ptr{SQLite.C.sqlite3_stmt}   # `_sqlite_rowtable`'s reason
+  iterate(q) === nothing && return _sqlite_no_rows(q)
+  return _sqlite_value(handle, 1)
+end
+
 # The result column of each field of `T`, by name: the typed projection names every field (and nothing
 # else), but a `values(...)` projection may list them in another order.
 function _sqlite_field_columns(::Type{T}, names::AbstractVector{Symbol}) where T

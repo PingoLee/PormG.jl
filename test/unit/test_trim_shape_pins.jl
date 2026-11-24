@@ -3290,9 +3290,11 @@ end
     @test occursin("returned = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}", ew_src)
     # The old read stays for a pool that is not PormG's own (a test double), behind the type check, and nowhere else.
     @test occursin("if settings.connections isa PostgresConnectionPool", ew_src)
-    @test count("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src) == 1
+    # #1694: the old read gained an empty-rows check (`_returned_no_row`), so it reads the rows once, then the first.
+    @test count("returned_rows = Tables.rowtable(result)", ew_src) == 1
+    @test count("_row_to_field_keyed_dict(Base.first(returned_rows), model, connection), model)", ew_src) == 1
     @test findfirst("if settings.connections isa PostgresConnectionPool", ew_src) <
-          findfirst("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src)
+          findfirst("_row_to_field_keyed_dict(Base.first(returned_rows), model, connection), model)", ew_src)
 
     PG = Base.get_extension(PormG, :PormGPostgresExt)
     MY = Base.get_extension(PormG, :PormGMySQLExt)
@@ -6391,7 +6393,8 @@ end
     @test _dynamic_calls(QB._mysql_target_rows, (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, Vector{String},
                                                  String, PormG.ConnectionPool.MySQLConnectionPool, QB._FieldRowDecoder, String, Bool)) == String[]
     pg = _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, rest..., QB.PgParameterizedQuery, tail...))
-    @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
+    # The stand-in pool's old read, and (#1694) its empty-rows check on those rows.
+    @test all(s -> occursin(r"rowtable|\|> first|\(first\)|isempty|_row_to_field_keyed_dict", s), pg)
     @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
   end
 
@@ -7163,6 +7166,38 @@ end
     end
     @test filter(x -> occursin("sqlite_bind_value", x),
                  _dynamic_calls(CP._normalize_manual_params, (Vector{Any}, CP.SQLiteConnectionPool))) == String[]
+  end
+
+  # What: the refusal `create` and `update_or_create` raise on PostgreSQL for an `INSERT … RETURNING` that returned no row
+  #   (`_returned_no_row`, #1694).
+  # Expected: it exists, and builds its `StatementError` with no dynamic call, for either PostgreSQL pool.
+  # Why: the refusal replaces a raw `BoundsError` and runs in the trimmed Postgres.jl binary (its `returning_refused`
+  #   step); a dynamic call in it would raise `MissingCodeError` in its place there.
+  @testset "the empty-RETURNING refusal is built at its types (#1694)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_returned_no_row)
+    if isdefined(QB, :_returned_no_row)
+      for P in (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, PormG.ConnectionPool.PostgresConnectionPool{:libpq})
+        @test (P, _dynamic_calls(QB._returned_no_row, (String, PormG.Models.ModelType, P))) == (P, String[])
+        @test only(Base.return_types(QB._returned_no_row, (String, PormG.Models.ModelType, P))) === PormG.StatementError
+      end
+    end
+  end
+
+  # What: a `filters=` list of pairs whose values have different types, normalized for `bulk_update` (`_norm_bulk_filter`,
+  #   #1694, #1599 layer 7).
+  # Expected: no dynamic call in the walk: each listed value type builds its pair by a static call; the open arm is one
+  #   `@noinline` method.
+  # Why: the closure it replaced built `String(f.first) => f.second` on a value read as `Any`, a call to the `Pair`
+  #   constructor a trimmed image had no code for: `bulk_update(…; filters = ["circuitid" => 1, "name" => …])` stopped
+  #   there with a `MethodError` (`UnionAll`, `(String, Int64)`).
+  @testset "filters= pairs of different value types normalize at their types (#1694)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_norm_bulk_filter)
+    if isdefined(QB, :_norm_bulk_filter)
+      @test _dynamic_calls(QB._norm_bulk_filter, (Any,)) == String[]
+      @test _dynamic_calls(QB._norm_bulk_filter, (Pair{String, Any},)) == String[]
+    end
   end
 
   # What: the detector itself, on a function that does make a dynamic call.

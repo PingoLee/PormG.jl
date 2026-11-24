@@ -113,3 +113,45 @@ GOC1299_TRIGGERS && @testset "get_or_create: a read-back miss is not a UsageErro
         drop!()
     end
 end
+
+# #1694: `create` and `update_or_create` read the new row from `INSERT … RETURNING` on PostgreSQL; a trigger that skips
+# the insert leaves it empty, and each raised a raw `BoundsError` (an index into the empty rows). PostgreSQL only: SQLite
+# and MySQL read the row back with a SELECT, and that miss is the `StatementError` above.
+by_engine(postgres = true, sqlite = false, mysql = false) &&
+@testset "create and update_or_create: an empty RETURNING is a StatementError on $(adapter_name) (#1694)" begin
+    # What: `create` and `update_or_create` on a table whose BEFORE INSERT trigger returns NULL raise `StatementError`
+    # naming the operation and the model, and store no row. Expected: the `_returned_no_row` text for each call, never a
+    # `BoundsError`. Why: an empty RETURNING is a refused statement (`catch DatabaseError`), not an indexing bug; this runs
+    # on PormG's own pool, under LibPQ and under Postgres.jl (`PORMG_POSTGRES_DRIVER`), the paths a stand-in pool skips.
+    key = PORMG_DB_FOLDER
+    conn = PormG.config[key].connections
+    ddl(sql) = PormG.ConnectionPool.fetch(conn, sql)
+    source = "module models\nimport PormG.Models\n" *
+             "Goc1694 = Models.Model(\"goc1694\",\n    id = Models.IDField(),\n" *
+             "    driverref = Models.CharField(max_length = 64, unique = true),\n" *
+             "    points = Models.IntegerField(default = 0))\nend\n"
+    holder = Module(:Goc1694Holder)
+    Base.include_string(holder, source)
+    model = Base.invokelatest(getfield, Base.invokelatest(getfield, holder, :models), :Goc1694)
+    PormG.Models.bind!(model, key)
+    drop!() = (ddl("DROP TABLE IF EXISTS goc1694"); ddl("DROP FUNCTION IF EXISTS goc1694_drop_row()"))
+    drop!()
+    try
+        ddl("CREATE TABLE goc1694 (id BIGSERIAL PRIMARY KEY, driverref VARCHAR(64) NOT NULL UNIQUE, points INTEGER NOT NULL DEFAULT 0)")
+        ddl("CREATE FUNCTION goc1694_drop_row() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN NULL; END \$\$")
+        ddl("CREATE TRIGGER goc1694_drop_row BEFORE INSERT ON goc1694 FOR EACH ROW EXECUTE FUNCTION goc1694_drop_row()")
+        for (op, call) in (("create", () -> model.objects.create("driverref" => "senna")),
+                           ("update_or_create", () -> model.objects.update_or_create("driverref" => "prost";
+                                                                                    defaults = ["points" => 1])))
+            err = try call(); nothing catch e; e end
+            @test (op, err isa PormG.StatementError) == (op, true)
+            @test (op, err isa BoundsError) == (op, false)
+            err isa PormG.StatementError &&
+                @test occursin("$(op): the statement returned no goc1694 row: a trigger or rule may have skipped it.",
+                               PormG.error_message(err))
+        end
+        @test model.objects.count() == 0
+    finally
+        drop!()
+    end
+end

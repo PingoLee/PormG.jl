@@ -197,7 +197,8 @@ pools"). 27 to 30 are the write residue's steps (see "The write residue"). The P
 23 when one of its connection shapes fails. 33 to 36 are the steps of #1599's layers 1 to 3: a second key, models
 loaded with `@import_models`, a nested transaction and a read on a spawned task (see "How an application starts"). 37 to 41 are the read shapes applications use most: relation hops, the remaining lookups and `Q`/`Qor`, paging,
 aggregates, and the reads each engine answers its own way (see "The read shapes applications use most"). 42 to 46 are the terminals applications use most: `count()`, `exists()`, a locking read in a transaction, a raw `fetch`,
-and typed rows into a table sink (see "The terminals applications use most").
+and typed rows into a table sink (see "The terminals applications use most"). 47 to 49 are the writes applications use most (see "The writes
+applications use most").
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -301,6 +302,32 @@ step	exists	year 2008 true; year 1900 false
 step	lock	select_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	raw_fetch	update +100: rounds 18, 106; in a transaction -100: rounds 6, 18
 step	tables	columntable of list(T) name, round: Monaco Grand Prix, Brazilian Grand Prix; rounds 6, 18
+```
+
+## The writes applications use most
+
+The steps of #1694 (#1599 layer 7), in the write entries, after `bulk_conflict` (`tools/writes.jl`):
+
+- `bulk_table` (exit code 47): `bulk_insert` of two races from a column table (a `NamedTuple` of vectors, the shape a
+  `DataFrame` hands a bulk writer) whose columns are named otherwise than the fields, through `columns = ["yr" =>
+  "year", …]`, then `bulk_update` of their rounds matched on `year` under two `filters=` pairs, each checked by a typed
+  read; the step deletes the two races.
+- `returning_refused` (exit code 48, the Postgres.jl entry only): `prep.jl` creates a trigger that skips the insert of a
+  race named "Skipped Grand Prix", so `create` meets an `INSERT … RETURNING` that returns no row. It raises
+  `StatementError` (a raw `BoundsError` before), and no row is written. Only PostgreSQL reads a created row from
+  `RETURNING`.
+- `delete_rules` (exit code 49): `prep.jl` seeds a `Result` of the Monaco race by its driver. Deleting the race
+  (`Result.raceid`, `PROTECT`) and the driver (`Result.driverid`, `RESTRICT`) is refused with `ProtectedError` before
+  any row is deleted, and both stay; deleting a season clears the next season's reference to it (`Season.previousid`,
+  `SET_NULL` on its own table). The step deletes the seasons it made.
+- Two more `bulk_refusal` lines: a `columns=` name the model has no field for, bare and as a pair's target, refused with
+  `UnknownFieldError` (a raw `KeyError` before).
+
+```
+step	bulk_table	columns= pairs: 2 rows: 2040 round 6, 2041 round 7; two filters= pairs: 2 rows: 2040 round 16, 2041 round 17; removed 2
+step	returning_refused	create: StatementError: create: the statement returned no race row: a trigger or rule may have skipped it.; 0 written
+step	delete_rules	PROTECT: refused with ProtectedError (result.raceid); RESTRICT: refused with ProtectedError (result.driverid); kept 1 race, 1 driver, 1 result
+step	delete_rules	SET_NULL: deleted 1, 2031 previous none
 ```
 
 ## The write residue (#1694)

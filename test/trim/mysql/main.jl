@@ -174,6 +174,10 @@ function (@main)(args::Vector{String})::Cint
     self_cascade_step() || return Cint(29)
     bulk_refusals_step(circuitid) || return Cint(30)
     bulk_conflict_step(circuitid) || return Cint(31)        # bulk_insert's on_conflict= (`../tools/writes.jl`, #1694)
+    # The writes applications use most (`tools/writes.jl`, #1694, #1599 layer 7): bulk writes from a column table, and the
+    # delete rules beyond CASCADE.
+    bulk_table_step(circuitid) || return Cint(47)
+    delete_rules_step() || return Cint(49)
     preallocated_keys_refusal_step(circuitid) || return Cint(32)  # MySQL cannot reserve an AUTO_INCREMENT id: the refusal
     transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
     nested_transaction_step(circuitid, KEY) || return Cint(35)  # a transaction inside one (`../tools/connections.jl`)

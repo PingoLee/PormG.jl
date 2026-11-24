@@ -354,9 +354,33 @@ end
 # so the same value inside a `Vector` was refused as an "Invalid filter specification" when it was
 # a perfectly good one. Normalizing every admitted spelling to `String` at the push closes both, and
 # keeps the accumulator concrete so nothing downstream sees a view.
+# One `filters=` entry (#1694, #1599 layer 7): a `String` as is, and a pair with a `String` key rebuilt at its value's type
+# for the types a constant predicate holds (`_apply_static_filter!`'s), so the pair is built by a static call. The
+# closure it replaces built `String(f.first) => f.second` on a value read as `Any` when the list's values had more than
+# one type (`filters = ["circuitid" => 1, "name" => "Monaco Grand Prix"]`), a call to the `Pair` constructor a trimmed
+# image had no code for. The same pair either way; any other entry takes the old expression, behind one call.
+function _norm_bulk_filter(@nospecialize(f))::Union{String, Pair{String, <:Any}}
+  f isa String && return f
+  if f isa Pair && getfield(f, :first) isa String
+    k = getfield(f, :first)::String
+    v = getfield(f, :second)
+    v isa Int64 && return k => v
+    v isa String && return k => v
+    v isa Bool && return k => v
+    v isa Float64 && return k => v
+    v isa Date && return k => v
+    v isa DateTime && return k => v
+    v isa Vector{Int64} && return k => v
+    v isa Vector{String} && return k => v
+  end
+  return _norm_bulk_filter_other(f)
+end
+@noinline _norm_bulk_filter_other(@nospecialize(f))::Union{String, Pair{String, <:Any}} =
+  f isa AbstractString ? String(f) : String(f.first) => f.second
+
 function _normalize_bulk_filters(filters)
   _filters::Vector{Union{String, Pair{String, <:Any}}} = []
-  _norm(f) = f isa AbstractString ? String(f) : String(f.first) => f.second
+  _norm(f) = _norm_bulk_filter(f)
   if filters === nothing
   elseif filters isa AbstractString
     push!(_filters, _norm(filters))
@@ -457,7 +481,11 @@ function _drop_blank_auto_primary_keys!(df::_BulkFrame,
   for field in copy(fields_df)
     haskey(mapping, field) || continue
 
-    f_meta = model.fields[field]
+    # A name the model has no field for is not a primary key: it is left for the check at the end of
+    # `_prepare_bulk_df!`, which raises `UnknownFieldError` naming it, as `bulk_update` does. This loop raised a raw
+    # `KeyError` for it first (`columns = [..., "nosuch"]`), on `bulk_insert` and `bulk_copy` only (#1694).
+    f_meta = get(model.fields, field, nothing)
+    f_meta === nothing && continue
     _is_pormg_minted_bulk_primary_key(f_meta) || continue
 
     col_name = mapping[field]

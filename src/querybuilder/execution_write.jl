@@ -361,12 +361,15 @@ real_obj = objct isa SQLObjectHandler ? objct.object : objct
       # `rows`: the read-back closure below assigns its own `rows`, and a shared name would box both).
       if settings.connections isa PostgresConnectionPool
         returned = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}
+        isempty(returned) && throw(_returned_no_row("create", model, connection))   # #1694
         return _owned_row(returned[1], model)
       end
       # Any other PostgreSQL pool (an application's test double with its own `fetch`, which may take no `_decode`)
       # reads the row as before.
       result = fetch(settings, exec_sql, parameters)
-      return _owned_row(_row_to_field_keyed_dict(Tables.rowtable(result) |> Base.first, model, connection), model)
+      returned_rows = Tables.rowtable(result)   # not `rows`: the closure below assigns its own (`returned`'s reason)
+      isempty(returned_rows) && throw(_returned_no_row("create", model, connection))   # #1694
+      return _owned_row(_row_to_field_keyed_dict(Base.first(returned_rows), model, connection), model)
     end
     # SQLite and MySQL: a plain INSERT, then the inserted row read back with a SELECT on the SAME
     # connection (`_inserted_row_query`). MySQL has no `RETURNING` (#1266). SQLite deliberately avoids
@@ -582,10 +585,15 @@ function _run_update_or_create(connection::PormGPostgres, settings, real_obj, mo
   # is (#1815): `Tables.rowtable(result) |> first` decided the row's type at run time, which a trimmed image has no code
   # for. The sentinel column is no field's, so it is kept under its own name, undecoded. Any other PostgreSQL pool (an
   # application's test double with its own `fetch`) reads the row as before.
+  # #1694: no row (a trigger or rule skipped it) is `_returned_no_row`'s `StatementError`, not a raw `BoundsError`.
   dict = if settings.connections isa PostgresConnectionPool
-    (fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}})[1]
+    returned = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}
+    isempty(returned) && throw(_returned_no_row("update_or_create", model, connection))
+    returned[1]
   else
-    _row_to_field_keyed_dict(Tables.rowtable(fetch(settings, exec_sql, parameters)) |> Base.first, model, connection)
+    returned_rows = Tables.rowtable(fetch(settings, exec_sql, parameters))
+    isempty(returned_rows) && throw(_returned_no_row("update_or_create", model, connection))
+    _row_to_field_keyed_dict(Base.first(returned_rows), model, connection)
   end
   # Strip the sentinel so it isn't a phantom field; fail safe (false) if it is ever absent.
   created_raw = pop!(dict, Symbol("__pormg_created"), false)

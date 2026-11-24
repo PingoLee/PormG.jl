@@ -128,7 +128,8 @@ by_engine(postgres = true, sqlite = false, mysql = false) &&
     ddl(sql) = PormG.ConnectionPool.fetch(conn, sql)
     source = "module models\nimport PormG.Models\n" *
              "Goc1694 = Models.Model(\"goc1694\",\n    id = Models.IDField(),\n" *
-             "    driverref = Models.CharField(max_length = 64, unique = true))\nend\n"
+             "    driverref = Models.CharField(max_length = 64, unique = true),\n" *
+             "    points = Models.IntegerField(default = 0))\nend\n"
     holder = Module(:Goc1694Holder)
     Base.include_string(holder, source)
     model = Base.invokelatest(getfield, Base.invokelatest(getfield, holder, :models), :Goc1694)
@@ -136,12 +137,12 @@ by_engine(postgres = true, sqlite = false, mysql = false) &&
     drop!() = (ddl("DROP TABLE IF EXISTS goc1694"); ddl("DROP FUNCTION IF EXISTS goc1694_drop_row()"))
     drop!()
     try
-        ddl("CREATE TABLE goc1694 (id BIGSERIAL PRIMARY KEY, driverref VARCHAR(64) NOT NULL UNIQUE)")
+        ddl("CREATE TABLE goc1694 (id BIGSERIAL PRIMARY KEY, driverref VARCHAR(64) NOT NULL UNIQUE, points INTEGER NOT NULL DEFAULT 0)")
         ddl("CREATE FUNCTION goc1694_drop_row() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RETURN NULL; END \$\$")
         ddl("CREATE TRIGGER goc1694_drop_row BEFORE INSERT ON goc1694 FOR EACH ROW EXECUTE FUNCTION goc1694_drop_row()")
         for (op, call) in (("create", () -> model.objects.create("driverref" => "senna")),
                            ("update_or_create", () -> model.objects.update_or_create("driverref" => "prost";
-                                                                                    defaults = ["driverref" => "prost"])))
+                                                                                    defaults = ["points" => 1])))
             err = try call(); nothing catch e; e end
             @test (op, err isa PormG.StatementError) == (op, true)
             @test (op, err isa BoundsError) == (op, false)

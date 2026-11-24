@@ -3290,9 +3290,11 @@ end
     @test occursin("returned = fetch(settings, exec_sql, parameters; _decode = _FieldRowDecoder(model, connection))::Vector{Dict{Symbol, Any}}", ew_src)
     # The old read stays for a pool that is not PormG's own (a test double), behind the type check, and nowhere else.
     @test occursin("if settings.connections isa PostgresConnectionPool", ew_src)
-    @test count("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src) == 1
+    # #1694: the old read gained an empty-rows check (`_returned_no_row`), so it reads the rows once, then the first.
+    @test count("returned_rows = Tables.rowtable(result)", ew_src) == 1
+    @test count("_row_to_field_keyed_dict(Base.first(returned_rows), model, connection), model)", ew_src) == 1
     @test findfirst("if settings.connections isa PostgresConnectionPool", ew_src) <
-          findfirst("Tables.rowtable(result) |> Base.first, model, connection), model)", ew_src)
+          findfirst("_row_to_field_keyed_dict(Base.first(returned_rows), model, connection), model)", ew_src)
 
     PG = Base.get_extension(PormG, :PormGPostgresExt)
     MY = Base.get_extension(PormG, :PormGMySQLExt)
@@ -6391,7 +6393,8 @@ end
     @test _dynamic_calls(QB._mysql_target_rows, (PormG.Configuration.Settings, QB.SQLObjectQuery, PormG.Models.ModelType, Vector{String},
                                                  String, PormG.ConnectionPool.MySQLConnectionPool, QB._FieldRowDecoder, String, Bool)) == String[]
     pg = _dynamic_calls(QB._run_update_or_create, (PormG.ConnectionPool.PostgresConnectionPool{:postgres}, rest..., QB.PgParameterizedQuery, tail...))
-    @test all(s -> occursin(r"rowtable|\|> first|_row_to_field_keyed_dict", s), pg)
+    # The stand-in pool's old read, and (#1694) its empty-rows check on those rows.
+    @test all(s -> occursin(r"rowtable|\|> first|\(first\)|isempty|_row_to_field_keyed_dict", s), pg)
     @test _dynamic_calls(QB._created_flag, (Any,)) == String[]
   end
 

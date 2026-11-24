@@ -8,7 +8,7 @@
 # lines and both refusals.
 #
 # Two more jobs build the fixture's server variants (test/trim/mysql, test/trim/postgres, #1614) and run
-# them against a service container: MySQL 8.4, and PostgreSQL 18 through Postgres.jl with SCRAM-SHA-256.
+# them against a service container: MySQL 8.4, and PostgreSQL 19 through Postgres.jl with SCRAM-SHA-256.
 # Each fails unless its binary exits 0, prints the row, runs the single-row write (create, read back, update,
 # delete), and its `fail` step prints the server's own error.
 #
@@ -544,14 +544,14 @@ jobs:
           if-no-files-found: warn
 
   postgres-read:
-    name: Trimmed read (PostgreSQL 18, Postgres.jl)
+    name: Trimmed read (PostgreSQL 19, Postgres.jl)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
       postgres:
         # No POSTGRES_HOST_AUTH_METHOD: the image's default for TCP connections is scram-sha-256, the
         # authentication the Base64 roots exist for (`trim_entrypoints`, through the Postgres.jl extension).
-        image: postgres:18
+        image: postgres:19
         env:
           POSTGRES_DB: pormg_trim
           POSTGRES_USER: f1

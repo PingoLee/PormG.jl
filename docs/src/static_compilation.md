@@ -23,7 +23,7 @@ else is untested in a trimmed binary, even where it compiles.
   on three drivers:
   - SQLite, through SQLite.jl;
   - MySQL 8.4, through MySQL.jl;
-  - PostgreSQL 18, through Postgres.jl (see [PostgreSQL](#PostgreSQL-through-Postgres.jl) below).
+  - PostgreSQL 19, through Postgres.jl (see [PostgreSQL](#PostgreSQL-through-Postgres.jl) below).
 
   The same read with a comparison filter on a date or an integer (`filter("date__@gte" => Date(2008, 6, 1))`,
   `filter("round__@lt" => 10)`), and with `order_by("date")` or `order_by("-date")`, has run on the three
@@ -68,7 +68,7 @@ else is untested in a trimmed binary, even where it compiles.
   fields (`Union{Nothing, X}` of a `String`, an `Int64` or a `Float64`) have run, and a `Decimal` on MySQL and
   PostgreSQL.
 - **The single-row write**, on SQLite through SQLite.jl, on MySQL 8.4 through MySQL.jl and on
-  PostgreSQL 18 through Postgres.jl (#1694, #1614):
+  PostgreSQL 19 through Postgres.jl (#1694, #1614):
   - `create` with name–value pairs (`M.Race.objects.create("year" => 2009, …)`), including the fields
     the write fills itself: a `DateTimeField(auto_now_add = true)`, a `DateField(auto_now = true)` and a
     `UUIDField(auto_add = true)`. The timestamp is written in PormG's own text and read back from it;
@@ -80,7 +80,7 @@ else is untested in a trimmed binary, even where it compiles.
   - the refusals PormG raises before any SQL: an `InvalidValueError` for a date string that is not a
     calendar date, and for a `Bool` given to a text column (run on SQLite; the check is the same on every
     driver).
-- **`bulk_insert`** (#1694, #1614), on SQLite, on MySQL 8.4 and on PostgreSQL 18 through Postgres.jl
+- **`bulk_insert`** (#1694, #1614), on SQLite, on MySQL 8.4 and on PostgreSQL 19 through Postgres.jl
   (whose bulk write binds each column as an array, `unnest`), from a `Vector` of `NamedTuple`s whose element type is concrete
   (`[(year = 2010, round = 6, …), …]`), with the fields the write fills itself left out (the same
   `auto_now_add`, `auto_now` and `auto_add` fields as above) and no `columns=`, `on_conflict` or
@@ -151,7 +151,7 @@ else is untested in a trimmed binary, even where it compiles.
   statement is still running on.
 
 PormG checks these with a fixture application, `test/trim/` in the repository. Its `Trim (juliac)`
-workflow builds and runs it every night, on SQLite and against a MySQL 8.4 and a PostgreSQL 18 server:
+workflow builds and runs it every night, on SQLite and against a MySQL 8.4 and a PostgreSQL 19 server:
 the reads above (lookups, expressions, functions, subqueries, joins, CTEs, windows, the untyped read),
 the writes above (create, update, delete, the cascading, `SET_DEFAULT` and self-referential deletes,
 `bulk_insert`, `bulk_update`, `update_or_create`, `get_or_create`), the refusals and the refused statements, and on SQLite the pool's

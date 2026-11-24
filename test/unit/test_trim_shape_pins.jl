@@ -7200,6 +7200,30 @@ end
     end
   end
 
+  # What: `exists()` (#1839 decision 2): `_exists`, the fluent `h.exists()`, and the execution body `_exists_run`.
+  # Expected: each infers `Bool`; `_exists_run` makes no dynamic call, and nothing it reaches does, outside the
+  #   statement's build (`_exists_statement`, the render's own pins) and the reviewed open pool arm.
+  # Why: `exists()` computes `n > 0` itself, but its answer was inferred as the union of `Bool` and the inspection shapes
+  #   `show_query` can choose, so a trimmed program stated `::Bool` (the fixture did), and code reading it dispatched at
+  #   run time.
+  @testset "exists() answers an inferred Bool (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    OH = QB.ObjectHandler
+    @test only(Base.return_types(QB._exists, (OH,))) === Bool
+    @test isdefined(QB, :_exists_run)
+    if isdefined(QB, :_exists_run)
+      @test only(Base.return_types(QB._exists_run, (OH, Nothing))) === Bool
+      @test _dynamic_calls(QB._exists_run, (OH, Nothing)) == String[]
+      # Below `_exists_run`, through each pool arm, to the count: the frames of `fetch`'s own keyword body (cancellation,
+      # the decode for a pool whose result type is not registered), the lazy settings resolution and the logging
+      # macro are every terminal's, reviewed with them, and are not on this answer's path.
+      shared = r"^Tuple\{(PormG\.ConnectionPool\.var\"##fetch#\d+\"|typeof\(PormG\.Configuration\._resolve_lazily!\)|typeof\(Core\.kwcall\), NamedTuple, typeof\(Base\.CoreLogging\.handle_message_nothrow\))"
+      deep = _dynamic_calls_deep(QB._exists_run, (OH, Nothing); depth = 4,
+                                 skip = (QB._exists_statement, PormG.ConnectionPool._with_unlisted_pool))
+      @test filter(x -> !occursin(shared, x), deep) == String[]
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -133,8 +133,19 @@ end
     end
     mixed = ["circuitid" => 1, "name" => "Monaco Grand Prix"]
     @test isequal(map(typeof, _AW_QB._normalize_bulk_filters(mixed)), [Pair{String, Int64}, Pair{String, String}])
-    @test _aw_outcome(() -> _AW_QB._normalize_bulk_filters(Any["year" => 2008, 5])) ==
-          _aw_outcome(() -> _AW_QB._normalize_bulk_filters(Any["year" => 2008, 5]))
+    # An invalid entry is refused by the vector loop's guard before any entry is normalized, as before: the old
+    # normalization is the same loop over the old closure.
+    function old_normalize(filters::Vector)
+      out = Union{String, Pair{String, <:Any}}[]
+      for f in filters
+        f isa Union{AbstractString, Pair{<:AbstractString, <:Any}} || throw(PormG.QueryBuildError("Invalid filter specification: $f"))
+        push!(out, old_norm(f))
+      end
+      out
+    end
+    for bad in (Any["year" => 2008, 5], Any[5], Any["year", :x => 1])
+      @test _aw_outcome(() -> _AW_QB._normalize_bulk_filters(bad)) == _aw_outcome(() -> old_normalize(bad))
+    end
     @test _aw_outcome(() -> _AW_QB._normalize_bulk_filters(Any["year" => 2008, 5]))[2] === PormG.QueryBuildError
   end
 end

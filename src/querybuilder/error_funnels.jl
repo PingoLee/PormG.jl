@@ -176,5 +176,5 @@ end
 # skipped the row, so there is none to return. It indexed the empty rows and raised a raw `BoundsError`. A
 # `StatementError`, as `update_or_create` on MySQL raises when its row cannot be read back for the same cause: not the
 # caller's misuse, and no race either, so the same call fails the same way again.
-_returned_no_row(operation::AbstractString, model, connection) = StatementError(_backend_name(connection),
+_returned_no_row(operation::AbstractString, model::PormGModel, connection::_SQLEngine) = StatementError(_backend_name(connection),
   "$(operation): the statement returned no $(model.name) row: a trigger or rule may have skipped it.")

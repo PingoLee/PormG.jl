@@ -180,6 +180,8 @@ function returning_refused_step(circuitid::Int)::Bool
         end
         written = M.Race.objects.filter("name" => "Skipped Grand Prix").count()::Int
         say("returning_refused", string("create: ", refused, "; ", written, " written"))
+        # A row written (the trigger missing) is deleted, so the step leaves the database as it found it.
+        written > 0 && M.Race.objects.filter("name" => "Skipped Grand Prix").delete()
         return startswith(refused, "StatementError") && written == 0
     catch e
         failed("returning_refused", e); return false

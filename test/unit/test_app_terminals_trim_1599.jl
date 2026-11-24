@@ -12,8 +12,10 @@
 #     - `count()` itself answers as before on a real SQLite pool;
 #     - a raw `fetch`'s parameters bind on SQLite through `_sqlite_bind_manual` as they did through `sqlite_bind_value`
 #       on each value read as `Any`: the same bound value and type, or the same refusal, for every value type.
-#   Postgres.jl's method reads `ResultRow.data`; a `Postgres.Result` is not built by hand here, so its equivalence is
-#   the integration suite's `count()` calls under `PORMG_POSTGRES_DRIVER=Postgres`.
+#     - on Postgres.jl, the extension's read of a hand-built `Postgres.Result` is the old expression's answer, for a row
+#       and for no row;
+#     - a statement with no row raises on the caller what the old read raised (type and text), not the statement's
+#       `StatementError`.
 #
 # Hermetic: an in-memory SQLite database and hand-built MySQL results; no server.
 #
@@ -27,6 +29,7 @@ using Dates, UUIDs
 
 const _AT_QB = PormG.QueryBuilder
 const _AT_MY = Base.get_extension(PormG, :PormGMySQLExt)
+const _AT_PG = Base.get_extension(PormG, :PormGPostgresExt)
 
 module AtModels
 import PormG
@@ -72,9 +75,10 @@ end
     @test R.objects.filter("year" => 1900).count() === 0
     @test R.objects.filter("year" => 2008).values("year").distinct().count() === 1
     @test R.objects.filter("round" => 6).limit(1).count() === 1
-    # A statement with no row takes the old expression, so it raises as the old read did.
-    @test _at_outcome(() -> _AT_QB._fetch_first_cell(settings, "SELECT 1 WHERE 0", nothing))[1] ==
-          _at_outcome(() -> _AT_QB._first_cell_any(fetch(settings, "SELECT 1 WHERE 0")))[1]
+    # A statement with no row: the old expression reads its rows on the caller, so it raises what the old read raised
+    # (its type and text), not the statement's `StatementError`.
+    @test _at_outcome(() -> _AT_QB._fetch_first_cell(settings, "SELECT 1 WHERE 0", nothing)) ==
+          _at_outcome(() -> _AT_QB._first_cell_any(fetch(settings, "SELECT 1 WHERE 0")))
     PormG.Configuration.close_pool!("at_sqlite")
   end
 
@@ -89,13 +93,30 @@ end
       cases = (MR([Symbol("COUNT(*)")], AbstractVector[Int64[7]], 1, 0, UInt64(0), ""),
                MR([Symbol("COUNT(*)")], AbstractVector[Union{Missing, Int64}[7]], 1, 0, UInt64(0), ""),
                MR([:n], AbstractVector[Int32[5]], 1, 0, UInt64(0), ""),
-               MR([:n], AbstractVector[Int64[]], 0, 0, UInt64(0), ""))
+               MR([:n], AbstractVector[Int64[]], 0, 0, UInt64(0), ""),
+               MR([:n], AbstractVector[Union{Missing, Int64}[missing]], 1, 0, UInt64(0), ""))
       for r in cases
-        @test (eltype(r.columns[1]), _at_outcome(() -> _AT_QB._FirstCell()(r))) ==
-              (eltype(r.columns[1]), _at_outcome(() -> _AT_QB._first_cell_any(r)))
+        @test isequal((eltype(r.columns[1]), _at_outcome(() -> _AT_QB._FirstCell()(r))),
+                      (eltype(r.columns[1]), _at_outcome(() -> _AT_QB._first_cell_any(r))))
       end
       @test _AT_QB._FirstCell()(cases[1]) === 7
       @test _AT_QB._FirstCell()(cases[3]) === Int32(5)
+    end
+  end
+
+  # What: the Postgres.jl extension's read of a `Postgres.Result`, against the old expression over the same result.
+  # Expected: the same answer (value and type, or the same refusal) for a row and for no row.
+  # Why: the extension reads `ResultRow.data` directly; the old expression read it through `Tables.rowtable`.
+  @testset "Postgres.jl: the extension's first cell is the old expression's" begin
+    @test _AT_PG !== nothing
+    if _AT_PG !== nothing
+      PGM = _AT_PG.Postgres
+      row(v) = PGM.ResultRow(Any[v], [:count], Type[typeof(v)], Dict(:count => 1), 1)
+      for r in (PGM.Result([:count], Type[Int64], [row(Int64(3))], "SELECT 1", nothing),
+                PGM.Result([:count], Type[Int64], PGM.ResultRow[], "SELECT 0", nothing))
+        @test _at_outcome(() -> _AT_QB._FirstCell()(r)) == _at_outcome(() -> _AT_QB._first_cell_any(r))
+      end
+      @test _AT_QB._FirstCell()(PGM.Result([:count], Type[Int64], [row(Int64(3))], "SELECT 1", nothing)) === Int64(3)
     end
   end
 

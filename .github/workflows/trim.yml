@@ -303,6 +303,9 @@ jobs:
             # through the key they kept, registered in code; and a second key with writes off (test/trim/README.md).
             'step\timported\t@import_models 1 rows: 2008 Monaco Grand Prix; invokelatest 1 rows'
             'step\tkeys\t1 rows on f1, 1 on f1_ro; a create on f1_ro refused with WritesDisabledError'
+            # A locking read in a transaction and a raw fetch, after the read steps (#1599 layer 6, test/trim/tools/terminals.jl).
+            'step\tlock\tselect_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix'
+            'step\traw_fetch\tupdate +100: rounds 18, 106; in a transaction -100: rounds 6, 18'
             'step\twrite\tok'
             'step\tquery\t2 rows'
             'step\trow\t1 2008 Monaco Grand Prix 2008-05-25'
@@ -337,9 +340,6 @@ jobs:
             # A user transaction that commits and one that rolls back on the block's own error (#1599 layer 2), then
             # close_all!() last, since a trimmed binary runs no atexit hook (test/trim/tools/connections.jl).
             'step\ttransaction\tcommitted 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1'
-            # A locking read in a transaction and a raw fetch (#1599 layer 6, test/trim/tools/terminals.jl).
-            'step\tlock\tselect_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix'
-            'step\traw_fetch\tupdate +100: rounds 18, 106; in a transaction -100: rounds 6, 18'
             # A transaction inside one (a savepoint) and a read on spawned tasks (#1599 layer 2).
             'step\tnested_transaction\tcommitted 2 seen inside, 2 after; inner rolled back on TrimRollback, kept 2020; removed 3'
             'step\tspawned\t@spawn 2 rows: Monaco Grand Prix, Brazilian Grand Prix; @async 2 rows: Monaco Grand Prix, Brazilian Grand Prix'

@@ -1161,9 +1161,16 @@ end
 # `hasmethod` test and `Tables.rowtable`, which a trimmed image had no code for. Handed to `fetch` as a decoder: the
 # driver extensions read the cell from their own result (Postgres.jl's, MySQL's) or from the statement on SQLite's
 # worker, each the value the expression below reads from it; any other result (LibPQ's) takes that expression.
+#
+# The old expression runs on the caller, after `fetch`'s `try`, wherever it runs at all, so anything it raises reaches the
+# caller as it did (a result with no row raised `BoundsError`, not the statement's `StatementError`): SQLite's worker
+# hands back the cell, or its materialized rows when there is none to read (the extension's method), or the rows
+# `backend_execute` materialized (the fallback, `decode_on_worker` below), and `decoded_on_worker` reads those rows here.
 struct _FirstCell end
 (::_FirstCell)(result) = _first_cell_any(result)
-decoded_on_worker(::_FirstCell, result) = result
+decode_on_worker(::_FirstCell, result) = result
+decoded_on_worker(::_FirstCell, @nospecialize(result)) =
+  result isa AbstractVector{<:NamedTuple} ? _first_cell_any(result) : result
 
 # What `count()` read from a result before (#1599 layer 6 kept it as is): a result with scalar `[row, col]` indexing
 # (LibPQ's) gives `[1, 1]`; SQLite's materialized rowtable (`Vector{<:NamedTuple}`) also has an `(Int, Int)` getindex

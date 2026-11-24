@@ -60,28 +60,30 @@ function raw_fetch_step(key::String)::Bool
     settings = PormG.Configuration.get_settings(key)
     sql(delta::Int) = string("UPDATE race SET round = round ", delta > 0 ? "+ " : "- ", abs(delta), " WHERE year = ",
                              raw_marker(1), " AND name = ", raw_marker(2))
-    moved = false
     ok = false
     try
         fetch(settings, sql(100), [2008, "Monaco Grand Prix"])
-        moved = true
         up = M.Race.objects.filter("year" => 2008).order_by("round").list(RaceRow)
         back = PormG.run_in_transaction(key) do
             fetch(settings, sql(-100), [2008, "Monaco Grand Prix"])
             M.Race.objects.filter("year" => 2008).order_by("round").list(RaceRow)
         end::Vector{RaceRow}
-        moved = false
         rounds(rows) = join([string(r.round) for r in rows], ", ")
         say("raw_fetch", string("update +100: rounds ", rounds(up), "; in a transaction -100: rounds ", rounds(back)))
         ok = rounds(up) == "18, 106" && rounds(back) == "6, 18"
     catch e
         failed("raw_fetch", e)
     finally
-        if moved   # the +100 ran and the -100 did not: move it back, so the step leaves the database as it found it
+        # When the step did not pass, the race is put back at its round if a +100 stuck (an UPDATE can commit before its
+        # call raises), read through the ORM so it is never moved twice: the step leaves the database as it found it.
+        if !ok
             try
-                fetch(settings, sql(-100), [2008, "Monaco Grand Prix"])
+                monaco = M.Race.objects.filter("year" => 2008, "name" => "Monaco Grand Prix").list(RaceRow)
+                if !isempty(monaco) && monaco[1].round > 100
+                    fetch(settings, sql(-100), [2008, "Monaco Grand Prix"])
+                end
             catch e
-                failed("raw_fetch", e); ok = false
+                failed("raw_fetch", e)
             end
         end
     end

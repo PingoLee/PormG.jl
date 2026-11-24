@@ -292,6 +292,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "An Empty RETURNING and an Unknown columns= Field Raise Typed Errors (#1694)" include("unit/test_app_writes_trim_1694.jl")
     @testset "exists(), the Lookup Refusals and Q/Qor from 32 Arguments Answer as Before (#1599)" include("unit/test_trim_followups_1599.jl")
     @testset "bulk_update Renders and Refuses as Recorded; an Empty SET Is Refused (#1841)" include("unit/test_bulk_update_matrix_1841.jl")
+    @testset "The JSON, Array and Network Lookups Bind as Recorded (#1599)" include("unit/test_lookup_bind_matrix_1599.jl")
     @testset "A row read looks the stored key up first (#1592)" include("unit/test_row_lookup_fast_path_1592.jl")
     @testset "ORDER BY NULL Placement (#75)" include("unit/test_order_by_nulls.jl")
     @testset "SQLOrder Orientation Whitelist (#77)" include("unit/test_sqlorder_orientation.jl")

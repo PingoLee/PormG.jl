@@ -135,17 +135,66 @@ function _render_json_operator(v::SQLTypeOper, column::String, instruc::SQLInstr
     throw(FilterError("The \e[31m@$(v.operator)\e[0m operator requires a JSONField column; \e[31m$(something(col_as, "the target"))\e[0m is not JSON."))
   op = v.operator
   values = _oper_literal(v)
+  # #1599 layer 5: the value is the filter's, untyped; each bind reads it at its type (`_json_document_text`,
+  # `_json_key_text`, `_json_key_strings`) and binds the result through `_add_parameter_at`, the same calls on the same
+  # values, so the bound text and every refusal are as before. Over the untyped value each call dispatched at run time,
+  # which a trimmed image has no code for: the trimmed `payload__@jcontains` stopped at the bind, before the renderer.
   ph = if op == "jcontains"
-    add_parameter!(instruc, Models.format_json_sql(values); sql_type="jsonb")
+    _add_parameter_at(instruc, _json_document_text(values), "jsonb")
   elseif op == "has_key"
-    add_parameter!(instruc, string(values))
+    add_parameter!(instruc, _json_key_text(values))
   else  # has_any_keys / has_keys
     values isa AbstractVector ||
       throw(FilterError("The \e[31m@$(op)\e[0m operator requires an array of keys, e.g. filter(\"col__@$(op)\" => [\"a\", \"b\"]); got a single value."))
-    add_parameter!(instruc, String.(values); sql_type="text[]")
+    _add_parameter_at(instruc, _json_key_strings(values), "text[]")
   end
   return _json_operator_sql(op, instruc.connection, column, ph)
 end
+
+# `Models.format_json_sql(v)` for `@jcontains`'s document, read at the types a JSON document holds (#1599 layer 5); any
+# other value takes the call behind `@noinline`, as before.
+@noinline function _json_document_text(@nospecialize(v))
+  v isa Dict{String, Any} && return Models.format_json_sql(v)
+  v isa Dict{String, String} && return Models.format_json_sql(v)
+  v isa Dict{String, Int64} && return Models.format_json_sql(v)
+  v isa Dict{String, Bool} && return Models.format_json_sql(v)
+  v isa Dict{String, Float64} && return Models.format_json_sql(v)
+  v isa Vector{Any} && return Models.format_json_sql(v)
+  v isa Vector{String} && return Models.format_json_sql(v)
+  v isa Vector{Int64} && return Models.format_json_sql(v)
+  v isa String && return Models.format_json_sql(v)
+  return _json_document_text_other(v)
+end
+@noinline _json_document_text_other(@nospecialize(v)) = Models.format_json_sql(v)
+
+# `string(v)` for `@has_key`'s key (#1599 layer 5): a `String`, a `Symbol` or an integer at its type; anything else as
+# before.
+@noinline function _json_key_text(@nospecialize(v))::String
+  v isa String && return string(v)
+  v isa Symbol && return string(v)
+  v isa Int64 && return string(v)
+  return _json_key_text_other(v)
+end
+@noinline _json_key_text_other(@nospecialize(v))::String = string(v)
+
+# `String.(v)` for `@has_any_keys`/`@has_keys`'s keys (#1599 layer 5), at the vector types a list of keys comes as;
+# any other vector as before (a key that is no string raises what it raised).
+@noinline function _json_key_strings(@nospecialize(v))::Vector{String}
+  v isa Vector{String} && return String.(v)
+  v isa Vector{Any} && return _json_key_strings_any(v)
+  v isa Vector{Symbol} && return String.(v)
+  return _json_key_strings_other(v)
+end
+# A `Vector{Any}` of keys: each `String` as it is, any other element through `String(x)`, which raises what it raised.
+function _json_key_strings_any(v::Vector{Any})::Vector{String}
+  out = Vector{String}(undef, length(v))
+  for (i, x) in enumerate(v)
+    out[i] = x isa String ? x : _json_key_string_other(x)
+  end
+  return out
+end
+@noinline _json_key_string_other(@nospecialize(x))::String = String(x)
+@noinline _json_key_strings_other(@nospecialize(v))::Vector{String} = String.(v)
 
 # #904: render a PostgreSQL network operator (`<<`, `<<=`, `>>`, `>>=`, `&&`, `family()`,
 # `masklen()`). The left-hand side must be a `GenericIPAddressField` or `CIDRField` column — the
@@ -159,7 +208,11 @@ end
 # meets it through PostgreSQL's implicit `cidr → inet` cast. A column on the right (`F`, a CTE or a
 # joined column) is compared as it is, uncast. Any other expression is refused: none was asked for, and
 # an unvalidated one would fail at the server instead.
-function _render_network_operator(v::SQLTypeOper, column::String, operand_field, field_label::AbstractString,
+#
+# #1599 layer 5: the operand field is one of the model field types (`_operand_field`), held unspecialized, so the call
+# from `_render_filter_oper` has one compiled target; specialized on the field union it had none in a trimmed image.
+function _render_network_operator(v::SQLTypeOper, column::String,
+                                  @nospecialize(operand_field::Union{Nothing, Models.AnyField}), field_label::String,
                                   instruc::SQLInstruction)::String
   op = v.operator
   # The path the caller wrote, for the messages. Without a field it is a projection alias (reached
@@ -181,30 +234,52 @@ function _render_network_operator(v::SQLTypeOper, column::String, operand_field,
   (operand_field !== nothing && _pattern_text_kind(operand_field.formatter) in (:inet, :cidr)) ||
     throw(FilterError("$(where_): the @$(op) lookup requires a GenericIPAddressField " *
                       "or CIDRField column, and $(subject) is not one."))
-  lookup = "$(label)__@$(op)"
   value_node = _oper_value_node(v)
   values = _oper_literal(v)
   ph = if isa(value_node, Union{SQLTypeF,SQLTypeCTE,SQLTypeJoined})
     rhs_ref = value_node::Union{FExpression,OuterRefObject,CTEReference,JoinedReference}   # narrowed before the closure captures it
     _on_join_right(() -> _get_filter_query(rhs_ref, instruc), instruc)   # #985: the right side
   elseif isa(value_node, Union{SQLType,SubqueryObject,SQLObjectHandler})
-    throw(FilterError("Error in filter '$(lookup)': the @$(op) lookup takes a value or a column " *
+    # The path the caller wrote, built only for this refusal (#1599 layer 5: `label` is one of several types here).
+    throw(FilterError("Error in filter '$(label)__@$(op)': the @$(op) lookup takes a value or a column " *
                       "(F(\"…\")), not this expression."))
   elseif op in NETWORK_CONTAINMENT_OPERATORS
-    add_parameter!(instruc, _guarded_format(Models.format_inet_network_sql, values, op, label,
-                                            operand_field.type); sql_type = "inet")
+    # #1599 layer 5: the formatted network at its type (`_add_parameter_at`), as the date buckets bind theirs.
+    _add_parameter_at(instruc, _guarded_format(Models.format_inet_network_sql, values, op, label,
+                                               operand_field.type), "inet")
   else  # family / prefixlen
     # #988: the value is bound, so a refusal is an `InvalidValueError`, located like a formatter's.
     # A `Bool` is an `Integer` in Julia, and `true` is not a family (#949's reasoning).
-    allowed, what = op == "family" ? ((4, 6), "4 or 6") : (0:128, "a whole number from 0 to 128")
-    kind = !(values isa Integer) || values isa Bool ? :type :
-           values in allowed ? nothing : :range
+    what = op == "family" ? "4 or 6" : "a whole number from 0 to 128"
+    kind, n = _network_int_operand(values, op == "family")
     kind === nothing ||
       throw(with_location(InvalidValueError("The @$(op) lookup takes $(what)", kind);
                           op = "filter", field = label, field_type = _opt_label(operand_field.type)))
-    add_parameter!(instruc, Int(values))
+    add_parameter!(instruc, n)
   end
-  return _network_operator_sql(op, instruc.connection, column, ph)
+  # #1599 layer 5: a bound placeholder is a `String`, so the call into the family is static; a column on the right
+  # renders what it renders, and takes the call as before.
+  ph isa String && return _network_operator_sql(op, instruc.connection, column, ph)
+  return _network_operator_sql_other(op, instruc.connection, column, ph)
+end
+
+@noinline _network_operator_sql_other(op::AbstractString, @nospecialize(conn), column::String, @nospecialize(ph)) =
+  _network_operator_sql(op, conn, column, ph)
+
+# `@family`/`@prefixlen`'s operand (#1599 layer 5): `(nothing, n)` for an integer the lookup takes (`4`/`6`; `0:128`),
+# `(:type, 0)` for a value that is no integer (a `Bool` included, #949), `(:range, 0)` for another integer. An `Int64` is
+# read at its type; any other integer is checked by `in` and converted by `Int`, as before.
+function _network_int_operand(@nospecialize(values), family::Bool)::Tuple{Union{Nothing, Symbol}, Int}
+  (!(values isa Integer) || values isa Bool) && return (:type, 0)
+  if values isa Int64
+    ok = family ? (values == 4 || values == 6) : (0 <= values <= 128)
+    return ok ? (nothing, values) : (:range, 0)
+  end
+  return _network_int_operand_other(values, family)
+end
+@noinline function _network_int_operand_other(@nospecialize(values), family::Bool)::Tuple{Union{Nothing, Symbol}, Int}
+  allowed = family ? (4, 6) : 0:128
+  return values in allowed ? (nothing, Int(values)) : (:range, 0)
 end
 
 # Resolve the base PormGField a JSON operator targets: a bare column name lives on the model;
@@ -249,7 +324,7 @@ function _render_array_operator(v::SQLTypeOper, column::String, instruc::SQLInst
   formatter = field.formatter::Models.ArrayFormatter
   unbounded = Models.ArrayFormatter(formatter.base, formatter.kind, nothing)
   literal = _guarded_format(unbounded, values, v.operator, _array_lookup_label(v), field.type)
-  placeholder = add_parameter!(instruc, literal)
+  placeholder = _add_parameter_at(instruc, literal)   # #1599 layer 5: the formatted literal at its type
   return _array_operator_sql(v.operator, instruc.connection, column, placeholder)
 end
 
@@ -436,6 +511,16 @@ _bucket_bind(instruc::SQLInstruction, @nospecialize(f_meta::Models.AnyField), @n
   return _add_parameter_other(instruc, v)
 end
 @noinline _add_parameter_other(instruc::SQLInstruction, @nospecialize(v)) = add_parameter!(instruc, v)
+
+# The same with the parameter's SQL type (`add_parameter!(instruc, v; sql_type)`): a JSON document's text, a list of
+# keys, a network's text (#1599 layer 5).
+@noinline function _add_parameter_at(instruc::SQLInstruction, @nospecialize(v), sql_type::String)
+  v isa String && return add_parameter!(instruc, v; sql_type = sql_type)
+  v isa Vector{String} && return add_parameter!(instruc, v; sql_type = sql_type)
+  return _add_parameter_other(instruc, v, sql_type)
+end
+@noinline _add_parameter_other(instruc::SQLInstruction, @nospecialize(v), sql_type::String) =
+  add_parameter!(instruc, v; sql_type = sql_type)
 
 # `f(value; ranged)` for a bucket's bounds (`_year_bucket_bounds`, `_yyyy_mm_bucket_bounds`) with the value read untyped
 # from the filter (#1599 layer 5): an integer year and a `"YYYY-MM"` label at their types; anything else at run time.

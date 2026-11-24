@@ -7256,11 +7256,28 @@ end
         end
       end
     end
-    # The network render's operand arguments (`operand_field`, `field_label`) vary by caller: its pin is the call into
-    # the family function, read from its source, which takes the engine as the instruction holds it.
     fo_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "filter_operators.jl"), String)
-    @test occursin("return _network_operator_sql(op, instruc.connection, column, ph)", fo_src)
     @test !occursin("connarg", fo_src)
+    # The binds before each renderer (#1599 layer 5): the JSON and array renders make no dynamic call at all; the call
+    # into the network render resolves (its field argument unspecialized over the field union), and inside it the
+    # binds and the family call are static: what is left is the transform label, a column on the right
+    # (`_on_join_right`) and the located refusal of a family/prefix value, none on a bound value's path.
+    IO_ = QB.InstructionObject
+    @test _dynamic_calls(QB._render_json_operator, (QB.OperObject, String, IO_)) == String[]
+    @test _dynamic_calls(QB._render_array_operator, (QB.OperObject, String, IO_)) == String[]
+    @test filter(x -> occursin("_render_network_operator", x), _dynamic_calls(QB._render_filter_oper, (QB.OperObject, IO_))) == String[]
+    net = _dynamic_calls(QB._render_network_operator, (QB.OperObject, String, Union{Nothing, PormG.Models.AnyField}, String, IO_))
+    @test filter(x -> occursin(r"add_parameter|_network_operator_sql|\bInt\(| in |_guarded_format", x), net) == String[]
+    @test length(net) <= 5
+    @test isdefined(QB, :_json_document_text) && isdefined(QB, :_network_int_operand)
+    if isdefined(QB, :_json_document_text) && isdefined(QB, :_network_int_operand)
+      for (f, open_arm) in ((QB._json_document_text, "_json_document_text_other"), (QB._json_key_text, "_json_key_text_other"),
+                            (QB._json_key_strings, "_json_key_strings_other"))
+        @test (nameof(f), filter(x -> !occursin(open_arm, x), _dynamic_calls(f, (Any,)))) == (nameof(f), String[])
+      end
+      @test filter(x -> !occursin("_add_parameter_other", x), _dynamic_calls(QB._add_parameter_at, (IO_, Any, String))) == String[]
+      @test filter(x -> !occursin("_network_int_operand_other", x), _dynamic_calls(QB._network_int_operand, (Any, Bool))) == String[]
+    end
   end
 
   # What: every function in `src/` and `ext/` that takes an argument `@nospecialize` (an engine, as a renderer holds it)

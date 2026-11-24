@@ -59,6 +59,10 @@ function (@main)(args::Vector{String})::Cint
     self_cascade_step() || return Cint(29)
     bulk_refusals_step(1) || return Cint(30)
     bulk_conflict_step(1) || return Cint(31)        # bulk_insert's on_conflict= (`tools/writes.jl`, #1694)
+    # The writes applications use most (`tools/writes.jl`, #1694, #1599 layer 7): bulk writes from a column table, and the
+    # delete rules beyond CASCADE.
+    bulk_table_step(1) || return Cint(47)
+    delete_rules_step() || return Cint(49)
     transaction_step(1, TrimF1.KEY) || return Cint(24)  # a user transaction (`tools/connections.jl`, #1599 layer 2)
     nested_transaction_step(1, TrimF1.KEY) || return Cint(35)  # a transaction inside one (`tools/connections.jl`)
     spawned_read_step(2008) || return Cint(36)  # a read on spawned tasks (`tools/connections.jl`, #1599 layer 2)

@@ -52,6 +52,23 @@ Constructor::Models.ModelType = Models.Model(
                                      default = DEFAULT_CIRCUIT_ID)
 )
 
-Models.@models Circuit Race PitStop Driver Constructor
+# A race's results (#1694, #1599 layer 7): a race that has one cannot be deleted (`PROTECT`), nor its driver (`RESTRICT`),
+# the shape the F1 schema's results and lap times have. `delete_rules_step` (`../tools/writes.jl`) checks both refusals.
+Result::Models.ModelType = Models.Model(
+  resultid = Models.IDField(),
+  raceid = Models.ForeignKey(Race, pk_field = "raceid", on_delete = "PROTECT"),
+  driverid = Models.ForeignKey(Driver, pk_field = "driverid", on_delete = "RESTRICT"),
+  position = Models.IntegerField()
+)
+
+# A season and the one before it (#1694, #1599 layer 7): deleting a season clears the next one's reference (`SET_NULL`
+# on its own table).
+Season::Models.ModelType = Models.Model(
+  seasonid = Models.IDField(),
+  year = Models.IntegerField(),
+  previousid = Models.ForeignKey("Season", pk_field = "seasonid", on_delete = "SET_NULL", null = true)
+)
+
+Models.@models Circuit Race PitStop Driver Constructor Result Season
 
 end

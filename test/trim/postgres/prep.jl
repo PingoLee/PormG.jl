@@ -29,6 +29,13 @@ PormG.Migrations.ensure_table!(M.Race, KEY)
 PormG.Migrations.ensure_table!(M.PitStop, KEY)
 PormG.Migrations.ensure_table!(M.Driver, KEY)
 PormG.Migrations.ensure_table!(M.Constructor, KEY)
+PormG.Migrations.ensure_table!(M.Result, KEY)
+PormG.Migrations.ensure_table!(M.Season, KEY)
+# The results first: they keep their race (`PROTECT`) and driver (`RESTRICT`) from being deleted below. A season's
+# reference to the one before is cleared first, as the constructors' below.
+M.Result.objects.delete(allow_delete_all = true)
+M.Season.objects.filter("previousid__@isnull" => false).update("previousid" => nothing)
+M.Season.objects.delete(allow_delete_all = true)
 # A self-referential CASCADE is not deleted under `allow_delete_all` (PormG refuses the loop): clear the chain's
 # references first, then delete every constructor.
 M.Constructor.objects.filter("parentid__@isnull" => false).update("parentid" => nothing)
@@ -50,6 +57,9 @@ monaco_race = M.Race.objects.filter("year" => 2008, "round" => 6).values("raceid
 # and checks that these two are left as they are.
 M.PitStop.objects.create("raceid" => monaco_race["raceid"], "stop" => 1, "lap" => 20)
 M.Driver.objects.create("surname" => "Piquet", "debut_raceid" => monaco_race["raceid"])
+# A result of the seeded Monaco race, by its driver (#1694): neither can be deleted (`delete_rules_step`).
+piquet = M.Driver.objects.filter("surname" => "Piquet").values("driverid").list()[1]
+M.Result.objects.create("raceid" => monaco_race["raceid"], "driverid" => piquet["driverid"], "position" => 1)
 # The default home circuit at its fixed id, and a seeded chain of constructors on it (`set_default_step`,
 # `self_cascade_step`, `tools/writes.jl`): Toleman became Benetton, which became Renault. Both steps leave these as they
 # are.
@@ -62,4 +72,14 @@ M.Constructor.objects.create("name" => "Benetton", "parentid" => toleman["constr
 benetton = M.Constructor.objects.filter("name" => "Benetton").values("constructorid").list()[1]
 M.Constructor.objects.create("name" => "Renault", "parentid" => benetton["constructorid"],
                              "home_circuitid" => models.DEFAULT_CIRCUIT_ID)
+# A trigger that skips one race's insert (#1694): `returning_refused_step` (`main.jl`) creates that race, and `create`
+# meets an `INSERT … RETURNING` that returns no row. Raw SQL: no ORM call creates a trigger.
+settings = PormG.Configuration.get_settings(KEY)
+fetch(settings, raw"""CREATE OR REPLACE FUNCTION pormg_trim_skip_insert() RETURNS trigger AS $$
+BEGIN
+  IF NEW.name = 'Skipped Grand Prix' THEN RETURN NULL; END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql""")
+fetch(settings, "DROP TRIGGER IF EXISTS pormg_trim_skip_insert ON race")
+fetch(settings, "CREATE TRIGGER pormg_trim_skip_insert BEFORE INSERT ON race FOR EACH ROW EXECUTE FUNCTION pormg_trim_skip_insert()")
 println("prepped ", trim_where(server))

@@ -165,6 +165,27 @@ function shapes_step(server::TrimServer)::Bool
     end
 end
 
+# An `INSERT … RETURNING` that a trigger skipped (#1694; `prep.jl` creates the trigger, which skips the race named
+# "Skipped Grand Prix"): `create` raises `StatementError` naming the operation and the model, where it raised a raw
+# `BoundsError`, and no row is written. Only PostgreSQL reads a created row from `RETURNING`. Exit code 48.
+function returning_refused_step(circuitid::Int)::Bool
+    try
+        refused = try
+            M.Race.objects.create("year" => 2042, "round" => 6, "circuitid" => circuitid, "name" => "Skipped Grand Prix",
+                                  "date" => Date(2042, 5, 25))
+            "not refused"
+        catch e
+            e isa PormG.StatementError || rethrow()
+            string("StatementError: ", something((e::PormG.StatementError).message, ""))
+        end
+        written = M.Race.objects.filter("name" => "Skipped Grand Prix").count()::Int
+        say("returning_refused", string("create: ", refused, "; ", written, " written"))
+        return startswith(refused, "StatementError") && written == 0
+    catch e
+        failed("returning_refused", e); return false
+    end
+end
+
 function (@main)(args::Vector{String})::Cint
     t0 = time_ns()
     say("main", "entered")
@@ -226,6 +247,11 @@ function (@main)(args::Vector{String})::Cint
     self_cascade_step() || return Cint(29)
     bulk_refusals_step(circuitid) || return Cint(30)
     bulk_conflict_step(circuitid) || return Cint(31)        # bulk_insert's on_conflict= (`../tools/writes.jl`, #1694)
+    # The writes applications use most (`tools/writes.jl`, #1694, #1599 layer 7): bulk writes from a column table, and the
+    # delete rules beyond CASCADE.
+    bulk_table_step(circuitid) || return Cint(47)
+    returning_refused_step(circuitid) || return Cint(48)   # PostgreSQL's empty RETURNING, a StatementError
+    delete_rules_step() || return Cint(49)
     transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
     nested_transaction_step(circuitid, KEY) || return Cint(35)  # a transaction inside one (`../tools/connections.jl`)
     spawned_read_step(2008) || return Cint(36)  # a read on spawned tasks (`../tools/connections.jl`, #1599 layer 2)

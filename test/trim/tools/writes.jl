@@ -343,6 +343,14 @@ function bulk_refusals_step(circuitid::Int)::Bool
     ok &= refusal_case("a field mapped twice", () -> PormG.bulk_insert(M.Race.objects,
         [(a = 2012, b = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20))];
         columns = ["a" => "year", "b" => "year", "round", "circuitid", "name", "date"]))
+    # #1694: a columns= name the model has no field for, bare and as a pair's target: `UnknownFieldError`, where it was a raw
+    # `KeyError` (upgrading/2026-11-23-1694-bulk-insert-unknown-column-unknownfielderror.md).
+    ok &= refusal_case("a columns= field the model lacks", () -> PormG.bulk_insert(M.Race.objects,
+        [(year = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20), lap = 1)];
+        columns = ["year", "round", "circuitid", "name", "date", "lap"]))
+    ok &= refusal_case("a columns= pair to a field the model lacks", () -> PormG.bulk_insert(M.Race.objects,
+        [(year = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20), lap = 1)];
+        columns = ["year", "round", "circuitid", "name", "date", "lap" => "laps"]))
     ok &= refusal_case("a column in another case", () -> PormG.bulk_insert(M.Race.objects,
         [(Year = 2012, round = 6, circuitid = circuitid, name = "Monaco Grand Prix", date = Date(2012, 5, 20))]))
     ok &= refusal_case("a primary key set", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6)];
@@ -441,4 +449,100 @@ function preallocated_keys_refusal_step(circuitid::Int)::Bool
     catch e
         failed("bulk_refusal", e); return false
     end
+end
+
+# ── The writes applications use most (#1694, #1599 layer 7) ──────────────────────────────────────────────────────────
+
+# The column table a `DataFrame` hands a bulk writer, as a `NamedTuple` of vectors.
+const RaceRoundRow = NamedTuple{(:year, :round, :name), Tuple{Int64, Int64, String}}
+
+# Bulk writes from a column table (#1694, #1599 layer 7): `bulk_insert` of two races whose columns are named otherwise
+# than the fields (`columns = ["yr" => "year", "rnd" => "round", …]`), then `bulk_update` of their rounds matched on
+# `year` under two `filters=` pairs (`"circuitid" => …` and `"name" => …`), each checked by a typed read; the step deletes
+# the two races. Exit code 47 when a write raises, a read does not show it, or the delete does not remove the rows.
+function bulk_table_step(circuitid::Int)::Bool
+    ok = false
+    try
+        table = (yr = [2040, 2041], rnd = [6, 7], cid = [circuitid, circuitid], nm = ["Monaco Grand Prix", "Monaco Grand Prix"],
+                 dt = [Date(2040, 5, 27), Date(2041, 5, 26)])
+        PormG.bulk_insert(M.Race.objects, table;
+                          columns = ["yr" => "year", "rnd" => "round", "cid" => "circuitid", "nm" => "name", "dt" => "date"])
+        inserted = M.Race.objects.filter("year__@in" => [2040, 2041]).order_by("year").values("year", "round", "name").list(RaceRoundRow)
+        updates = (year = [2040, 2041], round = [16, 17])
+        r = PormG.bulk_update(M.Race.objects, updates; columns = ["round"], match_on = ["year"],
+                              filters = ["circuitid" => circuitid, "name" => "Monaco Grand Prix"])::NamedTuple{(:count, :rows), Tuple{Int, Nothing}}
+        updated = M.Race.objects.filter("year__@in" => [2040, 2041]).order_by("year").values("year", "round", "name").list(RaceRoundRow)
+        removed = first(M.Race.objects.filter("year__@in" => [2040, 2041]).delete()::Tuple{Int, Dict{String, Integer}})
+        shown(rows) = join([string(x.year, " round ", x.round) for x in rows], ", ")
+        say("bulk_table", string("columns= pairs: ", length(inserted), " rows: ", shown(inserted), "; two filters= pairs: ",
+                                 r.count, " rows: ", shown(updated), "; removed ", removed))
+        ok = shown(inserted) == "2040 round 6, 2041 round 7" && r.count == 2 && shown(updated) == "2040 round 16, 2041 round 17" &&
+             removed == 2
+    catch e
+        failed("bulk_table", e)
+    finally
+        if !ok   # neither race is left behind (`transaction_step`'s reason)
+            try
+                M.Race.objects.filter("year__@in" => [2040, 2041]).delete()
+            catch e
+                failed("bulk_table", e)
+            end
+        end
+    end
+    return ok
+end
+
+const SeasonRow = NamedTuple{(:year, :previousid), Tuple{Int64, Union{Nothing, Int64}}}
+const SeasonIdRow = NamedTuple{(:seasonid,), Tuple{Int64}}
+
+# Whether `e` is the `ProtectedError` a delete raises for `field` under `rule`, read at its type.
+protected_by(@nospecialize(e), field::String, rule::String)::Bool =
+    e isa PormG.ProtectedError && occursin(field, (e::PormG.ProtectedError).msg) && occursin(rule, (e::PormG.ProtectedError).msg)
+
+# The delete rules a schema's keys declare most beyond `CASCADE` (#1694, #1599 layer 7): deleting the seeded Monaco race,
+# which has a result (`PROTECT`), and the result's driver (`RESTRICT`) is refused with `ProtectedError` before any row
+# is deleted, and both stay; deleting a season clears the next season's reference to it (`SET_NULL` on its own table).
+# The step deletes the seasons it made. Exit code 49 when a delete is not refused, a seeded row is gone, or the reference
+# is not cleared.
+function delete_rules_step()::Bool
+    ok = false
+    try
+        protect = try
+            M.Race.objects.filter("year" => 2008, "round" => 6).delete()
+            "not refused"
+        catch e
+            protected_by(e, "result.raceid", "PROTECT") || rethrow()
+            "refused with ProtectedError (result.raceid)"
+        end
+        restrict = try
+            M.Driver.objects.filter("surname" => "Piquet").delete()
+            "not refused"
+        catch e
+            protected_by(e, "result.driverid", "RESTRICT") || rethrow()
+            "refused with ProtectedError (result.driverid)"
+        end
+        kept = string(M.Race.objects.filter("year" => 2008, "round" => 6).count()::Int, " race, ",
+                      M.Driver.objects.filter("surname" => "Piquet").count()::Int, " driver, ",
+                      M.Result.objects.count()::Int, " result")
+        M.Season.objects.create("year" => 2030)
+        first_season = M.Season.objects.filter("year" => 2030).values("seasonid").list(SeasonIdRow)[1].seasonid
+        M.Season.objects.create("year" => 2031, "previousid" => first_season)
+        deleted = first(M.Season.objects.filter("year" => 2030).delete()::Tuple{Int, Dict{String, Integer}})
+        after = M.Season.objects.filter("year" => 2031).values("year", "previousid").list(SeasonRow)
+        previous = isempty(after) ? "missing" : after[1].previousid === nothing ? "none" : string(after[1].previousid)
+        say("delete_rules", string("PROTECT: ", protect, "; RESTRICT: ", restrict, "; kept ", kept))
+        say("delete_rules", string("SET_NULL: deleted ", deleted, ", 2031 previous ", previous))
+        ok = startswith(protect, "refused") && startswith(restrict, "refused") && kept == "1 race, 1 driver, 1 result" &&
+             deleted == 1 && previous == "none"
+    catch e
+        failed("delete_rules", e)
+    finally
+        try   # the seasons the step made, on every path (the 2031 season no longer references 2030 once it is deleted)
+            M.Season.objects.filter("year__@in" => [2030, 2031], "previousid__@isnull" => false).update("previousid" => nothing)
+            M.Season.objects.filter("year__@in" => [2030, 2031]).delete()
+        catch e
+            failed("delete_rules", e); ok = false
+        end
+    end
+    return ok
 end

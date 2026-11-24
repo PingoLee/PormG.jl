@@ -118,8 +118,17 @@ else is untested in a trimmed binary, even where it compiles.
 - **`bulk_update`** from a `Vector` of `NamedTuple`s with `columns=` and one `match_on=` key, with a
   constant `filters=` predicate (`filters = ["year" => 2010]`) and with two `match_on=` keys, and
   **`update_or_create`** and **`get_or_create`**, on the three drivers (#1694).
-- **A delete through `SET_DEFAULT`** (the child's key set back to its `default`) and a **self-referential
-  `CASCADE`** (a chain of rows of one table deleted level by level, #1377), on the three drivers (#1694).
+- **Bulk writes from a column table** (#1694), on the three drivers: `bulk_insert` from a `NamedTuple` of vectors (the
+  shape a `DataFrame` hands a bulk writer) whose columns are named otherwise than the fields, through `columns =
+  ["yr" => "year", …]`, and `bulk_update` from one, matched on a field under two `filters=` pairs whose values have
+  different types (`filters = ["circuitid" => 1, "name" => "Monaco Grand Prix"]`).
+- **A delete through `SET_DEFAULT`** (the child's key set back to its `default`), a **self-referential
+  `CASCADE`** (a chain of rows of one table deleted level by level, #1377) and a **self-referential `SET_NULL`**, on the
+  three drivers (#1694).
+- **A delete refused by `PROTECT` or `RESTRICT`** (#1694), on the three drivers: `ProtectedError` naming the referencing
+  model and field, before any row is deleted.
+- **`create` on PostgreSQL whose `INSERT … RETURNING` returns no row** (a trigger or rule skipped it), through
+  Postgres.jl: the `StatementError` the JIT raises (#1694).
 - **The bulk writers' refusals** before any SQL, each the error type and text the JIT raises: a query or a
   value that is no table, ragged or empty columns, a `columns=` of the wrong type or mapping a field twice, a
   column in another case, a primary key set, a `match_on=` pair or unknown field, a per-row key or a

@@ -30,6 +30,13 @@ function boot!(server::TrimServer)
     return nothing
 end
 
+"""Register `key` on the same server with writes off (`change_data = false`, the default): a second, read-only
+connection beside `KEY` (`keys_step`, `../tools/connections.jl`, #1599 layer 1)."""
+function register_readonly!(server::TrimServer, key::String)
+    PormG.Configuration.register_connection(key, trim_url(server, "mysql"); adapter = "MySQL", env = "prod", pool_size = 1)
+    return nothing
+end
+
 # The struct of ../main.jl: `list(show_query = :struct)` writes the same fields on MySQL (#1632).
 struct RaceRow
     raceid::Int64     # IDField
@@ -117,6 +124,8 @@ function (@main)(args::Vector{String})::Cint
         failed("boot", e); return Cint(1)
     end
     query_step() || return Cint(3)
+    # A second, read-only key beside the entry's own, registered in code (#1599 layer 1, `../tools/connections.jl`).
+    keys_step(key -> register_readonly!(server, key)) || return Cint(33)
     # The comparison filters, `order_by`, the other lookups and the expression comparisons (#1599 layer 5, `../tools/reads.jl`), on the two seeded races.
     compare_step() || return Cint(10)
     order_step() || return Cint(11)
@@ -151,6 +160,8 @@ function (@main)(args::Vector{String})::Cint
     bulk_conflict_step(circuitid) || return Cint(31)        # bulk_insert's on_conflict= (`../tools/writes.jl`, #1694)
     preallocated_keys_refusal_step(circuitid) || return Cint(32)  # MySQL cannot reserve an AUTO_INCREMENT id: the refusal
     transaction_step(circuitid, KEY) || return Cint(24)  # a user transaction (`../tools/connections.jl`, #1599 layer 2)
+    nested_transaction_step(circuitid, KEY) || return Cint(35)  # a transaction inside one (`../tools/connections.jl`)
+    spawned_read_step(2008) || return Cint(36)  # a read on spawned tasks (`../tools/connections.jl`, #1599 layer 2)
     say("elapsed_ms", string(div(time_ns() - t0, 1_000_000)))
     # A statement the server refuses reaches the caller as its own error, after the read, the write and their timing (#1599, ../tools/failing.jl).
     pool = PormG.Configuration.get_settings(KEY).connections::PormG.ConnectionPool.MySQLConnectionPool

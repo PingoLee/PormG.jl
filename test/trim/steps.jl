@@ -66,6 +66,42 @@ function boot_step(dir::String, idle_timeout::Int = 0)::Bool
     end
 end
 
+# The Monaco races through the models `TrimF1.Imported` loaded with `@import_models` (`src/TrimF1.jl`).
+imported_monaco()::Vector{RaceRow} =
+    TrimF1.Imported.models.Race.objects.filter("circuitid__country" => "Monaco").order_by("year").list(RaceRow)
+
+# The models an application loads with `@import_models` in its module body, after reading `connection.yml` there
+# (#1599 layer 3, `TrimF1.Imported`). The binary reads no YAML, so the step registers the key those models recorded
+# (`db`) in code, on the same file, then reads through them with no `set_models` call: each model is still bound to
+# `db`, from the precompile. Then the same read through `Base.invokelatest`, the call an application makes when it
+# loads models at run time; here they were loaded when the package was precompiled, so a plain call reads the same.
+# The step closes the key's pool. Run the binary from the repository root, as CI does: `register_connection` refuses a
+# key that names a folder in the working directory, and `test/trim/` holds `db/`. Exit code 34 when the registration or
+# a read raises, or a read returns other rows.
+function imported_step(dir::String)::Bool
+    ok = false
+    try
+        PormG.Configuration.register_connection(TrimF1.Imported.KEY, joinpath(dir, "f1.sqlite");
+                                                adapter = "SQLite", env = "prod", pool_size = 1)
+        direct = imported_monaco()
+        latest = Base.invokelatest(imported_monaco)::Vector{RaceRow}
+        say("imported", string("@import_models ", length(direct), " rows: ",
+                               join([string(r.year, " ", r.name) for r in direct], ", "), "; invokelatest ",
+                               length(latest), " rows"))
+        ok = length(direct) == 1 && direct[1].year == 2008 && length(latest) == 1
+    catch e
+        failed("imported", e)
+    finally
+        try
+            # On every path, so the step leaves no pool open; not when the registration itself failed.
+            haskey(PormG.config, TrimF1.Imported.KEY) && PormG.Configuration.close_pool!(TrimF1.Imported.KEY)
+        catch e
+            failed("imported", e); ok = false
+        end
+    end
+    return ok
+end
+
 # Two creates PormG refuses before any SQL (#1599 layer 7, #1694): a date the date validator refuses,
 # and a `Bool` for a text column, which passes validation and is refused by the format step. Each prints
 # the refusal's type and message, so the run shows the write's error paths work in a trimmed image: a

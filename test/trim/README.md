@@ -4,7 +4,7 @@ A minimal F1 application built with `juliac --trim`, the measuring stick for #15
 built as a trimmed binary). It is #1616's first checkbox.
 
 What it does (`main.jl`): boot with the connection built in code (`register_connection` and
-`Models.set_models(models; key)`, #1606 — no `connection.yml` is read), two creates PormG refuses
+`Models.set_models(models; key)`, #1606 — no `connection.yml` is read at run time), two creates PormG refuses
 before any SQL (a date string that is not a calendar date, and a `Bool` for a text column; each prints
 the refusal's type and message), the read steps of `tools/reads.jl` (a comparison filter on a date and on an
 integer, `date__@gte` and `round__@lt`, an `order_by` each way, and the other common lookups: `__@gt`, `__@lte`,
@@ -175,7 +175,8 @@ does not clear the driver's debut race, reports other counts, or changes the row
 user transactions do not commit or roll back as their typed reads expect, and 25 when `close_all!()` leaves a
 connection held or its driver handle open (`main.jl` and the server variants; see "Transactions and closing the
 pools"). 27 to 30 are the write residue's steps (see "The write residue"). The Postgres.jl variant also exits
-23 when one of its connection shapes fails.
+23 when one of its connection shapes fails. 33 to 36 are the steps of #1599's layers 1 to 3: a second key, models
+loaded with `@import_models`, a nested transaction and a read on a spawned task (see "How an application starts").
 
 **The `tasks` run** (`build/read <run dir> tasks`) adds two steps after the read, for the pool's
 long-lived tasks: a task body a trimmed image never compiled dies silently, so only running it shows
@@ -244,6 +245,36 @@ what it wrote (`bulk_conflict` also moves the race table's sequence past its exp
   whose key MySQL cannot draw before the INSERT, refused with the `BackendCapabilityError` the JIT raises. A
   `returning=` that executes does not run trimmed on any engine yet (`docs/src/static_compilation.md`).
 
+## How an application starts
+
+The steps of #1599 layers 1 to 3, the boot an application has under the JIT, as a trimmed binary can run it:
+
+- `imported` (exit code 34, `main.jl` only, `steps.jl`, run from the repository root: `register_connection` refuses a
+  key that names a folder in the working directory, and `test/trim/` holds `db/`): the models of `TrimF1.Imported` (`src/TrimF1.jl`), which
+  reads `db/connection.yml` with `load_many` and loads `db/models.jl` with `@import_models`, both in its module
+  body, as most applications do. That body runs when the package is precompiled, under the JIT, and each model keeps
+  the key its folder had (`db`). The binary reads no YAML: the step registers `db` in code on the run directory's
+  file and reads the Monaco races through those models with no `set_models` call, then again through
+  `Base.invokelatest`, and closes the key's pool. The server variants build no package, so they do not run it.
+- `keys` (exit code 33, every write entry, `tools/connections.jl`): a second key, `f1_ro`, on the same database,
+  registered with writes off. The Monaco races read through either key are the same race, a `create` through
+  `f1_ro` is refused with `WritesDisabledError` before any SQL, and the key's pool is closed.
+- `nested_transaction` (exit code 35, every write entry, `tools/connections.jl`, after `transaction`): a
+  `run_in_transaction` block that calls a function opening its own block on the same key (a savepoint), both
+  races committed; then one whose inner block raises `TrimRollback`, caught by the outer block, so only the inner
+  race is rolled back. Typed reads check each, and the step deletes the races it kept.
+- `spawned` (exit code 36, every write entry, `tools/connections.jl`): the two 2008 races read on a task
+  `Threads.@spawn` starts, then on one `@async` starts. The task's closure captures the year, an argument, since a
+  task over a captured constant is never compiled (#1794). With `JULIA_NUM_THREADS=2` the `@spawn` read runs on
+  another thread; the CI jobs run with one.
+
+```
+step	imported	@import_models 1 rows: 2008 Monaco Grand Prix; invokelatest 1 rows
+step	keys	1 rows on f1, 1 on f1_ro; a create on f1_ro refused with WritesDisabledError
+step	nested_transaction	committed 2 seen inside, 2 after; inner rolled back on TrimRollback, kept 2020; removed 3
+step	spawned	@spawn 2 rows: Monaco Grand Prix, Brazilian Grand Prix; @async 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+```
+
 ## Transactions and closing the pools
 
 Every write entry (`main.jl` and the two server variants) runs `transaction` (exit code 24,
@@ -262,6 +293,8 @@ with `prep.jl`, and runs the binary under the same 300 s timeout. It fails unles
 and prints each of these lines, as its JIT control prints them:
 
 ```
+step	imported	@import_models 1 rows: 2008 Monaco Grand Prix; invokelatest 1 rows
+step	keys	1 rows on f1, 1 on f1_ro; a create on f1_ro refused with WritesDisabledError
 step	refused	InvalidValueError: …        (twice: the invalid date, then the Bool name)
 step	compare	date__@gte 1 rows: Brazilian Grand Prix
 step	compare	round__@lt 1 rows: Monaco Grand Prix
@@ -321,6 +354,8 @@ step	cascade	3 rows; pitstop 2, race 1
 step	cascade	0 pit stops left; 1 driver, debut none
 step	cascade	seeded 1 pit stop, 1 driver; kept
 step	transaction	committed 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1
+step	nested_transaction	committed 2 seen inside, 2 after; inner rolled back on TrimRollback, kept 2020; removed 3
+step	spawned	@spawn 2 rows: Monaco Grand Prix, Brazilian Grand Prix; @async 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	close_all	1 open before, 0 after; the handle closed
 ```
 
@@ -394,6 +429,7 @@ step	server	127.0.0.1:3306/pormg_trim
 step	boot	ok
 step	query	1 rows
 step	row	1 2008 Monaco Grand Prix 2008-05-25
+step	keys	1 rows on f1, 1 on f1_ro; a create on f1_ro refused with WritesDisabledError
 step	compare	date__@gte 1 rows: Brazilian Grand Prix
 step	compare	round__@lt 1 rows: Monaco Grand Prix
 step	order	date: Monaco Grand Prix, Brazilian Grand Prix
@@ -454,12 +490,14 @@ step	cascade	3 rows; pitstop 2, race 1
 step	cascade	0 pit stops left; 1 driver, debut none
 step	cascade	seeded 1 pit stop, 1 driver; kept
 step	transaction	committed 1 seen inside, 1 after; rolled back on TrimRollback, 0 left; removed 1
+step	nested_transaction	committed 2 seen inside, 2 after; inner rolled back on TrimRollback, kept 2020; removed 3
+step	spawned	@spawn 2 rows: Monaco Grand Prix, Brazilian Grand Prix; @async 2 rows: Monaco Grand Prix, Brazilian Grand Prix
 step	fail	threw StatementError                  (the refused statement, `tools/failing.jl`)
 step	close_all	1 open before, 0 after; the handle closed
 ```
 
 The Postgres.jl variant prints its `shape` lines (`password, sslmode: 1 rows`, `no password: 1 rows`,
-`no password, sslmode: 1 rows`) after `transaction`.
+`no password, sslmode: 1 rows`) after `spawned`.
 
 The untyped lines name each cell's type, which is the engine's own: MySQL and PostgreSQL read `year` and
 `round` as `Int32` where SQLite reads `Int64`. The ids are a fresh database's with the binary run straight after `prep.jl`. `prep.jl` empties the tables

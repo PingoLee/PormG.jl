@@ -90,6 +90,18 @@ else is untested in a trimmed binary, even where it compiles.
 - **A user transaction** (#1599 layer 2), on the three drivers: a `run_in_transaction(key) do … end`
   block that commits, and an `atomic(key) do … end` block that rolls back when the block raises its own
   error, which reaches the caller unchanged. A typed read after each shows the outcome.
+- **A transaction inside a transaction** (#1599 layer 2), on the three drivers: a function that opens its own
+  `run_in_transaction(key)` block, called from inside another block on the same key, becomes a savepoint. When it
+  raises, only its savepoint rolls back, and the outer block, catching the error, commits.
+- **A read on a spawned task** (#1599 layer 2), on the three drivers: a typed read on a task `Threads.@spawn`
+  starts and on one `@async` starts. The workflow runs each binary with one thread. A trimmed binary takes its thread
+  count from `JULIA_NUM_THREADS`, and run by hand with two threads, the three binaries read the same rows, `@spawn`
+  running the read on another thread. The task's closure must capture a value (an argument, not a literal), or the
+  build folds it and compiles no body for the task.
+- **Two connection keys on one database** (#1599 layer 1), on the three drivers: the second registered with writes
+  off, read through with `.db("f1_ro")`, and a create through it refused with `WritesDisabledError`, as under the JIT.
+- **Models loaded with `@import_models` in a package's module body** (#1599 layer 3), on SQLite. See
+  [Migrating an application boot](#Migrating-an-application-boot).
 - **`bulk_update`** from a `Vector` of `NamedTuple`s with `columns=` and one `match_on=` key, with a
   constant `filters=` predicate (`filters = ["year" => 2010]`) and with two `match_on=` keys, and
   **`update_or_create`** and **`get_or_create`**, on the three drivers (#1694).
@@ -140,8 +152,8 @@ tasks. The SQLite refused statement is checked by hand.
   (`postgres_driver = "Postgres"`) for PostgreSQL.
 - **Untyped reads beyond `.list()` and `list(:dict)`**: `list(:json)`, a raw `fetch` or `execute` and
   `DataFrame(query)` have not run in a trimmed binary.
-- **`connection.yml`.** A trimmed binary cannot parse YAML. Register the connection in code, at run time
-  (below).
+- **`connection.yml`.** A trimmed binary cannot parse YAML. Register each connection in code, at run time
+  ([Migrating an application boot](#Migrating-an-application-boot)).
 - **Migrations.** The binary does not run `migrate`. Migrate the database from a JIT process.
 - **Log records.** A trimmed binary prints no `@error` records, so do not rely on PormG's log messages
   (its warnings included) reaching your output. Print what you need yourself, to `Core.stdout`, as the
@@ -244,6 +256,77 @@ end
 ([Writing `T`](read/index.md#Writing-T:-show_query-:struct)). PormG returns it as text and never
 evaluates it in your module: paste it and review it. In a trimmed binary, keep to the field types listed
 under [What works today](#What-works-today) until the others have run trimmed.
+
+## Migrating an application boot
+
+Most PormG applications read their connections from `connection.yml` and load their models with `@import_models`.
+For a trimmed binary, the first has to change; the second can stay, in a package.
+
+**`connection.yml` cannot be read.** YAML.jl keeps the input's encoding in a field of an abstract type, so the
+first token of every parse is a call a trimmed image has no code for
+([JuliaData/YAML.jl#260](https://github.com/JuliaData/YAML.jl/issues/260)), and the parser makes more such calls
+after it. A trimmed binary that parses YAML, whatever the file holds, gets a `Core.MissingCodeError`, after the
+runtime prints an `Internal error` about the call. PormG cannot tell that it runs in a trimmed binary
+(`Base.JLOptions().trim` reads `0` there), so it does not refuse `load` before the parse. Register each connection
+in code instead, from `main`, with its values from the environment or the arguments:
+
+```julia
+# One call per key the application's `connection.yml` folders held. The environment you passed to
+# `load(…; env)` becomes `env`, and each `config:` flag a keyword.
+function boot!(env::String)
+    PormG.register_connection("f1", ENV["F1_DB_URL"]; adapter = "PostgreSQL", postgres_driver = "Postgres",
+                              env = env, change_data = true)
+    # A read-only connection: writes stay off, since `change_data` is `false` unless you pass it.
+    PormG.register_connection("f1_ro", ENV["F1_DB_RO_URL"]; adapter = "PostgreSQL", postgres_driver = "Postgres",
+                              env = env)
+end
+```
+
+A query picks a key with `.db("f1_ro")`, and a create through a key with writes off is refused with
+`WritesDisabledError`, as under the JIT. `register_connection` refuses a key that names a folder in the working
+directory, which is reserved for `load`: an application whose keys were the names of its `connection.yml` folders
+(`db`, …) and that runs from its own root registers other keys and binds its models to them (below), or runs from
+another directory.
+
+**`@import_models` in a package's module body works.** The body runs when the package is precompiled, under the
+JIT, so the `load` before `@import_models` reads `connection.yml` then, and each model is bound to the key its
+folder had. The package image keeps the models and that binding, and none of the configuration. At run time,
+either register that key in code before the first query, and the models use it, or bind them to a key of your
+choice, which also works when that key would be a folder name:
+
+```julia
+module F1App
+using PormG, Postgres
+# Runs when the package is precompiled, under the JIT: reads db/connection.yml and binds the models to "db".
+PormG.Configuration.load_many(["db"]; root = normpath(joinpath(@__DIR__, "..")), env = "dev")
+PormG.@import_models "../db/models.jl" models
+end
+```
+
+```julia
+function (@main)(args::Vector{String})::Cint
+    url = ENV["F1_DB_URL"]
+    # Either the key the models were bound to …
+    PormG.register_connection("db", url; adapter = "PostgreSQL", postgres_driver = "Postgres", env = "prod")
+    # … or a key of your own, and the models bound to it:
+    # PormG.register_connection("f1", url; adapter = "PostgreSQL", postgres_driver = "Postgres", env = "prod")
+    # PormG.Models.set_models(F1App.models.MODEL_SET; key = "f1")
+    # … the reads, then close_all!(), as above
+end
+```
+
+The fixture runs the first form (`TrimF1.Imported` and its `imported` step); `set_models(…; key)` is the boot of
+every fixture entry. Four habits of a JIT application do not carry over:
+
+- **A path computed in a package** from `@__DIR__` names the folder `juliac` copied the package to while it built,
+  which is gone when the binary runs. Pass paths in at run time, from the arguments or the environment.
+- **An `__init__` that loads `connection.yml`** fails in a trimmed binary, on that path or on the YAML parse.
+  Move the connection setup into a function that `main` calls, and call the same function from the JIT entry.
+- **The entry file's top level is not a module body:** there, `load` is refused while the image is written
+  (above), so `@import_models` and the `load` before it belong in a package. A trimmed binary cannot define a
+  module at run time, so models are never loaded from `main`.
+- **`Base.invokelatest` around a read** is not needed: the models exist when the binary starts, so a plain call
+  reads the same. It has run trimmed, and reads the same rows.
 
 ## MySQL
 

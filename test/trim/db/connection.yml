@@ -1,0 +1,11 @@
+# Read once, while TrimF1 is precompiled, by the app-shaped module `TrimF1.Imported` (../src/TrimF1.jl, #1599 layer 1):
+# an application's connection.yml, with no credentials (SQLite). A trimmed binary cannot parse YAML, so at run time the
+# fixture registers this key ("db", the folder's name) in code; the path below is not used then.
+default_env: prod
+
+prod:
+  adapter: SQLite
+  database: f1.sqlite
+  config:
+    change_db: false
+    change_data: false

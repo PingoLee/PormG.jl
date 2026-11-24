@@ -7394,6 +7394,24 @@ end
     @test widened(QB.Q, 81) == false
   end
 
+  # What: the refusal `bulk_update` raises when every field the table brings is a key, so its SET list is empty
+  #   (`_bulk_update_nothing_to_set`, #1841).
+  # Expected: it exists, returns a `QueryBuildError`, and builds it with no dynamic call; `_bulk_update_frame` still makes
+  #   none (its own pin above).
+  # Why: the refusal runs in the trimmed write binaries (a `bulk_refusal` line); a dynamic call in it would raise
+  #   `MissingCodeError` in place of the refusal there.
+  @testset "the empty-SET refusal is built at its types (#1841)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_bulk_update_nothing_to_set)
+    if isdefined(QB, :_bulk_update_nothing_to_set)
+      tt = (Vector{String}, Vector{Union{String, Pair{String, String}}}, Vector{String}, Vector{Pair{String, Any}}, Vector{String})
+      @test _dynamic_calls(QB._bulk_update_nothing_to_set, tt) == String[]
+      @test only(Base.return_types(QB._bulk_update_nothing_to_set, tt)) === PormG.QueryBuildError
+      bu_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+      @test occursin("isempty(safe_set_parts) &&\n    throw(_bulk_update_nothing_to_set(", bu_src)
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

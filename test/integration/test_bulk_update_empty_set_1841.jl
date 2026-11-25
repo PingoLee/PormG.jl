@@ -5,7 +5,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 # #1841: a bulk_update whose every field is a key leaves nothing for SET.
 # Tests: the shapes that left the SET list empty — filters= keys alone, match_on keys alone (the primary key, another
-#   field), the two together, the primary-key fallback, and a table whose every column is the primary key — on this
+#   field), the two together, the primary-key fallback, and rows whose every column is the primary key — on this
 #   run's engine (PostgreSQL under either driver, SQLite, MySQL).
 # Expected: each raises `QueryBuildError` naming the fields and where their keys came from, before any SQL; the race
 #   row they name is unchanged. A `filters=` lookup on the field (`year__@in`) still renders a SET of that field.
@@ -44,13 +44,13 @@ end
         ("the primary-key fallback",
          (; kw...) -> PormG.bulk_update(M.Race.objects, (raceid = [rid],); columns = ["raceid"], kw...),
          "bulk_update: every field in columns= (raceid) is $(pk); $(tail)"),
-        ("every column of the table a key, columns= not given",
+        ("every column the rows bring a key, columns= not given",
          (; kw...) -> PormG.bulk_update(M.Status.objects, (statusid = [sid],); kw...),
-         "bulk_update: every column of the table (statusid) is $(pk); $(tail)"),
+         "bulk_update: every column the rows bring (statusid) is $(pk); $(tail)"),
     )
     for (label, call, expected) in cases
         @test (label, refusal(() -> call())) == (label, expected)
-        # The inspection modes refuse the same way: the statement is never built.
+        # The inspection modes refuse the same way: the statement is never returned or sent.
         @test (label, refusal(() -> call(show_query = :sql))) == (label, expected)
     end
     @test snapshot() == before

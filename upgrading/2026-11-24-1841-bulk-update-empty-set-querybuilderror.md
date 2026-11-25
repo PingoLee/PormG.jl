@@ -9,10 +9,11 @@
 ### What changed
 
 `bulk_update` sets the fields of the table that are not keys: a `match_on=` key, the primary key it matches on when
-`match_on=` is not given, and a `filters=` key are matched, never set. When every field the table brings is a key,
+`match_on=` is not given, and a `filters=` key are matched, never set. When every field the rows bring is a key,
 nothing is left to set. PormG still sent the statement, with nothing after `SET`, and each engine rejected it as a
-syntax error once it was sent. The call is now refused before any SQL, with a `QueryBuildError` that names the fields
-and where their keys came from:
+syntax error once it was sent; under `show_query = :sql`, `:dict` or `:params` the call returned that statement. The
+call is now refused before any statement is sent or returned, with a `QueryBuildError` that names the fields and
+where their keys came from:
 
 | the call | before | now |
 |---|---|---|
@@ -20,7 +21,8 @@ and where their keys came from:
 | `bulk_update(…; columns = ["year"], filters = ["year" => 2008])` (no `match_on=`) | as above | the same `QueryBuildError` |
 | `bulk_update(…; columns = ["raceid"], match_on = ["raceid"])` | as above | `QueryBuildError`: `… every field in columns= (raceid) is a key in match_on=; …` |
 | `bulk_update(…; columns = ["raceid"])` (no `match_on=`) | as above | `QueryBuildError`: `… every field in columns= (raceid) is the primary key, which bulk_update matches on when match_on= is not given; …` |
-| `bulk_update(M.Status.objects, rows)`, a table whose every column is the primary key, `columns=` not given | as above | `QueryBuildError`: `… every column of the table (statusid) is the primary key, …` |
+| `bulk_update(M.Status.objects, (statusid = [1],))`, rows whose every column is the primary key, `columns=` not given | as above | `QueryBuildError`: `… every column the rows bring (statusid) is the primary key, …` |
+| any of the above with `show_query = :sql`, `:dict` or `:params` | returned the statement, with nothing after `SET` | the same `QueryBuildError` |
 
 The `StatementError` each engine raised, after the statement was sent:
 
@@ -31,8 +33,9 @@ The `StatementError` each engine raised, after the statement was sent:
 | MySQL | `the MySQL statement could not be executed (SQLSTATE 42000)` (a syntax error at the statement's prepare) |
 
 No row was ever changed by such a call, before or now. A field the model fills itself on every update
-(`auto_now = true`) is always set, so a model with one never reaches this refusal. A `filters=` lookup on a field
-(`"year__@in" => […]`) is a predicate, not a key, and leaves that field in `SET` as before.
+(`auto_now = true`) is set whenever the rows do not bring it, so such a call keeps a `SET` list; an `auto_now` field
+that is itself a key is matched, never set, like any key. A `filters=` lookup on a field (`"year__@in" => […]`) is a
+predicate, not a key, and leaves that field in `SET` as before.
 
 The refusal comes where the `SET` list is known, after the checks that come before it (the arguments, the table, the
 keys and `filters=`), which raise what they raised. A call that left `SET` empty and also had a fault checked later
@@ -41,8 +44,8 @@ keys and `filters=`), which raise what they raised. A call that left `SET` empty
 
 ### How to find the calls to migrate
 
-Look for a `catch` that expects a `StatementError` around `bulk_update`, and for `bulk_update` calls whose `columns=`
-are all keys:
+Look for a `catch` that expects a `StatementError` around `bulk_update`, for `bulk_update` calls whose `columns=` are
+all keys, and for a dry run (`show_query = :sql`) of such a call that reads the returned statement:
 
 ```
 grep -rn "bulk_update" --include=*.jl .

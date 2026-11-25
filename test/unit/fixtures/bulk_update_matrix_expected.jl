@@ -164,11 +164,11 @@ const _BUMX_EXPECTED = Dict{Tuple{String,Symbol},Any}(
   ("empty SET: match_on and filters= together", :mysql) =>
     (stage = :raised, error = "QueryBuildError", message = "bulk_update: every field in columns= (year) is a key in filters=; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
   ("empty SET: columns omitted, every column a key", :postgres) =>
-    (stage = :raised, error = "QueryBuildError", message = "bulk_update: every column of the table (statusid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
+    (stage = :raised, error = "QueryBuildError", message = "bulk_update: every column the rows bring (statusid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
   ("empty SET: columns omitted, every column a key", :sqlite) =>
-    (stage = :raised, error = "QueryBuildError", message = "bulk_update: every column of the table (statusid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
+    (stage = :raised, error = "QueryBuildError", message = "bulk_update: every column the rows bring (statusid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
   ("empty SET: columns omitted, every column a key", :mysql) =>
-    (stage = :raised, error = "QueryBuildError", message = "bulk_update: every column of the table (statusid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
+    (stage = :raised, error = "QueryBuildError", message = "bulk_update: every column the rows bring (statusid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
   ("empty SET: primary-key fallback, columns raceid", :postgres) =>
     (stage = :raised, error = "QueryBuildError", message = "bulk_update: every field in columns= (raceid) is the primary key, which bulk_update matches on when match_on= is not given; nothing is left to update. A key is matched, never set: name in columns= at least one field that is not a key."),
   ("empty SET: primary-key fallback, columns raceid", :sqlite) =>

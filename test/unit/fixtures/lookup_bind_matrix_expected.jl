@@ -283,4 +283,28 @@ const _LBMX_EXPECTED = Dict{Tuple{String,Symbol},Any}(
     (stage = :raised, error = "InvalidValueError", message = "Error in filter, field `pit_ip` (INET): The @prefixlen lookup takes a whole number from 0 to 128"),
   ("47 pit_ip__@prefixlen => BigInt 1180591620717411303424", :mysql) =>
     (stage = :raised, error = "InvalidValueError", message = "Error in filter, field `pit_ip` (INET): The @prefixlen lookup takes a whole number from 0 to 128"),
+  ("48 payload__@has_any_keys => Vector{Int64} Int64[]", :postgres) =>
+    (stage = :raised, error = "MethodError", message = "MethodError: typeinfo_implicit(::Type{Union{}}) is ambiguous."),
+  ("48 payload__@has_any_keys => Vector{Int64} Int64[]", :sqlite) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_any_keys lookup (JSONB ?|) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL)."),
+  ("48 payload__@has_any_keys => Vector{Int64} Int64[]", :mysql) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_any_keys lookup (JSONB ?|) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which MySQL does not support (supported on PostgreSQL)."),
+  ("49 payload__@has_any_keys => Vector{Any} Any[]", :postgres) =>
+    (stage = :ok, result = "Pair{String}[\"bucketing\" => :numbered, \"dialect\" => :postgresql, \"model\" => \"lbmx_telemetry\", \"operation\" => :select, \"parameter_buckets\" => Any[], \"parameter_count\" => 1, \"parameters\" => [String[]], \"sql_text\" => \"SELECT\\n    \\\"Tb\\\".\\\"id\\\" as \\\"id\\\"\\nFROM \\\"lbmx_telemetry\\\" as \\\"Tb\\\"\\nWHERE \\\"Tb\\\".\\\"payload\\\" ?| \\\$1::text[]\\n\"]"),
+  ("49 payload__@has_any_keys => Vector{Any} Any[]", :sqlite) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_any_keys lookup (JSONB ?|) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL)."),
+  ("49 payload__@has_any_keys => Vector{Any} Any[]", :mysql) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_any_keys lookup (JSONB ?|) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which MySQL does not support (supported on PostgreSQL)."),
+  ("50 payload__@has_any_keys => Vector{String} String[]", :postgres) =>
+    (stage = :ok, result = "Pair{String}[\"bucketing\" => :numbered, \"dialect\" => :postgresql, \"model\" => \"lbmx_telemetry\", \"operation\" => :select, \"parameter_buckets\" => Any[], \"parameter_count\" => 1, \"parameters\" => [String[]], \"sql_text\" => \"SELECT\\n    \\\"Tb\\\".\\\"id\\\" as \\\"id\\\"\\nFROM \\\"lbmx_telemetry\\\" as \\\"Tb\\\"\\nWHERE \\\"Tb\\\".\\\"payload\\\" ?| \\\$1::text[]\\n\"]"),
+  ("50 payload__@has_any_keys => Vector{String} String[]", :sqlite) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_any_keys lookup (JSONB ?|) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL)."),
+  ("50 payload__@has_any_keys => Vector{String} String[]", :mysql) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_any_keys lookup (JSONB ?|) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which MySQL does not support (supported on PostgreSQL)."),
+  ("51 payload__@has_keys => Vector{Float64} Float64[]", :postgres) =>
+    (stage = :raised, error = "MethodError", message = "MethodError: typeinfo_implicit(::Type{Union{}}) is ambiguous."),
+  ("51 payload__@has_keys => Vector{Float64} Float64[]", :sqlite) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_keys lookup (JSONB ?&) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL)."),
+  ("51 payload__@has_keys => Vector{Float64} Float64[]", :mysql) =>
+    (stage = :raised, error = "BackendCapabilityError", message = "The @has_keys lookup (JSONB ?&) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which MySQL does not support (supported on PostgreSQL)."),
 )

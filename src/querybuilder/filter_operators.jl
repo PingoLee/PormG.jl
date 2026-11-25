@@ -178,8 +178,9 @@ end
 @noinline _json_key_text_other(@nospecialize(v))::String = string(v)
 
 # `String.(v)` for `@has_any_keys`/`@has_keys`'s keys (#1599 layer 5), at the vector types a list of keys comes as;
-# any other vector as before (a key that is no string raises what it raised).
-@noinline function _json_key_strings(@nospecialize(v))::Vector{String}
+# any other vector as before (a key that is no string raises what it raised, and an empty one keeps the element type
+# `String.(v)` gives it, `Union{}` for an `Int[]`: no return annotation converts it).
+@noinline function _json_key_strings(@nospecialize(v))
   v isa Vector{String} && return String.(v)
   v isa Vector{Any} && return _json_key_strings_any(v)
   v isa Vector{Symbol} && return String.(v)
@@ -194,7 +195,7 @@ function _json_key_strings_any(v::Vector{Any})::Vector{String}
   return out
 end
 @noinline _json_key_string_other(@nospecialize(x))::String = String(x)
-@noinline _json_key_strings_other(@nospecialize(v))::Vector{String} = String.(v)
+@noinline _json_key_strings_other(@nospecialize(v)) = String.(v)
 
 # #904: render a PostgreSQL network operator (`<<`, `<<=`, `>>`, `>>=`, `&&`, `family()`,
 # `masklen()`). The left-hand side must be a `GenericIPAddressField` or `CIDRField` column — the

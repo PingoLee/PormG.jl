@@ -3319,7 +3319,7 @@ function _bulk_update(objct::SQLObjectHandler, src,
 end
 
 # #1841: the refusal when every field the table brings is a key, so the SET list is empty. It names those fields, as
-# the caller named them (`columns=`'s targets, or every column of the table when `columns=` is not given), and where
+# the caller named them (`columns=`'s targets, or every column the rows bring when `columns=` is not given), and where
 # their keys came from: `match_on=`, the primary key `bulk_update` matches on when `match_on=` is not given, `filters=`.
 @noinline function _bulk_update_nothing_to_set(fields_df::Vector{String},
     columns::Vector{Union{String, Pair{String, String}}}, dynamic_keys::Vector{String},
@@ -3334,7 +3334,7 @@ end
   keys = by_match && by_filter ? (isempty(match_on) ? "is a key, in filters= or $(pk)" : "is a key in match_on= or filters=") :
          by_filter ? "is a key in filters=" :
          isempty(match_on) ? "is $(pk)" : "is a key in match_on="
-  what = isempty(columns) ? "every column of the table" : "every field in columns="
+  what = isempty(columns) ? "every column the rows bring" : "every field in columns="
   return QueryBuildError("bulk_update: $(what) ($(join(named, ", "))) $(keys); nothing is left to update. " *
                          "A key is matched, never set: name in columns= at least one field that is not a key.")
 end

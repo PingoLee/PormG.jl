@@ -126,7 +126,9 @@ end
 _tf_show(st, mode) = _TF_QB._show_query_result(mode, st.sql, st.instruction.connection, st.model_name, :select;
                                                parameters = st.instruction.parameters)
 
-# The comprehension `Q`/`Qor` used before #1838 (#863): the oracle for `_q_terms_of` at every length.
+# The comprehension `Q`/`Qor` used before #1838 (#863): the oracle for `_q_terms_of` at every length. It is one version
+# back: #1838 replaced it with the recursion and the `Any32` loop this change types, and its own equivalence test
+# (`test_app_reads_trim_1599.jl`) holds the comprehension as the oracle too.
 _tf_old_terms(x...) = [isa(v, Pair) ? _TF_QB._check_filter(v) : isa(v, _TF_QB.FilterType) ? _TF_QB._check_filter_node(v) :
                        throw(PormG.FilterError("Invalid argument: a $(typeof(v)); please use a pair (key => value).")) for v in x]
 

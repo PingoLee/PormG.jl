@@ -92,6 +92,11 @@ const _LBMX_CELLS = Pair{String, Any}[
   "pit_ip__@prefixlen" => -1,
   "pit_ip__@prefixlen" => UInt8(24),
   "pit_ip__@prefixlen" => big(2)^70,
+  # Empty key lists: the element type each bound before (`String.(v)`: `Union{}` for an `Int[]`).
+  "payload__@has_any_keys" => Int[],
+  "payload__@has_any_keys" => Any[],
+  "payload__@has_any_keys" => String[],
+  "payload__@has_keys" => Float64[],
 ]
 
 _lbmx_strip(s) = replace(s, r"\e\[[0-9;]*m" => "")

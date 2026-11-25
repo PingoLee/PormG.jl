@@ -2964,7 +2964,9 @@ end
       close(db)
     end
     er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
-    @test occursin("n = _fetch_row_count(settings, sql, instruction.parameters)", er_src)
+    # `exists()` counts through it from its execution body (`_exists_run`, #1839 decision 2), on the statement
+    # `_exists_statement` built.
+    @test occursin("n = _fetch_row_count(settings, st.sql, st.instruction.parameters)", er_src)
 
     # `delete()`'s own transaction lifecycle. Its terminal finalize: the keyword call on the two caught errors (`Any`)
     # had no target, and the trimmed binary raised that `MethodError` in place of the delete's own error.

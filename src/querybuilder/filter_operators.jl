@@ -323,10 +323,32 @@ function _render_array_operator(v::SQLTypeOper, column::String, instruc::SQLInst
     throw(FilterError("The \e[31m@$(v.operator)\e[0m lookup takes a list of elements."))
   formatter = field.formatter::Models.ArrayFormatter
   unbounded = Models.ArrayFormatter(formatter.base, formatter.kind, nothing)
-  literal = _guarded_format(unbounded, values, v.operator, _array_lookup_label(v), field.type)
+  literal = _guarded_array_literal(unbounded, values, _array_lookup_label(v), field.type)
   placeholder = _add_parameter_at(instruc, literal)   # #1599 layer 5: the formatted literal at its type
   return _array_operator_sql(v.operator, instruc.connection, column, placeholder)
 end
+
+# An array lookup's list formatted by its column's `ArrayFormatter`, located on refusal as `_guarded_format` locates one
+# (#1599 layer 5). `_guarded_format` reached the same `formatter(values)` call through the formatter walk
+# (`_format_literal_value` → `Models.apply_formatter`'s `ArrayFormatter` arm) with the list untyped, which a trimmed
+# image had no code for (`_apply_lookup_formatter(::Any, ::Vector{Int64}, ::Bool)`). Here the formatter is concrete and
+# the list is read at the types an array lookup takes; any other list takes the call behind `@noinline`.
+function _guarded_array_literal(formatter::Models.ArrayFormatter, @nospecialize(values), @nospecialize(label),
+                                @nospecialize(type_label))
+  try
+    _array_literal_at(formatter, values)
+  catch e
+    _locate_filter_refusal(e, label, type_label; subject = "field")
+  end
+end
+@noinline function _array_literal_at(f::Models.ArrayFormatter, @nospecialize(values))
+  values isa Vector{Int64} && return f(values)
+  values isa Vector{String} && return f(values)
+  values isa Vector{Float64} && return f(values)
+  values isa Vector{Any} && return f(values)
+  return _array_literal_other(f, values)
+end
+@noinline _array_literal_other(f::Models.ArrayFormatter, @nospecialize(values)) = f(values)
 
 # #31: render the `@search` lookup — `to_tsvector(<config>, col) @@ <tsquery>` — on a text column: a
 # bare one, or one reached through a ForeignKey or a CTE (read after `column` renders, as the array

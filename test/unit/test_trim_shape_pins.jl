@@ -7278,6 +7278,15 @@ end
       @test filter(x -> !occursin("_add_parameter_other", x), _dynamic_calls(QB._add_parameter_at, (IO_, Any, String))) == String[]
       @test filter(x -> !occursin("_network_int_operand_other", x), _dynamic_calls(QB._network_int_operand, (Any, Bool))) == String[]
     end
+    # The array lookup's list, formatted by its concrete `ArrayFormatter` at the list's type (not through the shared
+    # formatter walk, whose open arm had no code for it): only the open arm is dynamic.
+    @test isdefined(QB, :_array_literal_at)
+    if isdefined(QB, :_array_literal_at)
+      AF = PormG.Models.ArrayFormatter
+      @test filter(x -> !occursin("_array_literal_other", x), _dynamic_calls(QB._array_literal_at, (AF, Any))) == String[]
+      @test filter(x -> !occursin(r"_locate_filter_refusal|kwcall", x),
+                   _dynamic_calls(QB._guarded_array_literal, (AF, Any, Any, Any))) == String[]
+    end
   end
 
   # What: every function in `src/` and `ext/` that takes an argument `@nospecialize` (an engine, as a renderer holds it)

@@ -2964,7 +2964,9 @@ end
       close(db)
     end
     er_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_read.jl"), String)
-    @test occursin("n = _fetch_row_count(settings, sql, instruction.parameters)", er_src)
+    # `exists()` counts through it from its execution body (`_exists_run`, #1839 decision 2), on the statement
+    # `_exists_statement` built.
+    @test occursin("n = _fetch_row_count(settings, st.sql, st.instruction.parameters)", er_src)
 
     # `delete()`'s own transaction lifecycle. Its terminal finalize: the keyword call on the two caught errors (`Any`)
     # had no target, and the trimmed binary raised that `MethodError` in place of the delete's own error.
@@ -7197,6 +7199,244 @@ end
     if isdefined(QB, :_norm_bulk_filter)
       @test _dynamic_calls(QB._norm_bulk_filter, (Any,)) == String[]
       @test _dynamic_calls(QB._norm_bulk_filter, (Pair{String, Any},)) == String[]
+    end
+  end
+
+  # What: `exists()` (#1839 decision 2): `_exists`, the fluent `h.exists()`, and the execution body `_exists_run`.
+  # Expected: each infers `Bool`; `_exists_run` makes no dynamic call, and nothing it reaches does, outside the
+  #   statement's build (`_exists_statement`, the render's own pins) and the reviewed open pool arm.
+  # Why: `exists()` computes `n > 0` itself, but its answer was inferred as the union of `Bool` and the inspection shapes
+  #   `show_query` can choose, so a trimmed program stated `::Bool` (the fixture did), and code reading it dispatched at
+  #   run time.
+  @testset "exists() answers an inferred Bool (#1599 layer 6)" begin
+    QB = PormG.QueryBuilder
+    OH = QB.ObjectHandler
+    @test only(Base.return_types(QB._exists, (OH,))) === Bool
+    @test isdefined(QB, :_exists_run)
+    if isdefined(QB, :_exists_run)
+      @test only(Base.return_types(QB._exists_run, (OH, Nothing))) === Bool
+      @test _dynamic_calls(QB._exists_run, (OH, Nothing)) == String[]
+      # Below `_exists_run`, through each pool arm, to the count: the frames of `fetch`'s own keyword body (cancellation,
+      # the decode for a pool whose result type is not registered), the lazy settings resolution and the logging
+      # macro are every terminal's, reviewed with them, and are not on this answer's path.
+      shared = r"^Tuple\{(PormG\.ConnectionPool\.var\"##fetch#\d+\"|typeof\(PormG\.Configuration\._resolve_lazily!\)|typeof\(Core\.kwcall\), NamedTuple, typeof\(Base\.CoreLogging\.handle_message_nothrow\))"
+      deep = _dynamic_calls_deep(QB._exists_run, (OH, Nothing); depth = 4,
+                                 skip = (QB._exists_statement, PormG.ConnectionPool._with_unlisted_pool))
+      @test filter(x -> !occursin(shared, x), deep) == String[]
+    end
+  end
+
+  # What: the JSON, array and network lookups' render (`_render_json_operator`/`_render_array_operator`/
+  #   `_render_network_operator` → the family's `_*_operator_sql` → the `Dialect` renderer the operator names), and the
+  #   refusal each renderer raises on an engine without the feature (#1838 decision 2).
+  # Expected: no dynamic call to the family function from its render; the family function is static at the split engine
+  #   union with its engine argument unspecialized (bit 2), and so is every `Dialect` method of every renderer (bit 1);
+  #   on SQLite and MySQL each renderer reaches its refusal with no dynamic call to `_capability_error`.
+  # Why: specialized on the engine, the family functions had no compiled target in a trimmed image (as the pattern family's
+  #   had, `name__@icontains`), and a direct `_capability_error` call under an unspecialized engine raises
+  #   `MissingCodeError` there in place of the JIT's `BackendCapabilityError` (as the regex/unaccent ones did).
+  @testset "the JSON, array and network lookups render and refuse at the split engine union (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    D = PormG.Dialect
+    families = ((QB._render_json_operator, (QB.OperObject, String, QB.InstructionObject), QB._json_operator_sql, QB.JSON_CONTAINMENT_OPERATORS),
+                (QB._render_array_operator, (QB.OperObject, String, QB.InstructionObject), QB._array_operator_sql, QB.ARRAY_CONTAINMENT_OPERATORS),
+                (QB._render_network_operator, nothing, QB._network_operator_sql, QB.NETWORK_LOOKUP_OPERATORS))
+    for (render, rargs, fam, ops) in families
+      if rargs !== nothing
+        @test (nameof(render), filter(x -> occursin("_operator_sql", x), _dynamic_calls(render, rargs))) == (nameof(render), String[])
+      end
+      @test (nameof(fam), _dynamic_calls(fam, (String, QB.ConnType, String, String))) == (nameof(fam), String[])
+      @test (nameof(fam), only(methods(fam)).nospecialize & 0b10) == (nameof(fam), 0b10)
+      for op in ops
+        f = getglobal(D, Symbol(op))
+        for m in methods(f)
+          m.module === D || continue
+          @test (op, string(m.sig), m.nospecialize & 0b1) == (op, string(m.sig), 0b1)
+        end
+        for E in (PormG.PormGSQLite, PormG.PormGMySQL)
+          @test (E, op, filter(x -> occursin(r"capability_error|kwcall", x), _dynamic_calls(f, (E, String, String)))) == (E, op, String[])
+        end
+      end
+    end
+    fo_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "filter_operators.jl"), String)
+    @test !occursin("connarg", fo_src)
+    # The binds before each renderer (#1599 layer 5): the JSON and array renders make no dynamic call at all; the call
+    # into the network render resolves (its field argument unspecialized over the field union), and inside it the
+    # binds and the family call are static: what is left is the transform label, a column on the right
+    # (`_on_join_right`) and the located refusal of a family/prefix value, none on a bound value's path.
+    IO_ = QB.InstructionObject
+    @test _dynamic_calls(QB._render_json_operator, (QB.OperObject, String, IO_)) == String[]
+    @test _dynamic_calls(QB._render_array_operator, (QB.OperObject, String, IO_)) == String[]
+    @test filter(x -> occursin("_render_network_operator", x), _dynamic_calls(QB._render_filter_oper, (QB.OperObject, IO_))) == String[]
+    net = _dynamic_calls(QB._render_network_operator, (QB.OperObject, String, Union{Nothing, PormG.Models.AnyField}, String, IO_))
+    @test filter(x -> occursin(r"add_parameter|_network_operator_sql|\bInt\(| in |_guarded_format", x), net) == String[]
+    @test length(net) <= 5
+    @test isdefined(QB, :_json_document_text) && isdefined(QB, :_network_int_operand)
+    if isdefined(QB, :_json_document_text) && isdefined(QB, :_network_int_operand)
+      for (f, open_arm) in ((QB._json_document_text, "_json_document_text_other"), (QB._json_key_text, "_json_key_text_other"),
+                            (QB._json_key_strings, "_json_key_strings_other"))
+        @test (nameof(f), filter(x -> !occursin(open_arm, x), _dynamic_calls(f, (Any,)))) == (nameof(f), String[])
+      end
+      @test filter(x -> !occursin("_add_parameter_other", x), _dynamic_calls(QB._add_parameter_at, (IO_, Any, String))) == String[]
+      @test filter(x -> !occursin("_network_int_operand_other", x), _dynamic_calls(QB._network_int_operand, (Any, Bool))) == String[]
+    end
+    # The array lookup's list, formatted by its concrete `ArrayFormatter` at the list's type (not through the shared
+    # formatter walk, whose open arm had no code for it): only the open arm is dynamic.
+    @test isdefined(QB, :_array_literal_at)
+    if isdefined(QB, :_array_literal_at)
+      AF = PormG.Models.ArrayFormatter
+      @test filter(x -> !occursin("_array_literal_other", x), _dynamic_calls(QB._array_literal_at, (AF, Any))) == String[]
+      @test filter(x -> !occursin(r"_locate_filter_refusal|kwcall", x),
+                   _dynamic_calls(QB._guarded_array_literal, (AF, Any, Any, Any))) == String[]
+    end
+  end
+
+  # What: every function in `src/` and `ext/` that takes an argument `@nospecialize` (an engine, as a renderer holds it)
+  #   and calls `_capability_error` directly.
+  # Expected: none, except the reviewed barriers themselves (`_capability_error_at` and its helper
+  #   `_capability_error_why`, `Dialect.jl`), which call it once the engine is resolved through `with_pool`.
+  # Why: under an unspecialized engine the direct call has no compiled target in a trimmed image, so the refusal raises
+  #   `Core.MissingCodeError` where the JIT raises `BackendCapabilityError` (#1838: regex/unaccent; #1838 decision 2:
+  #   the JSON, array and network lookups). A renderer added later with the direct call fails here.
+  @testset "no direct _capability_error call under an unspecialized argument (#1599)" begin
+    reviewed = Set(["_capability_error_at", "_capability_error_why"])
+    nospec(a) = a isa Expr && a.head === :macrocall && a.args[1] in (Symbol("@nospecialize"), GlobalRef(Base, Symbol("@nospecialize")))
+    defname(sig) = sig isa Expr && sig.head === :where ? defname(sig.args[1]) :
+                   sig isa Expr && sig.head === :(::) && length(sig.args) == 2 ? defname(sig.args[1]) :
+                   sig isa Expr && sig.head === :call ? sig.args[1] : nothing
+    callsig(sig) = sig isa Expr && sig.head in (:where, :(::)) ? callsig(sig.args[1]) : sig
+    # The name an argument binds: `conn` in `@nospecialize(conn::T)`, `@nospecialize(conn)`, `conn::T` or `conn`.
+    argname(a) = a isa Symbol ? a : a isa Expr && a.head === :macrocall ? argname(a.args[end]) :
+                 a isa Expr && a.head === :(::) && length(a.args) == 2 ? argname(a.args[1]) :
+                 a isa Expr && a.head === :kw ? argname(a.args[1]) : nothing
+    # A direct `_capability_error(x, …)` whose first argument is one of `names` (an unspecialized parameter): a call
+    # on a value bound inside, such as a `do` block's resolved pool (`bulk_copy`'s `connection`), is not one.
+    function calls_direct(ex, names)
+      ex isa Expr || return false
+      if ex.head === :call && length(ex.args) >= 2
+        c = ex.args[1]
+        name = c isa Symbol ? c : (c isa Expr && c.head === :. && c.args[end] isa QuoteNode) ? c.args[end].value : nothing
+        a1 = ex.args[2] isa Expr && ex.args[2].head === :parameters ? (length(ex.args) >= 3 ? ex.args[3] : nothing) : ex.args[2]
+        name === :_capability_error && a1 isa Symbol && a1 in names && return true
+      end
+      return any(a -> calls_direct(a, names), ex.args)
+    end
+    found = String[]
+    function walk(ex, file)
+      ex isa Expr || return
+      if ex.head in (:function, :(=)) && length(ex.args) == 2
+        sig = callsig(ex.args[1])
+        if sig isa Expr && sig.head === :call && any(nospec, sig.args[2:end])
+          fname = defname(ex.args[1])
+          fstr = fname isa Symbol ? String(fname) : string(fname)
+          names = Set(Symbol[n for n in map(argname, filter(nospec, sig.args[2:end])) if n !== nothing])
+          calls_direct(ex.args[2], names) && !(fstr in reviewed) && push!(found, "$(file): $(fstr)")
+        end
+      end
+      foreach(a -> walk(a, file), ex.args)
+    end
+    root = pkgdir(PormG)
+    n_files = 0
+    for dir in ("src", "ext"), (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
+      endswith(f, ".jl") || continue
+      n_files += 1
+      walk(Meta.parseall(read(joinpath(d, f), String); filename = f), relpath(joinpath(d, f), root))
+    end
+    @test n_files > 50
+    @test found == String[]
+    # The scan finds what it looks for: a renderer written the way the fourteen were before.
+    probe = Meta.parseall("""
+      function jprobe(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+        throw(_capability_error(conn, :jsonb_operators, "The @jprobe lookup"))
+      end
+      """)
+    empty!(found); walk(probe, "probe"); @test found == ["probe: jprobe"]
+    empty!(found)
+  end
+
+  # What: `Q`/`Qor` from 32 arguments on (`Base.Any32`, #1838 residue): the walk each argument goes through
+  #   (`_q_term_known`), the collection over a 40-argument tuple of mixed pairs and nodes, and the literal call.
+  # Expected: the walk's only dynamic call is its open arm; collecting a mixed 40-tuple makes no dynamic call outside the
+  #   reviewed checks and the open arm; each pair reaches `_check_filter` at a concrete pair type; a literal call does not
+  #   compile to a `Vararg`-widened `Q`/`Qor`.
+  # Why: the loop's element was the tuple's element union, so `_q_term(v)` was dynamic (or, for a few member types, reached
+  #   `_check_filter(::Pair{String})` with the value typed `Any`): a trimmed binary given 32 or more arguments stopped
+  #   there. A widened `Q`/`Qor` would make every length dynamic.
+  @testset "Q and Qor from 32 arguments check each argument at its type (#1599 layer 5)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_q_term_known)
+    W = Tuple{(i % 9 == 0 ? Pair{String, Int64} : i % 9 == 1 ? Pair{String, String} : i % 9 == 2 ? Pair{String, Float64} :
+               i % 9 == 3 ? Pair{String, PormG.Dates.Date} : i % 9 == 4 ? QB.QObject : i % 9 == 5 ? QB.QorObject :
+               i % 9 == 6 ? QB.OperObject : i % 9 == 7 ? QB.FExpression : QB.ExistsObject for i in 1:40)...}
+    N4 = Tuple{(i % 7 == 0 ? Pair{String, Int64} : i % 7 == 1 ? Pair{String, String} : i % 7 == 2 ? Pair{String, Float64} :
+                i % 7 == 3 ? Pair{String, Bool} : i % 7 == 4 ? QB.QObject : i % 7 == 5 ? QB.QorObject : QB.OperObject for i in 1:40)...}
+    if isdefined(QB, :_q_term_known)
+      @test filter(x -> !occursin("_q_term_open", x), _dynamic_calls(QB._q_term_known, (Any,))) == String[]
+      skip = (QB._check_filter, QB._check_filter_node, QB._q_term_open)
+      for T in (W, N4, NTuple{40, Pair{String, Int64}}, NTuple{40, Pair{String, Any}})
+        @test (T, _dynamic_calls_deep(QB._q_terms_of, (T,); depth = 3, skip = skip)) == (T, String[])
+      end
+    end
+    # Each `_check_filter` the 40-argument collection reaches is at a concrete pair type (a merged `Pair{String}` reads
+    # its value as `Any`, and `_check_filter`'s operator choice is then made at run time).
+    function check_filter_specs(T)
+      specs = Any[]
+      seen = Set{Any}()
+      function go(tt, d)
+        d > 4 && return
+        for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+          for st in ci.code
+            st isa Expr && st.head === :invoke || continue
+            mi = st.args[1]
+            mi isa Core.CodeInstance && (mi = mi.def)
+            mi isa Core.MethodInstance || continue
+            mi in seen && continue
+            push!(seen, mi)
+            if mi.def isa Method && mi.def.name === :_check_filter
+              push!(specs, mi.specTypes.parameters[2])
+            elseif mi.def isa Method && mi.def.module === QB && mi.def.name in (:_q_push_terms!, :_q_term, :_q_term_known, :_q_terms_of)
+              go(mi.specTypes, d + 1)
+            end
+          end
+        end
+      end
+      go(Tuple{typeof(QB._q_terms_of), T}, 0)
+      return specs
+    end
+    for T in (N4, W)
+      specs = check_filter_specs(T)
+      @test (T, !isempty(specs)) == (T, true)
+      @test (T, filter(!isconcretetype, specs)) == (T, Any[])
+    end
+    # A literal call of 40 (`Qor`) and 81 (`Q`) mixed arguments does not invoke a `Vararg`-widened method instance.
+    widened(f, n) = begin
+      args = [isodd(i) ? :("round" => $i) : :("name" => $(string("n", i))) for i in 1:n]
+      g = @eval () -> $(f)($(args...))
+      any(Base.code_typed(g, (); optimize = true)) do (ci, _)
+        any(st -> st isa Expr && st.head === :invoke &&
+                  (mi = st.args[1]; mi isa Core.CodeInstance && (mi = mi.def); mi isa Core.MethodInstance &&
+                   mi.def isa Method && mi.def.name in (:Q, :Qor) && Base.isvarargtype(last(mi.specTypes.parameters))), ci.code)
+      end
+    end
+    @test widened(QB.Qor, 40) == false
+    @test widened(QB.Q, 81) == false
+  end
+
+  # What: the refusal `bulk_update` raises when every field the table brings is a key, so its SET list is empty
+  #   (`_bulk_update_nothing_to_set`, #1841).
+  # Expected: it exists, returns a `QueryBuildError`, and builds it with no dynamic call; `_bulk_update_frame` still makes
+  #   none (its own pin above).
+  # Why: the refusal runs in the trimmed write binaries (a `bulk_refusal` line); a dynamic call in it would raise
+  #   `MissingCodeError` in place of the refusal there.
+  @testset "the empty-SET refusal is built at its types (#1841)" begin
+    QB = PormG.QueryBuilder
+    @test isdefined(QB, :_bulk_update_nothing_to_set)
+    if isdefined(QB, :_bulk_update_nothing_to_set)
+      tt = (Vector{String}, Vector{Union{String, Pair{String, String}}}, Vector{String}, Vector{Pair{String, Any}}, Vector{String})
+      @test _dynamic_calls(QB._bulk_update_nothing_to_set, tt) == String[]
+      @test only(Base.return_types(QB._bulk_update_nothing_to_set, tt)) === PormG.QueryBuildError
+      bu_src = read(joinpath(pkgdir(PormG), "src", "querybuilder", "execution_bulk.jl"), String)
+      @test occursin("isempty(safe_set_parts) &&\n    throw(_bulk_update_nothing_to_set(", bu_src)
     end
   end
 

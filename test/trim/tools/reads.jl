@@ -417,6 +417,38 @@ function lookup_more_step()::Bool
     end
 end
 
+# `Q`/`Qor` from 32 arguments on (#1599 layer 5, #1838 residue): a `Qor` of 40 literal arguments of mixed types, and a
+# `Qor` built from a list the way an application builds one at run time, by `push!` over a `Vector{Pair{String,Int64}}`.
+# `Qor(v...)` over a `Vector` is not one of them: a splat whose length is known only at run time is a call a trimmed
+# image has no target for (`juliac --trim` refuses `_apply_iterate` into a function, whatever the vector's type), so
+# the step uses the spelling that runs. Each is checked by its typed rows. Exit code 51 when a read raises or returns
+# other rows.
+function qor_many_step()::Bool
+    try
+        ok = true
+        many = Qor("round" => 6, "name__@icontains" => "brazil", "year__@gte" => 2100.0, "date" => Date(1990, 1, 1),
+                   "round" => 101, "round" => 102, "round" => 103, "round" => 104, "round" => 105, "round" => 106,
+                   "round" => 107, "round" => 108, "round" => 109, "round" => 110, "round" => 111, "round" => 112,
+                   "round" => 113, "round" => 114, "round" => 115, "round" => 116, "round" => 117, "round" => 118,
+                   "round" => 119, "round" => 120, "round" => 121, "round" => 122, "round" => 123, "round" => 124,
+                   "round" => 125, "round" => 126, "round" => 127, "round" => 128, "round" => 129, "round" => 130,
+                   "round" => 131, "round" => 132, "round" => 133, "round" => 134, "round" => 135, Q("year" => 1950))
+        ok &= named_line("qor_many", "Qor of 40 literal arguments",
+                         M.Race.objects.filter(many).order_by("round").values("name").list(RaceNameRow), race_name,
+                         "Monaco Grand Prix, Brazilian Grand Prix")
+        rounds = Pair{String, Int64}[("round" => r) for r in vcat(6, 200:240)]
+        built = Qor()
+        for p in rounds
+            push!(built, p)
+        end
+        ok &= named_line("qor_many", "Qor by push! over $(length(rounds)) pairs",
+                         M.Race.objects.filter(built).values("name").list(RaceNameRow), race_name, "Monaco Grand Prix")
+        return ok
+    catch e
+        failed("qor_many", e); return false
+    end
+end
+
 # Paging (#1599 layer 5): `order_by("-date")` with `page(limit)`, with `page(limit, offset)`, and with `limit` and
 # `offset`. Exit code 39 when a read raises or returns other rows.
 function page_step()::Bool
@@ -492,6 +524,49 @@ function engine_read_step()::Bool
     catch e
         failed("engine_read", e); return false
     end
+end
+
+# A telemetry row's key, the typed row of `lookup_refusals_step`.
+const TelemetryIdRow = NamedTuple{(:telemetryid,), Tuple{Int64}}
+
+# The JSON and network lookups (#1599, #1838 decision 2), which only PostgreSQL has: one read per lookup over
+# `CarTelemetry`. PostgreSQL runs each, and the line is the rows it matches; SQLite and MySQL refuse each before any
+# SQL through the renderer's barrier, and the line is the refusal's type and text. A job checks these `lookup_refusal`
+# lines against its own JIT control (`same_lines.sh`). Exit code 50 when a read raises anything else.
+# The array lookups (`__@acontains`, `__@contained_by`, `__@overlap`) are not here: their list reaches the column's
+# `ArrayFormatter`, whose element formatting is not typed for a trimmed image yet, and the refusal's location then
+# fails on its own untyped label (#1599 residue).
+function lookup_refusals_step()::Bool
+    try
+        q() = M.CarTelemetry.objects
+        lookup_refusal_line("payload__@jcontains", () -> q().filter("payload__@jcontains" => Dict("drs" => true)).values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("payload__@has_key", () -> q().filter("payload__@has_key" => "tyre").values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("payload__@has_any_keys", () -> q().filter("payload__@has_any_keys" => ["ers", "tyre"]).values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("payload__@has_keys", () -> q().filter("payload__@has_keys" => ["drs", "tyre"]).values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@net_contained", () -> q().filter("pit_ip__@net_contained" => "10.0.0.0/8").values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@net_contained_or_equal", () -> q().filter("pit_ip__@net_contained_or_equal" => "10.0.0.0/8").values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@net_contains", () -> q().filter("pit_ip__@net_contains" => "10.0.0.7").values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@net_contains_or_equals", () -> q().filter("pit_ip__@net_contains_or_equals" => "10.0.0.7").values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@net_overlaps", () -> q().filter("pit_ip__@net_overlaps" => "10.0.0.0/24").values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@family", () -> q().filter("pit_ip__@family" => 4).values("telemetryid").list(TelemetryIdRow))
+        lookup_refusal_line("pit_ip__@prefixlen", () -> q().filter("pit_ip__@prefixlen" => 32).values("telemetryid").list(TelemetryIdRow))
+        return true
+    catch e
+        failed("lookup_refusal", e); return false
+    end
+end
+
+# One `lookup_refusal` line: `<label>: <n> rows`, or `<label>: BackendCapabilityError: <message>` when the engine refuses
+# it. Anything else propagates to the step.
+function lookup_refusal_line(label::String, read::F)::Nothing where {F <: Function}
+    text = try
+        string(length(read()::Vector{TelemetryIdRow}), " rows")
+    catch e
+        e isa PormG.BackendCapabilityError || rethrow()
+        string("BackendCapabilityError: ", (e::PormG.BackendCapabilityError).msg)
+    end
+    say("lookup_refusal", string(label, ": ", text))
+    return nothing
 end
 
 # One `engine_read` line: `<label>: <rows>`, or `<label> refused: <message>` when the engine refuses it with

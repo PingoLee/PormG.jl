@@ -22,12 +22,13 @@ function count_step()::Bool
     end
 end
 
-# `exists()` as a read terminal (#1599 layer 6), for a filter that matches and one that does not. Exit code 43 when one
-# raises or answers the other way.
+# `exists()` as a read terminal (#1599 layer 6), for a filter that matches and one that does not. Its answer is
+# inferred `Bool` (#1839 decision 2), so the step states no type: the binary relies on the inferred one. Exit code 43
+# when one raises or answers the other way.
 function exists_step()::Bool
     try
-        yes = M.Race.objects.filter("year" => 2008).exists()::Bool   # untyped, as `count()`'s integer: state it
-        no = M.Race.objects.filter("year" => 1900).exists()::Bool
+        yes = M.Race.objects.filter("year" => 2008).exists()
+        no = M.Race.objects.filter("year" => 1900).exists()
         say("exists", string("year 2008 ", yes, "; year 1900 ", no))
         return yes && !no
     catch e

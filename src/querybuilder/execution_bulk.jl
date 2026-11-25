@@ -3318,6 +3318,27 @@ function _bulk_update(objct::SQLObjectHandler, src,
   end
 end
 
+# #1841: the refusal when every field the table brings is a key, so the SET list is empty. It names those fields, as
+# the caller named them (`columns=`'s targets, or every column the rows bring when `columns=` is not given), and where
+# their keys came from: `match_on=`, the primary key `bulk_update` matches on when `match_on=` is not given, `filters=`.
+@noinline function _bulk_update_nothing_to_set(fields_df::Vector{String},
+    columns::Vector{Union{String, Pair{String, String}}}, dynamic_keys::Vector{String},
+    static_filters::Vector{Pair{String, Any}}, match_on::Vector{String})::QueryBuildError
+  targets = String[c isa String ? c : c.second for c in columns]
+  named = isempty(columns) ? fields_df : String[f for f in fields_df if f in targets]
+  isempty(named) && (named = fields_df)
+  static_keys = String[f.first for f in static_filters]
+  by_match = any(f -> f in dynamic_keys, named)
+  by_filter = any(f -> f in static_keys, named)
+  pk = "the primary key, which bulk_update matches on when match_on= is not given"
+  keys = by_match && by_filter ? (isempty(match_on) ? "is a key, in filters= or $(pk)" : "is a key in match_on= or filters=") :
+         by_filter ? "is a key in filters=" :
+         isempty(match_on) ? "is $(pk)" : "is a key in match_on="
+  what = isempty(columns) ? "every column the rows bring" : "every field in columns="
+  return QueryBuildError("bulk_update: $(what) ($(join(named, ", "))) $(keys); nothing is left to update. " *
+                         "A key is matched, never set: name in columns= at least one field that is not a key.")
+end
+
 # #1599 layer 7, #1694: everything `bulk_update` does once its frame is built, compiled once for every kind of table,
 # as the whole call was under `@nospecialize(src)`. The source is read at its own type above (the checks and the frame,
 # in the order they ran), as `bulk_insert` reads it since #1814: over an unspecialized source the frame's Tables.jl calls
@@ -3380,6 +3401,11 @@ function _bulk_update_frame(work::SQLObjectHandler, model::PormGModel, settings,
       push!(safe_set_parts, "$quoted_field = source.$quoted_source_field$source_cast")
     end
   end
+  # #1841: a key is matched, never set, so when every field the table brings is a key, nothing is left for SET. The
+  # statement went out with an empty SET list, a syntax error each engine reported in its own words after it was
+  # sent. Refused here, before any SQL, where the SET list is known.
+  isempty(safe_set_parts) &&
+    throw(_bulk_update_nothing_to_set(fields_df, columns, dinanic_filters, static_filters, match_on))
 
   # Security: Create parameterized query.
   # `base_parameters` holds what `build()` bound — the static-filter WHERE values, and on PostgreSQL

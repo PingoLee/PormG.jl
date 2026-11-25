@@ -81,8 +81,8 @@ end
 # Tests: the CALL behind each arm. The chain and `copy()` are inferred as `ObjectHandler`, run for real.
 # The arms that return `Any` by contract are exactly the recorded set.
 # Expected: the chain infers `ObjectHandler`. The `Any` set is create/update/update_or_create/
-# get_or_create/count/aggregate/exists/first/last/earliest/latest/get/list/inspect/explain/delete,
-# each called with no type argument.
+# get_or_create/count/aggregate/first/last/earliest/latest/get/list/inspect/explain/delete,
+# each called with no type argument; `exists()` infers `Bool` (#1599, #1839 decision 2).
 # Matters: the recorded set is the JIT-only surface #1605 names. A chain arm that stops inferring
 # fails here, and an arm that starts inferring fails too, until it is moved out of the set.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,7 +103,9 @@ end
 
     # The terminals' inferred return types, no `T` given. `Any` (or a union of the inspection shapes)
     # because the result is a `PormGRow`, a `Dict` row, a driver value read through raw `fetch`, or an
-    # inspection shape chosen by `show_query` at run time: JIT-only by #1605's contract.
+    # inspection shape chosen by `show_query` at run time: JIT-only by #1605's contract. `exists()` is
+    # the one typed: its answer is `n > 0`, computed by PormG, and its inspection modes are chosen before
+    # the execution body (#1599, #1839 decision 2).
     calls = (
         create           = h -> h.create("year" => 2009),
         update           = h -> h.update("year" => 2009),
@@ -126,7 +128,8 @@ end
     for (name, f) in pairs(calls)
         isconcretetype(only(Base.return_types(f, (OH,)))) || push!(untyped, name)
     end
-    @test Set(untyped) == Set(keys(calls))
+    @test Set(untyped) == setdiff(Set(keys(calls)), [:exists])
+    @test only(Base.return_types(calls.exists, (OH,))) === Bool
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -4031,47 +4031,52 @@ end
 # non-string VALUE (placeholder) reaching a renderer; a non-string column is a `MethodError`,
 # exactly as before.
 #
+# #1599 (#1838 decision 2): the JSON, array and network renderers take the engine `@nospecialize(conn::T)` on
+# every method, as the pattern ones do, and a refusal goes through the barrier (`_capability_error_at`): a direct
+# `_capability_error` call under an unspecialized engine has no compiled target in a trimmed image, which raises
+# `Core.MissingCodeError` where the JIT raises `BackendCapabilityError`. `test_trim_shape_pins.jl` scans for one.
+#
 # PostgreSQL JSONB containment/overlap operators (PG-only; SQLite + abstract throw a friendly
 # error, mirroring iunaccent_*). LibPQ binds `$N` placeholders, so a literal `?`/`?|`/`?&` here is
 # the jsonb operator, never a bind marker. The RHS placeholder already carries any needed cast
 # (`::jsonb` for @>, `::text[]` for ?|/?&) from add_parameter!.
-function jcontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function jcontains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) @> $(value)"                    # jsonb contains the given document
 end
-function jcontains(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :jsonb_operators, "The @jcontains lookup (JSONB @>)"))
+function jcontains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :jsonb_operators, "The @jcontains lookup (JSONB @>)"))
 end
-function jcontains(conn::PormGAbstractType, column::AbstractString, value)
+function jcontains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @jcontains lookup (JSONB @>) requires PostgreSQL"))
 end
 
-function has_key(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function has_key(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ? $(value)"                     # top-level key exists
 end
-function has_key(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :jsonb_operators, "The @has_key lookup (JSONB ?)"))
+function has_key(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :jsonb_operators, "The @has_key lookup (JSONB ?)"))
 end
-function has_key(conn::PormGAbstractType, column::AbstractString, value)
+function has_key(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @has_key lookup (JSONB ?) requires PostgreSQL"))
 end
 
-function has_any_keys(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function has_any_keys(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ?| $(value)"                    # any of the given keys exists
 end
-function has_any_keys(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :jsonb_operators, "The @has_any_keys lookup (JSONB ?|)"))
+function has_any_keys(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :jsonb_operators, "The @has_any_keys lookup (JSONB ?|)"))
 end
-function has_any_keys(conn::PormGAbstractType, column::AbstractString, value)
+function has_any_keys(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @has_any_keys lookup (JSONB ?|) requires PostgreSQL"))
 end
 
-function has_keys(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function has_keys(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) ?& $(value)"                    # all of the given keys exist
 end
-function has_keys(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :jsonb_operators, "The @has_keys lookup (JSONB ?&)"))
+function has_keys(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :jsonb_operators, "The @has_keys lookup (JSONB ?&)"))
 end
-function has_keys(conn::PormGAbstractType, column::AbstractString, value)
+function has_keys(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @has_keys lookup (JSONB ?&) requires PostgreSQL"))
 end
 
@@ -4079,33 +4084,33 @@ end
 # ONE bound array literal (`add_parameter!(::PormGArrayLiteral)`), which the server reads as the
 # column's own array type — the operator is polymorphic, so its other operand types it. SQLite has no
 # array type; an `ArrayField` cannot exist there, and these refuse like the JSON four above.
-function acontains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function acontains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) @> $(value)"                    # the array holds every given element
 end
-function acontains(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :arrays, "The @acontains lookup (array @>)"))
+function acontains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :arrays, "The @acontains lookup (array @>)"))
 end
-function acontains(conn::PormGAbstractType, column::AbstractString, value)
+function acontains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @acontains lookup (array @>) requires PostgreSQL"))
 end
 
-function contained_by(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function contained_by(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) <@ $(value)"                    # every element is among the given ones
 end
-function contained_by(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :arrays, "The @contained_by lookup (array <@)"))
+function contained_by(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :arrays, "The @contained_by lookup (array <@)"))
 end
-function contained_by(conn::PormGAbstractType, column::AbstractString, value)
+function contained_by(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @contained_by lookup (array <@) requires PostgreSQL"))
 end
 
-function overlap(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function overlap(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) && $(value)"                    # at least one element in common
 end
-function overlap(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :arrays, "The @overlap lookup (array &&)"))
+function overlap(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :arrays, "The @overlap lookup (array &&)"))
 end
-function overlap(conn::PormGAbstractType, column::AbstractString, value)
+function overlap(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @overlap lookup (array &&) requires PostgreSQL"))
 end
 
@@ -4145,73 +4150,73 @@ _array_slice_expr(@nospecialize(conn::PormGBackend), column::AbstractString, low
 # either column (`_refuse_unsupported_type`), so its arm is reached only by a model that
 # declares one and is queried without being migrated. A containment operand arrives already cast
 # (`$1::inet`) — `<<` is ambiguous on an untyped parameter — or as a column, which needs no cast.
-function net_contained(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function net_contained(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) << $(value)"                    # strictly inside the given network
 end
-function net_contained(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @net_contained lookup (inet <<)"))
+function net_contained(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @net_contained lookup (inet <<)"))
 end
-function net_contained(conn::PormGAbstractType, column::AbstractString, value)
+function net_contained(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contained lookup (inet <<) requires PostgreSQL"))
 end
 
-function net_contained_or_equal(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function net_contained_or_equal(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) <<= $(value)"                   # inside the given network, or equal to it
 end
-function net_contained_or_equal(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @net_contained_or_equal lookup (inet <<=)"))
+function net_contained_or_equal(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @net_contained_or_equal lookup (inet <<=)"))
 end
-function net_contained_or_equal(conn::PormGAbstractType, column::AbstractString, value)
+function net_contained_or_equal(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contained_or_equal lookup (inet <<=) requires PostgreSQL"))
 end
 
-function net_contains(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function net_contains(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) >> $(value)"                    # strictly contains the given value
 end
-function net_contains(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @net_contains lookup (inet >>)"))
+function net_contains(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @net_contains lookup (inet >>)"))
 end
-function net_contains(conn::PormGAbstractType, column::AbstractString, value)
+function net_contains(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contains lookup (inet >>) requires PostgreSQL"))
 end
 
-function net_contains_or_equals(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function net_contains_or_equals(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) >>= $(value)"                   # contains the given value, or equals it
 end
-function net_contains_or_equals(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @net_contains_or_equals lookup (inet >>=)"))
+function net_contains_or_equals(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @net_contains_or_equals lookup (inet >>=)"))
 end
-function net_contains_or_equals(conn::PormGAbstractType, column::AbstractString, value)
+function net_contains_or_equals(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @net_contains_or_equals lookup (inet >>=) requires PostgreSQL"))
 end
 
-function net_overlaps(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function net_overlaps(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "$(column) && $(value)"                    # either contains or equals the other
 end
-function net_overlaps(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @net_overlaps lookup (inet &&)"))
+function net_overlaps(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @net_overlaps lookup (inet &&)"))
 end
-function net_overlaps(conn::PormGAbstractType, column::AbstractString, value)
+function net_overlaps(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @net_overlaps lookup (inet &&) requires PostgreSQL"))
 end
 
-function family(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function family(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "family($(column)) = $(value)"             # 4 or 6
 end
-function family(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @family lookup (inet family())"))
+function family(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @family lookup (inet family())"))
 end
-function family(conn::PormGAbstractType, column::AbstractString, value)
+function family(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @family lookup (inet family()) requires PostgreSQL"))
 end
 
-function prefixlen(conn::PormGPostgres, column::AbstractString, value::AbstractString)::String
+function prefixlen(@nospecialize(conn::PormGPostgres), column::AbstractString, value::AbstractString)::String
   return "masklen($(column)) = $(value)"            # the netmask length
 end
-function prefixlen(conn::PormGBackend, column::AbstractString, value::AbstractString)
-  throw(_capability_error(conn, :network_types, "The @prefixlen lookup (inet masklen())"))
+function prefixlen(@nospecialize(conn::PormGBackend), column::AbstractString, value::AbstractString)
+  throw(_capability_error_at(conn, :network_types, "The @prefixlen lookup (inet masklen())"))
 end
-function prefixlen(conn::PormGAbstractType, column::AbstractString, value)
+function prefixlen(@nospecialize(conn::PormGAbstractType), column::AbstractString, value)
   throw(BackendCapabilityError("The @prefixlen lookup (inet masklen()) requires PostgreSQL"))
 end
 

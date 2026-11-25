@@ -149,6 +149,8 @@ step	lookup_more	date__@yyyy_mm 1 rows: Monaco Grand Prix
 step	lookup_more	round__@ne 1 rows: Brazilian Grand Prix
 step	lookup_more	round__@nin 1 rows: Brazilian Grand Prix
 step	lookup_more	Qor(Q) 1 rows: Monaco Grand Prix
+step	qor_many	Qor of 40 literal arguments 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	qor_many	Qor by push! over 42 pairs 1 rows: Monaco Grand Prix
 step	page	page(1) 1 rows: Brazilian Grand Prix
 step	page	page(1, 1) 1 rows: Monaco Grand Prix
 step	page	limit offset 1 rows: Monaco Grand Prix
@@ -247,6 +249,11 @@ any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is check
   constructor's parent's parent's home circuit, through the self-referential key twice) and one reverse hop (a
   circuit's races, `race__year`).
 - `lookup_more` (exit code 38): `__@yyyy_mm`, `__@ne`, `__@nin`, and `Qor` over a lookup and a nested `Q`.
+- `qor_many` (exit code 51, #1838 residue): `Qor` with 40 literal arguments of mixed types (pairs of an integer, a
+  string, a float and a date, and a nested `Q`), and a `Qor` built from a run-time `Vector{Pair{String,Int64}}` by
+  `push!`, the way an application builds one from a list. Not `Qor(v...)`: a splat whose length is known only at run
+  time is a call `juliac --trim` refuses (`_apply_iterate` into a function, whatever the vector's element type), so a
+  trimmed application builds the `Qor` by `push!` over a vector of concrete pairs.
 - `page` (exit code 39): `order_by("-date")` with `page(1)`, `page(1, 1)`, and `limit(1).offset(1)`.
 - `aggregate` (exit code 40): `Count(distinct = true)`, `Max`, `Avg` and `Min` grouped by year;
   `Sum(Case(When(...), default = 0))`; `distinct()`; `ToChar` ordered by its alias; a CTE joined with
@@ -277,14 +284,30 @@ step	engine_read	Extract EPOCH: Monaco Grand Prix 1211673600, Brazilian Grand Pr
 
 MySQL refuses the three lookups as SQLite does and reads `EPOCH` as PostgreSQL does.
 
+- `lookup_refusal` (exit code 50, the write entries; #1838 decision 2): the JSON (`__@jcontains`, `__@has_key`,
+  `__@has_any_keys`, `__@has_keys`) and network (`__@net_contained`, …, `__@family`, `__@prefixlen`) lookups over
+  `CarTelemetry`, which only PostgreSQL has. The Postgres.jl `prep.jl` creates its table and seeds one row, and each
+  line is the rows a lookup matches. SQLite and MySQL refuse each before any SQL through the renderer's barrier, and
+  the line is the refusal's type and text. A job checks these lines against its own JIT control
+  (`tools/same_lines.sh`). The array lookups are not in the step yet: their list reaches the column's
+  `ArrayFormatter`, whose element formatting does not run trimmed.
+
+```
+step	lookup_refusal	payload__@has_key: BackendCapabilityError: The @has_key lookup (JSONB ?) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL).
+step	lookup_refusal	pit_ip__@family: BackendCapabilityError: The @family lookup (inet family()) needs network address types (`inet`, `cidr`), which SQLite does not support (supported on PostgreSQL).
+```
+
+and on PostgreSQL (Postgres.jl), `<lookup>: 1 rows` for each but `pit_ip__@net_contains` (`0 rows`: the seeded
+address does not strictly contain itself).
+
 ## The terminals applications use most
 
 The steps of #1599 layer 6 (`tools/terminals.jl`), after `engine_read` and before any write:
 
 - `count` (exit code 42): `count()` over a filter, across a join and over no row. `count()` returns the integer the
   driver read, untyped: the step states its type, `count()::Int`, as a trimmed program states a typed read's row type.
-- `exists` (exit code 43): `exists()` for a filter that matches and one that does not, stated `::Bool` for the same
-  reason.
+- `exists` (exit code 43): `exists()` for a filter that matches and one that does not. Its answer is inferred `Bool`
+  (#1839 decision 2), so the step states no type: the binary relies on the inferred one.
 - `lock` (exit code 44, the write entries): `select_for_update(of = ("self",))` as a user read inside
   `run_in_transaction`. SQLite renders no lock clause (its transaction holds the write lock), the servers `FOR UPDATE`.
 - `raw_fetch` (exit code 45, the write entries): the raw `fetch` hatch with the backend's own markers (`raw_marker(i)`:
@@ -322,6 +345,9 @@ The steps of #1694 (#1599 layer 7), in the write entries, after `bulk_conflict` 
   `SET_NULL` on its own table). The step deletes the seasons it made.
 - Two more `bulk_refusal` lines: a `columns=` name the model has no field for, bare and as a pair's target, refused with
   `UnknownFieldError` (a raw `KeyError` before).
+- One more `bulk_refusal` line (#1841): a `bulk_update` of `Season` whose every field is a key (`columns = ["year"]`,
+  `match_on = ["seasonid"]`, `filters = ["year" => 2012]`), refused with `QueryBuildError` before any SQL (an empty
+  `SET` list sent to the server before). On `Season`, not `Race`: a race's `auto_now` field is always set.
 
 ```
 step	bulk_table	columns= pairs: 2 rows: 2040 round 6, 2041 round 7; two filters= pairs: 2 rows: 2040 round 16, 2041 round 17; removed 2
@@ -344,7 +370,7 @@ what it wrote (`bulk_conflict` also moves the race table's sequence past its exp
 - `self_cascade` (exit code 29): a chain of four constructors (each `parentid` the one before); deleting the
   first deletes the other three through the collector's walk of the table's own key (#1377), and the chain
   `prep.jl` seeds (Toleman, Benetton, Renault) is left as it was.
-- `bulk_refusal` (exit code 30): twenty-two inputs the bulk writers refuse before any SQL, one line each with
+- `bulk_refusal` (exit code 30): twenty-six inputs the bulk writers refuse before any SQL, one line each with
   the refusal's type and text. The job compares these lines with its JIT control's (`tools/same_lines.sh`),
   since a refusal's text can name engine-specific details.
 - `bulk_conflict` (exit code 31): `bulk_insert` with `on_conflict=`, over races with explicit ids far above any id
@@ -459,6 +485,8 @@ step	lookup_more	date__@yyyy_mm 1 rows: Monaco Grand Prix
 step	lookup_more	round__@ne 1 rows: Brazilian Grand Prix
 step	lookup_more	round__@nin 1 rows: Brazilian Grand Prix
 step	lookup_more	Qor(Q) 1 rows: Monaco Grand Prix
+step	qor_many	Qor of 40 literal arguments 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	qor_many	Qor by push! over 42 pairs 1 rows: Monaco Grand Prix
 step	page	page(1) 1 rows: Brazilian Grand Prix
 step	page	page(1, 1) 1 rows: Monaco Grand Prix
 step	page	limit offset 1 rows: Monaco Grand Prix
@@ -468,6 +496,7 @@ step	aggregate	distinct 1 rows: 2008
 step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
 step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
 step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
+step	lookup_refusal	…                             (11 lines, each engine's own: see "The read shapes applications use most")
 step	count	round__@gt 2; circuitid__country 1; year 1900 0
 step	exists	year 2008 true; year 1900 false
 step	lock	select_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix
@@ -618,6 +647,8 @@ step	lookup_more	date__@yyyy_mm 1 rows: Monaco Grand Prix
 step	lookup_more	round__@ne 1 rows: Brazilian Grand Prix
 step	lookup_more	round__@nin 1 rows: Brazilian Grand Prix
 step	lookup_more	Qor(Q) 1 rows: Monaco Grand Prix
+step	qor_many	Qor of 40 literal arguments 2 rows: Monaco Grand Prix, Brazilian Grand Prix
+step	qor_many	Qor by push! over 42 pairs 1 rows: Monaco Grand Prix
 step	page	page(1) 1 rows: Brazilian Grand Prix
 step	page	page(1, 1) 1 rows: Monaco Grand Prix
 step	page	limit offset 1 rows: Monaco Grand Prix
@@ -627,6 +658,7 @@ step	aggregate	distinct 1 rows: 2008
 step	aggregate	ToChar -alias 2 rows: Brazilian Grand Prix 2008-11, Monaco Grand Prix 2008-05
 step	aggregate	CTE INNER 1 rows: Brazilian Grand Prix 1
 step	engine_read	…                                (4 lines, each engine's own: see "The read shapes applications use most")
+step	lookup_refusal	…                             (11 lines, each engine's own: see "The read shapes applications use most")
 step	count	round__@gt 2; circuitid__country 1; year 1900 0
 step	exists	year 2008 true; year 1900 false
 step	lock	select_for_update(of = self) 2 rows: Monaco Grand Prix, Brazilian Grand Prix

@@ -31,6 +31,7 @@ PormG.Migrations.ensure_table!(M.Driver, KEY)
 PormG.Migrations.ensure_table!(M.Constructor, KEY)
 PormG.Migrations.ensure_table!(M.Result, KEY)
 PormG.Migrations.ensure_table!(M.Season, KEY)
+PormG.Migrations.ensure_table!(M.CarTelemetry, KEY)   # the lookups only PostgreSQL has (`lookup_refusals_step`)
 # The results first: they keep their race (`PROTECT`) and driver (`RESTRICT`) from being deleted below. A season's
 # reference to the one before is cleared first, as the constructors' below.
 M.Result.objects.delete(allow_delete_all = true)
@@ -44,6 +45,10 @@ M.PitStop.objects.delete(allow_delete_all = true)
 M.Driver.objects.delete(allow_delete_all = true)
 M.Race.objects.delete(allow_delete_all = true)
 M.Circuit.objects.delete(allow_delete_all = true)
+M.CarTelemetry.objects.delete(allow_delete_all = true)
+# One lap's telemetry, which each JSON, array and network lookup of `lookup_refusals_step` matches or not.
+M.CarTelemetry.objects.create("payload" => Dict("drs" => true, "tyre" => "soft"), "pit_laps" => [12, 31],
+                              "pit_ip" => "10.0.0.7")
 M.Circuit.objects.create("circuitref" => "monaco", "name" => "Circuit de Monaco", "country" => "Monaco")
 M.Circuit.objects.create("circuitref" => "interlagos", "name" => "Autódromo José Carlos Pace", "country" => "Brazil")
 monaco = M.Circuit.objects.filter("circuitref" => "monaco").values("circuitid").list()[1]

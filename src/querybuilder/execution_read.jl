@@ -1255,66 +1255,87 @@ function _fetch_row_count(settings, sql::String, params::Union{Nothing,ParamColl
 end
 _fetch_row_count_on(params, settings, sql::String) = fetch(settings, sql; params = params, _decode = _RowCounter())::Int
 
-function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
+# #1599 (#1839 decision 2): `exists()` answers `n > 0`, a `Bool` PormG computes, so its answer is inferred `Bool`
+# on every engine and pool type. The build is shared (`_exists_statement`); the inspection modes
+# (`show_query = :sql`, …) and the execution are two bodies, chosen before the connection closure, as the
+# typed read does (`_typed_read_owned`): a closure that returned either had the union of the inspection
+# shapes and `Bool` as its type. Both bodies build the same statement, in the same order, so a build-time
+# refusal is raised as before, and `show_query` folds away under `@constprop` for the plain call.
+Base.@constprop :aggressive function _exists(oq::SQLObjectHandler; table_alias::Union{Nothing, SQLTableAlias} = nothing, show_query::Symbol = :execute)
+  show_query !== :execute && return _exists_show(oq, table_alias, show_query)
+  return _exists_run(oq, table_alias)
+end
+
+# The statement `exists()` sends: the handler's own copy, its probe projection, `LIMIT 1` and the offset.
+function _exists_statement(oq::SQLObjectHandler, connection, table_alias::Union{Nothing, SQLTableAlias})
+  q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
+  # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
+  keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
+  _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
+  keep_values || (q.object.values = ProjectionNode[])
+
+  # Create shared table alias and parameters BEFORE building CTEs
+  # so CTE parameters are numbered first (critical for positional backends).
+  table_alias === nothing && (table_alias = SQLTbAlias())
+  parameters = get_parameter(connection)
+
+  # Build WITH clause first — CTE params land in :cte bucket before main params.
+  set_context!(parameters, :cte)
+  with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
+
+  # Main query continues from where CTE numbering left off. #1002: `exists()` is a semi-join unless an
+  # OFFSET counts the rows; then it answers for the rows `list()` returns, whose cleared projection
+  # still declares its joins.
+  instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
+                      cte_state = cte_state, semi_join = q.object.offset <= 0,
+                      declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
+  _refuse_constant_terminal(instruction, keep_values, "exists()")
+  # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
+  # caller set binds (#46). A non-positive offset was always dropped here, and still is.
+  # #1053: a caller's `limit(0)` makes it `LIMIT 0` — the probe is the smaller of the two, so it is
+  # one of two literals the code chooses, never the caller's value interpolated.
+  limit_clause = _probe_limit(q.object.limit, 1) == 0 ? "LIMIT 0" : "LIMIT 1"
+  offset_clause = q.object.offset > 0 ?
+    with_bucket(() -> "OFFSET " * add_parameter!(parameters, q.object.offset), parameters, :limit) : ""
+
+  # Quote table name and alias to prevent SQL injection
+  safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
+  safe_alias = quote_identifier(instruction.alias, instruction.connection)
+
+  sql = """
+  $(with_clause)SELECT $(_exists_projection(q.object, instruction, keep_values))
+  FROM $safe_table_name as $safe_alias
+  $(join(instruction.join, "\n"))
+  $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
+  $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")$(isempty(instruction.having) ? "" : "\nHAVING " * join(instruction.having, " AND \n   "))$(isempty(instruction.order) ? "" : "\nORDER BY " * join(instruction.order, ", "))
+  $limit_clause
+  $offset_clause
+  """
+  return (sql = sql, instruction = instruction, model_name = q.object.model.name)
+end
+
+# Inspection short-circuit: return SQL/metadata without hitting the database.
+function _exists_show(oq::SQLObjectHandler, table_alias::Union{Nothing, SQLTableAlias}, show_query::Symbol)
   try
-    # Resolve settings
     return _with_connection(oq) do settings, connection, conn_key
-      # `table_alias` is rebound below: a fresh binding, so the closure never reassigns what it
-      # captures, which would box it (#1693).
-      let table_alias = table_alias
-        q = _terminal_copy(oq)   # #1624: its own changes (order, values) stay off the caller's handler
-        # #1066: a kept projection is probed as `list()` would run it — see `_projection_shapes_rows`.
-        keep_values = _projection_shapes_rows(q.object; distinct = q.object.distinct && q.object.offset > 0, clear_degenerate = false)
-        _keeps_order(q.object, keep_values) || (q.object.order = []) # clear order_by
-        keep_values || (q.object.values = ProjectionNode[])
+      st = _exists_statement(oq, connection, table_alias)
+      return _show_query_result(show_query, st.sql, st.instruction.connection, st.model_name, :select;
+                                parameters=st.instruction.parameters)
+    end
+  catch e
+    @pormg_debug false
+    rethrow(e)   # #1107: see `_exists_run`
+  end
+end
 
-        # Create shared table alias and parameters BEFORE building CTEs
-        # so CTE parameters are numbered first (critical for positional backends).
-        table_alias === nothing && (table_alias = SQLTbAlias())
-        parameters = get_parameter(connection)
-
-        # Build WITH clause first — CTE params land in :cte bucket before main params.
-        set_context!(parameters, :cte)
-        with_clause, cte_state = build_cte_clause(q.object.ctes, connection, parameters, table_alias)
-
-        # Main query continues from where CTE numbering left off. #1002: `exists()` is a semi-join unless an
-        # OFFSET counts the rows; then it answers for the rows `list()` returns, whose cleared projection
-        # still declares its joins.
-        instruction = build(q.object, table_alias=table_alias, connection=connection, parameters=parameters,
-                            cte_state = cte_state, semi_join = q.object.offset <= 0,
-                            declared_paths = keep_values ? String[] : _projected_paths(oq.object.values))
-        _refuse_constant_terminal(instruction, keep_values, "exists()")
-        # `LIMIT 1` is this query's own shape, not a user value, so it stays literal; the OFFSET the
-        # caller set binds (#46). A non-positive offset was always dropped here, and still is.
-        # #1053: a caller's `limit(0)` makes it `LIMIT 0` — the probe is the smaller of the two, so it is
-        # one of two literals the code chooses, never the caller's value interpolated.
-        limit_clause = _probe_limit(q.object.limit, 1) == 0 ? "LIMIT 0" : "LIMIT 1"
-        offset_clause = q.object.offset > 0 ?
-          with_bucket(() -> "OFFSET " * add_parameter!(parameters, q.object.offset), parameters, :limit) : ""
-    
-        # Quote table name and alias to prevent SQL injection
-        safe_table_name = safe_table_identifier(Models.model_table_name(q.object.model), instruction.connection)
-        safe_alias = quote_identifier(instruction.alias, instruction.connection)
-    
-        sql = """
-        $(with_clause)SELECT $(_exists_projection(q.object, instruction, keep_values))
-        FROM $safe_table_name as $safe_alias
-        $(join(instruction.join, "\n"))
-        $(isempty(instruction._where) ? "" : "WHERE " * join(instruction._where, " AND \n   "))
-        $(instruction.aggregate && !isempty(instruction.group) ? "GROUP BY $(join(instruction.group, ", "))" : "")$(isempty(instruction.having) ? "" : "\nHAVING " * join(instruction.having, " AND \n   "))$(isempty(instruction.order) ? "" : "\nORDER BY " * join(instruction.order, ", "))
-        $limit_clause
-        $offset_clause
-        """
-        # Inspection short-circuit: return SQL/metadata without hitting the database.
-        if show_query !== :execute
-          return _show_query_result(show_query, sql, instruction.connection, q.object.model.name, :select;
-                                  parameters=instruction.parameters)
-        end
-        @pormg_debug false
-        n = _fetch_row_count(settings, sql, instruction.parameters)   # #1599 layer 7: counted where the result is concrete
-        @pormg_debug false
-        return n > 0
-      end
+function _exists_run(oq::SQLObjectHandler, table_alias::Union{Nothing, SQLTableAlias})::Bool
+  try
+    return _with_connection(oq) do settings, connection, conn_key
+      st = _exists_statement(oq, connection, table_alias)
+      @pormg_debug false
+      n = _fetch_row_count(settings, st.sql, st.instruction.parameters)   # #1599 layer 7: counted where the result is concrete
+      @pormg_debug false
+      return n > 0
     end
   catch e
     @pormg_debug false

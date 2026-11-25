@@ -43,6 +43,7 @@ include("common_bulk_scratch_setup.jl")
     @testset "Tables.jl source (#1344)"     begin include("test_tables_source.jl")      end
     @testset "Expression-Kind Read-back (#1034)" begin include("test_expression_kind_readback.jl") end
     @testset "Updates"                      begin include("test_updates.jl")            end
+    @testset "bulk_update Empty SET (#1841)" begin include("test_bulk_update_empty_set_1841.jl") end
     @testset "Deletes"                      begin include("test_deletes.jl")            end
     @testset "Cascade key read decode (#1599 layer 7)" begin include("test_cascade_keys_equivalence_1694.jl") end
     @testset "Mutation Fence Race (#765)"   begin include("test_mutation_fence_concurrency.jl") end

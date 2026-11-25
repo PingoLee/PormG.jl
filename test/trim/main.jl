@@ -32,9 +32,11 @@ function (@main)(args::Vector{String})::Cint
     # Q/Qor, paging, aggregates, and the shapes each engine answers its own way.
     hops_step() || return Cint(37)
     lookup_more_step() || return Cint(38)
+    qor_many_step() || return Cint(51)   # Q/Qor from 32 arguments (`tools/reads.jl`)
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
+    lookup_refusals_step() || return Cint(50)   # the JSON, array and network lookups (`tools/reads.jl`)
     # The terminals applications use most (`tools/terminals.jl`, #1599 layer 6): count(), exists(), a locking read in a
     # transaction, a raw fetch, and the Tables.jl interface a table sink reads.
     count_step() || return Cint(42)

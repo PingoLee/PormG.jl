@@ -367,6 +367,10 @@ function bulk_refusals_step(circuitid::Int)::Bool
         columns = ["round"], match_on = ["raceid"], filters = ["raceid"]))
     ok &= refusal_case("a key given twice", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, round = 6), (raceid = 1, round = 7)];
         columns = ["round"], match_on = ["raceid"]))
+    # #1841: every field the table brings is a key, so nothing is left for SET. On `Season`, which fills no field itself:
+    # `Race`'s `auto_now` field is always set, so a race never leaves SET empty.
+    ok &= refusal_case("every field a key", () -> PormG.bulk_update(M.Season.objects, [(seasonid = 1, year = 2012)];
+        columns = ["year"], match_on = ["seasonid"], filters = ["year" => 2012]))
     ok &= refusal_case("a joined path", () -> PormG.bulk_update(M.Race.objects, [(raceid = 1, cn = "x")];
         columns = ["cn" => "circuitid__name"], match_on = ["raceid"]))
     ok &= refusal_case("an ordered handler", () -> PormG.bulk_update(M.Race.objects.order_by("year"), [(raceid = 1, round = 6)];

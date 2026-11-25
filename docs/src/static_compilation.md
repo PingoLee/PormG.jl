@@ -59,7 +59,13 @@ else is untested in a trimmed binary, even where it compiles.
   "EPOCH")` on MySQL and PostgreSQL. An engine without one of them (`__@regex`, `__@iregex` and
   `__@iunaccent_contains` on SQLite and MySQL, `EPOCH` on SQLite) refuses it with the `BackendCapabilityError`
   the JIT raises. `__@iunaccent_contains` has not run on PostgreSQL: the workflow's database does not have the
-  `unaccent` function.
+  `unaccent` function. The JSON (`__@jcontains`, `__@has_key`, `__@has_any_keys`, `__@has_keys`), array
+  (`__@acontains`, `__@contained_by`, `__@overlap`) and network (`__@net_contained`, …, `__@family`, `__@prefixlen`)
+  lookups have run on PostgreSQL, and SQLite and MySQL refuse each with the `BackendCapabilityError` the JIT raises.
+  `Q` and `Qor` with 32 arguments or more have run too, built literally or by `push!` over a `Vector` of concrete
+  pairs (`q = Qor(); for p in pairs; push!(q, p); end`). Not `Qor(pairs...)` over a `Vector`: a splat whose length is
+  known only at run time is a call `juliac --trim` refuses, whatever the vector's element type, and a `Vector` whose
+  pairs' values are typed `Any` (`Pair{String,Any}`) leaves each pair's lookup to be chosen at run time.
 
   The untyped read (`.list()` and `list(:dict)`, #1823) has run on the three drivers too.
 
@@ -137,9 +143,10 @@ else is untested in a trimmed binary, even where it compiles.
 - **The terminals applications use most** (#1599 layer 6), on the three drivers: `count()` over a filter, across a
   join and over no row; `exists()`; `select_for_update(of = ("self",))` as a read inside `run_in_transaction`; the
   raw `fetch` hatch with values bound by the backend's own markers (`fetch(settings, "UPDATE … WHERE year = ?",
-  [2008])`), outside and inside a transaction. `count()` and `exists()` return the driver's value untyped, so state
-  the type where you use it, `count()::Int`, `exists()::Bool`, as you declare a typed read's row type: a call on an
-  untyped value has no code in a trimmed binary unless that exact call was compiled.
+  [2008])`), outside and inside a transaction. `count()` returns the driver's value untyped, so state the type where
+  you use it, `count()::Int`, as you declare a typed read's row type: a call on an untyped value has no code in a
+  trimmed binary unless that exact call was compiled. `exists()` answers a `Bool` PormG computes, inferred as such, so
+  it needs no annotation.
 - **Typed rows into a table sink** (#1599 layer 6), on the three drivers: `Tables.columntable(rows)` over the rows
   `list(T)` returns, a `NamedTuple` of typed vectors. `Tables` is a dependency of your application, as it is of a
   `DataFrame`.

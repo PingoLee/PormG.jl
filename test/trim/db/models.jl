@@ -69,6 +69,16 @@ Season::Models.ModelType = Models.Model(
   previousid = Models.ForeignKey("Season", pk_field = "seasonid", on_delete = "SET_NULL", null = true)
 )
 
-Models.@models Circuit Race PitStop Driver Constructor Result Season
+# A car's telemetry on one lap (#1599, #1838 decision 2): a JSON document, an array and a network address, the three
+# column kinds of the lookups only PostgreSQL has (`docs/src/backends.md`). Only the Postgres.jl variant creates its
+# table: on SQLite and MySQL `lookup_refusals_step` (`../tools/reads.jl`) is refused before any SQL.
+CarTelemetry::Models.ModelType = Models.Model(
+  telemetryid = Models.IDField(),
+  payload = Models.JSONField(null = true),
+  pit_laps = Models.ArrayField(Models.IntegerField()),
+  pit_ip = Models.GenericIPAddressField()
+)
+
+Models.@models Circuit Race PitStop Driver Constructor Result Season CarTelemetry
 
 end

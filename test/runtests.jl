@@ -195,6 +195,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "Engine Branches Are Reviewed (#1129)" include("unit/test_engine_branches.jl")
     @testset "Concrete Types Ratchet (#1346)" include("unit/test_type_ratchet.jl")
     @testset "Trim Shape Pins (#1599)" include("unit/test_trim_shape_pins.jl")
+    @testset "The Located Refusal and the Array Element Path, Typed, Equal the Old Code (#1844)" include("unit/test_trim_phase_close_1844.jl")
     @testset "The Pool Through the Terminals (#1693)" include("unit/test_terminal_pool_barrier.jl")
     @testset "Configuration Read At Run Time (#1606)" include("unit/test_image_build_config.jl")
     @testset "Engine Facts Have No Fallback (#1129)" include("unit/test_engine_facts.jl")

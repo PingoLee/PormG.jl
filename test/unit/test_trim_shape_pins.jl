@@ -7474,6 +7474,16 @@ end
     end
   end
 
+  # What: `_add_parameter_at`'s bind of an array lookup's literal (`PormGArrayLiteral`).
+  # Expected: a static `add_parameter!` call for it, not the open arm's run-time one.
+  # Why: #1844. Behind the typed locator and element path, a trimmed binary stopped at the literal's bind through the open
+  #   arm: PostgreSQL's bind, and SQLite's and MySQL's `BackendCapabilityError`, are each that call's method.
+  @testset "an array literal binds at its type (#1844)" begin
+    QB = PormG.QueryBuilder
+    ci, _ = only(code_typed(QB._add_parameter_at, (QB.InstructionObject, Any); optimize = true))
+    @test any(st -> st isa Expr && st.head === :invoke && occursin("PormGArrayLiteral", string(st.args[1])), ci.code)
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

@@ -7440,6 +7440,40 @@ end
     end
   end
 
+  # What: `_locate_filter_refusal`, the funnel every refused filter value is located through, and the type label it reads
+  #   (`_opt_label`), over the unspecialized arguments it is called with.
+  # Expected: no dynamic call to `_opt_label`, and `_opt_label` itself makes none but its one open arm's; the labels callers
+  #   pass (`nothing`, a `String`) are read at their types.
+  # Why: #1844. A trimmed image had no code for `_opt_label(::Any)`, so every refusal located here surfaced as a
+  #   `MethodError` in place of the `InvalidValueError` the JIT raises, and an application could not catch what it expects.
+  @testset "the refusal locator reads its type label at its types (#1844)" begin
+    QB = PormG.QueryBuilder
+    @test _dynamic_calls_kw(QB._locate_filter_refusal, (Any, Any, Any)) == String[]
+    @test _dynamic_calls(QB._opt_label, (Any,)) == String[]
+    @test isdefined(QB, :_opt_label_other)
+    @test only(Base.return_types(QB._opt_label, (Any,))) == Union{Nothing, String}
+  end
+
+  # What: `ArrayFormatter`'s element path over the element vectors an array lookup binds (`Vector{Int64}`, `Vector{String}`,
+  #   `Vector{Float64}`), every callee followed, the open arm for a formatter no arm names excepted.
+  # Expected: no dynamic call in a PormG frame (a text element read into a timestamp included: `_pg_timestamp_parts`).
+  # Why: #1844. The base formatter's slot is typed `Function` and the element kind is a union of ten, so the old loop called
+  #   `apply_formatter(f.base.formatter, el::Any)` and the element conversion at run time; a trimmed image had no code for
+  #   them and the array lookups stopped there.
+  @testset "the array element path formats each element at its types (#1844)" begin
+    M = PormG.Models
+    @test isdefined(M, :_array_element_texts) && isdefined(M, :_array_element_text_other)
+    if isdefined(M, :_array_element_texts)
+      # PormG's own frames: Base's and Decimals' internals (`print_to_string`, `Decimals.normalize`) are upstream rows, and
+      # the reviewed open arms (`_array_element_text_other`, the `Decimal` slot readers' `_other`) are skipped.
+      skip = (M._array_element_text_other, M._decimal_exponent_other, M._decimal_negative_other)
+      own(calls) = filter(c -> occursin(r"^Tuple\{(typeof\()?PormG\.", c), calls)
+      for V in (Vector{Int64}, Vector{String}, Vector{Float64})
+        @test own(_dynamic_calls_deep(M._array_element_texts, (M.ArrayFormatter, V); skip = skip)) == String[]
+      end
+    end
+  end
+
   # What: the detector itself, on a function that does make a dynamic call.
   # Expected: it reports the call.
   # Why: a detector that never finds anything would pass every pin above for the wrong reason.

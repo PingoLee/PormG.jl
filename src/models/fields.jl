@@ -4208,6 +4208,12 @@ function (f::ArrayFormatter)(value)
     _pg_array_elements(value)
   f.size !== nothing && length(elems) > f.size &&
     throw(InvalidValueError("this ArrayField holds at most $(f.size) elements (size = $(f.size)), got $(length(elems)).", :range))
+  return PormGArrayLiteral(print_pg_array_literal(_array_element_texts(f, elems)))
+end
+
+# The elements' texts, behind a barrier at the element vector's type (#1844): a `Vector{Int64}` from an array lookup reads
+# each element as an `Int64`, so the base formatter and the element conversion are called at their types.
+function _array_element_texts(f::ArrayFormatter, elems::AbstractVector)::Vector{Union{Nothing, String}}
   texts = Vector{Union{Nothing, String}}(undef, length(elems))
   for (i, el) in enumerate(elems)
     if el === nothing || el === missing
@@ -4219,17 +4225,7 @@ function (f::ArrayFormatter)(value)
     (el isa Union{AbstractArray, Tuple} && !(el isa AbstractString)) &&
       throw(InvalidValueError("element $i is a $(typeof(el)): an ArrayField holds a one-dimensional array, so an element cannot be a collection.", :type))
     texts[i] = try
-      # Through `apply_formatter`: the slot is typed `Function`, so a direct call dispatches at run
-      # time (#1599 layer 3).
-      formatted = apply_formatter(f.base.formatter, el)
-      # A float into a numeric element converts through its shortest text (`string`, `1.1`), not the
-      # formatter's 17 significant digits (`1.1000000000000001`), which is the noise a declared
-      # `default = [1.1]` would otherwise carry into the DDL and every literal. The formatter still
-      # runs first, so it still refuses what it refuses.
-      # The IEEE types by name: under Decimals 0.4 a `Decimal` is an `AbstractFloat` too, and its text
-      # is not a plain number. `string`, not `repr`: `repr(1.5f0)` is `"1.5f0"`.
-      source = f.kind isa CDecimal && el isa Union{Float16, Float32, Float64} ? string(el) : formatted
-      pg_array_element_text(f.kind, pg_array_element_value(f.kind, source))
+      _array_element_text(f, el)
     catch e
       (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
       # The base formatters cover their own types; one handed another type (`format_bool_sql("t")`)
@@ -4240,7 +4236,54 @@ function (f::ArrayFormatter)(value)
                               e isa InvalidValueError ? e.kind : :type))
     end
   end
-  return PormGArrayLiteral(print_pg_array_literal(texts))
+  return texts
+end
+
+# One element's text: the base field's formatter, then the conversion to the element's `kind` value and its text.
+#
+# A float into a numeric element converts through its shortest text (`string`, `1.1`), not the formatter's 17 significant
+# digits (`1.1000000000000001`), which is the noise a declared `default = [1.1]` would otherwise carry into the DDL and
+# every literal. The formatter still runs first, so it still refuses what it refuses. The IEEE types by name: under
+# Decimals 0.4 a `Decimal` is an `AbstractFloat` too, and its text is not a plain number. `string`, not `repr`:
+# `repr(1.5f0)` is `"1.5f0"`.
+#
+# The base field's `formatter` slot is typed `Function` and `kind` is a union of ten, so the call is made at the pair's
+# concrete types (#1844): one arm per (formatter, kind) pair the element fields declare (`array_element_kind`), each a
+# static call in a trimmed image. Any other pair (a formatter of the caller's own) takes the open arm, the call as before
+# through `apply_formatter`. A walk of its own on purpose: arms on the shared formatter walk (`apply_formatter`,
+# `_format_literal_value`) fan out into every formatter for each value type (#1843's precompile blowup).
+@inline function _array_element_text(f::ArrayFormatter, el)::String
+  g = f.base.formatter
+  k = f.kind
+  if g isa typeof(format_number_sql)
+    k isa CInt32 && return _array_element_text_at(k, format_number_sql, el)
+    k isa CInt64 && return _array_element_text_at(k, format_number_sql, el)
+    k isa CFloat64 && return _array_element_text_at(k, format_number_sql, el)
+    k isa CDecimal && return _array_element_text_at(k, format_number_sql, el)
+  elseif g isa typeof(format_text_sql)
+    k isa CVarChar && return _array_element_text_at(k, format_text_sql, el)
+    k isa CText && return _array_element_text_at(k, format_text_sql, el)
+  elseif g isa typeof(format_date_sql)
+    k isa CDate && return _array_element_text_at(k, format_date_sql, el)
+  elseif g isa typeof(format_timezone_sql)
+    k isa CDateTime && return _array_element_text_at(k, format_timezone_sql, el)
+  elseif g isa typeof(format_bool_sql)
+    k isa CBool && return _array_element_text_at(k, format_bool_sql, el)
+  elseif g isa typeof(format_uuid_sql)
+    k isa CUUID && return _array_element_text_at(k, format_uuid_sql, el)
+  end
+  return _array_element_text_other(f, el)
+end
+@inline function _array_element_text_at(k::K, g::G, el)::String where {K <: _ArrayElementKind, G <: Function}
+  formatted = g(el)
+  source = k isa CDecimal && el isa Union{Float16, Float32, Float64} ? string(el) : formatted
+  return pg_array_element_text(k, pg_array_element_value(k, source))
+end
+# The open arm: through `apply_formatter`, whose call into the slot's formatter dispatches at run time (#1599 layer 3).
+@noinline function _array_element_text_other(f::ArrayFormatter, @nospecialize(el))::String
+  formatted = apply_formatter(f.base.formatter, el)
+  source = f.kind isa CDecimal && el isa Union{Float16, Float32, Float64} ? string(el) : formatted
+  return pg_array_element_text(f.kind, pg_array_element_value(f.kind, source))
 end
 
 # The element bounds the write path checks per element (`QueryBuilder._validate_array_value`) and a

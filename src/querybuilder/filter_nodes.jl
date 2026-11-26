@@ -636,20 +636,30 @@ end
 function _locate_filter_refusal(@nospecialize(e), @nospecialize(label), @nospecialize(type_label);
                                 subject::AbstractString = "field")
   e isa InvalidValueError || rethrow(e)
-  named = label isa AbstractString ? String(label) : label isa Symbol ? string(label) :
+  # #1844: read at the label's type, so `named` is a `Union{Nothing,String}` and the `with_location` call below is static;
+  # a `String(label)` on the abstract type was a run-time call, and its `Any` made the keyword call one too.
+  named::Union{Nothing, String} =
+          label isa String ? label :
+          label isa Union{AbstractString, Symbol} ? _opt_label_other(label) :
           # A CTE or `Joined` handle holds names only, so it is quoted as the caller wrote it.
           label isa CTEReference ? "CTE(\"$(label.name)\", \"$(label.path)\")" :
           label isa JoinedReference ? sprint(show, label) : nothing
+  field_type = _opt_label(type_label)
   throw(subject == "field" && named !== nothing ?
-          with_location(e; op = "filter", field = named, field_type = _opt_label(type_label)) :
+          with_location(e; op = "filter", field = named, field_type = field_type) :
         subject == "field" ?
-          with_location(e; op = "filter on an expression", field_type = _opt_label(type_label)) :
+          with_location(e; op = "filter on an expression", field_type = field_type) :
           with_location(e; op = named === nothing ? "filter on a $(subject)" :
                                                     "filter on the `$(named)` $(subject)",
-                        field_type = _opt_label(type_label)))
+                        field_type = field_type))
 end
 
-_opt_label(x) = x === nothing ? nothing : string(x)   # refusal-value-ok: a field-type label, not a bound value
+# The type label, as `with_location` stores it (`Union{Nothing,String}`). Every caller passes `nothing` or a `String` (a
+# field's `type` slot, `_formatter_type_label`'s answer), and those are read here at their types (#1844): a trimmed image had
+# no code for the old `_opt_label(x::Any)` call, so every refusal located here surfaced as a `MethodError` in its place.
+# Anything else goes through the one open arm, which prints it as before.
+_opt_label(@nospecialize(x))::Union{Nothing, String} = x === nothing ? nothing : x isa String ? x : _opt_label_other(x)
+@noinline _opt_label_other(@nospecialize(x))::String = string(x)   # refusal-value-ok: a field-type label, not a bound value
 
 # #576: the guarded form of the format step. `_locate_filter_refusal` above fixed the `catch`
 # body; this fixes the `try`. #467 was never a missing message -- it was a branch that formatted

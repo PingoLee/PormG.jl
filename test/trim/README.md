@@ -262,9 +262,10 @@ any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is check
   `__@iunaccent_contains` are PostgreSQL's only (`docs/src/backends.md`), and `Extract("date", "EPOCH")`, which SQLite
   does not have, reads as a `Decimal` (the width-less decimal the call means). An engine without one refuses it
   before any SQL with `BackendCapabilityError`, and the line is the refusal's text. On PostgreSQL,
-  `__@iunaccent_contains` needs the `unaccent` function in the database, which `migrate` installs when
-  `connection.yml` names the extension and `prep.jl` does not: the line records it (`not run: the database has no
-  unaccent function (SQLSTATE 42883)`). A job checks these lines against its own JIT control (`tools/same_lines.sh`).
+  `__@iunaccent_contains` needs the `unaccent` extension and PormG's `public.immutable_unaccent` wrapper in the database,
+  which `migrate` installs when `connection.yml` names the extension; the Postgres.jl `prep.jl` runs the same install
+  step (#1838 decision 1). A database without them still records the step as `not run: the database has no unaccent
+  function (SQLSTATE 42883)`. A job checks these lines against its own JIT control (`tools/same_lines.sh`).
 
 ```
 step	engine_read	name__@regex refused: The regex lookup needs POSIX regular-expression matching (`~`, `~*`), which SQLite does not support (supported on PostgreSQL). …
@@ -278,7 +279,7 @@ and on PostgreSQL (Postgres.jl):
 ```
 step	engine_read	name__@regex: Monaco Grand Prix
 step	engine_read	name__@iregex: Brazilian Grand Prix
-step	engine_read	name__@iunaccent_contains not run: the database has no unaccent function (SQLSTATE 42883)
+step	engine_read	name__@iunaccent_contains: Autódromo José Carlos Pace
 step	engine_read	Extract EPOCH: Monaco Grand Prix 1211673600, Brazilian Grand Prix 1225584000
 ```
 
@@ -289,8 +290,16 @@ MySQL refuses the three lookups as SQLite does and reads `EPOCH` as PostgreSQL d
   `CarTelemetry`, which only PostgreSQL has. The Postgres.jl `prep.jl` creates its table and seeds one row, and each
   line is the rows a lookup matches. SQLite and MySQL refuse each before any SQL through the renderer's barrier, and
   the line is the refusal's type and text. A job checks these lines against its own JIT control
-  (`tools/same_lines.sh`). The array lookups are not in the step yet: their list reaches the column's
-  `ArrayFormatter`, whose element formatting does not run trimmed.
+  (`tools/same_lines.sh`).
+- `array_lookup` (exit code 53, the write entries; #1844): `__@acontains`, `__@contained_by` and `__@overlap` over
+  `CarTelemetry.pit_laps`, an `ArrayField(IntegerField())`. On PostgreSQL the line is the rows each matches over the
+  seeded row (`pit_laps = [12, 31]`), checked by the job; SQLite and MySQL refuse each with `BackendCapabilityError`
+  (`An ArrayField value cannot be bound on SQLite: …`). Checked against each job's JIT control (`tools/same_lines.sh`).
+- `filter_refusal` (exit code 52, every entry; #1844): three filter values PormG refuses before any SQL, each located by
+  `_locate_filter_refusal`: `"year" => "abc"`, `"date" => "not a date"` and `"date__@year" => "abc"`. The line is the
+  `InvalidValueError`'s text, the same on every engine (`year: InvalidValueError: Error in filter, field `year`
+  (INTEGER): The value is not a valid number`); a trimmed image that cannot locate a refusal prints `MethodError`
+  instead. Checked against each job's JIT control.
 
 ```
 step	lookup_refusal	payload__@has_key: BackendCapabilityError: The @has_key lookup (JSONB ?) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL).

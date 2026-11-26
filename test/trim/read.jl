@@ -35,6 +35,7 @@ function (@main)(args::Vector{String})::Cint
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
+    filter_refusal_step() || return Cint(52)   # filter values refused and located (`tools/reads.jl`, #1844)
     # The terminals applications use most (`tools/terminals.jl`, #1599 layer 6): count(), exists() and the Tables.jl
     # interface a table sink reads.
     count_step() || return Cint(42)

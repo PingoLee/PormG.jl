@@ -24,6 +24,14 @@ PormG.Configuration.register_connection(KEY, trim_url(server, "postgresql");
     change_db = true, change_data = true)
 PormG.Models.set_models(models.MODEL_SET; key = KEY)
 
+# `__@iunaccent_contains` calls `public.immutable_unaccent` (#1838 decision 1): the unaccent extension and PormG's IMMUTABLE
+# wrapper over it, installed by the step `migrate` runs when `connection.yml` names `extensions: [unaccent]`. The key is
+# registered in code, so the entry is set on its settings here. unaccent is a trusted extension: the fixture's role needs
+# CREATE on the database, not superuser. Idempotent, like `migrate`'s.
+let settings = PormG.Configuration.get_settings(KEY)
+    settings.db_config_settings["extensions"] = ["unaccent"]
+    PormG.Configuration._install_configured_extensions!(settings)
+end
 PormG.Migrations.ensure_table!(M.Circuit, KEY)
 PormG.Migrations.ensure_table!(M.Race, KEY)
 PormG.Migrations.ensure_table!(M.PitStop, KEY)

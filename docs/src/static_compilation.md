@@ -58,11 +58,13 @@ else is untested in a trimmed binary, even where it compiles.
   joined with `join_type = "INNER"`. `__@regex` and `__@iregex` have run on PostgreSQL, and `Extract("date",
   "EPOCH")` on MySQL and PostgreSQL. An engine without one of them (`__@regex`, `__@iregex` and
   `__@iunaccent_contains` on SQLite and MySQL, `EPOCH` on SQLite) refuses it with the `BackendCapabilityError`
-  the JIT raises. `__@iunaccent_contains` has not run on PostgreSQL: the workflow's database does not have the
-  `unaccent` function. The JSON (`__@jcontains`, `__@has_key`, `__@has_any_keys`, `__@has_keys`) and network
+  the JIT raises. `__@iunaccent_contains` has run on PostgreSQL, in a database where `unaccent` is installed
+  (`migrate` installs it when `connection.yml` names it under `extensions:`). The JSON (`__@jcontains`, `__@has_key`, `__@has_any_keys`, `__@has_keys`) and network
   (`__@net_contained`, …, `__@family`, `__@prefixlen`) lookups have run on PostgreSQL, and SQLite and MySQL refuse
-  each with the `BackendCapabilityError` the JIT raises. The array lookups (`__@acontains`, `__@contained_by`,
-  `__@overlap`) have not run trimmed: an array value's elements are not formatted at their types yet.
+  each with the `BackendCapabilityError` the JIT raises, and so have the array lookups (`__@acontains`,
+  `__@contained_by`, `__@overlap`) over an `ArrayField(IntegerField())`. A filter value PormG refuses before any SQL
+  (one a field's formatter refuses, or a `__@year` bound) raises the `InvalidValueError` the JIT raises, located with
+  its field and type.
   `Q` and `Qor` with 32 arguments or more have run too, built literally or by `push!` over a `Vector` of concrete
   pairs (`q = Qor(); for p in pairs; push!(q, p); end`). Not `Qor(pairs...)` over a `Vector`: a splat whose length is
   known only at run time is a call `juliac --trim` refuses, whatever the vector's element type, and a `Vector` whose
@@ -178,6 +180,9 @@ tasks. The SQLite refused statement is checked by hand.
     trimmed in each case, but no trimmed binary has refused one;
   - `bulk_insert(…; returning = …)` (see above), an upsert without a `target` (`on_conflict = :nothing`), and
     deleting one row through `delete(row)`.
+- **A filter on an aggregate alias** (`values("n" => Count("raceid")).filter("n" => …)`, which renders in `HAVING`) has
+  not run trimmed: the alias's value is typed and bound through calls made at run time, so a trimmed binary stops there,
+  whether the value is refused or not. Filter on the aggregate under the JIT, or with `Q` in a separate process.
 - **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
   by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three
   digits: PormG's own text, `2009-05-24T14:00:00.000+00:00`, is that shape, and it has run trimmed on

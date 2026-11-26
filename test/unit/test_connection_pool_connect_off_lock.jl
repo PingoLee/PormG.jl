@@ -21,7 +21,7 @@ const CP = PormG.ConnectionPool
 #
 # Every task here is a sticky `@async` task on one thread, so the mock's `sleep` is the yield point
 # that lets the main task run while a connect is in flight. Gate: on the unpatched code each timed
-# assertion waits out the whole connect (4 s in the two timed testsets, #1830), against a bound of 1–2 s.
+# assertion waits out the whole connect (4 s in the two timed testsets, #1830), against a bound of 2 s.
 # ─────────────────────────────────────────────────────────────────────────────
 
 mutable struct FakeSlowConn1540
@@ -106,8 +106,8 @@ _mocks_1540() = (("PG", () -> MockPGSlow1540(2)), ("SQLite", () -> MockSQLiteSlo
     @testset "$label" begin
       p = mk()
       c1 = CP.acquire_connection(p; timeout_seconds = 5)   # slot 1, instant connect
-      # #1830: a 4 s connect, so the bounds below sit 3 s under the unpatched wait and 1 s over the patched one; a
-      # loaded runner added ~0.9 s of scheduling to a 0.2 s wait against a 2 s connect and failed the old 1.0 s bound.
+      # #1830: a 4 s connect, so the 2 s bounds below sit 2 s under the unpatched wait; the old 0.5 s bounds against a
+      # 2 s connect left no room for the scheduling delay a loaded runner adds (~0.9 s measured in the testset below).
       p.delay = 4.0
       A = @async CP.acquire_connection(p; timeout_seconds = 10)   # slot 2: a 4 s connect
       started = _wait_until_1540(() -> p.connecting == 1)
@@ -125,8 +125,8 @@ _mocks_1540() = (("PG", () -> MockPGSlow1540(2)), ("SQLite", () -> MockSQLiteSlo
       @test started
       @test reserved                                       # reserved: leased, empty
       @test released === true
-      @test release_s < 1.0                                # ← unpatched: ~4 s, behind the connect
-      @test acquire_s < 1.0
+      @test release_s < 2.0                                # ← unpatched: ~4 s, behind the connect
+      @test acquire_s < 2.0
       @test got === c1
 
       a = fetch(A)

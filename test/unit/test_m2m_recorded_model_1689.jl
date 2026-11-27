@@ -146,17 +146,36 @@ function _mr_new_module_models(mod::Module)
   return out
 end
 
-# What: for every module registered in this process (in the full unit suite, every test's models), the models its set
-#   declares against the models the old scan of its names found.
+# What: for this file's modules (their own models, a many-to-many across two of them), the models each set declares
+#   against the models the old scan of the module's names found.
 # Expected: the same models, so `_from_column_names` takes the same candidates and returns the same columns.
 # Why: the scan looked each name up in the module at run time, which a trimmed image cannot follow (#1689); the set is
-#   what registration recorded, and every model binding must be declared in it.
+#   what registration recorded.
 @testset "a module's declared models are the ones its names held (#1689)" begin
-  mods = collect(keys(PormG.Models.REGISTERED_SETS))
-  @test length(mods) >= 4
-  for mod in mods
+  for mod in (Mr1689People, Mr1689Races, Mr1689Teams, Mr1689Seasons)
     old, new = _mr_old_module_models(mod), _mr_new_module_models(mod)
     @test (nameof(mod), length(new), all(m -> m in old, new) && all(m -> m in new, old)) ==
           (nameof(mod), length(old), true)
   end
+end
+
+# A module that imports a model from another and declares it in its own set (the shape the full unit suite has in
+# `test_plain_model_binding_warning.jl` and the using-scoped app tests).
+module Mr1689Importer
+import PormG
+import PormG.Models
+import ..Mr1689Teams: Team
+Models.@models Team
+end
+
+# What: the models `_from_column_names` takes from a module that declares an imported model.
+# Expected: the declared set includes the imported model; the old scan of the module's names did not (`names(mod; all =
+#   true)` leaves imported bindings out).
+# Why: the one documented difference of #1689's change to the ORDER BY alias check (MySQL, SQLite below 3.30): an
+#   imported, declared model's table now counts, where the old scan missed it (`upgrading/…-1689-…`). The other one, a
+#   module redefined in place whose set and live bindings hold different objects, reads the set, as every other lookup
+#   through the module does.
+@testset "an imported, declared model counts for the module (#1689)" begin
+  old, new = _mr_old_module_models(Mr1689Importer), _mr_new_module_models(Mr1689Importer)
+  @test (Mr1689Teams.Team in new, Mr1689Teams.Team in old) == (true, false)
 end

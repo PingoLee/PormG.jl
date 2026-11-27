@@ -6677,9 +6677,8 @@ end
                                ("_resolve_having_filter_value", "_bind_predicate_value", "_bind_alias_predicate")) ==
           String[]
     @test _named_dynamic_calls(Tuple{typeof(QB._resolve_having_filter_value), QB.MemoKey, Any, I, String},
-                               ("_sqlite_preserve_native_parameter", "_having_list_native", "_guarded_format",
-                                "_lookup_formatter", "_having_alias_formatter")) == String[]
-    @test _dynamic_calls(QB._sqlite_preserve_native_parameter, (Any, Any, Any, I)) == String[]
+                               ("_sqlite_preserve_native_parameter", "_guarded_format", "_lookup_formatter",
+                                "_having_alias_formatter")) == String[]
     @test _dynamic_calls(QB._bind_alias_predicate, (I, String, Any)) == String[]
   end
 

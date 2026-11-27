@@ -6,10 +6,11 @@
 #   and checks its value at its types since #1846 (#1599 layers 5-6), and answers what the old code answered:
 #     - `_resolve_having_filter_value` returns the same value, of the same type, or raises the same error type and text,
 #       for every alias kind × operator × value below, on every engine (the SQLite native-number rule included);
-#     - the whole statement renders the same SQL and binds the same parameters, or raises the same refusal, through the
-#       filter and the `Q`/`Qor` spelling (checked here against the base's recorded answers is the PR's differential;
-#       this file checks the statements render and the refusals keep their type and text).
-#   The old `_resolve_having_filter_value` (base `20b8ad664`) is vendored below as the oracle.
+#     - the statements render in `HAVING` and the refusal keeps its type and text.
+#   The old `_resolve_having_filter_value` (base `20b8ad664`) is vendored below as the oracle. The whole statement, its
+#   parameters (with their element types) and every refusal are compared with the code before the change in
+#   `test_having_alias_matrix_1846.jl`, a recorded matrix: a function-level oracle cannot judge an empty list, whose
+#   element type comes from inference where the comprehension runs.
 #
 # Hermetic: mock connections, no database.
 #

@@ -72,7 +72,7 @@ const _HVMX_CELLS = Pair{String, Any}[
 _hvmx_strip(s) = replace(s, r"\e\[[0-9;]*m" => "")
 _hvmx_canon(r) = r isa AbstractDict ? sort!([string(k) => _hvmx_canon(v) for (k, v) in r]; by = first) : r
 # The parameters with their element types: an empty list bound as `String[]` and as `Any[]` are different parameters.
-_hvmx_typed(r) = r isa AbstractDict ? [string(k) => (k in (:params, "params") ? repr(v) : _hvmx_canon(v)) for (k, v) in r] : r
+_hvmx_typed(r) = r isa AbstractDict ? [string(k) => (k in (:params, "params") ? _hvmx_show(v) : _hvmx_canon(v)) for (k, v) in r] : r
 _hvmx_spellings(key, value) = (
   :filter => () -> (key => value,),
   :Q => () -> (Q(key => value),),
@@ -82,18 +82,22 @@ function _hvmx_observe(alias, mk, key, value, spelling, conn)
   try
     q = _HVMX_R.objects.values("year", alias => mk()).filter(spelling()...)
     d = PormG.QueryBuilder.query(q; connection = conn, show_query = :dict)
-    return (stage = :ok, result = _hvmx_strip(repr(sort!(_hvmx_typed(d); by = first))))
+    return (stage = :ok, result = _hvmx_strip(_hvmx_show(sort!(_hvmx_typed(d); by = first))))
   catch e
     msg = _hvmx_strip(sprint(showerror, e))
     e isa MethodError && (msg = first(split(msg, '\n')))   # its candidate list carries file paths
     return (stage = :raised, error = string(nameof(typeof(e))), message = msg)
   end
 end
-# An expression value is named by its type, not its `repr`, which another test file's `show` methods can change in the
-# full suite (one cell of each expression type, so the name is unique).
+# Values and types are printed relative to one module, never `Main`: how a type prints (`FExpression` or
+# `PormG.QueryBuilder.FExpression`) depends on what `Main` has imported, which differs in the full unit suite. An
+# expression value is named by its type, not its `repr`, which another test file's `show` methods can change (one cell of
+# each expression type, so the name is unique).
+_hvmx_show(x) = sprint(show, x; context = :module => PormG.QueryBuilder)
 _hvmx_label(value) = value isa Union{PormG.QueryBuilder.SQLTypeF, PormG.QueryBuilder.SQLTypeFunction} ?
-                     string(nameof(typeof(value))) : repr(value)
-_hvmx_id(alias, key, value, spelling) = string(alias, " ", key, " => ", typeof(value), " ", _hvmx_label(value), " ", spelling)
+                     string(nameof(typeof(value))) : _hvmx_show(value)
+_hvmx_id(alias, key, value, spelling) =
+  string(alias, " ", key, " => ", _hvmx_show(typeof(value)), " ", _hvmx_label(value), " ", spelling)
 _hvmx_cases() = [(alias, mk, isempty(op) ? alias : string(alias, "__@", op), value, sp, spf)
                  for (alias, mk) in _HVMX_ALIASES for (op, value) in _HVMX_CELLS
                  for (sp, spf) in _hvmx_spellings(isempty(op) ? alias : string(alias, "__@", op), value)]

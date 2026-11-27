@@ -18,9 +18,15 @@ name (`Race`) in the **target's** module, the one that defines `Driver`. When th
 | the target's module declares a different model as `Race` (or one whose name reads as `race`): a path that walks on past the hop, such as `on("races__circuitid", …)` | `QueryBuildError` naming the other model: `… The segment 'circuitid' is not a relation on model '<other model's name>'.` | the error for what the path is: `on()` across a many-to-many is refused (`… crosses the ManyToMany relation 'races' …`, #977) |
 | the same, wherever PormG walks a path to tell which tables a statement reaches (MySQL's `ORDER BY` alias check, a `values()` path that names a related column) | the walk continued from the other model | the walk continues from the model the relation recorded |
 
-The hop now reads the model registration recorded on the relation (#1601), as the forward hops already did. The model
-set of a module, not a scan of its names, also gives the models PormG considers for an `ORDER BY` column check; for
-every registered module they are the same models.
+The hop now reads the model registration recorded on the relation (#1601), as the forward hops already did.
+
+The models PormG considers for the `ORDER BY` alias check (on MySQL, and SQLite below 3.30, where PormG emulates
+`NULLS FIRST`/`LAST`) now come from the module's model set, not a scan of its names. They are the same models, with two
+exceptions. A model **imported** from another module and listed in the importer's `@models` is now considered, where the
+scan left imported bindings out. A models module **redefined in place** is read through its set, as every other lookup
+through the module is. This only matters for a table joined by a `cjoin` link to such a model, ordered by an alias the
+check must tell apart from that table's columns: the null ordering is now decided from the projection, where it was
+decided from the column of the same name.
 
 ### How to find the calls to migrate
 

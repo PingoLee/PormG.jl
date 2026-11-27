@@ -6716,6 +6716,32 @@ end
     @test hits == String[]
   end
 
+  # What: `showerror(io, e)` for every concrete `PormGError` type, at that type (#1613), following its calls 6 levels.
+  # Expected: no dynamic call in PormG's own frames, except the two reviewed ones: `PoolConnectError` prints its
+  #   driver's `cause`, whose type is the driver's (`_redacted_cause`, a designed run-time call), and the migration
+  #   errors (`DestructiveMigrationError`, `MigrationPrecheckError`) `repr` each lossy alter's values; migrations are a
+  #   JIT-only tool. Base's own frames (a `print` over an untyped part) are outside the pin.
+  # Why: a trimmed binary prints a caught PormG error through `showerror` exactly as the JIT does when the call is made
+  #   at the error's concrete type: the fixture's `showerror` lines compare every message it provokes with its JIT control
+  #   (`test/trim/tools/errors.jl`), and this keeps the methods those lines go through free of run-time calls.
+  @testset "PormG's errors print through showerror at their types (#1613)" begin
+    function concrete(T, acc = Type[])
+      for S in InteractiveUtils.subtypes(T)
+        isabstracttype(S) ? concrete(S, acc) : push!(acc, S)
+      end
+      acc
+    end
+    reviewed = ("PoolConnectError", "DestructiveMigrationError", "MigrationPrecheckError")
+    types = concrete(PormG.PormGError)
+    @test length(types) >= 25
+    for T in types
+      any(r -> endswith(string(T), r), reviewed) && continue
+      d = _dynamic_calls_deep(showerror, (IOBuffer, T); depth = 6)
+      mine = filter(x -> occursin("PormG", first(split(x, ": "))), d)
+      @test (T, mine) == (T, String[])
+    end
+  end
+
   # What: the many-to-many join (`_insert_many_to_many_joins`, the body `_m2m_joins_at` at the models' types) and the
   #   `to_many` stamp on the surviving row (`_flag_to_many!`).
   # Expected: no dynamic call in the body at `ModelType` (the relation's recorded models), none to the model helpers

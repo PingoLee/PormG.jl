@@ -6756,17 +6756,6 @@ end
       @test (T, unexpected) == (T, String[])
     end
   end
-      acc
-    end
-    reviewed = ("PoolConnectError", "DestructiveMigrationError", "MigrationPrecheckError")
-    @test length(types) >= 25
-    for T in types
-      any(r -> endswith(string(T), r), reviewed) && continue
-      d = _dynamic_calls_deep(showerror, (IOBuffer, T); depth = 6)
-      mine = filter(x -> occursin("PormG", first(split(x, ": "))), d)
-      @test (T, mine) == (T, String[])
-    end
-  end
 
   # What: the many-to-many join (`_insert_many_to_many_joins`, the body `_m2m_joins_at` at the models' types) and the
   #   `to_many` stamp on the surviving row (`_flag_to_many!`).

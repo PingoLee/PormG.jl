@@ -157,6 +157,8 @@ _jrs_last_join_table(sql) = last(collect(eachmatch(r"JOIN \"(\w+)\" AS", sql))).
         ("deep forward",      "driverid__teamid",  "name",   q -> nothing),
         ("reverse",           "driverid__results", "grid",   q -> nothing),
         ("ManyToMany",        "driverid__sponsors", "name",  q -> nothing),
+        # #1689: the reverse accessor, whose hop reads the model the relation recorded.
+        ("reverse ManyToMany", "driverid__sponsors__drivers", "number", q -> nothing),
         ("cjoin link (#974)", "grid",              "number", q -> q.cjoin("grid" => "Jrs_driver", warn = false, field = link())),
     )
     @testset "$label" for (label, path, col, prepare) in cases

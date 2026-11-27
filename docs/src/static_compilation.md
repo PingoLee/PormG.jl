@@ -183,6 +183,10 @@ tasks. The SQLite refused statement is checked by hand.
 - **A filter on an aggregate alias** (`values("n" => Count("raceid")).filter("n" => …)`, which renders in `HAVING`) has
   not run trimmed: the alias's value is typed and bound through calls made at run time, so a trimmed binary stops there,
   whether the value is refused or not. Run such a query under the JIT.
+- **A join target named by a string**: `cjoin("circuitid" => "Circuit")` and `cjoin_on("Circuit", …)` look the model up by
+  its name in the models module when the query is built, and have not run trimmed. Pass the model itself
+  (`cjoin_on(M.Circuit, …)`, `cjoin(…; field = Models.ForeignKey(M.Circuit, …))`). A relation declared on a model,
+  forward or reverse, many-to-many included, reads the model registration recorded (#1689).
 - **Timestamp text PormG did not write.** A timestamp PormG validates or reads back as text is parsed
   by hand when it carries a `Z` or a `±hh:mm` offset, after its milliseconds are brought to three
   digits: PormG's own text, `2009-05-24T14:00:00.000+00:00`, is that shape, and it has run trimmed on

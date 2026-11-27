@@ -6669,6 +6669,27 @@ end
   #   `deepcopy` for a value outside the typed set.
   # Why: `.copy()` walked the projection, the filter, the ORDER BY terms, the name lists and a filled insert map through
   #   `deepcopy`'s generic walk, which visits each field by run-time dispatch and which a trimmed image has no code for.
+  # What: the query builder's source (`src/querybuilder/`), for a model found by name in a module after registration:
+  #   a scan of a module's names (`names(mod; …)`), a binding read by a computed name (`getfield(mod, …)` on a module,
+  #   `isdefined(mod, n)` in a loop), and the reverse many-to-many hop's lookup of the owner by its binding name.
+  # Expected: none, except the `cjoin("f" => "Model")` / `cjoin_on("Model", …)` string forms, whose model name is the
+  #   caller's (`join_conditions.jl`, the two `isdefined(q.model._module, …)` checks), reviewed and kept (#1689).
+  # Why: a binding chosen by name at run time is one a `juliac --trim` image does not keep, and the reverse hop's lookup
+  #   was also wrong across modules (#1689); the relation records its model at registration (#1601).
+  @testset "the query builder finds no model by name in a module (#1689)" begin
+    dir = joinpath(pkgdir(PormG), "src", "querybuilder")
+    hits = String[]
+    for f in sort(readdir(dir)), (i, l) in enumerate(eachline(joinpath(dir, f)))
+      code = strip(first(split(l, '#')))   # a comment may name them
+      isempty(code) && continue
+      occursin(r"\bnames\(\s*(?!Dialect\b)\w+\s*;", code) && push!(hits, "$(f):$(i): $(code)")
+      occursin(r"related_binding\)", code) && push!(hits, "$(f):$(i): $(code)")
+      occursin(r"getfield\(\s*(mod|_module|\w+\._module)\s*,", code) && push!(hits, "$(f):$(i): $(code)")
+      occursin(r"isdefined\(\s*\w*(mod|_module)\s*,\s*n\s*\)", code) && push!(hits, "$(f):$(i): $(code)")
+    end
+    @test hits == String[]
+  end
+
   @testset ".copy() copies the whole query at its types (#1684)" begin
     QB = PormG.QueryBuilder
     OD = QB.OrderedCollections.OrderedDict{String,Any}

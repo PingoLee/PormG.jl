@@ -161,7 +161,7 @@ _model_table_at(@nospecialize(model))::String =
 # The column names of the tables in this statement's FROM clause: the base model's, each joined model's,
 # and each joined CTE's projections. A joined model is found by its table among the models the base
 # model reaches through its relations (forward and reverse, any depth, whatever module defines them),
-# the `cjoin_on` targets, and the models of the base model's module.
+# the `cjoin_on` targets, and the models the base model's module declares (its model set).
 #
 # Read while ORDER BY renders (`get_order_query`), so it also counts the joins the statement adds after
 # that point (#404 fixes that order): an `order_by` path a later term resolves, the relation paths a
@@ -200,10 +200,15 @@ function _from_column_names(object::SQLObject, instruc::SQLInstruction)::Set{Str
     push!(tables, _model_table_at(aj.target))
     push!(candidates, aj.target)
   end
+  # The models the base model's module declares (#1689): its model set, read as registration recorded it (#1601), not a
+  # scan of the module's names, which looked each binding up by name at run time.
   mod = isdefined(object.model, :_module) ? object.model._module : nothing
   if mod isa Module
-    for n in names(mod; all = true)
-      isdefined(mod, n) && (m = getfield(mod, n)) isa PormGModel && push!(candidates, m)
+    set = Models._model_set(mod)
+    if set !== nothing
+      for (_, m) in Models._declared_models(set)
+        push!(candidates, m)
+      end
     end
   end
   cols = Set{String}()

@@ -58,6 +58,7 @@ env:
   # forward and one reverse, `__@yyyy_mm`/`__@ne`/`__@nin`, `Qor` over a `Q`, `page`/`limit`/`offset`,
   # `Count(distinct)`/`Max`/`Avg`/`Min`, `Sum(Case(...))`, `distinct()`, `ToChar` ordered by its alias, an INNER CTE join),
   # a `.copy()` changed and read beside its original (#1684),
+  # a many-to-many hop forward and backward through `Result` (#1689),
   # over the rows every prep.jl seeds. One line per lookup, order or expression; each job checks that its binary prints
   # every one.
   TRIM_READ_LINES: |-
@@ -108,6 +109,9 @@ env:
     step\thops\t2 hops 1 rows: stop 1 in Monaco
     step\thops\t3 hops 1 rows: Renault from None
     step\thops\treverse 2 rows: Autódromo José Carlos Pace 2008, Circuit de Monaco 2008
+    step\tm2m\tdrivers__surname 1 rows: Monaco Grand Prix
+    step\tm2m\traces__year 1 rows: Piquet
+    step\tm2m\tvalues races__name 1 rows: Piquet in Monaco Grand Prix
     step\tlookup_more\tdate__@yyyy_mm 1 rows: Monaco Grand Prix
     step\tlookup_more\tround__@ne 1 rows: Brazilian Grand Prix
     step\tlookup_more\tround__@nin 1 rows: Brazilian Grand Prix
@@ -172,7 +176,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 17 untyped read, 19 function read, 20 subquery read, 21 join read, 26 CTE read, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 46 typed rows into a table sink, 51 Q/Qor from 32 arguments, 54 a .copy() read, 52 a refused filter value not located as InvalidValueError, 124 = timed out)"
+            echo "::error::the trimmed read-only binary exited with status $status (3 read, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 17 untyped read, 19 function read, 20 subquery read, 21 join read, 26 CTE read, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 46 typed rows into a table sink, 51 Q/Qor from 32 arguments, 54 a .copy() read, 56 a many-to-many hop, 52 a refused filter value not located as InvalidValueError, 124 = timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -298,7 +302,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 21 join read, 22 cascading delete, 24 user transaction, 25 close_all, 26 CTE read, 27 bulk_update with filters= or two keys, 28 SET_DEFAULT, 29 self-referential cascade, 30 a bulk refusal, 31 bulk_insert on_conflict, 33 a second key, 34 the @import_models read, 35 nested transaction, 36 a read on a spawned task, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 44 a locking read in a transaction, 45 a raw fetch, 46 typed rows into a table sink, 47 bulk writes from a column table, 49 a delete rule, 50 the JSON and network lookups, 51 Q/Qor from 32 arguments, 54 a .copy() read, 52 a refused filter value not located as InvalidValueError, 53 the array lookups, 55 a write through a .copy(), 124 timed out)"
+            echo "::error::the trimmed write binary exited with status $status (1 boot, 2 write, 3 read, 6 a create was not refused with an InvalidValueError, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 12 a bulk_insert row was not refused with an InvalidValueError, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 21 join read, 22 cascading delete, 24 user transaction, 25 close_all, 26 CTE read, 27 bulk_update with filters= or two keys, 28 SET_DEFAULT, 29 self-referential cascade, 30 a bulk refusal, 31 bulk_insert on_conflict, 33 a second key, 34 the @import_models read, 35 nested transaction, 36 a read on a spawned task, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 44 a locking read in a transaction, 45 a raw fetch, 46 typed rows into a table sink, 47 bulk writes from a column table, 49 a delete rule, 50 the JSON and network lookups, 51 Q/Qor from 32 arguments, 54 a .copy() read, 56 a many-to-many hop, 52 a refused filter value not located as InvalidValueError, 53 the array lookups, 55 a write through a .copy(), 124 timed out)"
             exit 1
           fi
           # Each step's own line, exactly as its JIT control prints it (test/trim/steps.jl): the read steps, then the
@@ -480,7 +484,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 21 join read, 22 cascading delete, 24 user transaction, 25 close_all, 26 CTE read, 27 bulk_update with filters= or two keys, 28 SET_DEFAULT, 29 self-referential cascade, 30 a bulk refusal, 31 bulk_insert on_conflict, 32 the allocated-key refusal, 33 a second key, 35 nested transaction, 36 a read on a spawned task, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 44 a locking read in a transaction, 45 a raw fetch, 46 typed rows into a table sink, 47 bulk writes from a column table, 49 a delete rule, 50 the JSON and network lookups, 51 Q/Qor from 32 arguments, 54 a .copy() read, 52 a refused filter value not located as InvalidValueError, 53 the array lookups, 55 a write through a .copy(), 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 21 join read, 22 cascading delete, 24 user transaction, 25 close_all, 26 CTE read, 27 bulk_update with filters= or two keys, 28 SET_DEFAULT, 29 self-referential cascade, 30 a bulk refusal, 31 bulk_insert on_conflict, 32 the allocated-key refusal, 33 a second key, 35 nested transaction, 36 a read on a spawned task, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 44 a locking read in a transaction, 45 a raw fetch, 46 typed rows into a table sink, 47 bulk writes from a column table, 49 a delete rule, 50 the JSON and network lookups, 51 Q/Qor from 32 arguments, 54 a .copy() read, 56 a many-to-many hop, 52 a refused filter value not located as InvalidValueError, 53 the array lookups, 55 a write through a .copy(), 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then
@@ -645,7 +649,7 @@ jobs:
           set -e
           echo "exit status: $status"
           if [ "$status" -ne 0 ]; then
-            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 21 join read, 22 cascading delete, 23 a Postgres.jl connection shape, 24 user transaction, 25 close_all, 26 CTE read, 27 bulk_update with filters= or two keys, 28 SET_DEFAULT, 29 self-referential cascade, 30 a bulk refusal, 31 bulk_insert on_conflict, 33 a second key, 35 nested transaction, 36 a read on a spawned task, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 44 a locking read in a transaction, 45 a raw fetch, 46 typed rows into a table sink, 47 bulk writes from a column table, 48 an empty RETURNING not refused with StatementError (PostgreSQL), 49 a delete rule, 50 the JSON and network lookups, 51 Q/Qor from 32 arguments, 54 a .copy() read, 52 a refused filter value not located as InvalidValueError, 53 the array lookups, 55 a write through a .copy(), 124 timed out)"
+            echo "::error::the trimmed $TRIM_VARIANT binary exited with status $status (1 boot, 2 write, 3 read, 6 the fail step did not raise the server's error, 7 update, 8 delete, 9 bulk_insert, 10 comparison filter, 11 order_by, 13 lookup, 14 expression comparison, 15 bulk_update, 16 update_or_create, 17 untyped read, 18 get_or_create, 19 function read, 20 subquery read, 21 join read, 22 cascading delete, 23 a Postgres.jl connection shape, 24 user transaction, 25 close_all, 26 CTE read, 27 bulk_update with filters= or two keys, 28 SET_DEFAULT, 29 self-referential cascade, 30 a bulk refusal, 31 bulk_insert on_conflict, 33 a second key, 35 nested transaction, 36 a read on a spawned task, 37 relation hops, 38 lookup or Q/Qor, 39 paging, 40 aggregate, 41 an engine's own read, 42 count, 43 exists, 44 a locking read in a transaction, 45 a raw fetch, 46 typed rows into a table sink, 47 bulk writes from a column table, 48 an empty RETURNING not refused with StatementError (PostgreSQL), 49 a delete rule, 50 the JSON and network lookups, 51 Q/Qor from 32 arguments, 54 a .copy() read, 56 a many-to-many hop, 52 a refused filter value not located as InvalidValueError, 53 the array lookups, 55 a write through a .copy(), 124 timed out)"
             exit 1
           fi
           if ! grep -qxF "$(printf '%b' "$TRIM_EXPECTED_ROW")" build/run.txt; then

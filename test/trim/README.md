@@ -251,6 +251,9 @@ any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is check
 - `hops` (exit code 37): `values()` two hops forward (a pit stop's race's circuit), three hops forward (a
   constructor's parent's parent's home circuit, through the self-referential key twice) and one reverse hop (a
   circuit's races, `race__year`).
+- `m2m` (exit code 56, every entry; #1689): `Race.drivers`, a many-to-many through `Result` (`db/models.jl`), read
+  forward (`drivers__surname`), backward from a driver (`races__year`) and projected backward (`values("race" =>
+  "races__name")`), over the one result every `prep.jl` seeds (Piquet in the 2008 Monaco Grand Prix).
 - `lookup_more` (exit code 38): `__@yyyy_mm`, `__@ne`, `__@nin`, and `Qor` over a lookup and a nested `Q`.
 - `qor_many` (exit code 51, #1838 residue): `Qor` with 40 literal arguments of mixed types (pairs of an integer, a
   string, a float and a date, and a nested `Q`), and a `Qor` built from a run-time `Vector{Pair{String,Int64}}` by

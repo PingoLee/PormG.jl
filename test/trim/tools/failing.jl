@@ -39,6 +39,7 @@ _db_fields(e::PormG.IntegrityError) = (e.sqlstate, e.message, e.cause)
 
 @noinline function report_failure(@nospecialize(e))
     say("fail", string("threw ", nameof(typeof(e))))
+    showerror_line("fail", e)   # the full message at the error's type (#1613)
     if e isa MethodError
         Core.println("  missed: ", typeof(e.f))
         Core.println("  args: ", typeof(e.args))

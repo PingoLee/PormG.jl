@@ -110,6 +110,7 @@ function query_step()::Bool
     end
 end
 
+include(joinpath(@__DIR__, "..", "tools", "errors.jl"))   # every caught PormG error through `showerror` (#1613)
 include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
 include(joinpath(@__DIR__, "..", "tools", "reads.jl"))
 include(joinpath(@__DIR__, "..", "tools", "connections.jl"))
@@ -176,6 +177,7 @@ function returning_refused_step(circuitid::Int)::Bool
             "not refused"
         catch e
             e isa PormG.StatementError || rethrow()
+            showerror_line("returning_refused", e)
             string("StatementError: ", something((e::PormG.StatementError).message, ""))
         end
         written = M.Race.objects.filter("name" => "Skipped Grand Prix").count()::Int

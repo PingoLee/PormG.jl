@@ -598,6 +598,7 @@ function filter_refusal_line(label::String, read::F)::Bool where {F <: Function}
     catch e
         e isa PormG.InvalidValueError || (failed("filter_refusal", e); return false)
         say("filter_refusal", string(label, ": InvalidValueError: ", (e::PormG.InvalidValueError).msg))
+        showerror_line(string("filter_refusal ", label), e)
         return true
     end
 end
@@ -609,6 +610,7 @@ function lookup_refusal_line(label::String, read::F; step::String = "lookup_refu
         string(length(read()::Vector{TelemetryIdRow}), " rows")
     catch e
         e isa PormG.BackendCapabilityError || rethrow()
+        showerror_line(string(step, " ", label), e)
         string("BackendCapabilityError: ", (e::PormG.BackendCapabilityError).msg)
     end
     say(step, string(label, ": ", text))
@@ -625,6 +627,7 @@ function engine_read_line(label::String, read::F; needs_function::Bool = false):
         string(": ", read()::String)
     catch e
         if e isa PormG.BackendCapabilityError
+            showerror_line(string("engine_read ", label), e)
             string(" refused: ", (e::PormG.BackendCapabilityError).msg)
         elseif needs_function && e isa PormG.StatementError && (e::PormG.StatementError).sqlstate == "42883"
             " not run: the database has no unaccent function (SQLSTATE 42883)"
@@ -723,6 +726,7 @@ function having_step()::Bool
         catch e
             e isa PormG.InvalidValueError || (failed("having", e); return false)
             say("having", string("n__@gt \"abc\": InvalidValueError: ", (e::PormG.InvalidValueError).msg))
+            showerror_line("having n__@gt", e)
             true
         end
         return ok && refused

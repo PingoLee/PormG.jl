@@ -89,7 +89,11 @@ function _hvmx_observe(alias, mk, key, value, spelling, conn)
     return (stage = :raised, error = string(nameof(typeof(e))), message = msg)
   end
 end
-_hvmx_id(alias, key, value, spelling) = string(alias, " ", key, " => ", typeof(value), " ", repr(value), " ", spelling)
+# An expression value is named by its type, not its `repr`, which another test file's `show` methods can change in the
+# full suite (one cell of each expression type, so the name is unique).
+_hvmx_label(value) = value isa Union{PormG.QueryBuilder.SQLTypeF, PormG.QueryBuilder.SQLTypeFunction} ?
+                     string(nameof(typeof(value))) : repr(value)
+_hvmx_id(alias, key, value, spelling) = string(alias, " ", key, " => ", typeof(value), " ", _hvmx_label(value), " ", spelling)
 _hvmx_cases() = [(alias, mk, isempty(op) ? alias : string(alias, "__@", op), value, sp, spf)
                  for (alias, mk) in _HVMX_ALIASES for (op, value) in _HVMX_CELLS
                  for (sp, spf) in _hvmx_spellings(isempty(op) ? alias : string(alias, "__@", op), value)]

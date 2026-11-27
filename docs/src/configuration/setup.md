@@ -213,7 +213,7 @@ project root at run time too, from an environment variable or the working direct
 function (@main)(args::Vector{String})::Cint
     root = get(ENV, "RACECONTROL_ROOT", pwd())   # the deployment's folder, read when the program starts
     PormG.Configuration.load("db"; root = root, env = "prod")
-    PormG.Models.set_models(MyApp.models, "db")
+    PormG.Models.set_models(RaceControl.models, "db")
     # … serve
     return 0
 end

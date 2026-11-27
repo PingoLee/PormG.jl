@@ -356,7 +356,7 @@ end
 
 `APP_ROOT` from `@__DIR__` is right for a package image, whose files stay where they were installed. A `juliac`
 executable built from the package is different: `@__DIR__` there names the temporary copy the build compiled, which is
-gone when the program runs, so `__init__` takes the root at run time instead
+gone when the program runs. For that build, have `__init__` take the root at run time instead
 ([Built images read their configuration at run time](setup.md#Built-images-read-their-configuration-at-run-time)).
 
 Each half does a different job, which is why dropping either one breaks something. The first

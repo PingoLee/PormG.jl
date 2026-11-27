@@ -6716,19 +6716,42 @@ end
     @test hits == String[]
   end
 
-  # What: `showerror(io, e)` for every concrete `PormGError` type, at that type (#1613), following its calls 6 levels.
-  # Expected: no dynamic call in PormG's own frames, except the two reviewed ones: `PoolConnectError` prints its
-  #   driver's `cause`, whose type is the driver's (`_redacted_cause`, a designed run-time call), and the migration
-  #   errors (`DestructiveMigrationError`, `MigrationPrecheckError`) `repr` each lossy alter's values; migrations are a
-  #   JIT-only tool. Base's own frames (a `print` over an untyped part) are outside the pin.
-  # Why: a trimmed binary prints a caught PormG error through `showerror` exactly as the JIT does when the call is made
-  #   at the error's concrete type: the fixture's `showerror` lines compare every message it provokes with its JIT control
-  #   (`test/trim/tools/errors.jl`), and this keeps the methods those lines go through free of run-time calls.
+  # What: `showerror(io, e)` for every concrete `PormGError` type, at that type (#1613), following its calls 6 levels into
+  #   Base's frames too.
+  # Expected: no dynamic call, except the reviewed ones: the database errors (`IntegrityError`, `OperationalError`,
+  #   `StatementError`) and `MultipleObjectsReturned` interpolate a typed `Union` field into their text, which Base's
+  #   `print_to_string` prints at run time, and `PoolTimeoutError` prints a number the same way; `PoolConnectError` prints
+  #   its driver's untyped `cause` (`_redacted_cause`, a designed run-time call); the migration errors broadcast over
+  #   their lossy alters' values (`_lossy_alter_summary`), and migrations are a JIT-only tool.
+  # Why: a trimmed binary prints a caught PormG error through `showerror` as the JIT does when the call is made at the
+  #   error's concrete type: the fixture's `showerror` lines compare every message it provokes with its JIT control
+  #   (`test/trim/tools/errors.jl`). A new dynamic call (an untyped value interpolated into a message lands in Base's
+  #   `print_to_string`) is one more call a trimmed image may have no code for.
   @testset "PormG's errors print through showerror at their types (#1613)" begin
     function concrete(T, acc = Type[])
       for S in InteractiveUtils.subtypes(T)
         isabstracttype(S) ? concrete(S, acc) : push!(acc, S)
       end
+      acc
+    end
+    # type name => the frames a reviewed dynamic call may sit in
+    reviewed = Dict(
+      "IntegrityError" => ("print_to_string",), "OperationalError" => ("print_to_string",),
+      "StatementError" => ("print_to_string",), "MultipleObjectsReturned" => ("print_to_string",),
+      "PoolTimeoutError" => ("Tuple{typeof(print), IOBuffer",),
+      "PoolConnectError" => ("_redacted_cause", "Tuple{typeof(print), IOBuffer"),
+      "DestructiveMigrationError" => ("_lossy_alter_summary", "print_to_string"),
+      "MigrationPrecheckError" => ("_lossy_alter_summary", "print_to_string"),
+    )
+    types = concrete(PormG.PormGError)
+    @test length(types) >= 25
+    for T in types
+      allowed = get(reviewed, string(nameof(T)), ())
+      d = _dynamic_calls_deep(showerror, (IOBuffer, T); depth = 6)
+      unexpected = filter(x -> !any(f -> occursin(f, first(split(x, ": "))), allowed), d)
+      @test (T, unexpected) == (T, String[])
+    end
+  end
       acc
     end
     reviewed = ("PoolConnectError", "DestructiveMigrationError", "MigrationPrecheckError")

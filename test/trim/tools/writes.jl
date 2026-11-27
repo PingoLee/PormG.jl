@@ -550,3 +550,25 @@ function delete_rules_step()::Bool
     end
     return ok
 end
+
+# A handler `create` wrote through, copied, and a second create through the copy (#1684, #1599 layer 7): `create` leaves
+# its values in the handler's insert map, so the copy copies a filled map, which went through `deepcopy`'s generic walk
+# before #1684. Both rows are read back typed, then deleted, so the step leaves the database as it found it. Exit code 55
+# when a call raises or the read does not return the two rows.
+function copy_write_step(circuitid::Int)::Bool
+    try
+        q = M.Race.objects
+        q.create("year" => 2012, "round" => 6, "circuitid" => circuitid, "name" => "Monaco Grand Prix",
+                 "date" => Date(2012, 5, 27))
+        c = q.copy()
+        c.create("year" => 2013, "round" => 6, "circuitid" => circuitid, "name" => "Monaco Grand Prix",
+                 "date" => Date(2013, 5, 26))
+        rows = M.Race.objects.filter("year__@in" => [2012, 2013]).order_by("year").list(RaceRow)
+        say("copy_write", string(length(rows), " rows: ", join([string(r.year) for r in rows], ", ")))
+        removed = first(M.Race.objects.filter("year__@in" => [2012, 2013]).delete()::Tuple{Int, Dict{String, Integer}})
+        removed == 2 || say("copy_write", string("removed ", removed, " rows, expected 2"))
+        return [r.year for r in rows] == [2012, 2013] && removed == 2
+    catch e
+        failed("copy_write", e); return false
+    end
+end

@@ -286,6 +286,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset "The Upsert-Shaped Writes Write as Before (#1599, #1694)" include("unit/test_upsert_writes_trim_1694.jl")
     @testset "atomic Answers as Its Vararg Form Did (#1599)" include("unit/test_atomic_callee_trim_1599.jl")
     @testset "A CTE Body's Typed Copy Renders and Isolates as deepcopy Did (#1599)" include("unit/test_tree_copy_trim_1599.jl")
+    @testset ".copy() and a Filled Insert Map, Typed, Render and Isolate as deepcopy Did (#1684)" include("unit/test_typed_copy_1684.jl")
     @testset "The Write Residue Writes as Before (#1599, #1694)" include("unit/test_write_residue_trim_1694.jl")
     @testset "The Bulk Upsert Paths and the Render's Build Call Answer as Before (#1599, #1694)" include("unit/test_bulk_upsert_trim_1694.jl")
     @testset "The App's Read Shapes Answer as Before (#1599)" include("unit/test_app_reads_trim_1599.jl")

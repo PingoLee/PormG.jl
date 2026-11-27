@@ -24,7 +24,8 @@ each checked by a typed read after it, then a `bulk_insert` of two races from a 
 not a calendar date), which prints the refusal's type and message and checks that no row was written, then a
 `bulk_update` of two bulk-inserted races matched on `raceid` and an `update_or_create` that inserts one explicit id
 and then updates it, each read back typed and undone (#1694), and a `get_or_create` that inserts one explicit id
-and then finds it through the untyped `first()` (#1599 layer 6), then deletes it, and last a cascading delete: a
+and then finds it through the untyped `first()` (#1599 layer 6), then deletes it, then a create through a `.copy()` of
+a handler `create` wrote through (#1684), read back and undone, and last a cascading delete: a
 race of its own with two pit stops (`CASCADE`) and a driver who debuted in it (`SET_NULL`), deleted and checked by
 typed reads, with the pit stop and driver `prep.jl` seeds on the Monaco race left as they were (#1694, #1599 layer
 7). Each step prints one line. The read-only entry, `read.jl`, runs
@@ -186,7 +187,9 @@ raises or the read after it does not show the change, and 9 when its `bulk_inser
 than 2 rows, or the read after it does not return them, and 12 when its `bulk_insert` with an invalid row is not
 refused with an `InvalidValueError` or writes a row, 15 when its `bulk_update` and 16 when its `update_or_create`
 raises, the read after it does not show the change, or the delete that undoes it does not remove its rows). 17 when an untyped read raises or returns other rows, 18 when
-`get_or_create` raises, does not insert and then find its row, or the delete after it does not remove it. 19 when a
+`get_or_create` raises, does not insert and then find its row, or the delete after it does not remove it. 55 when a
+create through a `.copy()` of a handler `create` wrote through raises or its two rows are not read back and removed
+(#1684). 19 when a
 function read (a number function, an aggregate, a nested function or a `Case` whose `then` is an `F`) raises or returns
 other rows, 20 when a subquery read (`__@in` a queryset, `Exists`, a `Subquery` with or without `OuterRef`) does, 21 when a
 join, CTE or window read (`values`/`order_by` across a join, a `.with(...)` column in a projection and a filter, `RowNumber`/`Rank`
@@ -254,6 +257,10 @@ any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is check
   `push!`, the way an application builds one from a list. Not `Qor(v...)`: a splat whose length is known only at run
   time is a call `juliac --trim` refuses (`_apply_iterate` into a function, whatever the vector's element type), so a
   trimmed application builds the `Qor` by `push!` over a vector of concrete pairs.
+- `copy` (exit code 54, every entry; #1684): `.copy()` of a handler filtered on 2008 and ordered by date, the copy
+  changed (`round__@gt`, `order_by("-round")`, a `values` projection) and both read typed; then the original filtered
+  again and the copy read once more. The original reads the two seeded races, the copy the Brazilian one, and neither
+  sees the other's calls: the copy is made at the query's types, not through `deepcopy`'s walk.
 - `page` (exit code 39): `order_by("-date")` with `page(1)`, `page(1, 1)`, and `limit(1).offset(1)`.
 - `aggregate` (exit code 40): `Count(distinct = true)`, `Max`, `Avg` and `Min` grouped by year;
   `Sum(Case(When(...), default = 0))`; `distinct()`; `ToChar` ordered by its alias; a CTE joined with

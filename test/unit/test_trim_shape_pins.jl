@@ -6728,12 +6728,17 @@ end
   #   (`test/trim/tools/errors.jl`). A new dynamic call (an untyped value interpolated into a message lands in Base's
   #   `print_to_string`) is one more call a trimmed image may have no code for.
   @testset "PormG's errors print through showerror at their types (#1613)" begin
-    function concrete(T, acc = Type[])
-      for S in InteractiveUtils.subtypes(T)
-        isabstracttype(S) ? concrete(S, acc) : push!(acc, S)
+    # Every concrete subtype of `PormGError`, by an explicit walk (a local recursive function is not visible to itself
+    # when the file runs inside `runtests.jl`'s testset).
+    types = Type[]
+    pending = Any[PormG.PormGError]
+    while !isempty(pending)
+      for S in InteractiveUtils.subtypes(pop!(pending))
+        isabstracttype(S) ? push!(pending, S) : push!(types, S)
       end
-      acc
     end
+    # Only PormG's own types: a test file may define a subtype of its own.
+    filter!(T -> startswith(string(parentmodule(T)), "PormG"), types)
     # type name => the frames a reviewed dynamic call may sit in
     reviewed = Dict(
       "IntegrityError" => ("print_to_string",), "OperationalError" => ("print_to_string",),
@@ -6743,7 +6748,6 @@ end
       "DestructiveMigrationError" => ("_lossy_alter_summary", "print_to_string"),
       "MigrationPrecheckError" => ("_lossy_alter_summary", "print_to_string"),
     )
-    types = concrete(PormG.PormGError)
     @test length(types) >= 25
     for T in types
       allowed = get(reviewed, string(nameof(T)), ())
@@ -6755,7 +6759,6 @@ end
       acc
     end
     reviewed = ("PoolConnectError", "DestructiveMigrationError", "MigrationPrecheckError")
-    types = concrete(PormG.PormGError)
     @test length(types) >= 25
     for T in types
       any(r -> endswith(string(T), r), reviewed) && continue

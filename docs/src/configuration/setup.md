@@ -206,16 +206,25 @@ configuration at run time only:
   the keys. The file itself may still contain that connection's settings: rebuild it without loading
   at build time, and rotate its credentials.
 
-Load and bind your models in `main`, or in your package's `__init__` (which a build does not run):
+Load and bind your models in `main`, or in your package's `__init__` (which a build does not run). Take the
+project root at run time too, from an environment variable or the working directory:
 
 ```julia
 function (@main)(args::Vector{String})::Cint
-    PormG.Configuration.load("db"; root = APP_ROOT, env = "prod")
+    root = get(ENV, "RACECONTROL_ROOT", pwd())   # the deployment's folder, read when the program starts
+    PormG.Configuration.load("db"; root = root, env = "prod")
     PormG.Models.set_models(MyApp.models, "db")
     # … serve
     return 0
 end
 ```
+
+A root computed from `@__DIR__` (`const APP_ROOT = normpath(joinpath(@__DIR__, ".."))`, as above) is fixed when the
+code compiles. In a `juliac` executable that is the temporary copy of the project `juliac` built from, which is deleted
+when the build ends, so `load` reports that the folder does not exist. In any built image it is the build machine's path,
+not the deployment's. A REPL, a script or a service running on a package image keeps `@__DIR__` as it is. A
+`juliac --trim` binary cannot read `connection.yml` at all: see [Static Compilation](../static_compilation.md) for the
+in-code connection setup.
 
 Binding models at the top level of the entry script fails too, but with a different error: with no
 configuration loaded, `set_models` reports that the folder is not loaded.

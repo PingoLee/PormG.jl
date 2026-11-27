@@ -97,7 +97,9 @@ function _where_node!(v::FilterNode, instruc::SQLInstruction)::Nothing
       # given — which went unnoticed while this statement could not execute, and would not once it
       # can. `test_operators.jl` pins it.
       source = _projected_source(having_key, instruc)
-      clause = (source === nothing || _resolved_agg(source.field, instruc)) ? :having : :where
+      # #1846, #1599 layer 5: the projected node read at its type (`source.field` is a `FieldPart` slot, a union of
+      # abstract families); the call on it dispatched at run time, and the trimmed alias filter stopped here.
+      clause = (source === nothing || _with_field_part_open(_resolved_agg, source.field, instruc)) ? :having : :where
       # #707: an EXPRESSION on the right (`F("grid")`, `Lower("forename")`, `Max("grid")`) has no
       # value to type — it is a comparison between two expressions, which the WHERE path renders:
       # `_get_filter_query(::SQLTypeField)` resolves the alias through `_alias_lhs` (re-rendering
@@ -623,7 +625,7 @@ function _aggregate_alias_leaf(v::SQLTypeOper, instruc::SQLInstruction)
   cached = memo_projection(instruc, key)
   cached === nothing && return nothing
   source = _projected_source(key, instruc)
-  (source !== nothing && _resolved_agg(source.field, instruc)) || return nothing
+  (source !== nothing && _with_field_part_open(_resolved_agg, source.field, instruc)) || return nothing   # #1846
   return (key, cached)
 end
 

@@ -218,6 +218,31 @@ tasks. The SQLite refused statement is checked by hand.
   (its warnings included) reaching your output. Print what you need yourself, to `Core.stdout`, as the
   examples below do: in a trimmed binary, `Base.stdout` is not the process's standard output.
 
+## JIT-only tools
+
+These parts of PormG are tools for a JIT process (the REPL, a script, a deploy step), not for a trimmed binary. Each
+either runs code it reads or generates while the program runs, or depends on a package a trimmed binary cannot run.
+Use them from a JIT process beside the binary:
+
+- **Migrations:** `makemigrations`, `migrate`, `get_migration_plan`, `run_once`, `init_migrations` and the migration
+  planner. The planner `include`s the models file it compares with the database at run time, so the binary does not run
+  `migrate` (#1603). Migrate the database from a JIT process before the binary starts.
+- **Generating and importing models:** `generate_models_from_db` / `inspectdb`, the importers
+  (`import_models_from_postgres`, `import_models_from_sqlite`, `import_models_from_mysql`, `import_models_from_django`)
+  and `convertSQLToModel`. They write model source for you to compile in.
+- **Loading models at run time:** `import_models(path)`, which `include`s a models file while the program runs, and hot
+  reload: Revise, and `@models_module`'s reloading. A trimmed binary compiles its models in: `include` the models file at
+  the top level of the entry, as [A trimmed application](#A-trimmed-application) does.
+- **Changing the schema at run time:** `add_field!`, which registers a field on a model that is already bound. It has
+  not run in a trimmed binary: declare the field in the models file instead.
+- **Reading `connection.yml`:** `load`, `load_many` and `setup`. YAML.jl's parser cannot run in a trimmed binary
+  (JuliaData/YAML.jl#260). Register each connection in code ([Migrating an application boot](#Migrating-an-application-boot)).
+- **LibPQ:** a binary built with it aborts before `main` (see [What does not work yet](#What-does-not-work-yet)). Use
+  Postgres.jl.
+- **Writing code for you:** `list(show_query = :struct)`, which prints the struct a typed read takes, and the helpers
+  in `src/tools.jl` (`install_ai_skills`, `upgrade_guide`). Run them while you write the program; the binary uses what
+  they printed.
+
 ## Versions
 
 The versions PormG builds with are **Julia 1.13.4** and **JuliaC 0.3.12**. Other versions may work, but

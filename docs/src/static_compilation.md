@@ -495,8 +495,33 @@ connection's driver handle was closed.
 
 ## Errors in a trimmed binary
 
-Catch PormG's errors as usual (`catch e; e isa PormG.StatementError || rethrow()`). To report one, read
-its typed fields, `e.sqlstate` (`nothing` on SQLite) and `e.message`, rather than printing the exception.
-`e.cause` is the driver's error with no declared type: print `nameof(typeof(e.cause))`, never the cause
-itself. Printing a value whose type the compiler cannot see calls code the image may not have. The
-fixture's `test/trim/tools/failing.jl` shows the pattern.
+Catch PormG's errors as usual (`catch e; e isa PormG.StatementError || rethrow()`). Print one through `showerror`
+at its concrete type, and a trimmed binary prints the same text as the JIT, its whole message included:
+
+```julia
+catch e
+    e isa PormG.InvalidValueError || rethrow()
+    io = IOBuffer()
+    showerror(io, e::PormG.InvalidValueError)   # the type the compiler sees
+    println(Core.stdout, String(take!(io)))
+end
+```
+
+The fixture prints every refusal and error it provokes this way, on SQLite, MySQL and PostgreSQL, and its CI checks
+each line against the JIT's (#1613): input refusals (`InvalidValueError`, `UnknownFieldError`, `QueryBuildError`, …),
+capability refusals (`BackendCapabilityError`), delete rules (`ProtectedError`), a read-only connection
+(`WritesDisabledError`) and the database's own errors (`StatementError`, …). PormG's `showerror` methods make no call
+the compiler cannot resolve, and a unit test keeps them so.
+
+What may differ, or not run:
+
+- **An exception whose type the compiler cannot see.** `showerror(io, e)` on the `e` of a bare `catch e` is a run-time
+  call the image may have no code for. Narrow it first, as above: one `isa` arm per error type you expect.
+- **`show`, `repr` and `string` of an error** go through Julia's generic printer, not PormG's methods, and a trimmed
+  binary may have no code for them. Use `showerror`, or the typed fields (`e.msg` on the message-only errors).
+- **A database error's `cause`** is the driver's error, with no declared type. `showerror` names it by its type, which
+  runs. Do not print the cause itself: read `nameof(typeof(e.cause))`, `e.sqlstate` (`nothing` on SQLite) and
+  `e.message`, as the fixture's `test/trim/tools/failing.jl` does. `PoolConnectError` prints its cause's text, a run-time
+  call, so read its fields instead.
+- **The migration errors** (`DestructiveMigrationError`, `MigrationPrecheckError`) print their lossy alters through
+  `repr`. Migrations are a [JIT-only tool](#JIT-only-tools).

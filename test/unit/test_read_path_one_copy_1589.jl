@@ -77,6 +77,12 @@ function _oc_one_copy(terminal::F, one_copy::G, q) where {F,G}
 end
 
 _oc_query() = OC.Driver.objects.filter("constructorid" => 1)
+# The same rows behind twelve more filters that every driver passes. Since #1684 a copy is made at the query's types,
+# 25 allocations cheaper (60 → 35 for `_oc_query()`, measured), which put the one-copy margin under `count("col")`'s
+# own 35 and `aggregate()`'s own 47 while neither had changed. A filter adds about two allocations to a copy and none
+# to those terminals' extra (measured over 0, 4 and 8 filters), so this handler's copy (about 60) clears their fixed
+# work again, and a second copy, the defect, still costs a whole copy of the handler it is measured on.
+_oc_heavy_query() = (h = _oc_query(); for i in 1:12; h.filter("driverid__@gte" => -i); end; h)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # One copy per terminal, inspection arm: first / last / get / get(T) / earliest / list(T)
@@ -119,6 +125,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 @testset "#1589: an executing terminal copies the handler once" begin
     q = _oc_query()
+    qh = _oc_heavy_query()   # for the two terminals whose own work is near a light handler's copy (see above)
     pk1 = OC.Driver.objects.filter("driverid" => 1)
     # A copy of `base` carrying what the terminal adds, and the `list` read of it (which copies once).
     listing(base, prep, fmt) = (h = deepcopy(base); prep(h); () -> PormG.QueryBuilder.list(h, fmt))
@@ -126,10 +133,10 @@ end
         ("get()",       () -> pk1.get(),            listing(pk1, h -> h.limit(2), :row), pk1),
         ("get(T)",      () -> pk1.get(OcDriverRow), listing(pk1, h -> h.limit(2), OcDriverRow), pk1),
         ("first()",     () -> q.first(),            listing(q, h -> h.limit(1), :row), q),
-        ("count(col)",  () -> q.count("driverid"),
-                        listing(q, h -> h.values("pormg_count" => Count("driverid")), :dict), q),
-        ("aggregate()", () -> q.aggregate("n" => Count("driverid")),
-                        listing(q, h -> h.values("n" => Count("driverid")), :dict), q),
+        ("count(col)",  () -> qh.count("driverid"),
+                        listing(qh, h -> h.values("pormg_count" => Count("driverid")), :dict), qh),
+        ("aggregate()", () -> qh.aggregate("n" => Count("driverid")),
+                        listing(qh, h -> h.values("n" => Count("driverid")), :dict), qh),
     )
     for (name, terminal, one_copy, handler) in cases
         r = _oc_one_copy(terminal, one_copy, handler)

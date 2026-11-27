@@ -289,6 +289,7 @@ const PORMG_FLOOR_RESOLVE = get(ENV, "PORMG_FLOOR_RESOLVE", "0") == "1"
     @testset ".copy() and a Filled Insert Map, Typed, Render and Isolate as deepcopy Did (#1684)" include("unit/test_typed_copy_1684.jl")
     @testset "A Reverse Many-to-Many Hop Reads the Recorded Model (#1689)" include("unit/test_m2m_recorded_model_1689.jl")
     @testset "A Filter on an Aggregate Alias, Typed, Formats and Binds as Before (#1846)" include("unit/test_trim_having_1846.jl")
+    @testset "A Filter on a Projection Alias Renders and Binds as Recorded (#1846)" include("unit/test_having_alias_matrix_1846.jl")
     @testset "The Write Residue Writes as Before (#1599, #1694)" include("unit/test_write_residue_trim_1694.jl")
     @testset "The Bulk Upsert Paths and the Render's Build Call Answer as Before (#1599, #1694)" include("unit/test_bulk_upsert_trim_1694.jl")
     @testset "The App's Read Shapes Answer as Before (#1599)" include("unit/test_app_reads_trim_1599.jl")

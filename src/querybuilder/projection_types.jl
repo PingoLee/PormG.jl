@@ -12,12 +12,7 @@
 # therefore stays native only for the formatters whose SQL type is a number or a boolean — a
 # whitelist, because a node may carry its own formatter (`ToChar(…; formatter = …)`), and anything
 # but a number must bind as its formatter wrote it, exactly as the WHERE path does for a column.
-#
-# #1846, #1599 layer 5: the raw value, the formatter's answer and the formatter reach here untyped (an alias's value is the
-# predicate's literal slot, a formatter is a `Function`), so the one compiled body takes them unspecialized; every test
-# below is an `isa` or an `===`.
-function _sqlite_preserve_native_parameter(@nospecialize(raw_value), @nospecialize(formatted_value), @nospecialize(formatter),
-                                           instruc::SQLInstruction)
+function _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc::SQLInstruction)
   if instruc.connection isa PormGSQLite && raw_value isa Union{Number,Bool} &&
      (formatter === Models.format_number_sql || formatter === Models.format_bool_sql)
     return raw_value
@@ -37,7 +32,7 @@ end
 # #1846, #1599 layer 5: `raw_value` is the predicate's literal (`_oper_literal`, the slot's wide union), so the one
 # compiled body takes it unspecialized. Specialized on that union, the call from `_bind_alias_value` dispatched at run
 # time, and a trimmed alias filter stopped there. A membership or range list keeps its per-element rule behind one
-# `@noinline` call (`_having_list_native`), the comprehension as it was.
+# `@noinline` call (`_having_list_native`), the comprehension as it was: the designed open arm, a run-time dispatch.
 function _resolve_having_filter_value(alias::MemoKey, @nospecialize(raw_value), instruc::SQLInstruction,
                                       operator::AbstractString)
   # #576: the formatter choice and the format CALL were one expression repeated seven times, and
@@ -71,8 +66,10 @@ function _resolve_having_filter_value(alias::MemoKey, @nospecialize(raw_value), 
     return _having_list_native(raw_value, formatted_value, formatter, instruc)
   return _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc)
 end
-@noinline _having_list_native(@nospecialize(raw_value), @nospecialize(formatted_value), @nospecialize(formatter),
-                              instruc::SQLInstruction) =
+# Its arguments are specialized on purpose: the call dispatches on the run-time list, formatted list and formatter, as the
+# comprehension did inside the function it came from, so an empty list's element type is still the one inference gives
+# there (`Vector{String}` for a text alias on PostgreSQL); unspecialized, it was `Vector{Any}`, another parameter.
+@noinline _having_list_native(raw_value, formatted_value, formatter, instruc::SQLInstruction) =
   [_sqlite_preserve_native_parameter(r, f, formatter, instruc) for (r, f) in zip(raw_value, formatted_value)]
 
 # The formatter a HAVING/alias filter value must satisfy, resolved from whatever the alias projects.

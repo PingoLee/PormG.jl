@@ -269,6 +269,10 @@ any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is check
 - `aggregate` (exit code 40): `Count(distinct = true)`, `Max`, `Avg` and `Min` grouped by year;
   `Sum(Case(When(...), default = 0))`; `distinct()`; `ToChar` ordered by its alias; a CTE joined with
   `join_type = "INNER"`.
+- `having` (exit code 57, every entry; #1846): a filter on an aggregate alias, which renders in `HAVING`: a `Count`
+  grouped by year and filtered by its alias (`n__@gt`, once matching and once not), a `Sum` filtered by its alias
+  (`s__@gte`), and the alias given text, refused before any SQL with the JIT's `InvalidValueError` (the line is its type
+  and text, the same on every engine).
 - `engine_read` (exit code 41): the reads each engine answers its own way. `__@regex`, `__@iregex` and
   `__@iunaccent_contains` are PostgreSQL's only (`docs/src/backends.md`), and `Extract("date", "EPOCH")`, which SQLite
   does not have, reads as a `Decimal` (the width-less decimal the call means). An engine without one refuses it

@@ -6693,11 +6693,14 @@ end
   #   `deepcopy` for a value outside the typed set.
   # Why: `.copy()` walked the projection, the filter, the ORDER BY terms, the name lists and a filled insert map through
   #   `deepcopy`'s generic walk, which visits each field by run-time dispatch and which a trimmed image has no code for.
-  # What: the query builder's source (`src/querybuilder/`), for a model found by name in a module after registration:
-  #   a scan of a module's names (`names(mod; …)`), a binding read by a computed name (`getfield(mod, …)` on a module,
-  #   `isdefined(mod, n)` in a loop), and the reverse many-to-many hop's lookup of the owner by its binding name.
-  # Expected: none, except the `cjoin("f" => "Model")` / `cjoin_on("Model", …)` string forms, whose model name is the
-  #   caller's (`join_conditions.jl`, the two `isdefined(q.model._module, …)` checks), reviewed and kept (#1689).
+  # What: the query builder's source (`src/querybuilder/`), for a module binding read by a name chosen at run time after
+  #   registration: a scan of a module's names (`names(mod; …)`), a binding read by a computed name (`getfield`,
+  #   `getglobal`, `getproperty`, `isdefined`, `isdefinedglobal` on a module, the `invokelatest(getfield, mod, …)` form),
+  #   and the reverse many-to-many hop's lookup of the owner by its binding name.
+  # Expected: none. Not in the scan, reviewed and kept (#1689): a name the CALLER passes as a string, resolved through the
+  #   module's model set (`_require_bound_model`): `cjoin("f" => "Model")` / `cjoin_on("Model", …)` (with their two
+  #   `isdefined(q.model._module, …)` checks, whose receiver is not a module variable), and a `ForeignKey("Model")` link's
+  #   or an unregistered model's String `to` (`_relation_target`, `_forward_join_model`, `_relation_key_field`).
   # Why: a binding chosen by name at run time is one a `juliac --trim` image does not keep, and the reverse hop's lookup
   #   was also wrong across modules (#1689); the relation records its model at registration (#1601).
   @testset "the query builder finds no model by name in a module (#1689)" begin
@@ -6706,12 +6709,35 @@ end
     for f in sort(readdir(dir)), (i, l) in enumerate(eachline(joinpath(dir, f)))
       code = strip(first(split(l, '#')))   # a comment may name them
       isempty(code) && continue
-      occursin(r"\bnames\(\s*(?!Dialect\b)\w+\s*;", code) && push!(hits, "$(f):$(i): $(code)")
+      occursin(r"\bnames\(\s*(?!Dialect\b)[\w.]+\s*[;,]", code) && push!(hits, "$(f):$(i): $(code)")
       occursin(r"related_binding\)", code) && push!(hits, "$(f):$(i): $(code)")
-      occursin(r"getfield\(\s*(mod|_module|\w+\._module)\s*,", code) && push!(hits, "$(f):$(i): $(code)")
-      occursin(r"isdefined\(\s*\w*(mod|_module)\s*,\s*n\s*\)", code) && push!(hits, "$(f):$(i): $(code)")
+      occursin(r"\b(getfield|getglobal|getproperty|isdefinedglobal|isdefined)\b(\(|\s*,)\s*(mod|_module|\w+\._module|\w+\.model\._module)\s*,(?!\s*(main_join\b|Symbol\(target_model\)))",
+               code) && push!(hits, "$(f):$(i): $(code)")
     end
     @test hits == String[]
+  end
+
+  # What: the many-to-many join (`_insert_many_to_many_joins`, the body `_m2m_joins_at` at the models' types) and the
+  #   `to_many` stamp on the surviving row (`_flag_to_many!`).
+  # Expected: no dynamic call in the body at `ModelType` (the relation's recorded models), none to the model helpers
+  #   from the entry, and none in `_flag_to_many!` or the row search under it.
+  # Why: the trimmed many-to-many read (#1689's fixture step, the first trimmed many-to-many) stopped at
+  #   `model_table_name(::ModelType)`: the relation's model slots are the abstract `PormGModel`; the verifier also
+  #   listed `model_column` on them and the `findfirst` closure over the abstract `JoinRow` in `_flag_to_many!`.
+  @testset "a many-to-many join is built at the models' types (#1689)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    MT = PormG.Models.ModelType
+    R = PormG.Models.ManyToManyRelation
+    for H in (Nothing, String)
+      @test (H, _dynamic_calls(QB._m2m_joins_at, (R, MT, MT, I, String, String, String, H, Bool))) == (H, String[])
+      @test (H, _named_dynamic_calls(Tuple{typeof(Core.kwcall), NamedTuple{(:track_path,), Tuple{Bool}},
+                                           typeof(QB._insert_many_to_many_joins), R, I, String, String, String, H},
+                                     ("model_table_name", "model_column", "_m2m_joins"))) == (H, String[])
+    end
+    deep = _dynamic_calls_deep(QB._flag_to_many!, (Vector{QB.JoinRow}, String); depth = 4,
+                               skip = (QB._join_alias_other,))
+    @test filter(x -> occursin("_flag_to_many!", x) || startswith(x, "Tuple{typeof(PormG.QueryBuilder."), deep) == String[]
   end
 
   @testset ".copy() copies the whole query at its types (#1684)" begin

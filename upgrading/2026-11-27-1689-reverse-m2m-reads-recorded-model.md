@@ -15,7 +15,7 @@ name (`Race`) in the **target's** module, the one that defines `Driver`. When th
 | the case | before | now |
 |---|---|---|
 | the target's module binds no `Race`: `M.Driver.objects.filter("races__year" => 2009).values("surname").distinct()` | `QueryBuildError`: `No model is bound as `Race` in the models module of driver. …` | renders and returns the drivers |
-| the target's module binds a different model as `Race`: a path that walks on past the hop, such as `on("races__circuitid", …)` | `QueryBuildError` naming the other model: `… The segment 'circuitid' is not a relation on model '<other table>'.` | the error for what the path is: `on()` across a many-to-many is refused (`… crosses the ManyToMany relation 'races' …`, #977) |
+| the target's module declares a different model as `Race` (or one whose name reads as `race`): a path that walks on past the hop, such as `on("races__circuitid", …)` | `QueryBuildError` naming the other model: `… The segment 'circuitid' is not a relation on model '<other model's name>'.` | the error for what the path is: `on()` across a many-to-many is refused (`… crosses the ManyToMany relation 'races' …`, #977) |
 | the same, wherever PormG walks a path to tell which tables a statement reaches (MySQL's `ORDER BY` alias check, a `values()` path that names a related column) | the walk continued from the other model | the walk continues from the model the relation recorded |
 
 The hop now reads the model registration recorded on the relation (#1601), as the forward hops already did. The model

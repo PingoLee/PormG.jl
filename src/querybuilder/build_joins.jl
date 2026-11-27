@@ -233,6 +233,26 @@ function _insert_many_to_many_joins(
   previus_how::Union{String, Nothing} = nothing;   # positional: a `Union` keyword value is a dynamic call (#1599 slice A)
   track_path::Bool=true,
 )
+  # #1689, #1599 layer 5: the two models the relation recorded, read at `ModelType`, the model type PormG builds (#1772).
+  # The slots are the abstract `PormGModel`, so `model_table_name` and `model_column` on them dispatched at run time, and
+  # the trimmed many-to-many join stopped at `model_table_name(::ModelType)`. A model type defined elsewhere takes the
+  # same body behind one `@noinline` call.
+  owner_model = relation.owner_model_resolved
+  related_model = relation.related_model_resolved
+  owner_model isa Models.ModelType && related_model isa Models.ModelType &&
+    return _m2m_joins_at(relation, owner_model, related_model, instruct, parent_table, parent_alias, join_path,
+                         previus_how, track_path)
+  return _m2m_joins_other(relation, owner_model, related_model, instruct, parent_table, parent_alias, join_path,
+                          previus_how, track_path)
+end
+@noinline _m2m_joins_other(relation::Models.ManyToManyRelation, @nospecialize(owner_model), @nospecialize(related_model),
+                           instruct::SQLInstruction, parent_table::String, parent_alias::String, join_path::String,
+                           previus_how::Union{String, Nothing}, track_path::Bool) =
+  _m2m_joins_at(relation, owner_model, related_model, instruct, parent_table, parent_alias, join_path, previus_how,
+                track_path)
+function _m2m_joins_at(relation::Models.ManyToManyRelation, owner_model, related_model, instruct::SQLInstruction,
+                       parent_table::String, parent_alias::String, join_path::String,
+                       previus_how::Union{String, Nothing}, track_path::Bool)
   join_type = previus_how == "LEFT" ? "LEFT" : "INNER"
 
   # #64: the PARENT-side join keys (owner_pk / related_pk) are field NAMES; resolve each to
@@ -251,10 +271,7 @@ function _insert_many_to_many_joins(
   # ordinary import joined correctly and the bug survived; a `db_column=` written in the Django source
   # did not, because the importer splats it onto the field it builds (`process_class_fields!`). The
   # shape was origin-independent — hand-written models reached it the same way.
-  # #1601: both sides are resolved at registration and recorded on the relation.
-  owner_model = relation.owner_model_resolved
-  related_model = relation.related_model_resolved
-
+  # #1601: both sides are resolved at registration and recorded on the relation (read by the caller above).
   through_row = ModelJoin(
     a = parent_table,
     alias_a = parent_alias,
@@ -294,7 +311,15 @@ end
 # row would be dropped whenever dedup keeps the earlier row, so the stamp stays a post-insert write,
 # now by copy. Returns the stamped row.
 function _flag_to_many!(row_join::Vector{JoinRow}, alias::String)::ModelJoin
-  i = findfirst(r -> r.alias_b == alias, row_join)
+  # #1689, #1599 layer 5: the first row with that alias, each row's alias read through its kind (`_join_alias_b`). A
+  # `findfirst` closure called on the abstract `JoinRow` had no compiled target in a trimmed image.
+  i = nothing
+  for k in eachindex(row_join)
+    if _join_alias_b(row_join[k]) == alias
+      i = k
+      break
+    end
+  end
   row = i === nothing ? nothing : row_join[i]
   # Both halves are internal invariants (aliases are minted from the same vector that is searched,
   # and a CTE row shares a model row's dedup key only when a CTE is named after a table, which

@@ -259,8 +259,9 @@ any write (`tools/reads.jl`), over the rows every `prep.jl` seeds. Each is check
   trimmed application builds the `Qor` by `push!` over a vector of concrete pairs.
 - `copy` (exit code 54, every entry; #1684): `.copy()` of a handler filtered on 2008 and ordered by date, the copy
   changed (`round__@gt`, `order_by("-round")`, a `values` projection) and both read typed; then the original filtered
-  again and the copy read once more. The original reads the two seeded races, the copy the Brazilian one, and neither
-  sees the other's calls: the copy is made at the query's types, not through `deepcopy`'s walk.
+  again and the copy read once more; then a handler that already projects (`values("name", "round")`), copied and the
+  copy filtered. The original reads the two seeded races, the copy the Brazilian one (the Monaco one for the projected
+  copy), and neither sees the other's calls: the copy is made at the query's types, not through `deepcopy`'s walk.
 - `page` (exit code 39): `order_by("-date")` with `page(1)`, `page(1, 1)`, and `limit(1).offset(1)`.
 - `aggregate` (exit code 40): `Count(distinct = true)`, `Max`, `Avg` and `Min` grouped by year;
   `Sum(Case(When(...), default = 0))`; `distinct()`; `ToChar` ordered by its alias; a CTE joined with

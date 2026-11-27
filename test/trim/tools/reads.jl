@@ -659,9 +659,18 @@ function copy_step()::Bool
         after = q.list(RaceRow)
         say("copy", string("original after its filter: ", race_names(after), "; copy: ",
                            join([r.name for r in again], ", ")))
+        # A handler that already projects, copied: the projection's nodes are copied at their types too.
+        p = M.Race.objects.filter("year" => 2008).values("name", "round").order_by("date")
+        pc = p.copy()
+        pc.filter("round__@lt" => 10)
+        pr, pcr = p.list(CopyRow), pc.list(CopyRow)
+        say("copy", string("projected original: ", join([r.name for r in pr], ", "), "; copy: ",
+                           join([r.name for r in pcr], ", ")))
         return race_names(orig) == "Monaco Grand Prix, Brazilian Grand Prix" &&
                length(branch) == 1 && branch[1] == (name = "Brazilian Grand Prix", round = 18) &&
-               race_names(after) == "Monaco Grand Prix" && again == branch
+               race_names(after) == "Monaco Grand Prix" && again == branch &&
+               [r.name for r in pr] == ["Monaco Grand Prix", "Brazilian Grand Prix"] &&
+               [r.name for r in pcr] == ["Monaco Grand Prix"]
     catch e
         failed("copy", e); return false
     end

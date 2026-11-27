@@ -115,6 +115,7 @@ env:
     step\tcopy\toriginal: Monaco Grand Prix, Brazilian Grand Prix
     step\tcopy\tcopy: Brazilian Grand Prix (18)
     step\tcopy\toriginal after its filter: Monaco Grand Prix; copy: Brazilian Grand Prix
+    step\tcopy\tprojected original: Monaco Grand Prix, Brazilian Grand Prix; copy: Monaco Grand Prix
     step\tpage\tpage(1) 1 rows: Brazilian Grand Prix
     step\tpage\tpage(1, 1) 1 rows: Monaco Grand Prix
     step\tpage\tlimit offset 1 rows: Monaco Grand Prix

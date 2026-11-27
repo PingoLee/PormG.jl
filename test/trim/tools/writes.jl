@@ -553,7 +553,8 @@ end
 
 # A handler `create` wrote through, copied, and a second create through the copy (#1684, #1599 layer 7): `create` leaves
 # its values in the handler's insert map, so the copy copies a filled map, which went through `deepcopy`'s generic walk
-# before #1684. Both rows are read back typed, then deleted, so the step leaves the database as it found it. Exit code 55
+# before #1684. (The second `create` sets the copy's map anew: the step shows the filled map's copy runs, and the unit
+# test `test_typed_copy_1684.jl` checks what it holds.) Both rows are read back typed, then deleted, so the step leaves the database as it found it. Exit code 55
 # when a call raises or the read does not return the two rows.
 function copy_write_step(circuitid::Int)::Bool
     try

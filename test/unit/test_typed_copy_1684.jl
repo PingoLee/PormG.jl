@@ -114,11 +114,20 @@ function _tc84_src_grouped()
     order_by("year")
   return q, () -> nothing
 end
-# a decimal, a text and a timestamp value, and a function column compared
-_tc84_src_values() = (_TC84_RACE.objects.filter("round__@gte" => Decimal(5.5), "name__@startswith" => "Mon",
-                                                "date__@lt" => Date(2009, 1, 1)), () -> nothing)
+# a decimal, a float, a text and a date value, a date list, an `F` on the right, and a function column compared
+_tc84_src_values() = (_TC84_RACE.objects.filter("round__@gte" => Decimal(5.5), "round__@lt" => 18.5,
+                                                "name__@startswith" => "Mon", "date__@lt" => Date(2009, 1, 1),
+                                                "date__@in" => [Date(2008, 5, 25), Date(2008, 11, 2)],
+                                                "year__@gte" => F("round") + 1990, "date__@year" => 2008), () -> nothing)
+# a Subquery and an Exists in the projection, the inner handlers changed by their own fluent calls afterwards
+function _tc84_src_projected()
+  inner = _tc84_inner()
+  ex = _TC84_RACE.objects.filter("circuitid" => OuterRef("circuitid"), "round__@gt" => 3)
+  q = Tc84Models.Tc84_circuit.objects.values("name", "last" => Subquery(inner), "late" => Exists(ex)).order_by("name")
+  return q, () -> (inner.filter("round__@gt" => 9); ex.filter("year" => 1999))
+end
 _tc84_sources() = Function[_tc84_src_plain, _tc84_src_groups, _tc84_src_queryset, _tc84_src_exists,
-                           _tc84_src_grouped, _tc84_src_values]
+                           _tc84_src_grouped, _tc84_src_values, _tc84_src_projected]
 
 # What: `.copy()` against the old `deepcopy` copy, for every source above, on every engine.
 # Expected: the same SQL and parameters for the copy before any change, after the caller changes the source (its
@@ -158,6 +167,28 @@ _tc84_sources() = Function[_tc84_src_plain, _tc84_src_groups, _tc84_src_queryset
   before = _TC84_QB.query(dup; connection = _TC84_CONNS[1], show_query = :dict)
   poke()
   @test _TC84_QB.query(dup; connection = _TC84_CONNS[1], show_query = :dict) == before
+end
+
+# What: a query nested in the copied query's projection, whose `on()` condition holds a vector the caller still holds.
+# Expected: the copy shares that vector, as the outer query's own `on()` and a `Subquery` used as a filter value share
+#   theirs: a later `push!` on it reaches the copy. The nested handler's own fluent calls still do not (above).
+# Why: since #1684 a nested query is copied by the handler copy's rules, at its types; `deepcopy`'s generic walk used to
+#   clone it, the caller's values included (`upgrading/2026-11-27-1684-copy-nested-handler-shares-like-top-level.md`).
+@testset "a nested query's on() values are shared by the copy, as the outer query's are (#1684)" begin
+  conn = _TC84_CONNS[2]
+  for where_ in (:projection, :filter_value)
+    countries = ["Monaco"]
+    sub = _TC84_RACE.objects.on("circuitid", "country__@in" => countries).filter("circuitid" => OuterRef("circuitid")).
+      values("round")
+    q = where_ === :projection ? Tc84Models.Tc84_circuit.objects.values("name", "r" => Subquery(sub)) :
+                                 Tc84Models.Tc84_circuit.objects.filter("circuitid" => Subquery(sub))
+    dup = q.copy()
+    before = _TC84_QB.query(dup; connection = conn, show_query = :dict)
+    push!(countries, "Brazil")
+    after = _TC84_QB.query(dup; connection = conn, show_query = :dict)
+    @test (where_, after == before) == (where_, false)
+    @test after == _TC84_QB.query(q; connection = conn, show_query = :dict)
+  end
 end
 
 # A filled insert map's value, as a comparable leaf: an expression through its display.
@@ -204,10 +235,10 @@ _tc84_leaf(v) = v isa Union{PormG.PormGModel, _TC84_QB.SQLTypeF, _TC84_QB.SQLTyp
 end
 
 # What: `.copy()` against its source, slot by slot: every mutable object the copy reaches, at any depth.
-# Expected: nothing mutable is `===` between source and copy, except the queryset a predicate holds as its value
-#   (shared on purpose, as `deepcopy` shared it) and the models.
+# Expected: what is `===` between source and copy is what the old copy shared too (a predicate's field node, copied one
+#   level by `Base.deepcopy(::SQLTypeField)`), besides the models and the queryset a predicate holds as its value.
 # Why: a shared mutable object is how a caller's later call on one reaches the other (#43, #112).
-@testset ".copy() shares no mutable object with its source (#1684)" begin
+@testset ".copy() shares with its source only what deepcopy shared (#1684)" begin
   function mutables(x, acc = IdDict{Any,Nothing}(), seen = IdDict{Any,Nothing}())
     haskey(seen, x) && return acc
     seen[x] = nothing
@@ -229,9 +260,9 @@ end
     i == 3 && continue   # the shared queryset value, checked above
     src, _ = mk()
     getfield(src, :object).insert["laps"] = [78, 77]
-    dup = src.copy()
-    a, b = mutables(getfield(src, :object)), mutables(getfield(dup, :object))
-    shared = [typeof(k) for k in keys(b) if haskey(a, k)]
-    @test (i, shared) == (i, DataType[])
+    a = mutables(getfield(src, :object))
+    shared(dup) = (b = mutables(getfield(dup, :object)); sort!([string(typeof(k)) for k in keys(b) if haskey(a, k)]))
+    # What the old copy shared too: a predicate's field node, which `Base.deepcopy(::SQLTypeField)` copies one level.
+    @test (i, shared(src.copy())) == (i, shared(_tc84_old_copy(src)))
   end
 end

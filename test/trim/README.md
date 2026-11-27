@@ -315,6 +315,10 @@ MySQL refuses the three lookups as SQLite does and reads `EPOCH` as PostgreSQL d
   `InvalidValueError`'s text, the same on every engine (`year: InvalidValueError: Error in filter, field `year`
   (INTEGER): The value is not a valid number`); a trimmed image that cannot locate a refusal prints `MethodError`
   instead. Checked against each job's JIT control.
+- `showerror` (no step of its own, every entry; #1613): every refusal and error a step catches on purpose is also printed
+  through `showerror`, at its concrete type (`tools/errors.jl`), its whole text on one line (each newline written `\n`),
+  tagged with the step that caught it. A job checks these lines against its own JIT control (`tools/same_lines.sh`), so
+  a trimmed binary must print each message exactly as the JIT does.
 
 ```
 step	lookup_refusal	payload__@has_key: BackendCapabilityError: The @has_key lookup (JSONB ?) needs JSONB containment and key operators (`@>`, `?`, `?|`, `?&`), which SQLite does not support (supported on PostgreSQL).

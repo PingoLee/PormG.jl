@@ -221,7 +221,9 @@ function (@main)(args::Vector{String})::Cint
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
-    lookup_refusals_step() || return Cint(50)   # the JSON, array and network lookups (`tools/reads.jl`)
+    lookup_refusals_step() || return Cint(50)   # the JSON and network lookups (`tools/reads.jl`)
+    array_lookup_step() || return Cint(53)      # the array lookups (`tools/reads.jl`, #1844)
+    filter_refusal_step() || return Cint(52)    # filter values refused and located (`tools/reads.jl`, #1844)
     # The terminals applications use most (`tools/terminals.jl`, #1599 layer 6): count(), exists(), a locking read in a
     # transaction, a raw fetch, and the Tables.jl interface a table sink reads.
     count_step() || return Cint(42)

@@ -282,7 +282,10 @@ function _pg_timestamp_parts(k, x)::Tuple{DateTime, Union{Int, Nothing}}
   m === nothing && _pg_element_invalid(k, x)
   ms = m[7] === nothing ? 0 : parse(Int, rpad(first(m[7], 3), 3, '0'))
   dt = try
-    DateTime(parse.(Int, (m[1], m[2], m[3], m[4], m[5], m[6]))..., ms)
+    # Groups 1–6 are not optional, so each is a `SubString{String}`: parsed at that type (#1844), not broadcast over a
+    # tuple of `Union{Nothing,SubString}`, which was a run-time call in a trimmed image.
+    part(i::Int)::Int = parse(Int, m[i]::SubString{String})
+    DateTime(part(1), part(2), part(3), part(4), part(5), part(6), ms)
   catch e
     (e isa InterruptException || e isa StackOverflowError) && rethrow()   # #472
     _pg_element_invalid(k, x)

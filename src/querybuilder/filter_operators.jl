@@ -525,12 +525,13 @@ _bucket_bind(instruc::SQLInstruction, @nospecialize(f_meta::Models.AnyField), @n
   _add_parameter_at(instruc, _guarded_format(f_meta.formatter, x, "=", raw_field, f_meta.type))
 
 # `add_parameter!(instruc, v)` for a formatted value, untyped, at its concrete type (#1599 layer 5): one arm per type a
-# date-bucket bind formats to, each the same call; any other value takes it behind `@noinline`. Over the untyped value
+# date-bucket bind formats to, and an array lookup's literal, each the same call; any other value takes it behind `@noinline`. Over the untyped value
 # the call dispatched at run time (the sargable rewrite of `"date__@year" => 2008`).
 @noinline function _add_parameter_at(instruc::SQLInstruction, @nospecialize(v))
   v isa String && return add_parameter!(instruc, v)
   v isa Int64 && return add_parameter!(instruc, v)
   v isa Dates.Date && return add_parameter!(instruc, v)
+  v isa PormGArrayLiteral && return add_parameter!(instruc, v)   # an array lookup's list, and its refusal off PostgreSQL (#1844)
   return _add_parameter_other(instruc, v)
 end
 @noinline _add_parameter_other(instruc::SQLInstruction, @nospecialize(v)) = add_parameter!(instruc, v)

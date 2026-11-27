@@ -4,15 +4,16 @@
 # job checks them against the JIT control it ran itself rather than against lines spelled out in the workflow. The bulk
 # writers' refusals (`bulk_refusal`, #1694) are checked the same way: each line is a refusal's type and text, which must
 # be the one the JIT raises. So are the `engine_read` lines (#1599 layer 5): the reads each engine answers its own way,
-# rows on one and a capability refusal's text on another; and the `lookup_refusal` lines (#1838 decision 2): the JSON,
-# array and network lookups, rows on PostgreSQL and each refusal's type and text on SQLite and MySQL.
+# rows on one and a capability refusal's text on another; the `lookup_refusal` lines (#1838 decision 2): the JSON
+# and network lookups, and the `array_lookup` lines (#1844): rows on PostgreSQL and each refusal's type and text on SQLite
+# and MySQL; and the `filter_refusal` lines (#1844): filter values refused and located, the same on every engine.
 #
 #   test/trim/tools/same_lines.sh <JIT control output> <binary output> <at least N lines>
 #
 # Fails when the JIT control printed fewer than N such lines (so an empty comparison never passes) or when the
 # binary's differ.
 set -euo pipefail
-pat=$'^step\t(untyped|get_or_create|bulk_refusal|engine_read|lookup_refusal)\t'
+pat=$'^step\t(untyped|get_or_create|bulk_refusal|engine_read|lookup_refusal|array_lookup|filter_refusal)\t'
 jit=$(grep -E "$pat" "$1" || true)
 run=$(grep -E "$pat" "$2" || true)
 n=$(printf '%s' "$jit" | grep -c . || true)

@@ -533,9 +533,7 @@ const TelemetryIdRow = NamedTuple{(:telemetryid,), Tuple{Int64}}
 # `CarTelemetry`. PostgreSQL runs each, and the line is the rows it matches; SQLite and MySQL refuse each before any
 # SQL through the renderer's barrier, and the line is the refusal's type and text. A job checks these `lookup_refusal`
 # lines against its own JIT control (`same_lines.sh`). Exit code 50 when a read raises anything else.
-# The array lookups (`__@acontains`, `__@contained_by`, `__@overlap`) are not here: their list reaches the column's
-# `ArrayFormatter`, whose element formatting is not typed for a trimmed image yet, and the refusal's location then
-# fails on its own untyped label (#1599 residue).
+# The array lookups are `array_lookup_step`'s (#1844).
 function lookup_refusals_step()::Bool
     try
         q() = M.CarTelemetry.objects
@@ -556,16 +554,64 @@ function lookup_refusals_step()::Bool
     end
 end
 
-# One `lookup_refusal` line: `<label>: <n> rows`, or `<label>: BackendCapabilityError: <message>` when the engine refuses
-# it. Anything else propagates to the step.
-function lookup_refusal_line(label::String, read::F)::Nothing where {F <: Function}
+# The array lookups (#1844): `__@acontains`, `__@contained_by` and `__@overlap` over `CarTelemetry.pit_laps`, an
+# `ArrayField(IntegerField())`, which only PostgreSQL has. Their list goes through the column's `ArrayFormatter`, each
+# element through the base field's formatter. PostgreSQL runs each, and the line is the rows it matches over the one seeded
+# row (`pit_laps = [12, 31]`); SQLite and MySQL refuse each before any SQL, and the line is the refusal's type and text. A
+# job checks these `array_lookup` lines against its own JIT control (`same_lines.sh`). Exit code 53 when a read raises
+# anything else.
+function array_lookup_step()::Bool
+    try
+        q() = M.CarTelemetry.objects
+        lookup_refusal_line("pit_laps__@acontains", () -> q().filter("pit_laps__@acontains" => [12]).values("telemetryid").list(TelemetryIdRow);
+                            step = "array_lookup")
+        lookup_refusal_line("pit_laps__@contained_by", () -> q().filter("pit_laps__@contained_by" => [12, 31, 40]).values("telemetryid").list(TelemetryIdRow);
+                            step = "array_lookup")
+        lookup_refusal_line("pit_laps__@overlap", () -> q().filter("pit_laps__@overlap" => [31, 99]).values("telemetryid").list(TelemetryIdRow);
+                            step = "array_lookup")
+        lookup_refusal_line("pit_laps__@acontains none", () -> q().filter("pit_laps__@acontains" => [99]).values("telemetryid").list(TelemetryIdRow);
+                            step = "array_lookup")
+        return true
+    catch e
+        failed("array_lookup", e); return false
+    end
+end
+
+# Filter values PormG refuses before any SQL, each located by `_locate_filter_refusal` (#1844): a field formatter's refusal
+# on a plain field and on a date field, and a `@year` bucket's bound on a date field (the sargable rewrite's site). The line is the refusal's type and text, located with
+# the field and its type label; a trimmed image that cannot build the location raises a `MethodError` in place of
+# the `InvalidValueError` the JIT raises. The same on every engine; a job checks these `filter_refusal` lines against its
+# own JIT control (`same_lines.sh`). Exit code 52 when a read is not refused with an `InvalidValueError`.
+function filter_refusal_step()::Bool
+    ok = filter_refusal_line("year", () -> M.Race.objects.filter("year" => "abc").values("name").list(RaceNameRow))
+    ok &= filter_refusal_line("date", () -> M.Race.objects.filter("date" => "not a date").values("name").list(RaceNameRow))
+    ok &= filter_refusal_line("date__@year", () -> M.Race.objects.filter("date__@year" => "abc").values("name").list(RaceNameRow))
+    return ok
+end
+
+# One `filter_refusal` line: `<label>: InvalidValueError: <message>`. A read that is not refused, or is refused with anything
+# else, prints `failed`'s lines and the step fails.
+function filter_refusal_line(label::String, read::F)::Bool where {F <: Function}
+    try
+        read()
+        say("filter_refusal", string(label, ": not refused")); return false
+    catch e
+        e isa PormG.InvalidValueError || (failed("filter_refusal", e); return false)
+        say("filter_refusal", string(label, ": InvalidValueError: ", (e::PormG.InvalidValueError).msg))
+        return true
+    end
+end
+
+# One `lookup_refusal` line (or `step`'s): `<label>: <n> rows`, or `<label>: BackendCapabilityError: <message>` when the
+# engine refuses it. Anything else propagates to the step.
+function lookup_refusal_line(label::String, read::F; step::String = "lookup_refusal")::Nothing where {F <: Function}
     text = try
         string(length(read()::Vector{TelemetryIdRow}), " rows")
     catch e
         e isa PormG.BackendCapabilityError || rethrow()
         string("BackendCapabilityError: ", (e::PormG.BackendCapabilityError).msg)
     end
-    say("lookup_refusal", string(label, ": ", text))
+    say(step, string(label, ": ", text))
     return nothing
 end
 

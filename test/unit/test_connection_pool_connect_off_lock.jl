@@ -21,7 +21,7 @@ const CP = PormG.ConnectionPool
 #
 # Every task here is a sticky `@async` task on one thread, so the mock's `sleep` is the yield point
 # that lets the main task run while a connect is in flight. Gate: on the unpatched code each timed
-# assertion waits out the whole connect (2 s), against a bound of 0.5 s.
+# assertion waits out the whole connect (4 s in the two timed testsets, #1830), against a bound of 2 s.
 # ─────────────────────────────────────────────────────────────────────────────
 
 mutable struct FakeSlowConn1540
@@ -106,8 +106,10 @@ _mocks_1540() = (("PG", () -> MockPGSlow1540(2)), ("SQLite", () -> MockSQLiteSlo
     @testset "$label" begin
       p = mk()
       c1 = CP.acquire_connection(p; timeout_seconds = 5)   # slot 1, instant connect
-      p.delay = 2.0
-      A = @async CP.acquire_connection(p; timeout_seconds = 10)   # slot 2: a 2 s connect
+      # #1830: a 4 s connect, so the 2 s bounds below sit 2 s under the unpatched wait; the old 0.5 s bounds against a
+      # 2 s connect left no room for the scheduling delay a loaded runner adds (~0.9 s measured in the testset below).
+      p.delay = 4.0
+      A = @async CP.acquire_connection(p; timeout_seconds = 10)   # slot 2: a 4 s connect
       started = _wait_until_1540(() -> p.connecting == 1)
       # Time first, assert after: a failing `@test` prints, and the first failure report compiles
       # for long enough to hide the wait it is meant to measure.
@@ -123,8 +125,8 @@ _mocks_1540() = (("PG", () -> MockPGSlow1540(2)), ("SQLite", () -> MockSQLiteSlo
       @test started
       @test reserved                                       # reserved: leased, empty
       @test released === true
-      @test release_s < 0.5                                # ← unpatched: ~2 s, behind the connect
-      @test acquire_s < 0.5
+      @test release_s < 2.0                                # ← unpatched: ~4 s, behind the connect
+      @test acquire_s < 2.0
       @test got === c1
 
       a = fetch(A)
@@ -141,7 +143,7 @@ end
       p = mk()
       ceiling = p.pool_size * CP.POOL_EXPANSION_FACTOR
       held = [CP.acquire_connection(p; timeout_seconds = 5) for _ in 1:(ceiling - 1)]
-      p.delay = 2.0
+      p.delay = 4.0                                        # #1830: the gap widened, as in the testset above
       A = @async CP.acquire_connection(p; timeout_seconds = 10)   # reserves the last slot
       started = _wait_until_1540(() -> p.connecting == 1)
       t0 = time()                                          # time first, assert after (see above)
@@ -155,7 +157,7 @@ end
       @test started
       @test length(p.connections) == ceiling
       @test err isa PormG.PoolTimeoutError
-      @test 0.15 <= elapsed < 1.0                          # ← unpatched: ~2 s, the connect's length
+      @test 0.15 <= elapsed < 2.0                          # ← unpatched: ~4 s, the connect's length
 
       a = fetch(A)
       push!(held, a)

@@ -6693,6 +6693,29 @@ end
     @test hits == String[]
   end
 
+  # What: the many-to-many join (`_insert_many_to_many_joins`, the body `_m2m_joins_at` at the models' types) and the
+  #   `to_many` stamp on the surviving row (`_flag_to_many!`).
+  # Expected: no dynamic call in the body at `ModelType` (the relation's recorded models), none to the model helpers
+  #   from the entry, and none in `_flag_to_many!` or the row search under it.
+  # Why: the trimmed many-to-many read (#1689's fixture step, the first trimmed many-to-many) stopped at
+  #   `model_table_name(::ModelType)`: the relation's model slots are the abstract `PormGModel`; the verifier also
+  #   listed `model_column` on them and the `findfirst` closure over the abstract `JoinRow` in `_flag_to_many!`.
+  @testset "a many-to-many join is built at the models' types (#1689)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    MT = PormG.Models.ModelType
+    R = PormG.Models.ManyToManyRelation
+    for H in (Nothing, String)
+      @test (H, _dynamic_calls(QB._m2m_joins_at, (R, MT, MT, I, String, String, String, H, Bool))) == (H, String[])
+      @test (H, _named_dynamic_calls(Tuple{typeof(Core.kwcall), NamedTuple{(:track_path,), Tuple{Bool}},
+                                           typeof(QB._insert_many_to_many_joins), R, I, String, String, String, H},
+                                     ("model_table_name", "model_column", "_m2m_joins"))) == (H, String[])
+    end
+    deep = _dynamic_calls_deep(QB._flag_to_many!, (Vector{QB.JoinRow}, String); depth = 4,
+                               skip = (QB._join_alias_other,))
+    @test filter(x -> occursin("_flag_to_many!", x) || startswith(x, "Tuple{typeof(PormG.QueryBuilder."), deep) == String[]
+  end
+
   @testset ".copy() copies the whole query at its types (#1684)" begin
     QB = PormG.QueryBuilder
     OD = QB.OrderedCollections.OrderedDict{String,Any}

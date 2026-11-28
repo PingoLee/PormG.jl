@@ -220,6 +220,61 @@ tasks. The SQLite refused statement is checked by hand.
   (its warnings included) reaching your output. Print what you need yourself, to `Core.stdout`, as the
   examples below do: in a trimmed binary, `Base.stdout` is not the process's standard output.
 
+## JIT-only tools
+
+These parts of PormG are tools for a JIT process (the REPL, a script, a deploy step), not for a trimmed binary: they
+run code they read or generate while the program runs, depend on a package a trimmed binary cannot run, write code or
+files for you to use, or have not run in a trimmed binary. Use them from a JIT process beside the binary:
+
+- **Migrations:** `makemigrations`, `migrate`, `get_migration_plan`, `run_once`, `init_migrations` and the migration
+  planner. The planner `include`s the models file it compares with the database at run time, so the binary does not run
+  `migrate` (#1603). Migrate the database from a JIT process before the binary starts.
+- **Generating and importing models:** `generate_models_from_db` / `inspectdb`, the importers
+  (`import_models_from_postgres`, `import_models_from_sqlite`, `import_models_from_mysql`, `import_models_from_django`)
+  and `convertSQLToModel`. They write model source for you to compile in.
+- **Loading models at run time:** `import_models(path)`, which `include`s a models file while the program runs, and hot
+  reload: Revise, and `@models_module`'s reloading. A trimmed binary compiles its models in: `include` the models file at
+  the top level of the entry, as [A trimmed application](#A-trimmed-application) does.
+- **Changing the schema at run time:** `add_field!`, which registers a field on a model that is already bound. It has
+  not run in a trimmed binary: declare the field in the models file instead.
+- **Reading `connection.yml`:** `load` and `load_many`. YAML.jl's parser cannot run in a trimmed binary
+  (JuliaData/YAML.jl#260). Register each connection in code ([Migrating an application boot](#Migrating-an-application-boot)).
+- **LibPQ:** a binary built with it aborts before `main` (see [What does not work yet](#What-does-not-work-yet)). Use
+  Postgres.jl.
+- **Writing code for you:** `list(show_query = :struct)`, which prints the struct a typed read takes, and the helpers
+  in `src/tools.jl` (`setup`, which writes a `connection.yml` from your answers; `install_ai_skills`; `upgrade_guide`).
+  Run them while you write the program; the binary uses what they printed or wrote.
+
+## Size and start-up
+
+!!! note "Measured on PormG's trim fixture (2026-11-27)"
+    Linux x86-64 (an 8-core laptop CPU), Julia 1.13.4, JuliaC 0.3.12, built as in [Building](#Building)
+    (`JULIA_CPU_TARGET=native`, `--trim=unsafe-warn`). The numbers are the fixture's, not a promise: a binary's size
+    follows what the program calls, and its start-up what it does before the first query.
+
+    **Size** of each `test/trim/` binary:
+
+    | Binary | What it runs | Size |
+    |---|---|--:|
+    | one query | boot, one typed read on SQLite, close | 32.4 MB |
+    | SQLite read-only | the read steps | 45.5 MB |
+    | SQLite | the read and write steps | 69.0 MB |
+    | PostgreSQL (Postgres.jl) | the read and write steps | 78.1 MB |
+    | MySQL 8.4 | the read and write steps | 79.8 MB |
+
+    **Start-up to the first query**, from the command to the process's exit: boot (register the connection), one typed
+    read of two rows on SQLite (`filter`, `order_by`, `list(RaceRow)`), close the pools. The same entry file ran as the
+    trimmed binary and under the JIT (`julia --project <entry>.jl`, package images already compiled), alternating, 10 runs
+    each on a quiet machine:
+
+    | | median | min | max |
+    |---|--:|--:|--:|
+    | trimmed binary | 42.6 ms | 42.3 ms | 43.6 ms |
+    | JIT process | 11.9 s | 11.7 s | 12.1 s |
+
+    The JIT time is Julia's start, loading the packages and compiling the first query. To measure your own program, time
+    `julia --project app.jl …` against the binary the same way.
+
 ## Versions
 
 The versions PormG builds with are **Julia 1.13.4** and **JuliaC 0.3.12**. Other versions may work, but
@@ -470,8 +525,40 @@ connection's driver handle was closed.
 
 ## Errors in a trimmed binary
 
-Catch PormG's errors as usual (`catch e; e isa PormG.StatementError || rethrow()`). To report one, read
-its typed fields, `e.sqlstate` (`nothing` on SQLite) and `e.message`, rather than printing the exception.
-`e.cause` is the driver's error with no declared type: print `nameof(typeof(e.cause))`, never the cause
-itself. Printing a value whose type the compiler cannot see calls code the image may not have. The
-fixture's `test/trim/tools/failing.jl` shows the pattern.
+Catch PormG's errors as usual (`catch e; e isa PormG.StatementError || rethrow()`). Print one through `showerror`,
+at its concrete type:
+
+```julia
+try
+    M.Race.objects.filter("year" => "abc").list(RaceRow)
+catch e
+    e isa PormG.InvalidValueError || rethrow()
+    io = IOBuffer()
+    showerror(io, e::PormG.InvalidValueError)   # the type the compiler sees
+    println(Core.stdout, String(take!(io)))
+end
+```
+
+The fixture prints every refusal and error it provokes this way, on SQLite, MySQL and PostgreSQL, and its CI checks
+each line against the JIT's (#1613). The trimmed binaries print the same text, whole message included, for every type
+it provokes: input refusals (`InvalidValueError`, `UnknownFieldError`, `QueryBuildError`, `UnsafeMutationError`),
+capability refusals (`BackendCapabilityError`), delete rules (`ProtectedError`), a read-only connection
+(`WritesDisabledError`) and the database's `StatementError`. The other types have not been raised in a trimmed binary.
+A unit test keeps every `showerror` method's calls resolved at compile time, apart from a few reviewed ones: a database
+error's, `MultipleObjectsReturned`'s and `PoolTimeoutError`'s text has a typed part Julia prints at run time, which the
+fixture's `StatementError` lines show printing as under the JIT.
+
+What may differ, or not run:
+
+- **An exception whose type the compiler cannot see.** `showerror(io, e)` on the `e` of a bare `catch e` is a run-time
+  call the image may have no code for. Narrow it first, as above: one `isa` arm per error type you expect.
+- **`show`, `repr` and `string` of an error** go through Julia's generic printer for most PormG errors, and through
+  methods that `repr` each field for the database errors and `PoolConnectError`. None has run in a trimmed binary,
+  and the generic printer may have no code there. Use `showerror`, or the typed fields (`e.msg` on the message-only
+  errors).
+- **A database error's `cause`** is the driver's error, with no declared type. `showerror` names it by its type, which
+  runs. Do not print the cause itself: read `nameof(typeof(e.cause))`, `e.sqlstate` (`nothing` on SQLite) and
+  `e.message`, as the fixture's `test/trim/tools/failing.jl` does. `PoolConnectError` prints its cause's text, a run-time
+  call, so read its fields instead.
+- **The migration errors** (`DestructiveMigrationError`, `MigrationPrecheckError`) print each lossy alter by a broadcast
+  over its values, made at run time. Migrations are a [JIT-only tool](#JIT-only-tools).

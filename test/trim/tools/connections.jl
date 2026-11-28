@@ -79,6 +79,7 @@ function keys_step(register!::F)::Bool where {F <: Function}
             false
         catch e
             e isa PormG.WritesDisabledError || rethrow()
+            showerror_line("keys", e)
             true
         end
         say("keys", string(length(own), " rows on f1, ", length(ro), " on ", RO_KEY, "; a create on ", RO_KEY,

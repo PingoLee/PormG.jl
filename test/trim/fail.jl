@@ -10,6 +10,7 @@ PormG.trim_entrypoints(PormG.ConnectionPool.SQLiteConnectionPool)
 
 say(step::String, detail::String) = (println(Core.stdout, "step\t", step, "\t", detail); nothing)
 
+include(joinpath(@__DIR__, "tools", "errors.jl"))   # `showerror_line`, which `report_failure` calls (#1613)
 include(joinpath(@__DIR__, "tools", "failing.jl"))
 
 function (@main)(args::Vector{String})::Cint

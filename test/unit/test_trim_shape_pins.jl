@@ -6716,6 +6716,47 @@ end
     @test hits == String[]
   end
 
+  # What: `showerror(io, e)` for every concrete `PormGError` type, at that type (#1613), following its calls 6 levels into
+  #   Base's frames too.
+  # Expected: no dynamic call, except the reviewed ones: the database errors (`IntegrityError`, `OperationalError`,
+  #   `StatementError`) and `MultipleObjectsReturned` interpolate a typed `Union` field into their text, which Base's
+  #   `print_to_string` prints at run time, and `PoolTimeoutError` prints a number the same way; `PoolConnectError` prints
+  #   its driver's untyped `cause` (`_redacted_cause`, a designed run-time call); the migration errors broadcast over
+  #   their lossy alters' values (`_lossy_alter_summary`), and migrations are a JIT-only tool.
+  # Why: a trimmed binary prints a caught PormG error through `showerror` as the JIT does when the call is made at the
+  #   error's concrete type: the fixture's `showerror` lines compare every message it provokes with its JIT control
+  #   (`test/trim/tools/errors.jl`). A new dynamic call (an untyped value interpolated into a message lands in Base's
+  #   `print_to_string`) is one more call a trimmed image may have no code for.
+  @testset "PormG's errors print through showerror at their types (#1613)" begin
+    # Every concrete subtype of `PormGError`, by an explicit walk (a local recursive function is not visible to itself
+    # when the file runs inside `runtests.jl`'s testset).
+    types = Type[]
+    pending = Any[PormG.PormGError]
+    while !isempty(pending)
+      for S in InteractiveUtils.subtypes(pop!(pending))
+        isabstracttype(S) ? push!(pending, S) : push!(types, S)
+      end
+    end
+    # Only PormG's own types: a test file may define a subtype of its own.
+    filter!(T -> startswith(string(parentmodule(T)), "PormG"), types)
+    # type name => the frames a reviewed dynamic call may sit in
+    reviewed = Dict(
+      "IntegrityError" => ("print_to_string",), "OperationalError" => ("print_to_string",),
+      "StatementError" => ("print_to_string",), "MultipleObjectsReturned" => ("print_to_string",),
+      "PoolTimeoutError" => ("Tuple{typeof(print), IOBuffer",),
+      "PoolConnectError" => ("_redacted_cause", "Tuple{typeof(print), IOBuffer"),
+      "DestructiveMigrationError" => ("_lossy_alter_summary", "print_to_string"),
+      "MigrationPrecheckError" => ("_lossy_alter_summary", "print_to_string"),
+    )
+    @test length(types) >= 25
+    for T in types
+      allowed = get(reviewed, string(nameof(T)), ())
+      d = _dynamic_calls_deep(showerror, (IOBuffer, T); depth = 6)
+      unexpected = filter(x -> !any(f -> occursin(f, first(split(x, ": "))), allowed), d)
+      @test (T, unexpected) == (T, String[])
+    end
+  end
+
   # What: the many-to-many join (`_insert_many_to_many_joins`, the body `_m2m_joins_at` at the models' types) and the
   #   `to_many` stamp on the surviving row (`_flag_to_many!`).
   # Expected: no dynamic call in the body at `ModelType` (the relation's recorded models), none to the model helpers

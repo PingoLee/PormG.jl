@@ -1,5 +1,6 @@
 # A statement that fails on the server, and what the caller sees of it (#1599). Included by the server
-# variants' `main.jl` and by the SQLite `fail.jl` entry, after each defines `say`.
+# variants' `main.jl` and by the SQLite `fail.jl` entry, after each defines `say`; each also includes `errors.jl`, whose
+# `showerror_line` `report_failure` calls (#1613).
 #
 # In a trimmed image a failing statement surfaced as whatever the error path itself could not run: the
 # classifiers and the cause walks call `hasproperty`, `string` and `showerror` on an untyped exception,
@@ -54,5 +55,6 @@ _db_fields(e::PormG.IntegrityError) = (e.sqlstate, e.message, e.cause)
     Core.println("  cause: ", string(nameof(typeof(cause))))
     cause isa MethodError && Core.println("  cause missed: ", typeof(cause.f))
     cause isa MethodError && Core.println("  cause args: ", typeof(cause.args))
+    showerror_line("fail", e)   # the full message at the error's type (#1613), after the diagnostics above
     return nothing
 end

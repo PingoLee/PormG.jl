@@ -107,6 +107,7 @@ function query_step()::Bool
     end
 end
 
+include(joinpath(@__DIR__, "..", "tools", "errors.jl"))   # every caught PormG error through `showerror` (#1613)
 include(joinpath(@__DIR__, "..", "tools", "writes.jl"))
 include(joinpath(@__DIR__, "..", "tools", "reads.jl"))
 include(joinpath(@__DIR__, "..", "tools", "connections.jl"))

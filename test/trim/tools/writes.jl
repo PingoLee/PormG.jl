@@ -308,6 +308,7 @@ function refusal_case(label::String, call::F)::Bool where {F}
     catch e
         text = refusal_text(e)
         text === nothing && (failed("bulk_refusal", e); return false)
+        showerror_line(string("bulk_refusal ", label), e)
         # One line per refusal, so `same_lines.sh` compares a multi-line message whole.
         say("bulk_refusal", string(label, ": ", replace(text, '\n' => " ⏎ ")))
         return true
@@ -516,6 +517,7 @@ function delete_rules_step()::Bool
             "not refused"
         catch e
             protected_by(e, "result.raceid", "PROTECT") || rethrow()
+            showerror_line("delete_rules PROTECT", e)
             "refused with ProtectedError (result.raceid)"
         end
         restrict = try
@@ -523,6 +525,7 @@ function delete_rules_step()::Bool
             "not refused"
         catch e
             protected_by(e, "result.driverid", "RESTRICT") || rethrow()
+            showerror_line("delete_rules RESTRICT", e)
             "refused with ProtectedError (result.driverid)"
         end
         kept = string(M.Race.objects.filter("year" => 2008, "round" => 6).count()::Int, " race, ",

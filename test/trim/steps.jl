@@ -129,6 +129,7 @@ end
 @noinline function refusal(step::String, @nospecialize(e))::Bool
     if e isa PormG.InvalidValueError
         say(step, string("InvalidValueError: ", (e::PormG.InvalidValueError).msg))
+        showerror_line(step, e)
         return true
     end
     failed(step, e)
@@ -150,6 +151,9 @@ function query_step()::Bool
         failed("query", e); return false
     end
 end
+
+# Every caught PormG error printed in full through `showerror` at its type (#1613): `tools/errors.jl`.
+include(joinpath(@__DIR__, "tools", "errors.jl"))
 
 # The single-row write's steps (`write_step`, `update_step`, `delete_step`) are in `tools/writes.jl`, shared with
 # the server variants (#1614), so every binary prints the same lines.

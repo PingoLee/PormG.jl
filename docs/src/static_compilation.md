@@ -245,6 +245,36 @@ files for you to use, or have not run in a trimmed binary. Use them from a JIT p
   in `src/tools.jl` (`setup`, which writes a `connection.yml` from your answers; `install_ai_skills`; `upgrade_guide`).
   Run them while you write the program; the binary uses what they printed or wrote.
 
+## Size and start-up
+
+!!! note "Measured on PormG's trim fixture (2026-11-27)"
+    Linux x86-64 (an 8-core laptop CPU), Julia 1.13.4, JuliaC 0.3.12, built as in [Building](#Building)
+    (`JULIA_CPU_TARGET=native`, `--trim=unsafe-warn`). The numbers are the fixture's, not a promise: a binary's size
+    follows what the program calls, and its start-up what it does before the first query.
+
+    **Size** of each `test/trim/` binary:
+
+    | Binary | What it runs | Size |
+    |---|---|--:|
+    | one query | boot, one typed read on SQLite, close | 32.4 MB |
+    | SQLite read-only | the read steps | 45.5 MB |
+    | SQLite | the read and write steps | 69.0 MB |
+    | PostgreSQL (Postgres.jl) | the read and write steps | 78.1 MB |
+    | MySQL 8.4 | the read and write steps | 79.8 MB |
+
+    **Start-up to the first query**, from the command to the process's exit: boot (register the connection), one typed
+    read of two rows on SQLite (`filter`, `order_by`, `list(RaceRow)`), close the pools. The same entry file ran as the
+    trimmed binary and under the JIT (`julia --project <entry>.jl`, package images already compiled), alternating, 10 runs
+    each on a quiet machine:
+
+    | | median | min | max |
+    |---|--:|--:|--:|
+    | trimmed binary | 42.6 ms | 42.3 ms | 43.6 ms |
+    | JIT process | 11.9 s | 11.7 s | 12.1 s |
+
+    The JIT time is Julia's start, loading the packages and compiling the first query. To measure your own program, time
+    `julia --project app.jl …` against the binary the same way.
+
 ## Versions
 
 The versions PormG builds with are **Julia 1.13.4** and **JuliaC 0.3.12**. Other versions may work, but

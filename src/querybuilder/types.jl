@@ -1009,8 +1009,6 @@ That is a internal function, please do not use it.
   values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,SubqueryObject,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID,AbstractVector{UInt8}}
   column::ColumnPart
 end
-# The `values` slot's type, for an assertion that spares its constructor a `convert` from an untyped value (#1684).
-const _OperValues = fieldtype(OperObject, :values)
 # `OP` is internal (#202): unexported, undocumented, and the string-lookup form (`"field__@op" =>
 # value`) is the public way to write an operator predicate. The `SQLTypeFunction` arms exist for
 # PormG's own composite transforms — `Y_Q` / `Y_QUAD` (functions.jl), the year-qualified
@@ -3313,8 +3311,9 @@ function _oper_with_value(op::String, @nospecialize(v), column::ColumnPartNode):
   v isa Vector{String} && return OperObject(op, v, column)
   return _oper_with_value_other(op, v, column)
 end
-# The value is asserted at the slot's type (it came out of one), so the constructor converts nothing: `convert(<slot
-# type>, ::Any)` would be invalidated by any package's new `convert` method, as `_oper_column_copy` says.
+# The value is asserted at the slot's type (`_OperValues`, build_helpers.jl; it came out of one), so the constructor
+# converts nothing: `convert(<slot type>, ::Any)` would be invalidated by any package's new `convert` method, as
+# `_oper_column_copy` says.
 @noinline _oper_with_value_other(op::String, @nospecialize(v), column::ColumnPartNode)::OperObject =
   OperObject(op, v::_OperValues, column)
 function _oper_value_copy(@nospecialize(v))

@@ -1009,6 +1009,8 @@ That is a internal function, please do not use it.
   values::Union{String,Number,Bool,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Base.UUID,SQLObjectHandler,SQLTypeF,SQLTypeFunction,SQLTypeCTE,SQLTypeJoined,SubqueryObject,Vector{T}} where T<:Union{Missing,String,Dates.TimeType,Dates.Period,Dates.CompoundPeriod,Number,Bool,SQLTypeF,Base.UUID,AbstractVector{UInt8}}
   column::ColumnPart
 end
+# The `values` slot's type, for an assertion that spares its constructor a `convert` from an untyped value (#1684).
+const _OperValues = fieldtype(OperObject, :values)
 # `OP` is internal (#202): unexported, undocumented, and the string-lookup form (`"field__@op" =>
 # value`) is the public way to write an operator predicate. The `SQLTypeFunction` arms exist for
 # PormG's own composite transforms — `Y_Q` / `Y_QUAD` (functions.jl), the year-qualified
@@ -3289,14 +3291,13 @@ function _filter_terms_copy(fs::Vector{FilterType})::Vector{FilterType}
   return out
 end
 # A predicate's column: a field one level (its own `deepcopy` method, which shares the field's node as before), a
-# function or a window through the tree copy.
-function _oper_column_copy(@nospecialize(c))::ColumnPartNode
-  c isa SQLField && return deepcopy(c)::SQLField
-  c isa FObject && return _tree_copy(c)
-  c isa WindowFunction && return _tree_copy(c)
-  return _oper_column_other(c)
-end
-@noinline _oper_column_other(@nospecialize(c))::ColumnPartNode = deepcopy(c)
+# function or a window through the tree copy. One method per member of the slot's three-member union, and no open arm:
+# an untyped arm returning `::ColumnPartNode` compiles `convert(ColumnPartNode, ::Any)`, a call any package's new
+# `convert` method invalidates (Intervals.jl's, loaded with LibPQ), which discarded the whole cached copy chain and cost
+# the first `.copy()` 0.6 s with every driver loaded.
+_oper_column_copy(c::SQLField)::SQLField = deepcopy(c)::SQLField
+_oper_column_copy(c::FObject)::FObject = _tree_copy(c)
+_oper_column_copy(c::WindowFunction)::WindowFunction = _tree_copy(c)
 # A predicate's value, other than a queryset, as `deepcopy` copied it: a value nothing can change shared, a vector of
 # such values copied, a `Subquery` with its handler copied, an expression or reference through the tree copy, anything
 # else deep-copied behind the open arm. The predicate is rebuilt in the arm that knows the value's type, so the
@@ -3312,8 +3313,10 @@ function _oper_with_value(op::String, @nospecialize(v), column::ColumnPartNode):
   v isa Vector{String} && return OperObject(op, v, column)
   return _oper_with_value_other(op, v, column)
 end
+# The value is asserted at the slot's type (it came out of one), so the constructor converts nothing: `convert(<slot
+# type>, ::Any)` would be invalidated by any package's new `convert` method, as `_oper_column_copy` says.
 @noinline _oper_with_value_other(op::String, @nospecialize(v), column::ColumnPartNode)::OperObject =
-  OperObject(op, v, column)
+  OperObject(op, v::_OperValues, column)
 function _oper_value_copy(@nospecialize(v))
   v isa String && return v
   isbits(v) && return v

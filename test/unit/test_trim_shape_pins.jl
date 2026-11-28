@@ -6724,6 +6724,8 @@ end
     @test filter(c -> occursin("deepcopy", c),
                  invoked(Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Nothing, Nothing})) == String[]
     @test filter(c -> occursin(r"deepcopy|_copy_insert_other", c), invoked(Tuple{typeof(QB._copy_insert), OD})) == String[]
+    # `_oper_column_copy` is one method per member of the column's union, with no open arm: the deep scan below no longer
+    # skips one, so an untyped column arm put back shows there as a dynamic call (the per-member pins alone would not).
     for (f, T) in ((QB._filter_slot_copy, Vector{QB.FilterNode}), (QB._filter_terms_copy, Vector{QB.FilterType}),
                    (QB._copy_insert, OD), (QB._copy_insert_value, Any), (QB._oper_value_copy, Any),
                    (QB._oper_column_copy, QB.SQLField), (QB._oper_column_copy, QB.FObject),

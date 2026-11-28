@@ -6645,7 +6645,7 @@ end
     # Since #1684 the body's filter slot and insert map are copied at their types too: their open arms are skipped.
     reached = _dynamic_calls_deep(QB._cte_query_copy, (QB.ObjectHandler,); depth = 8,
                                   skip = (QB._tree_copy_other, QB._copy_insert_other, QB._store_cte_other!, Base.deepcopy,
-                                          QB._oper_value_other, QB._oper_column_other, QB._oper_with_value_other,
+                                          QB._oper_value_other,
                                           QB._put_insert_other!, QB._unlisted_node))
     @test filter(x -> startswith(x, "Tuple{typeof(PormG.QueryBuilder."), reached) == String[]
     # No `deepcopy` of a projection, an ORDER BY or a nested CTE body is left on the path (since #1684 none of the
@@ -6679,8 +6679,15 @@ end
     @test filter(c -> occursin(r"deepcopy|_copy_insert_other", c), invoked(Tuple{typeof(QB._copy_insert), OD})) == String[]
     for (f, T) in ((QB._filter_slot_copy, Vector{QB.FilterNode}), (QB._filter_terms_copy, Vector{QB.FilterType}),
                    (QB._copy_insert, OD), (QB._copy_insert_value, Any), (QB._oper_value_copy, Any),
-                   (QB._oper_column_copy, Any), (QB._tree_copy_values, QB.SQLObjectQuery))
+                   (QB._oper_column_copy, QB.SQLField), (QB._oper_column_copy, QB.FObject),
+                   (QB._oper_column_copy, QB.WindowFunction), (QB._tree_copy_values, QB.SQLObjectQuery))
       @test (nameof(f), T, _dynamic_calls(f, (T,))) == (nameof(f), T, String[])
+    end
+    # The value's open arm builds the predicate at the slot's type, with no run-time constructor call: an untyped one
+    # compiled `OperObject(::String, ::Any, …)` and its `convert` from `Any`, which a driver's dependency invalidates
+    # (Intervals.jl's `convert`), discarding the cached copy chain with every driver loaded.
+    for C in (QB.SQLField, QB.FObject, QB.WindowFunction)
+      @test (C, _dynamic_calls(QB._oper_with_value_other, (String, Any, C))) == (C, String[])
     end
     for T in (QB.OperObject, QB.QObject, QB.QorObject, QB.FExpression, QB.OuterRefObject, QB.ExistsObject)
       @test (T, _dynamic_calls(QB._filter_copy, (T,))) == (T, String[])
@@ -6688,7 +6695,7 @@ end
     @test _dynamic_calls(QB._oper_with_value, (String, Any, QB.ColumnPartNode)) == String[]
     reached = _dynamic_calls_deep(Base.deepcopy, (QB.ObjectHandler,); depth = 10,
                                   skip = (QB._tree_copy_other, QB._copy_insert_other, QB._store_cte_other!,
-                                          QB._oper_value_other, QB._oper_column_other, QB._oper_with_value_other,
+                                          QB._oper_value_other,
                                           QB._put_insert_other!, QB._unlisted_node))
     @test filter(x -> startswith(x, "Tuple{typeof(PormG.QueryBuilder."), reached) == String[]
   end

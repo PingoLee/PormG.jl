@@ -223,6 +223,14 @@ end
 
 @testset "#1624: no read makes a deep copy of the caller's handler" begin
     q = BW.Driver.objects.filter("constructorid" => 1)
+    # The same rows behind twelve more filters every driver passes, for the two terminals whose own work is near a light
+    # handler's copy: since #1684 a copy is made at the query's types (35 allocations for `q`, it was 60), under
+    # `aggregate()`'s own extra. A filter adds about two allocations to a copy and none to their extra (#1589's test
+    # measures it), so a second copy, the defect, still costs a whole copy of the handler measured.
+    qh = BW.Driver.objects.filter("constructorid" => 1)
+    for i in 1:12
+        qh.filter("driverid__@gte" => -i)
+    end
     pk1 = BW.Driver.objects.filter("driverid" => 1)
     prepared(base, prep) = (h = deepcopy(base); prep(h); h)
     render(h) = () -> _BW_QB._render_select(h; show_query = :sql)
@@ -249,10 +257,10 @@ end
         ("get(T)",      () -> pk1.get(BwDriverRow),
                         manual(prepared(pk1, h -> (h.values("driverid", "surname"); h.limit(2))), BwDriverRow), pk1),
         ("first()",     () -> q.first(),                      manual(prepared(q, h -> h.limit(1)), :row), q),
-        ("count(col)",  () -> q.count("driverid"),
-                        manual(prepared(q, h -> h.values("pormg_count" => Count("driverid"))), :dict), q),
-        ("aggregate()", () -> q.aggregate("n" => Count("driverid")),
-                        manual(prepared(q, h -> h.values("n" => Count("driverid"))), :dict), q),
+        ("count(col)",  () -> qh.count("driverid"),
+                        manual(prepared(qh, h -> h.values("pormg_count" => Count("driverid"))), :dict), qh),
+        ("aggregate()", () -> qh.aggregate("n" => Count("driverid")),
+                        manual(prepared(qh, h -> h.values("n" => Count("driverid"))), :dict), qh),
     )
     for (name, terminal, baseline, handler) in execute_cases
         @test _bw_no_deep_copy(name, terminal, baseline, handler)

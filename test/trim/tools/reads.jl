@@ -635,3 +635,43 @@ function engine_read_line(label::String, read::F; needs_function::Bool = false):
     say("engine_read", string(label, text))
     return nothing
 end
+
+# `.copy()` (#1684, #1599 layer 4): a handler filtered and ordered, copied, the copy changed (a filter, an `order_by`, a
+# `values` projection) and both read, checked by typed rows; then the original changed and the copy read again. The
+# original reads the two seeded races in date order, the copy the one past round 10, and neither sees the other's
+# calls. `.copy()` walked the query through `deepcopy`'s generic walk before #1684. Exit code 54 when a read raises or a
+# handler returns other rows.
+const CopyRow = NamedTuple{(:name, :round), Tuple{String, Int64}}
+function copy_step()::Bool
+    try
+        q = M.Race.objects.filter("year" => 2008)
+        q.order_by("date")
+        c = q.copy()
+        c.filter("round__@gt" => 10)
+        c.order_by("-round")
+        c.values("name", "round")
+        branch = c.list(CopyRow)
+        orig = q.list(RaceRow)
+        say("copy", string("original: ", race_names(orig)))
+        say("copy", string("copy: ", join([string(r.name, " (", r.round, ")") for r in branch], ", ")))
+        q.filter("round__@lt" => 10)
+        again = c.list(CopyRow)
+        after = q.list(RaceRow)
+        say("copy", string("original after its filter: ", race_names(after), "; copy: ",
+                           join([r.name for r in again], ", ")))
+        # A handler that already projects, copied: the projection's nodes are copied at their types too.
+        p = M.Race.objects.filter("year" => 2008).values("name", "round").order_by("date")
+        pc = p.copy()
+        pc.filter("round__@lt" => 10)
+        pr, pcr = p.list(CopyRow), pc.list(CopyRow)
+        say("copy", string("projected original: ", join([r.name for r in pr], ", "), "; copy: ",
+                           join([r.name for r in pcr], ", ")))
+        return race_names(orig) == "Monaco Grand Prix, Brazilian Grand Prix" &&
+               length(branch) == 1 && branch[1] == (name = "Brazilian Grand Prix", round = 18) &&
+               race_names(after) == "Monaco Grand Prix" && again == branch &&
+               [r.name for r in pr] == ["Monaco Grand Prix", "Brazilian Grand Prix"] &&
+               [r.name for r in pcr] == ["Monaco Grand Prix"]
+    catch e
+        failed("copy", e); return false
+    end
+end

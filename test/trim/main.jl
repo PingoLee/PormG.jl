@@ -33,6 +33,7 @@ function (@main)(args::Vector{String})::Cint
     hops_step() || return Cint(37)
     lookup_more_step() || return Cint(38)
     qor_many_step() || return Cint(51)   # Q/Qor from 32 arguments (`tools/reads.jl`)
+    copy_step() || return Cint(54)       # `.copy()`, the copy changed and both read (`tools/reads.jl`, #1684)
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)
@@ -55,6 +56,7 @@ function (@main)(args::Vector{String})::Cint
     bulk_update_step(1) || return Cint(15)        # the upsert-shaped writes (`tools/writes.jl`, #1694)
     update_or_create_step(1) || return Cint(16)
     get_or_create_step(1) || return Cint(18)
+    copy_write_step(1) || return Cint(55)   # a filled handler copied and written through (`tools/writes.jl`, #1684)
     cascade_step(1) || return Cint(22)  # the cascading delete (`tools/writes.jl`, #1694)
     # The write residue of layer 7 (`tools/writes.jl`, #1694): bulk_update with filters= and two keys, SET_DEFAULT, a
     # self-referential CASCADE, and the bulk writers' refusals.

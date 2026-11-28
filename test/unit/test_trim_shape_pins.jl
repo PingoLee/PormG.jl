@@ -6624,7 +6624,7 @@ end
   #   (`_cte_query_copy`) with the nested CTE bodies (`_copy_ctes`) going through it.
   # Expected: no dynamic call in any node's copy or in the walks over an untyped value; and from `_cte_query_copy` down,
   #   no call into `deepcopy`'s generic walk, except the open arm (`_tree_copy_other`, the designed dynamic call for a
-  #   type outside the set) and the filter slot's own copy, unchanged here (`Base.deepcopy(::Vector{FilterNode})`, #1684).
+  #   type outside the set). The filter slot is copied at its types since #1684 (the pin below).
   # Why: a CTE body projecting a `Subquery`, an `Exists`, a window, a `Case` or a mutable literal took `deepcopy`, whose
   #   walk visits each field by run-time dispatch: the trimmed `.with()` over such a body stopped inside
   #   `deepcopy_internal` (#1828 wall 4).
@@ -6642,11 +6642,14 @@ end
     end
     # PormG's own frames on the way down: none dispatches at run time (Base's logging on `_query_copy`'s error path and
     # the open arms are outside the pin).
+    # Since #1684 the body's filter slot and insert map are copied at their types too: their open arms are skipped.
     reached = _dynamic_calls_deep(QB._cte_query_copy, (QB.ObjectHandler,); depth = 8,
-                                  skip = (QB._tree_copy_other, QB._copy_insert_other, QB._store_cte_other!, Base.deepcopy))
+                                  skip = (QB._tree_copy_other, QB._copy_insert_other, QB._store_cte_other!, Base.deepcopy,
+                                          QB._oper_value_other,
+                                          QB._put_insert_other!, QB._unlisted_node))
     @test filter(x -> startswith(x, "Tuple{typeof(PormG.QueryBuilder."), reached) == String[]
-    # No `deepcopy` of a projection, an ORDER BY or a nested CTE body is left on the path: the generic walk is reached
-    # only through the filter slot (`deepcopy(obj.filter)`, its own typed hook) and the `Vector{String}` slots.
+    # No `deepcopy` of a projection, an ORDER BY or a nested CTE body is left on the path (since #1684 none of the
+    # filter slot or the `Vector{String}` slots either: the pin below).
     calls = String[]
     for (ci, _) in Base.code_typed_by_type(Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Vector{QB.ProjectionNode},
                                                  Vector{QB.SQLTypeOrder}}; optimize = true), s in ci.code
@@ -6654,6 +6657,49 @@ end
     end
     @test filter(c -> occursin(r"SQLTypeOrder|SQLOrder|ProjectionNode|SQLField|SQLText|ObjectHandler|CTEDict", c), calls) == String[]
     @test _dynamic_calls(QB._copy_ctes, (QB.OrderedCollections.OrderedDict{String,QB.CTEDict},)) == String[]
+  end
+
+  # What: `.copy()` and every `deepcopy` of a handler (an `Exists` render, `inspect_query`): the whole query copied at its
+  #   types (`_query_copy(obj, nothing)`, #1684): the projection (`_tree_copy_values`), the filter slot node by node
+  #   (`_filter_slot_copy`, `_filter_copy` per member, a predicate's value and column), the ORDER BY terms, the three name
+  #   lists, and a filled insert map value by value (`_copy_insert_value`).
+  # Expected: no `deepcopy` call left in `_query_copy(…, nothing, nothing)` or in `_copy_insert` (a filled map went to
+  #   `_copy_insert_other(::OrderedDict)`, `deepcopy` of the whole map); no dynamic call in each piece; and from
+  #   `deepcopy(::ObjectHandler)` down, no dynamic call in PormG's frames except the designed open arms, each the old
+  #   `deepcopy` for a value outside the typed set.
+  # Why: `.copy()` walked the projection, the filter, the ORDER BY terms, the name lists and a filled insert map through
+  #   `deepcopy`'s generic walk, which visits each field by run-time dispatch and which a trimmed image has no code for.
+  @testset ".copy() copies the whole query at its types (#1684)" begin
+    QB = PormG.QueryBuilder
+    OD = QB.OrderedCollections.OrderedDict{String,Any}
+    invoked(tt) = [string(s.args[1]) for (ci, _) in Base.code_typed_by_type(tt; optimize = true)
+                   for s in ci.code if s isa Expr && s.head === :invoke]
+    @test filter(c -> occursin("deepcopy", c),
+                 invoked(Tuple{typeof(QB._query_copy), QB.SQLObjectQuery, Nothing, Nothing})) == String[]
+    @test filter(c -> occursin(r"deepcopy|_copy_insert_other", c), invoked(Tuple{typeof(QB._copy_insert), OD})) == String[]
+    # `_oper_column_copy` is one method per member of the column's union, with no open arm: the deep scan below no longer
+    # skips one, so an untyped column arm put back shows there as a dynamic call (the per-member pins alone would not).
+    for (f, T) in ((QB._filter_slot_copy, Vector{QB.FilterNode}), (QB._filter_terms_copy, Vector{QB.FilterType}),
+                   (QB._copy_insert, OD), (QB._copy_insert_value, Any), (QB._oper_value_copy, Any),
+                   (QB._oper_column_copy, QB.SQLField), (QB._oper_column_copy, QB.FObject),
+                   (QB._oper_column_copy, QB.WindowFunction), (QB._tree_copy_values, QB.SQLObjectQuery))
+      @test (nameof(f), T, _dynamic_calls(f, (T,))) == (nameof(f), T, String[])
+    end
+    # The value's open arm builds the predicate at the slot's type, with no run-time constructor call: an untyped one
+    # compiled `OperObject(::String, ::Any, …)` and its `convert` from `Any`, which a driver's dependency invalidates
+    # (Intervals.jl's `convert`), discarding the cached copy chain with every driver loaded.
+    for C in (QB.SQLField, QB.FObject, QB.WindowFunction)
+      @test (C, _dynamic_calls(QB._oper_with_value_other, (String, Any, C))) == (C, String[])
+    end
+    for T in (QB.OperObject, QB.QObject, QB.QorObject, QB.FExpression, QB.OuterRefObject, QB.ExistsObject)
+      @test (T, _dynamic_calls(QB._filter_copy, (T,))) == (T, String[])
+    end
+    @test _dynamic_calls(QB._oper_with_value, (String, Any, QB.ColumnPartNode)) == String[]
+    reached = _dynamic_calls_deep(Base.deepcopy, (QB.ObjectHandler,); depth = 10,
+                                  skip = (QB._tree_copy_other, QB._copy_insert_other, QB._store_cte_other!,
+                                          QB._oper_value_other,
+                                          QB._put_insert_other!, QB._unlisted_node))
+    @test filter(x -> startswith(x, "Tuple{typeof(PormG.QueryBuilder."), reached) == String[]
   end
 
   # What: the CTE column typing chain for a `Cast`, a `Case` and a computed column (`_declared_type`, `_case_output_field`

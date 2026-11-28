@@ -32,6 +32,7 @@ function (@main)(args::Vector{String})::Cint
     hops_step() || return Cint(37)
     lookup_more_step() || return Cint(38)
     qor_many_step() || return Cint(51)   # Q/Qor from 32 arguments (`tools/reads.jl`)
+    copy_step() || return Cint(54)       # `.copy()`, the copy changed and both read (`tools/reads.jl`, #1684)
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
     engine_read_step() || return Cint(41)

@@ -316,8 +316,8 @@ function _solve_field(field::String, model::PormGModel, instruct::SQLInstruction
   # rows stay keyed by the declared field name even when the column differs.
   return safe_column_identifier(Models.field_db_column(model.fields[field], field), instruct.connection)
 end
-_solve_field(field::String, _module::Module, model_name::Symbol, instruct::SQLInstruction; kw...) = _solve_field(field, getfield(_module, model_name), instruct; kw...)
-_solve_field(field::String, _module::Module, model_name::String, instruct::SQLInstruction; kw...) = _solve_field(field, _module, Symbol(model_name), instruct; kw...)
+# #1689: the one caller (`_build_row_join`) passes the model it reached, so the forms that looked a model up by its name
+# in `_module` (`getfield(_module, Symbol(name))`) had no caller and are gone.
 _solve_field(field::String, _module::Module, model_name::PormGModel, instruct::SQLInstruction; kw...) = _solve_field(field, model_name, instruct; kw...)
 
 

@@ -19,7 +19,10 @@ Race::Models.ModelType = Models.Model(
   # Filled by the write itself (#1694): the entry's `create` leaves them out, so it runs the default fill.
   created_at = Models.DateTimeField(auto_now_add = true),
   updated_on = Models.DateField(auto_now = true),
-  token = Models.UUIDField(auto_add = true)
+  token = Models.UUIDField(auto_add = true),
+  # The drivers who have a result in the race (#1689, #1599 layer 5): a many-to-many through `Result`, the F1 schema's
+  # own link, read forward (`drivers__surname`) and backward from a driver (`races__year`) by `m2m_step`.
+  drivers = Models.ManyToManyField("Driver", through = "Result", related_name = "races")
 )
 
 # A race's pit stops (#1694, #1599 layer 7): deleting a race deletes them (`CASCADE`), in the ORM's own collector.

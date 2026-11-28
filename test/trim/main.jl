@@ -31,6 +31,7 @@ function (@main)(args::Vector{String})::Cint
     # The read shapes applications use most (`tools/reads.jl`, #1599 layer 5): relation hops, the remaining lookups and
     # Q/Qor, paging, aggregates, and the shapes each engine answers its own way.
     hops_step() || return Cint(37)
+    m2m_step() || return Cint(56)        # a many-to-many hop each way (`tools/reads.jl`, #1689)
     lookup_more_step() || return Cint(38)
     qor_many_step() || return Cint(51)   # Q/Qor from 32 arguments (`tools/reads.jl`)
     copy_step() || return Cint(54)       # `.copy()`, the copy changed and both read (`tools/reads.jl`, #1684)

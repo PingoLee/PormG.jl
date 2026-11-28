@@ -109,8 +109,10 @@ function _relation_step_at(q::SQLObject, model::PormGModel, seg::String, first_s
   end
   haskey(model.related_objects, seg) || return nothing
   related = model.related_objects[seg]
-  related isa Models.ManyToManyRelation &&
-    return (seg, _require_bound_model(model, related.related_binding), :many_to_many)
+  # #1689: the model the relation recorded at registration (#1601), as the forward hops read theirs. The hop looked the
+  # owner up by its binding name in the TARGET's module, which raised for a relation declared across two modules and
+  # joined the wrong table when that module bound another model under the same name.
+  related isa Models.ManyToManyRelation && return (seg, related.related_model_resolved, :many_to_many)
   return (seg, (related::Models.ReverseRelation).model_resolved, :reverse)
 end
 

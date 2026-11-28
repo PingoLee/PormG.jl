@@ -675,3 +675,26 @@ function copy_step()::Bool
         failed("copy", e); return false
     end
 end
+
+# A many-to-many hop each way (#1689, #1599 layer 5): `Race.drivers`, through `Result` (`db/models.jl`), read forward
+# from a race and backward from a driver, checked by typed rows. Every `prep.jl` seeds one result: Piquet in the 2008
+# Monaco Grand Prix (a filter across the relation asks for `distinct()`, PormG's cardinality rule, #1002). The backward hop read the owner model by its name in the driver's module before #1689; it reads the
+# model the relation recorded. Exit code 56 when a read raises or returns other rows.
+const SurnameRow = NamedTuple{(:surname,), Tuple{String}}
+const DriverRaceRow = NamedTuple{(:surname, :race), Tuple{String, String}}
+function m2m_step()::Bool
+    try
+        fwd = M.Race.objects.filter("drivers__surname" => "Piquet").values("name").distinct().list(RaceNameRow)
+        say("m2m", string("drivers__surname ", length(fwd), " rows: ", join([r.name for r in fwd], ", ")))
+        rev = M.Driver.objects.filter("races__year" => 2008).values("surname").distinct().list(SurnameRow)
+        say("m2m", string("races__year ", length(rev), " rows: ", join([r.surname for r in rev], ", ")))
+        across = M.Driver.objects.values("surname", "race" => "races__name").filter("races__round" => 6).
+            list(DriverRaceRow)
+        say("m2m", string("values races__name ", length(across), " rows: ",
+                          join([string(r.surname, " in ", r.race) for r in across], ", ")))
+        return [r.name for r in fwd] == ["Monaco Grand Prix"] && [r.surname for r in rev] == ["Piquet"] &&
+               across == [(surname = "Piquet", race = "Monaco Grand Prix")]
+    catch e
+        failed("m2m", e); return false
+    end
+end

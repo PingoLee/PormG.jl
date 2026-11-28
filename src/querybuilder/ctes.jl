@@ -127,10 +127,11 @@ function _cte_name_shadowed_model(name::String, q::SQLObject, query::SQLObjectHa
   end
   # The direct ForeignKey / many-to-many targets of both base models, whichever key their module
   # registered under (or none). A String `to` is skipped ON PURPOSE — do not resolve it here: a
-  # ForeignKey's String target is written back as a model by `resolve_fk_target!`, but a
-  # ManyToManyField's stays a String, and by construction it resolves IN THE BASE MODULE (defined
-  # there, or visible there through `using`), which `get_all_models(base._module)` already walks;
-  # its through table sits on the base model's own m2m cache. Only a target reachable by direct
+  # registered model's String targets are written back as models at registration (a ForeignKey's by
+  # `resolve_fk_target!`, a ManyToManyField's by `_declared_target`, #1601), so a String left here
+  # belongs to a model never registered, and it resolves IN THE BASE MODULE (defined there, or
+  # visible there through `using`), which `get_all_models(base._module)` already walks; a
+  # many-to-many's through table sits on the base model's own m2m cache. Only a target reachable by direct
   # reference from another module is a `PormGModel` here, and that is the one to follow.
   # #1599 layer 5: a field's target read at the field's type (`_relation_to`), and a target model's module at
   # `ModelType`, PormG's one `PormGModel` (another model type asks `hasproperty`, behind `@noinline`).

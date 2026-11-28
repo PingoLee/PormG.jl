@@ -73,8 +73,8 @@ end
 # about a lookup that failed.
 #
 # The descriptor below reads `related_model_resolved` too (#1601), so a manager looks neither side up
-# by name. The join path still does in one place: the reverse many-to-many hop in `join_conditions.jl`
-# reads `related_binding` out of `model._module` (#1689).
+# by name, and neither does the join path: the reverse many-to-many hop in `join_conditions.jl` reads it
+# as well (#1689).
 function _m2m_has_extra_fields(manager::ManyToManyManager)::Bool
   through_model = manager.relation.through_model_resolved
   through_model === nothing && return false

@@ -698,3 +698,35 @@ function m2m_step()::Bool
         failed("m2m", e); return false
     end
 end
+
+# A filter on an aggregate alias, which renders in `HAVING` (#1846, #1599 layers 5-6): a grouped `Count` filtered by its
+# alias (`__@gt`), a `Sum` filtered by its alias (`__@gte`), each checked by typed rows over the two seeded 2008 races,
+# and an alias given a value of the wrong type, refused before any SQL with the JIT's `InvalidValueError` (the line is its
+# type and text, as `filter_refusal`'s are; a job checks it against its own JIT control). Exit code 57 when a read raises,
+# returns other rows, or the refusal is not an `InvalidValueError`.
+const YearCountRow = NamedTuple{(:year, :n), Tuple{Int64, Int64}}
+const YearSumRow = NamedTuple{(:year, :s), Tuple{Int64, Int64}}
+function having_step()::Bool
+    try
+        counted = M.Race.objects.values("year", "n" => Count("raceid")).filter("n__@gt" => 1).list(YearCountRow)
+        say("having", string("Count n__@gt 1: ", length(counted), " rows: ",
+                             join([string(r.year, " ", r.n) for r in counted], ", ")))
+        none = M.Race.objects.values("year", "n" => Count("raceid")).filter("n__@gt" => 2).list(YearCountRow)
+        say("having", string("Count n__@gt 2: ", length(none), " rows"))
+        summed = M.Race.objects.values("year", "s" => Sum("round")).filter("s__@gte" => 24).list(YearSumRow)
+        say("having", string("Sum s__@gte 24: ", length(summed), " rows: ",
+                             join([string(r.year, " ", r.s) for r in summed], ", ")))
+        ok = counted == [(year = 2008, n = 2)] && isempty(none) && summed == [(year = 2008, s = 24)]
+        refused = try
+            M.Race.objects.values("year", "n" => Count("raceid")).filter("n__@gt" => "abc").list(YearCountRow)
+            say("having", "n__@gt \"abc\": not refused"); false
+        catch e
+            e isa PormG.InvalidValueError || (failed("having", e); return false)
+            say("having", string("n__@gt \"abc\": InvalidValueError: ", (e::PormG.InvalidValueError).msg))
+            true
+        end
+        return ok && refused
+    catch e
+        failed("having", e); return false
+    end
+end

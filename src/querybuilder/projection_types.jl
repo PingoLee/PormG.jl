@@ -28,7 +28,12 @@ end
 # so the value's type cannot decide it.
 # #474: `alias` is a `MemoKey`. Its second half is the output name the fallback loop below compares
 # against `custom_as`/`_as`; the first half selects the namespace for the `tab_field_cache` hit.
-function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLInstruction,
+#
+# #1846, #1599 layer 5: `raw_value` is the predicate's literal (`_oper_literal`, the slot's wide union), so the one
+# compiled body takes it unspecialized. Specialized on that union, the call from `_bind_alias_value` dispatched at run
+# time, and a trimmed alias filter stopped there. A membership or range list keeps its per-element rule behind one
+# `@noinline` call (`_having_list_native`), the comprehension as it was: the designed open arm, a run-time dispatch.
+function _resolve_having_filter_value(alias::MemoKey, @nospecialize(raw_value), instruc::SQLInstruction,
                                       operator::AbstractString)
   # #576: the formatter choice and the format CALL were one expression repeated seven times, and
   # not one of the seven was guarded — so every documented HAVING spelling reported a wrong-typed
@@ -42,7 +47,9 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # not formatted — `format_number_sql(true)` would be a category error, not a check.
   operator == "ISNULL" && return raw_value
   # #903: a pattern lookup on an alias over an `inet`/`cidr` column takes a fragment, as on the column.
-  formatter = _lookup_formatter(_having_alias_formatter(alias, instruc), operator)
+  # #1846: the alias's formatter is a `Function` or `nothing`, never the `PormGField` the other `_lookup_formatter` method
+  # takes, so the generic method is invoked by its signature: over that union the two-method call dispatched at run time.
+  formatter = Base.invoke(_lookup_formatter, Tuple{Any,AbstractString}, _having_alias_formatter(alias, instruc), operator)
   # #707: a type the ladder cannot name is not checked — the value binds as given, as it does on
   # the WHERE path for any column-less expression.
   formatter === nothing && return raw_value
@@ -56,9 +63,14 @@ function _resolve_having_filter_value(alias::MemoKey, raw_value, instruc::SQLIns
   # matched nothing on SQLite where `=` matched. Same condition as `_format_filter_value`'s
   # element-wise arm, so an element is kept native exactly when it was formatted on its own.
   operator in _ITERABLE_LOOKUP_OPERATORS && raw_value isa AbstractArray &&
-    return [_sqlite_preserve_native_parameter(r, f, formatter, instruc) for (r, f) in zip(raw_value, formatted_value)]
+    return _having_list_native(raw_value, formatted_value, formatter, instruc)
   return _sqlite_preserve_native_parameter(raw_value, formatted_value, formatter, instruc)
 end
+# Its arguments are specialized on purpose: the call dispatches on the run-time list, formatted list and formatter, as the
+# comprehension did inside the function it came from, so an empty list's element type is still the one inference gives
+# there (`Vector{String}` for a text alias on PostgreSQL); unspecialized, it was `Vector{Any}`, another parameter.
+@noinline _having_list_native(raw_value, formatted_value, formatter, instruc::SQLInstruction) =
+  [_sqlite_preserve_native_parameter(r, f, formatter, instruc) for (r, f) in zip(raw_value, formatted_value)]
 
 # The formatter a HAVING/alias filter value must satisfy, resolved from whatever the alias projects.
 #
@@ -2139,7 +2151,7 @@ end
 # bound in the current clause: what a `filter`/`Q` on the alias binds (`_render_alias_predicate_node`)
 # and, since #1381, a `When` condition on it (`_render_filter_oper`), which bound the value raw.
 function _bind_alias_value(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInstruction)
-  placeholder = _bind_predicate_value(instruc, v.operator,
+  placeholder = _bind_alias_predicate(instruc, v.operator,
                   _resolve_having_filter_value(having_key, _oper_literal(v), instruc, v.operator))
   # #1360: an alias over the whole JSON document compares as JSON, as the column's own filter arm does
   # (`filter_nodes.jl`); a pattern lookup binds text. A range binds a pair and `@isnull` a Bool, so
@@ -2149,6 +2161,16 @@ function _bind_alias_value(v::SQLTypeOper, having_key::MemoKey, instruc::SQLInst
     source isa SQLTypeField && _json_document_operand(source.field, instruc) &&
     (placeholder = _json_document_marker(instruc.connection, placeholder))
   return placeholder
+end
+
+# `_bind_predicate_value` for an alias's formatted value (#1846, #1599 layer 5), which reaches here untyped (a formatter's
+# answer): the same three shapes in the same order, each at a type. A range's pair goes through `_bind_range_value`'s
+# arms, a single value through `_bind_formatted_value`'s; `@isnull`'s polarity is returned as it is. On the untyped
+# value, `_bind_predicate_value`'s `formatted[1]` dispatched at run time.
+@noinline function _bind_alias_predicate(instruc::SQLInstruction, operator::AbstractString, @nospecialize(formatted))
+  operator in ("BETWEEN", "NOT BETWEEN") && return _bind_range_value(instruc, operator, formatted)
+  operator == "ISNULL" && return formatted
+  return _bind_formatted_value(instruc, formatted, operator in LIKE_WILDCARD_OPERATORS, operator)
 end
 
 # #1021 — `values("doc" => SearchVector(…)).filter("doc__@search" => q)`, Django's multi-column search.
@@ -2231,7 +2253,7 @@ function _render_interval_alias_predicate(v::SQLTypeOper, having_key::MemoKey, i
   ms_values === nothing && return nothing
   sql, interval_ms = _render_interval_source_ms(source, instruc)
   interval_ms && return _render_predicate_any(sql, v.operator, _bind_predicate_value(instruc, v.operator, ms_values), instruc, false)
-  placeholder = _bind_predicate_value(instruc, v.operator,
+  placeholder = _bind_alias_predicate(instruc, v.operator,
                   _resolve_having_filter_value(having_key, _oper_literal(v), instruc, v.operator))
   return _render_predicate_any(sql, v.operator, placeholder, instruc, false)
 end

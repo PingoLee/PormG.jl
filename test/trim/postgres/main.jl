@@ -222,6 +222,7 @@ function (@main)(args::Vector{String})::Cint
     copy_step() || return Cint(54)       # `.copy()`, the copy changed and both read (`tools/reads.jl`, #1684)
     page_step() || return Cint(39)
     aggregate_step() || return Cint(40)
+    having_step() || return Cint(57)     # a filter on an aggregate alias, HAVING (`tools/reads.jl`, #1846)
     engine_read_step() || return Cint(41)
     lookup_refusals_step() || return Cint(50)   # the JSON and network lookups (`tools/reads.jl`)
     array_lookup_step() || return Cint(53)      # the array lookups (`tools/reads.jl`, #1844)

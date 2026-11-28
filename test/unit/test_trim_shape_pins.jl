@@ -6659,6 +6659,29 @@ end
     @test _dynamic_calls(QB._copy_ctes, (QB.OrderedCollections.OrderedDict{String,QB.CTEDict},)) == String[]
   end
 
+  # What: a filter on an aggregate alias, which renders in `HAVING` (#1846): the clause choice in `_where_node!` and the
+  #   `Q`/`Qor` route (`_aggregate_alias_leaf`), and the alias value's format and bind (`_bind_alias_value` →
+  #   `_resolve_having_filter_value` → `_sqlite_preserve_native_parameter` → `_bind_alias_predicate`).
+  # Expected: no dynamic call to `_resolved_agg` (the projected node read through `_with_field_part_open`), none into the
+  #   value's chain, and none inside the chain's pieces at what their callers pass (an untyped value, a `Function`).
+  # Why: #1845 met the three walls in this order: a trimmed `values("n" => Count(…)).filter("n__@gt" => …)` stopped at
+  #   `_resolved_agg(::FObject, …)`, then at `_resolve_having_filter_value` on the literal slot's union, then at
+  #   `_sqlite_preserve_native_parameter` and `_bind_predicate_value`'s `formatted[1]` on the formatter's answer.
+  @testset "a filter on an aggregate alias is decided and bound at its types (#1846)" begin
+    QB = PormG.QueryBuilder
+    I = QB.InstructionObject
+    O = QB.OperObject
+    @test _named_dynamic_calls(Tuple{typeof(QB._where_node!), QB.FilterNode, I}, ("_resolved_agg",)) == String[]
+    @test _named_dynamic_calls(Tuple{typeof(QB._aggregate_alias_leaf), O, I}, ("_resolved_agg",)) == String[]
+    @test _named_dynamic_calls(Tuple{typeof(QB._bind_alias_value), O, QB.MemoKey, I},
+                               ("_resolve_having_filter_value", "_bind_predicate_value", "_bind_alias_predicate")) ==
+          String[]
+    @test _named_dynamic_calls(Tuple{typeof(QB._resolve_having_filter_value), QB.MemoKey, Any, I, String},
+                               ("_sqlite_preserve_native_parameter", "_guarded_format", "_lookup_formatter",
+                                "_having_alias_formatter")) == String[]
+    @test _dynamic_calls(QB._bind_alias_predicate, (I, String, Any)) == String[]
+  end
+
   # What: `.copy()` and every `deepcopy` of a handler (an `Exists` render, `inspect_query`): the whole query copied at its
   #   types (`_query_copy(obj, nothing)`, #1684): the projection (`_tree_copy_values`), the filter slot node by node
   #   (`_filter_slot_copy`, `_filter_copy` per member, a predicate's value and column), the ORDER BY terms, the three name

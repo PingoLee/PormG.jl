@@ -54,8 +54,10 @@ else is untested in a trimmed binary, even where it compiles.
   key twice) and across a reverse relation
   (`"race__year"`); `__@yyyy_mm`, `__@ne` and `__@nin`; `Qor` over a lookup and a nested `Q`; `order_by("-date")`
   with `page(n)`, `page(n, offset)` and `limit(n).offset(m)`; `Count(…; distinct = true)`, `Max`, `Avg` and `Min`
-  grouped; `Sum(Case(When(…), default = 0))`; `distinct()`; `ToChar(…, "YYYY-MM")` ordered by its alias; and a CTE
-  joined with `join_type = "INNER"`. `__@regex` and `__@iregex` have run on PostgreSQL, and `Extract("date",
+  grouped; `Sum(Case(When(…), default = 0))`; `distinct()`; `ToChar(…, "YYYY-MM")` ordered by its alias; a CTE
+  joined with `join_type = "INNER"`; and a filter on an aggregate alias, which renders in `HAVING`
+  (`values("year", "n" => Count("raceid")).filter("n__@gt" => 1)`, a `Sum` alias with `__@gte`, and a value of the
+  wrong type refused with the JIT's `InvalidValueError`, #1846). `__@regex` and `__@iregex` have run on PostgreSQL, and `Extract("date",
   "EPOCH")` on MySQL and PostgreSQL. An engine without one of them (`__@regex`, `__@iregex` and
   `__@iunaccent_contains` on SQLite and MySQL, `EPOCH` on SQLite) refuses it with the `BackendCapabilityError`
   the JIT raises. `__@iunaccent_contains` has run on PostgreSQL, in a database where `unaccent` is
@@ -180,9 +182,9 @@ tasks. The SQLite refused statement is checked by hand.
     trimmed in each case, but no trimmed binary has refused one;
   - `bulk_insert(…; returning = …)` (see above), an upsert without a `target` (`on_conflict = :nothing`), and
     deleting one row through `delete(row)`.
-- **A filter on an aggregate alias** (`values("n" => Count("raceid")).filter("n" => …)`, which renders in `HAVING`) has
-  not run trimmed: the alias's value is typed and bound through calls made at run time, so a trimmed binary stops there,
-  whether the value is refused or not. Run such a query under the JIT.
+- **A list compared with an aggregate alias** (`"n__@in" => [1, 2]`, `"n__@range" => [1, 10]`) has not run trimmed: the
+  list is checked element by element through one call made at run time. An alias over a whole JSON document and an alias
+  read inside a `When` condition have not run trimmed either.
 - **A join target named by a string**: `cjoin("circuitid" => "Circuit")` and `cjoin_on("Circuit", …)` look the model up by
   its name in the models module when the query is built, and have not run trimmed. Pass the model itself
   (`cjoin_on(M.Circuit, …)`, `cjoin(…; field = Models.ForeignKey(M.Circuit, …))`). A relation declared on a model,
